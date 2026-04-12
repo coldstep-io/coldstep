@@ -13,7 +13,7 @@
     "undici": "^6.23.1"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
+    "@types/node": "^25.6.0",
     "@vercel/ncc": "^0.38.3",
     "typescript": "^5.7.2"
   },
