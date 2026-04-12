@@ -1,0 +1,14 @@
+.editorconfig text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.bpf.c text eol=lf
+action.yml text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.go text eol=lf
+*.ts text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+.cursor/hooks.json text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf

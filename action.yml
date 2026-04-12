@@ -1,0 +1,92 @@
+name: Coldstep
+description: eBPF CI/runtime telemetry on GitHub-hosted ubuntu-latest (v1); see README and coldstep-ci.yml
+branding:
+  icon: shield
+  color: blue
+inputs:
+  mode:
+    description: >-
+      Runtime mode: detect logs telemetry only; enforce requires an allowlist and rejects non-allowlisted egress.
+    required: false
+    default: detect
+  allowed-domains:
+    description: >-
+      Comma- or whitespace-separated egress allowlist domains for enforce mode. Values are trimmed, lowercased, and deduplicated.
+    required: false
+    default: ''
+  github-token:
+    description: >-
+      Default GitHub token. Used when report-pr-summary is true to post an optional PR comment
+      (pull_request workflows only).
+    required: false
+    default: ${{ github.token }}
+  allowed-hosts:
+    description: >-
+      Comma- or whitespace-separated hostnames. Use *.example.com for one-level subdomains (clean-room matcher).
+    required: false
+    default: ''
+  allowed-ips:
+    description: Comma- or whitespace-separated IPv4 literals allowed for egress classification (v1; no CIDR yet).
+    required: false
+    default: ''
+  ignored-ip-nets:
+    description: >-
+      Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores
+      (common private-network / RFC1918 internal traffic), unless no-default-ignored-nets is true. Maximum 128 merged CIDRs total.
+      Affects policy classification and enforce-mode BPF bypass for those destinations.
+    required: false
+    default: ''
+  no-default-ignored-nets:
+    description: >-
+      When true, do not merge implicit 10.0.0.0/8 and 172.16.0.0/12; only ignored-ip-nets is used (may be empty).
+    required: false
+    default: 'false'
+  fail-on-error:
+    description: >-
+      If true, fail when the agent never reports operational readiness after startup attach succeeds for the
+      selected mode: detect requires sched_process_exec; connect/sendto/HTTP sniff and DNS recvfrom sniff are
+      best-effort and may be skipped (see digest BPF status). Enforce additionally requires syscall tracing and cgroup
+      programs. Does not fail on egress policy violations (v1).
+    required: false
+    default: 'false'
+  log-level:
+    description: Agent log level written to stderr (debug, info, warn, error).
+    required: false
+    default: info
+  report-job-summary:
+    description: If true, post step merges the workspace detect log into the job Summary tab.
+    required: false
+    default: 'true'
+  report-pr-summary:
+    description: >-
+      If true, post step comments the digest on the pull request (pull_request events only). Requires github-token.
+    required: false
+    default: 'false'
+  slack-webhook-endpoint:
+    description: >-
+      Optional Slack Incoming Webhook URL only (https://hooks.slack.com/services/...). Other hosts are rejected to
+      avoid accidental SSRF from workflow input. When valid, the post step POSTs a short digest after shutdown.
+    required: false
+    default: ''
+  feature-gates:
+    description: >-
+      Optional key=value pairs (comma-separated) passed through to the agent as COLDSTEP_FEATURE_GATES for experiments
+      (e.g. proc_tree=1 for sched_process_fork, tls_sni=1 for TLS ClientHello SNI JSONL/digest).
+    required: false
+    default: ''
+  release-path:
+    description: >-
+      Optional path to a prebuilt coldstep binary (debug). When set and the file exists, skips building from source on the runner.
+    required: false
+    default: ''
+  smoke-test-egress:
+    description: >-
+      When unset, defaults to true in detect mode and false in enforce mode (avoid unintended deny noise).
+      When true, fire short IPv4 UDP sendto and cleartext HTTP sendto probes after the agent starts so the
+      digest and workspace JSONL commonly show udp/http rows on ubuntu-latest.
+    required: false
+    default: ''
+runs:
+  using: node24
+  main: dist/main/index.js
+  post: dist/post/index.js

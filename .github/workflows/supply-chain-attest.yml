@@ -1,0 +1,107 @@
+# Builds and attests release-grade artifacts: Go agent binary, composite action tarball,
+# and CycloneDX SBOMs (Go + npm). Triggers on version tags and manual dispatch.
+name: supply-chain-attest
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  artifact-metadata: write
+
+concurrency:
+  group: supply-chain-attest-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Build Go agent (BPF + binary)
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+
+      - name: Build action bundle (ncc)
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run typecheck
+          npm run build
+
+      - name: Create composite action bundle archive
+        run: |
+          set -euo pipefail
+          test -f action.yml
+          test -f dist/main/index.js
+          test -f dist/post/index.js
+          tar -czf coldstep-action-bundle.tar.gz action.yml dist/main dist/post
+
+      - name: Install Syft (pinned)
+        env:
+          SYFT_VERSION: '1.18.0'
+        run: |
+          set -euo pipefail
+          curl -sSfL -o /tmp/syft.deb \
+            "https://github.com/anchore/syft/releases/download/v${SYFT_VERSION}/syft_${SYFT_VERSION}_linux_amd64.deb"
+          sudo dpkg -i /tmp/syft.deb
+          syft version
+
+      - name: Generate SBOMs (CycloneDX JSON)
+        run: |
+          set -euo pipefail
+          syft scan "file:${GITHUB_WORKSPACE}/go.mod" \
+            -o "cyclonedx-json=${GITHUB_WORKSPACE}/sbom-go.cdx.json"
+          syft scan "file:${GITHUB_WORKSPACE}/package-lock.json" \
+            -o "cyclonedx-json=${GITHUB_WORKSPACE}/sbom-js.cdx.json"
+          ls -la sbom-go.cdx.json sbom-js.cdx.json
+
+      - name: Attest — build provenance (Go binary)
+        uses: actions/attest@v4
+        with:
+          subject-path: '${{ github.workspace }}/bin/coldstep'
+
+      - name: Attest — build provenance (action bundle tarball)
+        uses: actions/attest@v4
+        with:
+          subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
+
+      - name: Attest — SBOM for Go binary subject
+        uses: actions/attest@v4
+        with:
+          subject-path: '${{ github.workspace }}/bin/coldstep'
+          sbom-path: '${{ github.workspace }}/sbom-go.cdx.json'
+
+      - name: Attest — SBOM for action bundle subject
+        uses: actions/attest@v4
+        with:
+          subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
+          sbom-path: '${{ github.workspace }}/sbom-js.cdx.json'
+
+      - name: Upload attestable artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: supply-chain-artifacts-${{ github.run_id }}
+          path: |
+            bin/coldstep
+            coldstep-action-bundle.tar.gz
+            sbom-go.cdx.json
+            sbom-js.cdx.json
+          if-no-files-found: error

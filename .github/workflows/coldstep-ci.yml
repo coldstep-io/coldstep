@@ -1,0 +1,22 @@
+# PR / main / workflow_dispatch CI for **ubuntu-latest** only (v1). Additional GitHub-hosted images may be wired later.
+
+name: coldstep-ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: coldstep-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  hosted-linux:
+    uses: ./.github/workflows/coldstep-ci-runner.yml
+    secrets: inherit

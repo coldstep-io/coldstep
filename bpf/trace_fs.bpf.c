@@ -1,0 +1,124 @@
+#include "vmlinux.h"
+#include <bpf/bpf_core_read.h>
+#include <bpf/bpf_helpers.h>
+#include <bpf/bpf_tracing.h>
+
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
+
+/* Linux x86_64 syscall numbers only (matches GitHub-hosted ubuntu-latest amd64). */
+#define FS_NR_OPENAT    257
+#define FS_NR_UNLINKAT  263
+#define FS_NR_RENAMEAT2 316
+#define FS_NR_FCHMODAT  268
+
+#define O_CREAT 0x40
+
+#define FS_PATH_MAX 256
+
+/* Op codes embedded in the event (single byte to keep struct small). */
+#define FS_OP_CREATE 1
+#define FS_OP_UNLINK 2
+#define FS_OP_RENAME 3
+#define FS_OP_CHMOD  4
+
+struct fs_event {
+	__u32 tgid;
+	__u32 tid;
+	__u8 comm[16];
+	__u8 op;
+	__u8 path[FS_PATH_MAX];
+	__u8 _pad[3]; /* explicit 4-byte alignment; matches Go fsEventWire layout */
+};
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8);
+} fs_agent_cfg SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 22);
+} fs_events SEC(".maps");
+
+static __always_inline int fs_enabled(void)
+{
+	__u32 k = 0;
+	__u8 *v = bpf_map_lookup_elem(&fs_agent_cfg, &k);
+
+	return v && *v;
+}
+
+static __always_inline void submit_fs_event(unsigned long path_ptr, __u8 op)
+{
+	struct fs_event *ev;
+	__u64 pt;
+
+	if (!path_ptr)
+		return;
+	ev = bpf_ringbuf_reserve(&fs_events, sizeof(*ev), 0);
+	if (!ev)
+		return;
+
+	pt = bpf_get_current_pid_tgid();
+	ev->tgid = (__u32)(pt >> 32);
+	ev->tid = (__u32)pt;
+	ev->op = op;
+	__builtin_memset(ev->comm, 0, sizeof(ev->comm));
+	__builtin_memset(ev->path, 0, sizeof(ev->path));
+	bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+	bpf_probe_read_user_str(ev->path, sizeof(ev->path), (const void *)path_ptr);
+
+	bpf_ringbuf_submit(ev, 0);
+}
+
+/*
+ * raw_tp/sys_enter: ctx->args[0] is struct pt_regs * on x86_64;
+ * ctx->args[1] is the syscall number. Arguments from regs->si/dx/r10 per ABI.
+ */
+SEC("raw_tp/sys_enter")
+int handle_fs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
+{
+	unsigned long regs_ptr = ctx->args[0];
+	long id = (long)ctx->args[1];
+	struct pt_regs *regs = (struct pt_regs *)regs_ptr;
+
+	if (!fs_enabled())
+		return 0;
+	if (!regs)
+		return 0;
+
+	if (id == FS_NR_OPENAT) {
+		unsigned long arg1, arg2;
+
+		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+			return 0;
+		if (bpf_core_read(&arg2, sizeof(arg2), &regs->dx))
+			return 0;
+		if (!(arg2 & O_CREAT))
+			return 0;
+		submit_fs_event(arg1, FS_OP_CREATE);
+	} else if (id == FS_NR_UNLINKAT) {
+		unsigned long arg1;
+
+		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+			return 0;
+		submit_fs_event(arg1, FS_OP_UNLINK);
+	} else if (id == FS_NR_RENAMEAT2) {
+		unsigned long arg3;
+
+		/* emit destination path (arg3 = newpath) */
+		if (bpf_core_read(&arg3, sizeof(arg3), &regs->r10))
+			return 0;
+		submit_fs_event(arg3, FS_OP_RENAME);
+	} else if (id == FS_NR_FCHMODAT) {
+		unsigned long arg1;
+
+		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+			return 0;
+		submit_fs_event(arg1, FS_OP_CHMOD);
+	}
+
+	return 0;
+}

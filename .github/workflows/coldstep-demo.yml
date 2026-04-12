@@ -1,0 +1,375 @@
+# Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
+#
+# Job `prevent-mode`: same BPF stack as product `mode: enforce` (cgroup block non-allowlisted egress). apt runs before the
+# agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
+# after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
+
+name: coldstep-demo
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  detect-mode:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    env:
+      COLDSTEP_DIFF_PREV_RUN: '1'
+      NS_RUNNER_LABEL: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assert tracked text is UTF-8 (before uses ./)
+        run: python3 scripts/assert_utf8_text.py
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      - name: Start Coldstep (detect mode)
+        uses: ./
+        with:
+          mode: detect
+          smoke-test-egress: 'false'
+          allowed-hosts: theclouddj.com, *.ubuntu.com
+          # Exercise all detect-time capabilities in one demo run.
+          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+
+      - name: Install nmap (apt)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+
+      - name: Capability probes (detect mode)
+        run: |
+          set -euo pipefail
+          # TCP (nmap)
+          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          # HTTP cleartext
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
+          # TLS ClientHello/SNI (force HTTP/1.1 to avoid QUIC bypassing TCP write sniff)
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+          # UDP sendto evidence
+          timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
+          # Process activity (proc_tree feature gate)
+          bash -c 'echo "coldstep-demo" >/dev/null'
+          # Filesystem events: create -> rename -> chmod -> unlink
+          TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
+          TMP_A="${TMP_FS_DIR}/a.txt"
+          TMP_B="${TMP_FS_DIR}/b.txt"
+          printf 'demo\n' > "${TMP_A}"
+          mv "${TMP_A}" "${TMP_B}"
+          chmod 600 "${TMP_B}"
+          # Exercise unlinkat path explicitly: some `rm` code paths are harder to observe
+          # consistently on shared runners than a direct libc unlink of an absolute path.
+          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
+          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
+            rm -f "${TMP_B}" || true
+          fi
+          unset _NS_DEMO_UNLINK_TARGET || true
+          rmdir "${TMP_FS_DIR}" || true
+
+      - name: Stop agent (flush digest to workspace)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: Verify detect capabilities and write visual summary
+        run: |
+          set -euo pipefail
+          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          test -f "$f"
+          test -f "$j"
+          grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
+          grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
+          grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
+          grep -q '"type":"udp"' "$j" || { echo "expected udp JSONL"; exit 1; }
+          grep -q '"type":"http"' "$j" || { echo "expected http JSONL"; exit 1; }
+          grep -q '"type":"tls"' "$j" || { echo "expected tls JSONL with tls_sni gate"; exit 1; }
+          grep -q '"type":"proc_fork"' "$j" || { echo "expected proc_fork JSONL with proc_tree gate"; exit 1; }
+          grep -q '"type":"fs_event"' "$j" || { echo "expected fs_event JSONL with fs_events gate"; exit 1; }
+          grep -Eq '"type":"fs_event".*"op":"create"' "$j" || { echo "expected fs_event create"; exit 1; }
+          grep -Eq '"type":"fs_event".*"op":"unlink"' "$j" || { echo "expected fs_event unlink"; exit 1; }
+          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
+            echo "::warning::fs_event rename not observed in this run (best-effort signal on ubuntu-latest)"
+          fi
+          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
+            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ubuntu-latest)"
+          fi
+          grep -q 'TLS ClientHello' "$f" || { echo "expected TLS section in digest"; exit 1; }
+          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
+          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
+          grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
+          grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
+          {
+            echo "### Detect Capability Matrix (GitHub-hosted ubuntu-latest)"
+            echo ""
+            echo "| Capability | Status | Evidence |"
+            echo "|---|---|---|"
+            echo "| Exec tracing | 🟢 | \\`type:exec\\` present |"
+            echo "| TCP connect telemetry | 🟢 | \\`type:tcp\\` present (nmap/curl) |"
+            echo "| UDP sendto telemetry | 🟢 | \\`type:udp\\` present (:53 probe) |"
+            echo "| HTTP cleartext telemetry | 🟢 | \\`type:http\\` present |"
+            echo "| TLS ClientHello/SNI hint | 🟢 | \\`type:tls\\` with \\`tls_sni=1\\` |"
+            echo "| Process tree (fork) | 🟢 | \\`type:proc_fork\\` present |"
+            echo "| Filesystem events | 🟢 | \\`type:fs_event\\` with required create/unlink (+ best-effort rename/chmod) |"
+            echo "| Runner defense posture | 🟢 | detect telemetry + enforce demo in this workflow |"
+            echo ""
+            echo "_Legend: 🟢 pass, 🟡 investigate, 🔴 fail_"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Compare detect output with previous successful run (opt-in)
+        if: env.COLDSTEP_DIFF_PREV_RUN == '1'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          summary="${GITHUB_STEP_SUMMARY}"
+          current_file="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          marker_prefix="coldstep-prev-diff"
+          echo "### Previous Run Diff" >> "${summary}"
+          echo "" >> "${summary}"
+          echo "- Feature flag: enabled (\`COLDSTEP_DIFF_PREV_RUN=1\`)" >> "${summary}"
+
+          if [[ ! -f "${current_file}" ]]; then
+            echo "- ${marker_prefix}.result=unavailable (current JSONL missing)" >> "${summary}"
+            exit 0
+          fi
+
+          current_run="${GITHUB_RUN_ID}"
+          branch="${GITHUB_REF_NAME}"
+          workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
+          # Single gh --jq filter (no awk|head): awk exiting first line SIGPIPEs jq under pipefail (exit 141).
+          # gh only accepts one --jq string (not jq --arg); embed run id in the expression (digits only).
+          baseline_run="$(
+            gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \
+              --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
+          )"
+          fallback_used="false"
+
+          if [[ -z "${baseline_run}" ]]; then
+            baseline_run="$(
+              gh run list --branch "${branch}" --status success --limit 30 --json databaseId \
+                --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
+            )"
+            fallback_used="true"
+          fi
+
+          if [[ -z "${baseline_run}" ]]; then
+            echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
+            echo "- ${marker_prefix}.result=unavailable (no prior successful run found)" >> "${summary}"
+            exit 0
+          fi
+
+          echo "- ${marker_prefix}.baseline_run_id=${baseline_run}" >> "${summary}"
+          echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
+
+          rm -rf prev-state
+          mkdir -p prev-state
+          baseline_artifact="coldstep-events-baseline-${NS_RUNNER_LABEL}"
+          if ! gh run download "${baseline_run}" --name "${baseline_artifact}" --dir prev-state >/dev/null 2>&1; then
+            echo "- ${marker_prefix}.result=unavailable (baseline artifact missing for run ${baseline_run})" >> "${summary}"
+            exit 0
+          fi
+
+          baseline_file="prev-state/.coldstep-events.jsonl"
+          if [[ ! -f "${baseline_file}" ]]; then
+            echo "- ${marker_prefix}.result=unavailable (downloaded artifact missing .coldstep-events.jsonl)" >> "${summary}"
+            exit 0
+          fi
+
+          if ! jq -r '.type // "unknown"' "${baseline_file}" | sort | uniq -c > prev_counts.raw; then
+            echo "- ${marker_prefix}.result=unavailable (baseline JSONL parse failed)" >> "${summary}"
+            exit 0
+          fi
+          if ! jq -r '.type // "unknown"' "${current_file}" | sort | uniq -c > curr_counts.raw; then
+            echo "- ${marker_prefix}.result=unavailable (current JSONL parse failed)" >> "${summary}"
+            exit 0
+          fi
+
+          declare -A prev_counts curr_counts all_types
+          while read -r n t; do
+            [[ -z "${t}" ]] && continue
+            prev_counts["${t}"]="${n}"
+            all_types["${t}"]=1
+          done < prev_counts.raw
+          while read -r n t; do
+            [[ -z "${t}" ]] && continue
+            curr_counts["${t}"]="${n}"
+            all_types["${t}"]=1
+          done < curr_counts.raw
+
+          echo "" >> "${summary}"
+          echo "#### Event volume by \`type\` (includes meta/exec noise)" >> "${summary}"
+          echo "" >> "${summary}"
+          echo "| Type | Baseline | Current | Delta |" >> "${summary}"
+          echo "|---|---:|---:|---:|" >> "${summary}"
+          while read -r t; do
+            [[ -z "${t}" ]] && continue
+            prev="${prev_counts[${t}]:-0}"
+            curr="${curr_counts[${t}]:-0}"
+            delta=$((curr - prev))
+            printf '| `%s` | %s | %s | %+d |\n' "${t}" "${prev}" "${curr}" "${delta}" >> "${summary}"
+          done < <(printf '%s\n' "${!all_types[@]}" | sort)
+
+          export NS_SUMMARY="${summary}"
+          export NS_BASELINE="${baseline_file}"
+          export NS_CURRENT="${current_file}"
+          export NS_MARKER="${marker_prefix}"
+          if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+            echo "- ${marker_prefix}.result=unavailable (traffic diff script failed)" >> "${summary}"
+            exit 0
+          fi
+
+      - name: Persist detect JSONL baseline artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coldstep-events-baseline-${{ env.NS_RUNNER_LABEL }}
+          path: ${{ github.workspace }}/.coldstep-events.jsonl
+          retention-days: 14
+          include-hidden-files: true
+          overwrite: true
+
+      - name: List workspace Coldstep artifacts
+        if: always()
+        run: |
+          set -euo pipefail
+          ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
+
+  prevent-mode:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Assert tracked text is UTF-8 (before uses ./)
+        run: python3 scripts/assert_utf8_text.py
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
+      - name: Install nmap (apt — before enforce so mirrors/DNS still work)
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+
+      - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
+        run: |
+          set -euo pipefail
+          ip=$(dig +short theclouddj.com A | awk 'NF{print; exit}')
+          test -n "${ip}"
+          echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
+
+      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
+        uses: ./
+        with:
+          mode: enforce
+          fail-on-error: 'true'
+          smoke-test-egress: 'false'
+          allowed-hosts: theclouddj.com, *.ubuntu.com
+          # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
+          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
+          # Explicit IP allowlist demo (direct connect test below).
+          allowed-ips: 1.1.1.1
+
+      - name: Allowed target — nmap port 80 (theclouddj.com)
+        run: |
+          set -euo pipefail
+          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+
+      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
+        run: |
+          set -euo pipefail
+          timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null || true
+
+      # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
+      # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.
+      - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
+        run: |
+          set -euo pipefail
+          echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
+
+      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
+        run: |
+          set -euo pipefail
+          if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
+            echo "expected curl to example.com to fail under enforce allowlist"
+            exit 1
+          fi
+
+      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
+        run: |
+          set -euo pipefail
+          if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
+            echo "expected direct IP connect to be blocked under enforce allowlist"
+            exit 1
+          fi
+
+      - name: Stop agent (flush digest to workspace)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: Settle then verify deny telemetry
+        run: |
+          set -euo pipefail
+          sleep 2
+          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          test -f "$f"
+          test -f "$j"
+          grep -q '### Enforcement' "$f" || { echo "expected enforcement section in digest"; exit 1; }
+          grep -q '"type":"deny"' "$j" || { echo "expected deny JSONL (blocked non-allowlisted egress)"; exit 1; }
+          grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
+          grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }
+          grep -Eq '"type":"deny".*"dst":"192.0.2.1"' "$j" || { echo "expected deny for blocked URL target example.com -> 192.0.2.1"; exit 1; }
+          grep -Eq '"type":"deny".*"dst":"93.184.216.34"' "$j" || { echo "expected deny for blocked direct IP 93.184.216.34"; exit 1; }
+          if grep -Eq '"type":"deny".*"dst":"1.1.1.1"' "$j"; then
+            echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
+          fi
+
+      - name: Quick control matrix (GitHub-native R/Y/G)
+        if: always()
+        run: |
+          {
+            echo "### Control Matrix"
+            echo ""
+            echo "| Control | Status | Evidence |"
+            echo "|---|---|---|"
+            echo "| Detect telemetry | 🟢 | detect-mode job digest + JSONL |"
+            echo "| Enforce domain allowlist | 🟢 | nmap to theclouddj.com allowed |"
+            echo "| Enforce URL block | 🟢 | deny JSONL dst=192.0.2.1 (example.com) |"
+            echo "| Enforce IP allowlist | 🟡 | probe ran for 1.1.1.1; treat deny/no-deny as runner-path signal |"
+            echo "| Enforce IP block | 🟢 | deny JSONL dst=93.184.216.34 |"
+            echo "| Investigate if flaky | 🟡 | rerun job and inspect deny/debug step |"
+            echo "| Regression | 🔴 | any assertion above fails |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
+      - name: Show deny lines (debug)
+        if: always()
+        run: |
+          set -x
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          if [ -f "$j" ]; then grep '"type":"deny"' "$j" || true; fi

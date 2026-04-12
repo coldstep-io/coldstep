@@ -1,0 +1,23 @@
+{
+  "name": "coldstep-action",
+  "private": true,
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "build": "ncc build src/main.ts -o dist/main --source-map && ncc build src/post.ts -o dist/post --source-map"
+  },
+  "dependencies": {
+    "@actions/core": "^1.11.1",
+    "@actions/github": "^6.0.1"
+  },
+  "overrides": {
+    "undici": "^6.23.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@vercel/ncc": "^0.38.3",
+    "typescript": "^5.7.2"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}

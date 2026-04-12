@@ -1,0 +1,29 @@
+# Build outputs (repo root; e.g. scripts/build-agent-linux.sh → bin/coldstep)
+/bin/
+/node_modules/
+
+# Local Windows tooling binaries (not published)
+*.exe
+CONTRIBUTING.md
+SECURITY.md
+
+# Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
+bpf/vmlinux.h
+internal/bpf/**/*.o
+internal/bpf/**/*_bpfel.go
+internal/bpf/**/*_bpfeb.go
+scripts/__pycache__/
+
+# Secrets
+.env
+
+# Editor / machine-local (not published)
+/.cursor/
+/.vscode/
+/specs/
+AGENTS.md
+
+# Agent runtime artifacts in workspace (detect digest); do not commit
+.coldstep-detect.md
+scripts/__pycache__/
+/docs/
