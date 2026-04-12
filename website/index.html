@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ColdStep — eBPF observability for GitHub-hosted Ubuntu runners</title>
+    <meta
+      name="description"
+      content="ColdStep is a GitHub Action and Linux eBPF agent that observes process and network activity on ubuntu-latest runners. Detect by default; optional egress enforcement."
+    />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,500;0,9..144,700;0,9..144,800;1,9..144,500&family=Figtree:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="favicon.svg" type="image/svg+xml" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="page">
+      <header class="site-header">
+        <div class="header-inner">
+          <p class="brand">Cold<span>Step</span></p>
+          <nav class="nav-actions" aria-label="Primary">
+            <a href="https://github.com/coldstep-io/coldstep/blob/main/QUICK_START.md">Quick start</a>
+            <a href="https://github.com/coldstep-io/coldstep/blob/main/README.md">Repository</a>
+            <a class="btn" href="https://github.com/coldstep-io/coldstep">View on GitHub</a>
+          </nav>
+        </div>
+      </header>
+
+      <main id="main">
+        <section class="hero" aria-labelledby="hero-heading">
+          <div class="hero-copy" data-reveal>
+            <h1 id="hero-heading">See what your CI actually touches.</h1>
+            <p class="hero-lede">
+              A composite GitHub Action and small Linux <strong>eBPF</strong> agent built for
+              <strong>GitHub-hosted Ubuntu</strong> runners. Record process and network signals in
+              <strong>detect</strong> mode, or optionally <strong>enforce</strong> an egress allowlist when you are
+              ready to harden the boundary.
+            </p>
+            <div class="hero-meta" role="list">
+              <span role="listitem">JSONL events</span>
+              <span role="listitem">Markdown digest</span>
+              <span role="listitem">Job Summary merge</span>
+            </div>
+          </div>
+          <aside class="hero-panel" data-reveal aria-label="How ColdStep sits in CI">
+            <p class="panel-label">Runner surface</p>
+            <div class="pipeline">
+              <div class="pipeline-row">
+                <span class="pill">checkout</span>
+                <span class="bar" aria-hidden="true"></span>
+                <strong>coldstep</strong>
+              </div>
+              <div class="pipeline-row">
+                <span class="pill">BPF load</span>
+                <span class="bar" aria-hidden="true"></span>
+                <strong>observe / enforce</strong>
+              </div>
+              <div class="pipeline-row">
+                <span class="pill">your job</span>
+                <span class="bar" aria-hidden="true"></span>
+                <strong>artifacts + summary</strong>
+              </div>
+            </div>
+          </aside>
+        </section>
+
+        <section class="section" aria-labelledby="features-heading">
+          <h2 id="features-heading">Built for merge gates you can reason about</h2>
+          <p class="section-intro">
+            ColdStep is intentionally narrow: Linux-only, validated on <code>ubuntu-latest</code>, with telemetry
+            written where you already look—workspace files and the Actions UI. Prefer JSONL when you need a durable
+            trail; use the digest when you want a fast human read.
+          </p>
+          <div class="features">
+            <article class="feature" data-reveal>
+              <h3>Kernel-adjacent truth</h3>
+              <p>
+                Syscall-class visibility for TCP connects, DNS, optional TLS ClientHello SNI, filesystem signals, and
+                process relationships—without pretending the runner is a perfect forensic appliance.
+              </p>
+            </article>
+            <article class="feature" data-reveal>
+              <h3>Progressive hardening</h3>
+              <p>
+                Start in detect mode to learn normal egress. When policy is clear, switch to enforce mode with explicit
+                allowlists so unexpected destinations fail the job early instead of silently leaking.
+              </p>
+            </article>
+            <article class="feature" data-reveal>
+              <h3>CI-native outputs</h3>
+              <p>
+                JSONL stream, shutdown telemetry JSON, and a Markdown digest you can merge into the job Summary—so
+                reviewers see the same story you do in the PR thread.
+              </p>
+            </article>
+          </div>
+
+          <div class="code-block" data-reveal>
+            <header>
+              <span>Minimal workflow</span>
+              <button type="button" class="copy-btn" id="copy-snippet" aria-label="Copy YAML snippet">
+                Copy
+              </button>
+            </header>
+            <pre><code id="yaml-snippet">jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: coldstep-io/coldstep@v0.1.0</code></pre>
+          </div>
+        </section>
+
+        <section class="section section--tight-top" aria-labelledby="modes-heading">
+          <h2 id="modes-heading">Two modes, one agent</h2>
+          <p class="section-intro">
+            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.0</code>) instead of tracking
+            <code>@main</code> unless you intentionally want churn.
+          </p>
+          <div class="modes">
+            <div class="mode">
+              <h3>Detect</h3>
+              <p>Observe and record. No egress blocking. Ideal for baselining and incident-friendly timelines.</p>
+              <span class="mode-tag">Default</span>
+            </div>
+            <div class="mode">
+              <h3>Enforce</h3>
+              <p>
+                Block TCP and UDP egress outside your allowlist. Requires explicit configuration—this is a guardrail,
+                not a surprise.
+              </p>
+              <span class="mode-tag">Opt-in</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="artifacts-heading">
+          <h2 id="artifacts-heading">Artifacts you can diff</h2>
+          <p class="section-intro">
+            Paths default under <code>$GITHUB_WORKSPACE</code> and can be overridden with environment variables such
+            as <code>COLDSTEP_EVENTS_LOG</code> when you need a stable contract for downstream tooling.
+          </p>
+          <ul class="outputs">
+            <li>
+              <code>.coldstep-events.jsonl</code>
+              <span>Append-only event stream—treat this as the source of truth for investigations.</span>
+            </li>
+            <li>
+              <code>.coldstep-detect.md</code>
+              <span>Shutdown digest with KPI tables and collapsible sections for quick scans.</span>
+            </li>
+            <li>
+              <code>.coldstep-telemetry.json</code>
+              <span>Totals and BPF health at shutdown for operational dashboards.</span>
+            </li>
+          </ul>
+        </section>
+      </main>
+
+      <footer class="site-footer">
+        <div class="footer-inner">
+          <p>
+            Open source under the project license.
+            <a href="https://github.com/coldstep-io/coldstep/blob/main/LICENSE.md">License inventory</a>
+          </p>
+          <div class="footer-links">
+            <a href="https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml">CI status</a>
+            <a href="https://github.com/coldstep-io/coldstep/blob/main/action.yml">action.yml inputs</a>
+            <a href="https://github.com/coldstep-io/coldstep">github.com/coldstep-io/coldstep</a>
+          </div>
+        </div>
+      </footer>
+    </div>
+
+    <script>
+      (function () {
+        var nodes = document.querySelectorAll("[data-reveal]");
+        if (!("IntersectionObserver" in window)) {
+          nodes.forEach(function (n) {
+            n.classList.add("is-visible");
+          });
+          return;
+        }
+        var io = new IntersectionObserver(
+          function (entries) {
+            entries.forEach(function (e) {
+              if (e.isIntersecting) {
+                e.target.classList.add("is-visible");
+                io.unobserve(e.target);
+              }
+            });
+          },
+          { rootMargin: "0px 0px -8% 0px", threshold: 0.15 }
+        );
+        nodes.forEach(function (n) {
+          io.observe(n);
+        });
+      })();
+
+      (function () {
+        var btn = document.getElementById("copy-snippet");
+        var text = document.getElementById("yaml-snippet");
+        if (!btn || !text) return;
+        btn.addEventListener("click", function () {
+          var value = text.textContent || "";
+          function done(ok) {
+            var prev = btn.textContent;
+            btn.textContent = ok ? "Copied" : "Copy";
+            if (ok) {
+              window.setTimeout(function () {
+                btn.textContent = prev;
+              }, 1600);
+            }
+          }
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(function () {
+              done(true);
+            }, function () {
+              done(false);
+            });
+          } else {
+            done(false);
+          }
+        });
+      })();
+    </script>
+  </body>
+</html>

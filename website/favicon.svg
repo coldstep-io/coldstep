@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="ColdStep">
+  <rect width="32" height="32" fill="#f6f3ee"/>
+  <path d="M6 22 L14 10 L18 16 L26 8" fill="none" stroke="#1e3a5f" stroke-width="2.2" stroke-linecap="square"/>
+  <circle cx="14" cy="10" r="2.2" fill="#c45c3a"/>
+</svg>
