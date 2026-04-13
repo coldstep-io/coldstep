@@ -21,7 +21,7 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.1.0
 ```
 
@@ -49,7 +49,7 @@ jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.1.0
         with:
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
