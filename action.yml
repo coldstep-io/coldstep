@@ -1,5 +1,8 @@
 name: Coldstep
-description: eBPF CI/runtime telemetry on GitHub-hosted ubuntu-latest (v1); see README and coldstep-ci.yml
+description: >-
+  eBPF CI/runtime telemetry on GitHub-hosted ubuntu-latest (v1); see README and coldstep-ci.yml.
+  GitHub requires this manifest be named action.yml (or action.yaml) at the repo root for uses: ./ and marketplace;
+  do not replace it with coldstep-action.yml or CI cannot load the composite.
 branding:
   icon: shield
   color: blue

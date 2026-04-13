@@ -22,7 +22,7 @@ jobs:
       COLDSTEP_DIFF_PREV_RUN: '1'
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Assert tracked text is UTF-8 (before uses ./)
         run: python3 scripts/assert_utf8_text.py
@@ -236,7 +236,7 @@ jobs:
 
       - name: Persist detect JSONL baseline artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coldstep-events-baseline-${{ env.NS_RUNNER_LABEL }}
           path: ${{ github.workspace }}/.coldstep-events.jsonl
@@ -253,7 +253,7 @@ jobs:
   prevent-mode:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
 
       - name: Assert tracked text is UTF-8 (before uses ./)
         run: python3 scripts/assert_utf8_text.py
