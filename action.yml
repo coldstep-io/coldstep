@@ -1,8 +1,8 @@
 name: Coldstep
+author: coldstep-io
 description: >-
-  eBPF CI/runtime telemetry on GitHub-hosted ubuntu-latest (v1); see README and coldstep-ci.yml.
-  GitHub requires this manifest be named action.yml (or action.yaml) at the repo root for uses: ./ and marketplace;
-  do not replace it with coldstep-action.yml or CI cannot load the composite.
+  eBPF egress telemetry and optional cgroup enforcement for GitHub-hosted ubuntu-latest runners (v1).
+  Keep this file as repository-root action.yml so workflows can reference it with uses: ./ and Marketplace can index it.
 branding:
   icon: shield
   color: blue
