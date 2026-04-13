@@ -1,8 +1,7 @@
-name: Coldstep
+name: Coldstep eBPF CI Egress
 author: coldstep-io
 description: >-
-  eBPF egress telemetry and optional cgroup enforcement for GitHub-hosted ubuntu-latest runners (v1).
-  Keep this file as repository-root action.yml so workflows can reference it with uses: ./ and Marketplace can index it.
+  eBPF egress telemetry and optional cgroup enforcement for GitHub-hosted ubuntu-latest CI runners (v1).
 branding:
   icon: shield
   color: blue
