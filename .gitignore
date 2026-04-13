@@ -4,8 +4,6 @@
 
 # Local Windows tooling binaries (not published)
 *.exe
-CONTRIBUTING.md
-SECURITY.md
 
 # Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
 bpf/vmlinux.h

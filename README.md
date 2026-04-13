@@ -21,7 +21,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.1.0
         with:
           fail-on-error: true
@@ -29,7 +29,7 @@ jobs:
       - run: echo "your build steps"
 ```
 
-Same-repo testing: `uses: ./` — see [`.github/workflows/coldstep-demo.yml`](.github/workflows/coldstep-demo.yml) (`workflow_dispatch`).
+**`coldstep-demo`** (`workflow_dispatch`) pins **`coldstep-io/coldstep@v0.1.0`** like consumers; merge gates still run the in-repo action with **`uses: ./`** via [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml).
 
 ---
 
@@ -46,13 +46,13 @@ Same-repo testing: `uses: ./` — see [`.github/workflows/coldstep-demo.yml`](.g
 
 ## GitHub Actions pins in this repository
 
-Consumer copy-paste above uses **`actions/checkout@v5`**. Other first-party pins in **`.github/workflows/`** (check files for edits over time):
+Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins in **`.github/workflows/`** (check files for edits over time):
 
 | Workflow / area | Notable `uses:` |
 | :-------------- | :-------------- |
-| **CI / demo / attest** | `actions/checkout@v5`, `actions/setup-go@v6` (`go-version: 1.24.x`), `actions/setup-node@v5` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v4` |
+| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version: 1.24.x`), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v7` |
 | **Supply chain** | `actions/attest@v4` |
-| **Pages** | `actions/checkout@v6`, `actions/configure-pages@v5`, `actions/upload-pages-artifact@v4`, `actions/deploy-pages@v4` |
+| **Pages** | `actions/checkout@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v4`, `actions/deploy-pages@v5` |
 
 ---
 
@@ -112,7 +112,7 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). There is no supported local workflow for compiling the agent, reproducing CI, or running the integration suite outside Actions.
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`** (or **`coldstep-demo.yml`** for composite demos) to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`** (or **`coldstep-demo.yml`** for the pinned-action demo) to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.

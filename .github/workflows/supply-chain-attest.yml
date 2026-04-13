@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: Setup Go
         uses: actions/setup-go@v6
@@ -31,7 +31,7 @@ jobs:
           go-version: '1.24.x'
 
       - name: Setup Node
-        uses: actions/setup-node@v5
+        uses: actions/setup-node@v6
         with:
           node-version: '24'
           cache: npm
@@ -96,7 +96,7 @@ jobs:
           sbom-path: '${{ github.workspace }}/sbom-js.cdx.json'
 
       - name: Upload attestable artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: supply-chain-artifacts-${{ github.run_id }}
           path: |
