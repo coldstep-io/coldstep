@@ -15,7 +15,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 2. **Go** — CI uses **`setup-go`** with **`go-version: 1.24.x`**, matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
 3. **TypeScript** — if you edit `src/main.ts` or `src/post.ts`, run `npm run typecheck` and **`npm run build`** (**`ncc`** writes **`dist/main`** and **`dist/post`**) so committed **`dist/`** stays in sync with sources.
 4. **Docs** — if you change workflow pins or action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
-5. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.1.0`**), not **`@main`**, unless they intentionally track head.
+5. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.1.1`**), not **`@main`**, unless they intentionally track head.
 
 ## Security-sensitive areas
 

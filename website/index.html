@@ -24,8 +24,9 @@
         <div class="header-inner">
           <p class="brand">Cold<span>Step</span></p>
           <nav class="nav-actions" aria-label="Primary">
+            <a href="https://github.com/marketplace/actions/coldstep-ebpf-ci-egress">Marketplace (v0.1.1)</a>
             <a href="https://github.com/coldstep-io/coldstep/blob/main/QUICK_START.md">Quick start</a>
-            <a href="https://github.com/coldstep-io/coldstep/blob/main/README.md">Repository</a>
+            <a href="https://github.com/coldstep-io/coldstep/blob/v0.1.1/README.md">README (v0.1.1)</a>
             <a class="btn" href="https://github.com/coldstep-io/coldstep">View on GitHub</a>
           </nav>
         </div>
@@ -42,6 +43,7 @@
               ready to harden the boundary.
             </p>
             <div class="hero-meta" role="list">
+              <span role="listitem"><code>coldstep-io/coldstep@v0.1.1</code></span>
               <span role="listitem">JSONL events</span>
               <span role="listitem">Markdown digest</span>
               <span role="listitem">Job Summary merge</span>
@@ -107,19 +109,25 @@
                 Copy
               </button>
             </header>
-            <pre><code id="yaml-snippet">jobs:
+            <pre><code id="yaml-snippet">on:
+  push:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.0</code></pre>
+      - uses: coldstep-io/coldstep@v0.1.1</code></pre>
           </div>
         </section>
 
         <section class="section section--tight-top" aria-labelledby="modes-heading">
           <h2 id="modes-heading">Two modes, one agent</h2>
           <p class="section-intro">
-            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.0</code>) instead of tracking
+            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.1</code>) instead of tracking
             <code>@main</code> unless you intentionally want churn.
           </p>
           <div class="modes">
@@ -170,7 +178,8 @@
           </p>
           <div class="footer-links">
             <a href="https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml">CI status</a>
-            <a href="https://github.com/coldstep-io/coldstep/blob/main/action.yml">action.yml inputs</a>
+            <a href="https://github.com/coldstep-io/coldstep/blob/v0.1.1/action.yml">action.yml inputs (v0.1.1)</a>
+            <a href="https://github.com/marketplace/actions/coldstep-ebpf-ci-egress">Marketplace · v0.1.1</a>
             <a href="https://github.com/coldstep-io/coldstep">github.com/coldstep-io/coldstep</a>
           </div>
         </div>

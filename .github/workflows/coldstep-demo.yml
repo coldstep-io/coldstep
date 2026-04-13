@@ -6,9 +6,9 @@
 
 name: coldstep-demo
 
-# This workflow pins the published JavaScript action so the runner does not depend on a
-# repository-root action.yml in GITHUB_WORKSPACE (see uses: ./ notes in workflow syntax).
-# In-repo action changes are still exercised via coldstep-ci.yml → coldstep-ci-runner.yml (uses: ./).
+# Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
+# from the workflow ref. Published tags (e.g. v0.1.1) must also ship `action.yml` at the root
+# for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
 
 on:
   workflow_dispatch:
@@ -36,7 +36,7 @@ jobs:
           go-version: '1.24.x'
 
       - name: Start Coldstep (detect mode)
-        uses: coldstep-io/coldstep@v0.1.0
+        uses: ./
         with:
           mode: detect
           smoke-test-egress: 'false'
@@ -283,7 +283,7 @@ jobs:
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
       - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
-        uses: coldstep-io/coldstep@v0.1.0
+        uses: ./
         with:
           mode: enforce
           fail-on-error: 'true'

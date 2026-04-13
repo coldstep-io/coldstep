@@ -2,6 +2,8 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
+**Pin workflows to** **`coldstep-io/coldstep@v0.1.1`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
 **[Quick Start](QUICK_START.md)** · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
@@ -10,7 +12,7 @@
 
 ## Add it to a workflow
 
-**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.0`** (or a newer tag you publish), not **`@main`**.
+**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.1`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 env:
@@ -22,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.0
+      - uses: coldstep-io/coldstep@v0.1.1
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-**`coldstep-demo`** (`workflow_dispatch`) pins **`coldstep-io/coldstep@v0.1.0`** like consumers; merge gates still run the in-repo action with **`uses: ./`** via [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml).
+**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.1.1`** (or a newer tag).
 
 ---
 
@@ -112,7 +114,7 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). There is no supported local workflow for compiling the agent, reproducing CI, or running the integration suite outside Actions.
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`** (or **`coldstep-demo.yml`** for the pinned-action demo) to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`** (or **`coldstep-demo.yml`** for the `uses: ./` demo) to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
