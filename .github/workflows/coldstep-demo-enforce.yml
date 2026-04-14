@@ -1,0 +1,87 @@
+# Simplified enforce-mode demo (cgroup egress allowlist). For apt ordering, nmap probes, baseline artifacts,
+# and deny assertions, see `.github/workflows/coldstep-demo.yml` — that file is the integration reference, not a copy template here.
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.3`
+
+name: coldstep-demo-enforce
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Assert tracked text is UTF-8 (before uses ./)
+        run: python3 scripts/assert_utf8_text.py
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      # Install curl before enforce; once enforce is up, non-allowlisted egress (including stub DNS UDP) can fail.
+      - name: Ensure curl
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl
+
+      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo prevent-mode).
+      - name: Pin allowlisted demo host in /etc/hosts
+        run: |
+          set -euo pipefail
+          ip="$(dig +short theclouddj.com A | awk 'NF{print; exit}')"
+          test -n "${ip}"
+          echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
+
+      - name: coldstep-io/coldstep (enforce)
+        uses: ./
+        with:
+          mode: enforce
+          fail-on-error: 'true'
+          smoke-test-egress: 'false'
+          allowed-hosts: theclouddj.com
+          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
+
+      - name: Allowed — HTTPS to allowlisted host
+        run: |
+          set -euo pipefail
+          curl -4 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null
+
+      # Deterministic deny: TEST-NET-1 is not merged into the allowlist map (same pattern as coldstep-demo prevent-mode).
+      - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
+        run: |
+          set -euo pipefail
+          echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
+
+      - name: Disallowed — expect curl to example.com to fail
+        run: |
+          set -euo pipefail
+          if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
+            echo "expected curl to example.com to fail under enforce allowlist"
+            exit 1
+          fi
+
+      - name: Stop agent (flush digest)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: Show enforcement lines (debug)
+        if: always()
+        run: |
+          set -euo pipefail
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          if [[ -f "$j" ]]; then grep '"type":"deny"' "$j" || true; fi
