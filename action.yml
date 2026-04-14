@@ -1,5 +1,5 @@
-name: coldstep-lens
-author: coldstep
+name: coldstep
+author: coldstep-io
 description: >-
   eBPF egress telemetry and optional cgroup enforcement for GitHub-hosted ubuntu-latest CI runners (v1).
 branding:

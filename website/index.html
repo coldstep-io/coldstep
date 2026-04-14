@@ -107,11 +107,16 @@
                 Copy
               </button>
             </header>
-            <pre><code id="yaml-snippet">jobs:
+            <pre><code id="yaml-snippet">on: push
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.1.3</code></pre>
           </div>
         </section>

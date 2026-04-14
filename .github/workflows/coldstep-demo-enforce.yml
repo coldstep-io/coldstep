@@ -1,7 +1,8 @@
 # Simplified enforce-mode demo (cgroup egress allowlist). For apt ordering, nmap probes, baseline artifacts,
 # and deny assertions, see `.github/workflows/coldstep-demo.yml` — that file is the integration reference, not a copy template here.
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.3`
 
-name: coldstep-lens-demo-enforce
+name: coldstep-demo-enforce
 
 on:
   workflow_dispatch:
@@ -39,7 +40,7 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start coldstep-lens (enforce)
+      - name: coldstep-io/coldstep (enforce)
         uses: ./
         with:
           mode: enforce
