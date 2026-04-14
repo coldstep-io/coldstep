@@ -107,7 +107,11 @@
                 Copy
               </button>
             </header>
-            <pre><code id="yaml-snippet">on: push
+            <pre><code id="yaml-snippet">name: coldstep
+
+on:
+  push:
+  pull_request:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
