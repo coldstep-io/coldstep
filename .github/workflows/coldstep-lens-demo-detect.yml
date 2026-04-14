@@ -1,0 +1,55 @@
+# Simplified detect-mode demo (observe-only). For the full capability matrix, drift diff, and artifacts, see
+# `.github/workflows/coldstep-demo.yml` — that file is the integration reference, not a copy template here.
+
+name: coldstep-lens-demo-detect
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  demo:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Assert tracked text is UTF-8 (before uses ./)
+        run: python3 scripts/assert_utf8_text.py
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+
+      - name: Start coldstep-lens (detect)
+        uses: ./
+        with:
+          mode: detect
+          log-level: info
+          fail-on-error: 'false'
+          report-job-summary: 'true'
+
+      - name: Sample egress (telemetry only — not blocked in detect)
+        run: |
+          set -euo pipefail
+          curl -4 -fsS --max-time 15 --connect-timeout 8 https://example.com/ >/dev/null
+
+      - name: Stop agent (flush digest)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: List workspace outputs
+        if: always()
+        run: |
+          set -euo pipefail
+          ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true

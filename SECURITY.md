@@ -9,7 +9,7 @@ coldstep loads **eBPF** programs with elevated privileges (**`sudo`**) on Linux 
 **Do not** open a public GitHub issue for undisclosed security vulnerabilities.
 
 1. Prefer **[GitHub private vulnerability reporting](https://docs.github.com/en/code-security/security-advisories/guidance-on-reporting-and-writing-information-about-vulnerabilities/privately-reporting-a-security-vulnerability)** for this repository (enable it under **Settings → Security** if it is not already on).
-2. If private reporting is unavailable, contact the **codestep-io** organization maintainers through an appropriate private channel.
+2. If private reporting is unavailable, contact the **coldstep-io** organization maintainers through an appropriate private channel.
 
 Include: affected component (action JS vs Go agent vs BPF), reproduction or threat sketch, and any known mitigations.
 

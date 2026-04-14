@@ -8,7 +8,7 @@ name: coldstep-demo
 
 # Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
 # from the workflow ref. Published tags (e.g. v0.1.3) must also ship `action.yml` at the root
-# for `uses: codestep-io/codestep-lens@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
+# for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
 
 on:
   workflow_dispatch:
