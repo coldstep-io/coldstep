@@ -2,9 +2,9 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
-**Pin workflows to** **`coldstep-io/coldstep@v0.1.1`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`codestep-io/codestep-lens@v0.1.3`** (or a newer tag). Listing: [**codestep-lens** on GitHub Marketplace](https://github.com/marketplace/actions/codestep-lens).
 
-[![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
+[![coldstep-ci](https://github.com/codestep-io/codestep-lens/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/codestep-io/codestep-lens/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/codestep-io/codestep-lens/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/codestep-io/codestep-lens/actions/workflows/coldstep-demo.yml)
 
 **[Quick Start](QUICK_START.md)** · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
 
@@ -12,7 +12,7 @@
 
 ## Add it to a workflow
 
-**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.1`** (or a newer tag you publish), not **`@main`**.
+**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`codestep-io/codestep-lens@v0.1.3`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 env:
@@ -24,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.1
+      - uses: codestep-io/codestep-lens@v0.1.3
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.1.1`** (or a newer tag).
+**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`codestep-io/codestep-lens@v0.1.3`** (or a newer tag).
 
 ---
 
@@ -123,4 +123,4 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 
 ## Repository
 
-Source: **[github.com/coldstep-io/coldstep](https://github.com/coldstep-io/coldstep)**
+Source: **[github.com/codestep-io/codestep-lens](https://github.com/codestep-io/codestep-lens)**

@@ -10,7 +10,7 @@ SPDX-License-Identifier: BSD-3-Clause
 
 ## BSD-3-Clause (this repository)
 
-Copyright (c) 2026 coldstep-io and contributors.
+Copyright (c) 2026 codestep-io and contributors.
 
 Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
 
