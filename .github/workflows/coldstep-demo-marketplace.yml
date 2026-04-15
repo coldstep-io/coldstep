@@ -1,7 +1,8 @@
 # Minimal consumer-style workflow: published composite only (`coldstep-io/coldstep@TAG`), same ref as the
 # [Marketplace listing](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress). The agent is built
 # from the action bundle unless you add `release-path`. Full integration / drift coverage stays on
-# `coldstep-demo.yml` (`uses: ./`).
+# `coldstep-demo.yml` (`uses: ./`). After detect starts, a typical Node setup + `npm ci` runs so the report
+# includes common CI egress (registry.npmjs.org, tool download).
 
 name: coldstep-demo-marketplace
 
@@ -21,3 +22,14 @@ jobs:
         with:
           mode: detect
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies (npm ci)
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
