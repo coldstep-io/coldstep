@@ -83,9 +83,8 @@ inputs:
     default: ''
   smoke-test-egress:
     description: >-
-      When unset, defaults to true in detect mode and false in enforce mode (avoid unintended deny noise).
-      When true, fire short IPv4 UDP sendto and cleartext HTTP sendto probes after the agent starts so the
-      digest and workspace JSONL commonly show udp/http rows on ubuntu-latest.
+      Default false. When true, fire short IPv4 UDP sendto and cleartext HTTP sendto probes after the agent starts
+      so the digest and workspace JSONL commonly show udp/http rows on ubuntu-latest (opt-in extra egress).
     required: false
     default: ''
 runs:

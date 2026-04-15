@@ -96,7 +96,6 @@ jobs:
         uses: ./
         with:
           mode: detect
-          smoke-test-egress: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
@@ -332,7 +331,6 @@ jobs:
         with:
           mode: enforce
           fail-on-error: 'true'
-          smoke-test-egress: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           allowed-ips: 1.1.1.1

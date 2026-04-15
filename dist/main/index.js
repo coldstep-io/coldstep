@@ -31016,14 +31016,6 @@ function inputBoolDefault(name, defaultVal) {
     }
     return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
-/** Empty input: on in detect, off in enforce. Explicit true/false overrides. */
-function smokeTestEgressDecision(mode) {
-    const v = core.getInput('smoke-test-egress').trim();
-    if (v === '') {
-        return mode !== 'enforce';
-    }
-    return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
-}
 async function waitForAgentReady(statusPath, timeoutMs) {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -31059,7 +31051,7 @@ async function run() {
     const failOnError = inputBoolDefault('fail-on-error', false);
     const logLevel = core.getInput('log-level') || 'info';
     const reportJobSummary = inputBoolDefault('report-job-summary', true);
-    const smokeTestEgress = smokeTestEgressDecision(mode);
+    const smokeTestEgress = inputBoolDefault('smoke-test-egress', false);
     const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
     const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
     const detectLog = path.join(baseDir, '.coldstep-detect.md');
@@ -31150,7 +31142,7 @@ async function run() {
             stdio: 'ignore',
         });
         probe.unref();
-        core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (set smoke-test-egress: false to disable)');
+        core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
         const ok = await waitForAgentReady(agentStatus, 60_000);

@@ -61,7 +61,6 @@ jobs:
         with:
           mode: enforce
           fail-on-error: 'true'
-          smoke-test-egress: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           allowed-ips: 1.1.1.1

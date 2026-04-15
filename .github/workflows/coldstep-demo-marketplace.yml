@@ -1,0 +1,23 @@
+# Minimal consumer-style workflow: published composite only (`coldstep-io/coldstep@TAG`), same ref as the
+# [Marketplace listing](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress). The agent is built
+# from the action bundle unless you add `release-path`. Full integration / drift coverage stays on
+# `coldstep-demo.yml` (`uses: ./`).
+
+name: coldstep-demo-marketplace
+
+on:
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  detect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: coldstep-io/coldstep@v0.1.4
+        with:
+          mode: detect
+          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
