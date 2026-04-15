@@ -91,7 +91,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `report-job-summary` | Merge digest into the job Summary. |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
-| `smoke-test-egress` | Short UDP/HTTP probes in detect (auto by default) to improve digest coverage on hosted runners. |
+| `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
 
 ---
 

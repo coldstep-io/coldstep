@@ -52,7 +52,6 @@ jobs:
         uses: ./
         with:
           mode: detect
-          smoke-test-egress: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
@@ -310,7 +309,6 @@ jobs:
         with:
           mode: enforce
           fail-on-error: 'true'
-          smoke-test-egress: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
