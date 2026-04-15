@@ -1,5 +1,6 @@
 # Simplified detect-mode demo (observe-only) with previous-run JSONL diff (`COLDSTEP_DIFF_PREV_RUN`).
-# For the full capability matrix and extra probes, see `.github/workflows/coldstep-demo.yml`.
+# One real probe per detect capability (same probes as `coldstep-demo.yml` detect-mode). For the full integration
+# workflow including enforce, see `.github/workflows/coldstep-demo.yml`.
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.3`
 
 name: coldstep-demo-detect
@@ -36,11 +37,42 @@ jobs:
           log-level: info
           fail-on-error: 'false'
           report-job-summary: 'true'
+          smoke-test-egress: 'false'
+          allowed-hosts: theclouddj.com, *.ubuntu.com
+          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
-      - name: Sample egress (telemetry only — not blocked in detect)
+      - name: Install nmap (apt)
         run: |
           set -euo pipefail
-          curl -4 -fsS --max-time 15 --connect-timeout 8 https://example.com/ >/dev/null
+          sudo apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+
+      - name: Capability probes (detect mode)
+        run: |
+          set -euo pipefail
+          # TCP (nmap)
+          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          # HTTP cleartext
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
+          # TLS ClientHello/SNI (force HTTP/1.1 to avoid QUIC bypassing TCP write sniff)
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+          # UDP sendto evidence
+          timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
+          # Process activity (proc_tree feature gate)
+          bash -c 'echo "coldstep-demo" >/dev/null'
+          # Filesystem events: create -> rename -> chmod -> unlink
+          TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
+          TMP_A="${TMP_FS_DIR}/a.txt"
+          TMP_B="${TMP_FS_DIR}/b.txt"
+          printf 'demo\n' > "${TMP_A}"
+          mv "${TMP_A}" "${TMP_B}"
+          chmod 600 "${TMP_B}"
+          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
+          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
+            rm -f "${TMP_B}" || true
+          fi
+          unset _NS_DEMO_UNLINK_TARGET || true
+          rmdir "${TMP_FS_DIR}" || true
 
       - name: Stop agent (flush digest)
         run: |
@@ -52,6 +84,53 @@ jobs:
             kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
             sleep 2
           fi
+
+      - name: Verify detect capabilities and write visual summary
+        run: |
+          set -euo pipefail
+          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          test -f "$f"
+          test -f "$j"
+          grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
+          grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
+          grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
+          grep -q '"type":"udp"' "$j" || { echo "expected udp JSONL"; exit 1; }
+          grep -q '"type":"http"' "$j" || { echo "expected http JSONL"; exit 1; }
+          grep -q '"type":"tls"' "$j" || { echo "expected tls JSONL with tls_sni gate"; exit 1; }
+          grep -q '"type":"proc_fork"' "$j" || { echo "expected proc_fork JSONL with proc_tree gate"; exit 1; }
+          grep -q '"type":"fs_event"' "$j" || { echo "expected fs_event JSONL with fs_events gate"; exit 1; }
+          grep -Eq '"type":"fs_event".*"op":"create"' "$j" || { echo "expected fs_event create"; exit 1; }
+          if ! grep -Eq '"type":"fs_event".*"op":"unlink"' "$j"; then
+            echo "::warning::fs_event unlink not observed in this run (best-effort signal on ubuntu-latest)"
+          fi
+          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
+            echo "::warning::fs_event rename not observed in this run (best-effort signal on ubuntu-latest)"
+          fi
+          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
+            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ubuntu-latest)"
+          fi
+          grep -q 'TLS ClientHello' "$f" || { echo "expected TLS section in digest"; exit 1; }
+          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
+          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
+          grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
+          grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
+          {
+            echo "### Detect Capability Matrix (GitHub-hosted ubuntu-latest)"
+            echo ""
+            echo "| Capability | Status | Evidence |"
+            echo "|---|---|---|"
+            echo "| Exec tracing | 🟢 | \\`type:exec\\` present |"
+            echo "| TCP connect telemetry | 🟢 | \\`type:tcp\\` present (nmap/curl) |"
+            echo "| UDP sendto telemetry | 🟢 | \\`type:udp\\` present (:53 probe) |"
+            echo "| HTTP cleartext telemetry | 🟢 | \\`type:http\\` present |"
+            echo "| TLS ClientHello/SNI hint | 🟢 | \\`type:tls\\` with \\`tls_sni=1\\` |"
+            echo "| Process tree (fork) | 🟢 | \\`type:proc_fork\\` present |"
+            echo "| Filesystem events | 🟢 | \\`type:fs_event\\` with required create (+ best-effort unlink/rename/chmod) |"
+            echo "| Minimal demo | 🟢 | \\`coldstep-demo-detect.yml\\` — see \\`coldstep-demo.yml\\` for enforce matrix |"
+            echo ""
+            echo "_Legend: 🟢 pass, 🟡 investigate, 🔴 fail_"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'

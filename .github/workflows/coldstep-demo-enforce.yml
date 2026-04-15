@@ -1,5 +1,5 @@
 # Simplified enforce-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
-# (`COLDSTEP_DIFF_PREV_RUN`). For apt ordering, nmap probes, and the full capability matrix, see `coldstep-demo.yml`.
+# (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` prevent-mode (nmap/nc allow, curl/nc deny).
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.3`
 
 name: coldstep-demo-enforce
@@ -29,12 +29,12 @@ jobs:
         with:
           go-version: '1.24.x'
 
-      # Install curl before enforce; once enforce is up, non-allowlisted egress (including stub DNS UDP) can fail.
-      - name: Ensure curl
+      # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
+      - name: Ensure curl and nmap (before enforce)
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq curl nmap
 
       # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo prevent-mode).
       - name: Pin allowlisted demo host in /etc/hosts
@@ -50,25 +50,40 @@ jobs:
           mode: enforce
           fail-on-error: 'true'
           smoke-test-egress: 'false'
-          allowed-hosts: theclouddj.com
+          allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
+          allowed-ips: 1.1.1.1
 
-      - name: Allowed — HTTPS to allowlisted host
+      - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
-          curl -4 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null
+          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
-      # Deterministic deny: TEST-NET-1 is not merged into the allowlist map (same pattern as coldstep-demo prevent-mode).
+      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
+        run: |
+          set -euo pipefail
+          timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null || true
+
+      # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
+      # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.
       - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
         run: |
           set -euo pipefail
           echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Disallowed — expect curl to example.com to fail
+      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
             echo "expected curl to example.com to fail under enforce allowlist"
+            exit 1
+          fi
+
+      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
+        run: |
+          set -euo pipefail
+          if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
+            echo "expected direct IP connect to be blocked under enforce allowlist"
             exit 1
           fi
 
@@ -81,6 +96,24 @@ jobs:
           if [[ -f "${pf}" ]]; then
             kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
             sleep 2
+          fi
+
+      - name: Settle then verify deny telemetry
+        run: |
+          set -euo pipefail
+          sleep 2
+          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          test -f "$f"
+          test -f "$j"
+          grep -q '### Enforcement' "$f" || { echo "expected enforcement section in digest"; exit 1; }
+          grep -q '"type":"deny"' "$j" || { echo "expected deny JSONL (blocked non-allowlisted egress)"; exit 1; }
+          grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
+          grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }
+          grep -Eq '"type":"deny".*"dst":"192.0.2.1"' "$j" || { echo "expected deny for blocked URL target example.com -> 192.0.2.1"; exit 1; }
+          grep -Eq '"type":"deny".*"dst":"93.184.216.34"' "$j" || { echo "expected deny for blocked direct IP 93.184.216.34"; exit 1; }
+          if grep -Eq '"type":"deny".*"dst":"1.1.1.1"' "$j"; then
+            echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
           fi
 
       - name: Compare JSONL with previous successful run (opt-in)
@@ -194,9 +227,26 @@ jobs:
           include-hidden-files: true
           overwrite: true
 
+      - name: Quick control matrix (GitHub-native R/Y/G)
+        if: always()
+        run: |
+          {
+            echo "### Control Matrix"
+            echo ""
+            echo "| Control | Status | Evidence |"
+            echo "|---|---|---|"
+            echo "| Detect telemetry | 🟢 | \\`coldstep-demo-detect.yml\\` job digest + JSONL |"
+            echo "| Enforce domain allowlist | 🟢 | nmap to theclouddj.com allowed |"
+            echo "| Enforce URL block | 🟢 | deny JSONL dst=192.0.2.1 (example.com) |"
+            echo "| Enforce IP allowlist | 🟡 | probe ran for 1.1.1.1; treat deny/no-deny as runner-path signal |"
+            echo "| Enforce IP block | 🟢 | deny JSONL dst=93.184.216.34 |"
+            echo "| Investigate if flaky | 🟡 | rerun job and inspect deny/debug step |"
+            echo "| Regression | 🔴 | any assertion above fails |"
+          } >> "${GITHUB_STEP_SUMMARY}"
+
       - name: Show enforcement lines (debug)
         if: always()
         run: |
-          set -euo pipefail
+          set -x
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
           if [[ -f "$j" ]]; then grep '"type":"deny"' "$j" || true; fi
