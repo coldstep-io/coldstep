@@ -3,6 +3,9 @@
 # Job `prevent-mode`: same BPF stack as product `mode: enforce` (cgroup block non-allowlisted egress). apt runs before the
 # agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
+#
+# Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
+# (published by `supply-chain-attest.yml` on version tags). Both jobs pass `release-path` and do not compile locally.
 
 name: coldstep-demo
 
@@ -15,6 +18,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLDSTEP_AGENT_VERSION: v0.1.4
 
 jobs:
   detect-mode:
@@ -31,9 +35,18 @@ jobs:
       - name: Assert tracked text is UTF-8 (before uses ./)
         run: python3 scripts/assert_utf8_text.py
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.24.x'
+      - name: Download coldstep agent (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          gh release download "${COLDSTEP_AGENT_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'coldstep-linux-amd64' \
+            --dir bin
+          mv bin/coldstep-linux-amd64 bin/coldstep
+          chmod +x bin/coldstep
 
       - name: Start Coldstep (detect mode)
         uses: ./
@@ -43,6 +56,7 @@ jobs:
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          release-path: bin/coldstep
 
       - name: Install nmap (apt)
         run: |
@@ -264,9 +278,18 @@ jobs:
       - name: Assert tracked text is UTF-8 (before uses ./)
         run: python3 scripts/assert_utf8_text.py
 
-      - uses: actions/setup-go@v6
-        with:
-          go-version: '1.24.x'
+      - name: Download coldstep agent (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          gh release download "${COLDSTEP_AGENT_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'coldstep-linux-amd64' \
+            --dir bin
+          mv bin/coldstep-linux-amd64 bin/coldstep
+          chmod +x bin/coldstep
 
       # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
       - name: Install nmap (apt — before enforce so mirrors/DNS still work)
@@ -293,6 +316,7 @@ jobs:
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           # Explicit IP allowlist demo (direct connect test below).
           allowed-ips: 1.1.1.1
+          release-path: bin/coldstep
 
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
