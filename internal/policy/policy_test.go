@@ -40,6 +40,24 @@ func TestParse_AllowedIP(t *testing.T) {
 	}
 }
 
+func TestPolicy_MergeLiteralAllowedIPv4Keys(t *testing.T) {
+	p, err := Parse("", "1.1.1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make(map[[4]byte]struct{})
+	p.MergeLiteralAllowedIPv4Keys(keys)
+	want := net.ParseIP("1.1.1.1").To4()
+	var wk [4]byte
+	copy(wk[:], want)
+	if _, ok := keys[wk]; !ok {
+		t.Fatalf("expected 1.1.1.1 in keys, got %d entries", len(keys))
+	}
+	p.MergeLiteralAllowedIPv4Keys(nil) // no panic
+	var nilP *Policy
+	nilP.MergeLiteralAllowedIPv4Keys(keys) // no panic
+}
+
 func TestParse_InvalidIP(t *testing.T) {
 	_, err := Parse("", "999.0.0.1")
 	if err == nil {

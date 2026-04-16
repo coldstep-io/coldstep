@@ -1,5 +1,6 @@
 /*
- * cgroup egress enforcement (IPv4 connect + UDP sendmsg) for mode: enforce.
+ * cgroup egress enforcement for mode: enforce — IPv4 only, hooks cgroup/connect4 and
+ * cgroup/sendmsg4 (no IPv6). Intended for GitHub-hosted ephemeral Linux runners.
  * Loaded as a separate BPF collection from syscall observability programs.
  */
 #include "vmlinux.h"

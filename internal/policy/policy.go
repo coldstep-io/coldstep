@@ -111,6 +111,22 @@ func (p *Policy) IgnoredIPv4Nets() []*net.IPNet {
 	return p.ignored
 }
 
+// MergeLiteralAllowedIPv4Keys adds IPv4 addresses from COLDSTEP_ALLOWED_IPS-style policy entries
+// into keys (used with domain-resolved IPs for enforce-mode BPF allowed_ipv4).
+func (p *Policy) MergeLiteralAllowedIPv4Keys(keys map[[4]byte]struct{}) {
+	if p == nil || keys == nil || len(p.ips) == 0 {
+		return
+	}
+	for s := range p.ips {
+		if len(s) != net.IPv4len {
+			continue
+		}
+		var k [4]byte
+		copy(k[:], s)
+		keys[k] = struct{}{}
+	}
+}
+
 func splitFields(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)

@@ -45,15 +45,16 @@ type execEvent struct {
 }
 
 type runStats struct {
-	mu           sync.Mutex
-	execN        int
-	tcpN         int
-	udpN         int
-	httpN        int
-	tlsN         int
-	procForkN    int
-	fsN          int
-	policyCounts map[string]int
+	mu                           sync.Mutex
+	execN                        int
+	tcpN                         int
+	udpN                         int
+	httpN                        int
+	tlsN                         int
+	procForkN                    int
+	fsN                          int
+	connect4TupleUpdateFailuresN int
+	policyCounts                 map[string]int
 }
 
 type forkSectionState struct {
@@ -382,6 +383,18 @@ func (s *runStats) addTLS(cl policy.Class) {
 	s.addPolicyLocked(cl)
 }
 
+func (s *runStats) setConnect4TupleUpdateFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connect4TupleUpdateFailuresN = n
+}
+
+func (s *runStats) connect4TupleUpdateFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connect4TupleUpdateFailuresN
+}
+
 func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) telemetry.Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -390,17 +403,18 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		pc[k] = v
 	}
 	return telemetry.Summary{
-		Version:        2,
-		SchemaVersion:  telemetry.SchemaVersion,
-		ExecEvents:     s.execN,
-		TCPEvents:      s.tcpN,
-		UDPEvents:      s.udpN,
-		HTTPEvents:     s.httpN,
-		TLSEvents:      s.tlsN,
-		ProcForkEvents: s.procForkN,
-		PolicyCounts:   pc,
-		KernelRelease:  kernel,
-		BPF:            bpf,
+		Version:                     2,
+		SchemaVersion:               telemetry.SchemaVersion,
+		ExecEvents:                  s.execN,
+		TCPEvents:                   s.tcpN,
+		UDPEvents:                   s.udpN,
+		HTTPEvents:                  s.httpN,
+		TLSEvents:                   s.tlsN,
+		ProcForkEvents:              s.procForkN,
+		Connect4TupleUpdateFailures: s.connect4TupleUpdateFailuresN,
+		PolicyCounts:                pc,
+		KernelRelease:               kernel,
+		BPF:                         bpf,
 	}
 }
 
@@ -1345,6 +1359,18 @@ func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
 	return int(v)
 }
 
+func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.Connect4TupleUpdateFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 // loadEnforceMaps programs the BPF allowlist map from a one-time IPv4 resolution of domains at agent
 // startup (short CI jobs); it does not track live DNS changes for already-loaded addresses.
 func loadEnforceMaps(ctx context.Context, objs *traceenforce.TraceenforceObjects, domains []string, resolver policy.LookupIPFunc, maxAttempts int, pol *policy.Policy) (int, error) {
@@ -1362,6 +1388,9 @@ func loadEnforceMaps(ctx context.Context, objs *traceenforce.TraceenforceObjects
 		}
 	}
 	keys := resolveAllowlistIPv4Keys(ctx, domains, resolver, maxAttempts)
+	if pol != nil {
+		pol.MergeLiteralAllowedIPv4Keys(keys)
+	}
 	if len(keys) == 0 {
 		return 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no IPv4 map entries; v1 enforce uses IPv4 A records only)")
 	}
@@ -1582,6 +1611,7 @@ func buildDigestInput(
 		EnforcementDenyCount:           enforceState.denyCount,
 		EnforcementDenyReserveFailures: enforceState.denyReserveFailures,
 		EnforcementFirstDeny:           enforceState.firstDeny,
+		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
 		FSRows:                         fsRows,
@@ -1719,6 +1749,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
 		defer syscallLnk.Close()
 		defer syscallObjs.Close()
+		defer func() {
+			if syscallObjs != nil {
+				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
+			}
+		}()
 		defer connRd.Close()
 		defer udpRd.Close()
 		defer httpRd.Close()

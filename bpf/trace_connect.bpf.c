@@ -1,8 +1,8 @@
 /*
- * Observability-only BPF: raw_tp/sys_enter for GitHub-hosted ubuntu-latest (amd64):
- *   - IPv4 TCP connect (__NR_connect 42) + (tgid,fd)->dst map for TLS write sniff
- *   - IPv4 UDP sendto (__NR_sendto 44) + optional HTTP/1 request sniff (dport 80)
- *   - Optional TLS ClientHello sniff on write(2) or sendto(2) (NULL dest) when cfg map on
+ * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64):
+ *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
+ *   - IPv4-only UDP via sendto(2) (not complete for all UDP egress paths)
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/sendto
  *   - close(2) clears (tgid,fd) map entries
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
@@ -50,9 +50,30 @@ struct {
 } connect4_by_tgid_fd SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} connect4_tuple_update_failures SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
+
+static __always_inline void note_connect4_tuple_update_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&connect4_tuple_update_failures, &k);
+
+	if (!v)
+		return;
+	{
+		__u32 n = *v + 1;
+
+		bpf_map_update_elem(&connect4_tuple_update_failures, &k, &n, BPF_ANY);
+	}
+}
 
 #include "trace_tcp_obs.inc"
 #include "trace_udp_obs.inc"

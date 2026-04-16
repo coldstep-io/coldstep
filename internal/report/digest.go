@@ -142,6 +142,8 @@ type DigestInput struct {
 	EnforcementDenyCount           int
 	EnforcementDenyReserveFailures int
 	EnforcementFirstDeny           *DenyDigestRow
+
+	Connect4TupleUpdateFailures int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -155,7 +157,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if strings.EqualFold(in.EnforcementMode, "enforce") {
 		b.WriteString("## Coldstep · enforce\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Enforce mode: cgroup-scoped IPv4 egress is allowlisted; denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
+		b.WriteString("<sub>Enforce mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
 	} else {
 		b.WriteString("## Coldstep · detect\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
@@ -168,6 +170,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
 	}
 	b.WriteString(fmt.Sprintf("| **tcp** | %d |\n", in.TCPTotal))
+	if in.Connect4TupleUpdateFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
+	}
 	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
 	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
 	if tlsKPIVisible(in) {
@@ -185,6 +190,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if fsKPIVisible(in) {
 		b.WriteString(" **fs_event** KPI counts high-signal filesystem operations (create, unlink, rename, chmod) observed via `openat`/`unlinkat`/`renameat2`/`fchmodat` syscalls when `COLDSTEP_FEATURE_GATES=fs_events=1`.")
+	}
+	if in.Connect4TupleUpdateFailures > 0 {
+		b.WriteString(" **connect4** row: BPF could not insert some `(tgid,fd)→tuple` entries (hash pressure); TCP connect ringbuf events are unchanged, but TLS ClientHello correlation may degrade.")
 	}
 	b.WriteString("</sub>\n\n")
 
