@@ -1264,6 +1264,11 @@ func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver po
 	if len(compiled.Domains) == 0 {
 		return policy.CompileResult{}, fmt.Errorf("enforce mode requires non-empty allowlist after normalization")
 	}
+	pol, perr := cfg.Policy()
+	if perr != nil {
+		return policy.CompileResult{}, perr
+	}
+	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
 	if compiled.AllowedIPv4.Len() == 0 {
 		msg := "enforce allowlist effective allowlist is empty (no IPv4 resolutions; v1 enforce uses IPv4 A records only)"
 		if len(compiled.UnresolvedDomains) > 0 {

@@ -170,6 +170,18 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "effective allowlist is empty") {
 		t.Fatalf("expected effective allowlist empty error, got %v", err)
 	}
+
+	res, err := compileEnforceAllowlist(ctx, config.Config{
+		Mode:           config.ModeEnforce,
+		AllowedDomains: []string{"example.com"},
+		AllowedIPs:     "1.1.1.1",
+	}, resolver, 1)
+	if err != nil {
+		t.Fatalf("literal allowed-ips should satisfy compile when DNS yields no A records: %v", err)
+	}
+	if res.AllowedIPv4.Len() != 1 || !res.AllowedIPv4.Contains(net.ParseIP("1.1.1.1")) {
+		t.Fatalf("expected single 1.1.1.1 in compiled set, got len=%d", res.AllowedIPv4.Len())
+	}
 }
 
 // TestRun_EnforceDenyEventEmission checks testAppendDenySample appends JSONL and returns the synthetic

@@ -40,6 +40,23 @@ func TestParse_AllowedIP(t *testing.T) {
 	}
 }
 
+func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
+	p, err := Parse("", "1.1.1.1, 8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s IPv4Set
+	p.MergeLiteralAllowedIPv4Into(&s)
+	if s.Len() != 2 {
+		t.Fatalf("expected 2 IPs in set, got %d", s.Len())
+	}
+	if !s.Contains(net.ParseIP("8.8.8.8")) {
+		t.Fatal("expected 8.8.8.8 in set")
+	}
+	var nilP *Policy
+	nilP.MergeLiteralAllowedIPv4Into(&s) // no panic
+}
+
 func TestPolicy_MergeLiteralAllowedIPv4Keys(t *testing.T) {
 	p, err := Parse("", "1.1.1.1")
 	if err != nil {

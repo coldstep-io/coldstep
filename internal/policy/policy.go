@@ -127,6 +127,19 @@ func (p *Policy) MergeLiteralAllowedIPv4Keys(keys map[[4]byte]struct{}) {
 	}
 }
 
+// MergeLiteralAllowedIPv4Into adds literal allowed IPv4 addresses into s (union with domain resolutions).
+func (p *Policy) MergeLiteralAllowedIPv4Into(s *IPv4Set) {
+	if p == nil || s == nil || len(p.ips) == 0 {
+		return
+	}
+	for sKey := range p.ips {
+		if len(sKey) != net.IPv4len {
+			continue
+		}
+		s.Add(net.IP([]byte(sKey)))
+	}
+}
+
 func splitFields(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
