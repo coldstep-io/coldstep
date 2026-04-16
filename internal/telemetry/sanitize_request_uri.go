@@ -12,22 +12,22 @@ const redactedCredential = "REDACTED"
 var sensitiveQueryKeys = map[string]struct{}{
 	"access_token": {}, "refresh_token": {}, "id_token": {}, "id_token_hint": {},
 	"token": {}, "oauth_token": {}, "oauth_verifier": {},
-	"code": {}, // OAuth 2 authorization code
+	"code":          {}, // OAuth 2 authorization code
 	"client_secret": {}, "client_assertion": {},
 	"api_key": {}, "apikey": {}, "api-key": {},
 	"secret": {}, "password": {}, "passwd": {}, "pwd": {},
 	"signature": {}, "sig": {},
 	"session": {}, "sessionid": {}, "sid": {},
-	"state": {}, // OAuth state (often high-entropy)
+	"state":  {}, // OAuth state (often high-entropy)
 	"bearer": {},
 }
 
 var (
-	jwtLikeRE  = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
-	bearerRE   = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
-	ghPatRE    = regexp.MustCompile(`\bgh[ps]_[A-Za-z0-9]{20,}\b`)
+	jwtLikeRE   = regexp.MustCompile(`eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+`)
+	bearerRE    = regexp.MustCompile(`(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+`)
+	ghPatRE     = regexp.MustCompile(`\bgh[ps]_[A-Za-z0-9]{20,}\b`)
 	stripeKeyRE = regexp.MustCompile(`\bsk_(?:live|test)_[A-Za-z0-9]+\b`)
-	awsKeyRE   = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
+	awsKeyRE    = regexp.MustCompile(`\bAKIA[0-9A-Z]{16}\b`)
 )
 
 func normQueryKey(k string) string {
