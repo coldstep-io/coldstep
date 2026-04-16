@@ -188,7 +188,7 @@ jobs:
           fi
 
           current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_REF_NAME}"
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
           baseline_run="$(
             gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \

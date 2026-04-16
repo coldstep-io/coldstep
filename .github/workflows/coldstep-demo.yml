@@ -193,7 +193,7 @@ jobs:
           fi
 
           current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_REF_NAME}"
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
           # Single gh --jq filter (no awk|head): awk exiting first line SIGPIPEs jq under pipefail (exit 141).
           # gh only accepts one --jq string (not jq --arg); embed run id in the expression (digits only).

@@ -246,7 +246,8 @@ jobs:
           fi
           
           current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_REF_NAME}"
+          # pull_request uses GITHUB_REF_NAME like "21/merge"; use the head branch so gh finds prior runs.
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           # gh --workflow expects a file name (e.g. coldstep-ci-runner.yml), not the workflow display title.
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
           baseline_run="$(
