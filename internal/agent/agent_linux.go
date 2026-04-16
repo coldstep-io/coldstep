@@ -1707,9 +1707,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Mode == config.ModeEnforce {
-		enforceState.setModeAndAllowlist(string(cfg.Mode), enforceCompiled.AllowedIPv4.Len())
-	}
 
 	dnsCache := NewDNSCache()
 
