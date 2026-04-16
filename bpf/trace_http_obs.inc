@@ -25,8 +25,11 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 
 		if (sz > HTTP_PAYLOAD_MAX)
 			sz = HTTP_PAYLOAD_MAX;
-		/* Verifier (e.g. Ubuntu 22.04 / Azure 6.8): bpf_probe_read_user size must be a tight unsigned bound. */
-		sz &= 0xffu;
+		/*
+		 * If HTTP_PAYLOAD_MAX is raised above 255, revisit the verifier upper bound
+		 * for bpf_probe_read_user (and this _Static_assert).
+		 */
+		_Static_assert(HTTP_PAYLOAD_MAX <= 255, "http sniff: raise read bound if HTTP_PAYLOAD_MAX > 255");
 		he->capture_len = (__u16)sz;
 		if (bpf_probe_read_user(he->payload, sz, (void *)buf_ptr)) {
 			bpf_ringbuf_discard(he, 0);

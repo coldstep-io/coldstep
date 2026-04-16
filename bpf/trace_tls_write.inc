@@ -57,10 +57,11 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			ev->_pad[0] = 0;
 			ev->_pad[1] = 0;
 			{
-				__u32 cap = len;
+				/* capture_len must match bytes read (userspace caps at TLS_PAYLOAD_MAX). */
+				__u32 cap_len = len;
 
-				ev->capture_len = (__u16)cap;
-				if (bpf_probe_read_user(ev->payload, TLS_PAYLOAD_MAX, (void *)buf_ptr)) {
+				ev->capture_len = (__u16)cap_len;
+				if (bpf_probe_read_user(ev->payload, cap_len, (void *)buf_ptr)) {
 					bpf_ringbuf_discard(ev, 0);
 					return;
 				}

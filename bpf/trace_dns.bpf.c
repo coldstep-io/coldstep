@@ -1,17 +1,15 @@
 /*
- * DNS response sniff (IPv4 A records) — ubuntu-latest amd64 only.
- * Pairs recvfrom sys_enter (capture buf,len) with sys_exit (read result) for __NR_recvfrom.
+ * DNS response sniff (IPv4 A records) — pairs recvfrom sys_enter with sys_exit.
+ * Syscall ABI matches trace_connect (x86_64 + arm64 via trace_connect_obs.h).
  */
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
+#include "trace_connect_obs.h"
 
-#ifndef COLDSTEP_NR_RECVFROM
-#define COLDSTEP_NR_RECVFROM 45
-#endif
+char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define DNS_SNIFF_MAX 512
 
@@ -53,12 +51,12 @@ int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (id != (long)COLDSTEP_NR_RECVFROM)
 		return 0;
 
-	if (bpf_core_read(&buf_user, sizeof(buf_user), &regs->si))
+	if (ns_read_syscall_arg(regs, 1, &buf_user))
 		return 0;
 	if (!buf_user)
 		return 0;
 
-	if (bpf_core_read(&max_len_u, sizeof(max_len_u), &regs->dx))
+	if (ns_read_syscall_arg(regs, 2, &max_len_u))
 		return 0;
 
 	val.buf_user = buf_user;
@@ -77,7 +75,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 {
 	struct pt_regs *regs = (void *)ctx->args[0];
 	long ret = (long)ctx->args[1];
-	unsigned long orig_ax;
+	unsigned long orig_nr;
 	struct recvfrom_pending *pending;
 	struct dns_sniff_event *ev;
 	__u32 copy_len;
@@ -86,9 +84,9 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (!regs)
 		return 0;
 
-	if (bpf_core_read(&orig_ax, sizeof(orig_ax), &regs->orig_ax))
+	if (coldstep_read_orig_syscall_nr(regs, &orig_nr))
 		return 0;
-	if (orig_ax != (unsigned long)COLDSTEP_NR_RECVFROM)
+	if (orig_nr != (unsigned long)COLDSTEP_NR_RECVFROM)
 		return 0;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();

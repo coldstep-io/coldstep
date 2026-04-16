@@ -82,3 +82,37 @@ func TestDecodeHTTPSniffEvent_tooShort(t *testing.T) {
 		t.Fatal("expected false")
 	}
 }
+
+func TestDecodeTLSSniffEvent_captureLenAtMax(t *testing.T) {
+	const header = 4 + 4 + 16 + 4 + 2 + 2 + 2
+	const expect = header + tlsPayloadMax
+	raw := make([]byte, expect)
+	binary.LittleEndian.PutUint32(raw[0:4], 300)
+	binary.LittleEndian.PutUint32(raw[4:8], 301)
+	copy(raw[8:24], []byte("tlscli\x00"))
+	raw[24], raw[25], raw[26], raw[27] = 9, 9, 9, 9
+	binary.BigEndian.PutUint16(raw[28:30], 443)
+	// Syscall may pass len > tlsPayloadMax; BPF caps capture_len to tlsPayloadMax.
+	binary.LittleEndian.PutUint16(raw[32:34], tlsPayloadMax)
+	for i := 0; i < tlsPayloadMax; i++ {
+		raw[34+i] = byte(i)
+	}
+
+	_, _, _, _, _, pay, ok := decodeTLSSniffEvent(raw)
+	if !ok {
+		t.Fatal("expected ok when capture_len == tlsPayloadMax")
+	}
+	if len(pay) != tlsPayloadMax {
+		t.Fatalf("payload len %d", len(pay))
+	}
+}
+
+func TestDecodeTLSSniffEvent_captureLenTooLarge(t *testing.T) {
+	const header = 4 + 4 + 16 + 4 + 2 + 2 + 2
+	raw := make([]byte, header+tlsPayloadMax)
+	binary.LittleEndian.PutUint16(raw[32:34], tlsPayloadMax+1)
+	_, _, _, _, _, _, ok := decodeTLSSniffEvent(raw)
+	if ok {
+		t.Fatal("expected false for capLen > tlsPayloadMax")
+	}
+}

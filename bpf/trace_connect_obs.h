@@ -22,11 +22,13 @@
 #define COLDSTEP_NR_SENDTO 206
 #define COLDSTEP_NR_WRITE 64
 #define COLDSTEP_NR_CLOSE 57
+#define COLDSTEP_NR_RECVFROM 207
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
 #define COLDSTEP_NR_SENDTO 44
 #define COLDSTEP_NR_WRITE 1
 #define COLDSTEP_NR_CLOSE 3
+#define COLDSTEP_NR_RECVFROM 45
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif
@@ -72,6 +74,27 @@ static __always_inline int ns_read_syscall_arg(struct pt_regs *regs, unsigned in
 	default:
 		return -1;
 	}
+#else
+	return -1;
+#endif
+}
+
+/* Syscall NR at sys_exit (x86: orig_ax; arm64: syscallno in struct pt_regs BTF). */
+static __always_inline int coldstep_read_orig_syscall_nr(struct pt_regs *regs, unsigned long *out)
+{
+	if (!regs || !out)
+		return -1;
+#if defined(bpf_target_x86)
+	return bpf_core_read(out, sizeof(*out), &regs->orig_ax);
+#elif defined(bpf_target_arm64)
+	{
+		__s32 nr;
+
+		if (bpf_core_read(&nr, sizeof(nr), &regs->syscallno))
+			return -1;
+		*out = (unsigned long)nr;
+	}
+	return 0;
 #else
 	return -1;
 #endif
