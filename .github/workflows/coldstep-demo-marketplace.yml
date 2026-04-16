@@ -1,8 +1,8 @@
 # Minimal consumer-style workflow: published composite only (`coldstep-io/coldstep@TAG`), same ref as the
 # [Marketplace listing](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress). The agent is built
 # from the action bundle unless you add `release-path`. Full integration / drift coverage stays on
-# `coldstep-demo.yml` (`uses: ./`). After detect starts: optional built-in smoke probes, explicit nc/curl/UDP
-# probes (reliable digest/JSONL samples), then a typical Node setup + `npm ci` for registry egress.
+# `coldstep-demo.yml` (`uses: ./`). After detect starts: optional built-in smoke probes plus explicit
+# nc/curl/UDP probes for reliable digest/JSONL samples.
 
 name: coldstep-demo-marketplace
 
@@ -15,6 +15,7 @@ env:
 jobs:
   detect:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
 
