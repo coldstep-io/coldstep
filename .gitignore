@@ -12,7 +12,7 @@ internal/bpf/**/*_bpfel.go
 internal/bpf/**/*_bpfeb.go
 scripts/__pycache__/
 
-# Local Docker MCP Toolkit reconnect helper (machine-specific paths / client wiring)
+# Local Docker MCP Toolkit reconnect helper (copy from scripts/docker-mcp-reconnect.ps1.example)
 scripts/docker-mcp-reconnect.ps1
 
 # Secrets
