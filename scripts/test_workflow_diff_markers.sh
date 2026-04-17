@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Contract smoke test for scripts/ci_coldstep_jsonl_traffic_diff.py summary markers used by
 # .github/workflows/coldstep-ci-runner.yml (detect-mode prev-diff step). Mirrors DiffScriptTests
-# unavailable-diff cases without requiring GitHub Actions.
+# unavailable-diff cases without requiring GitHub Actions. Second phase (C-SR-03): unclassified
+# totals appear on successful diffs when unknown event types are present.
 
 set -euo pipefail
 
@@ -42,3 +43,18 @@ if grep -Fq "policy=relaxed" "${NS_SUMMARY}"; then
 fi
 
 echo "ok: workflow diff markers (relaxed unavailable vs strict unavailable)"
+
+# --- C-SR-03: unclassified.base_total / unclassified.current_total markers ---
+export NS_SUMMARY="${WORKDIR}/summary_unclassified.md"
+touch "${NS_SUMMARY}"
+echo '{"type":"tcp","dst":"1.1.1.1","dport":443}' >"${NS_BASELINE}"
+{
+	echo '{"type":"tcp","dst":"1.1.1.1","dport":443}'
+	echo '{"type":"phantom_shell_contract"}'
+} >"${NS_CURRENT}"
+export COLDSTEP_DIFF_STRICT=0
+python3 "${ROOT}/scripts/ci_coldstep_jsonl_traffic_diff.py"
+grep -Fq "${MARKER}.unclassified.base_total=0" "${NS_SUMMARY}"
+grep -Fq "${MARKER}.unclassified.current_total=1" "${NS_SUMMARY}"
+
+echo "ok: workflow diff unclassified markers (C-SR-03)"

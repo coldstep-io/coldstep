@@ -175,6 +175,39 @@ class DiffScriptTests(unittest.TestCase):
         self.assertEqual([(1, "a")], gone)
         self.assertEqual([(2, 3, "b")], chg)
 
+    def test_main_writes_unclassified_marker_totals_to_summary(self):
+        """C-SR-03: workflow summary lists unclassified counts (unknown type buckets)."""
+        with tempfile.TemporaryDirectory() as td:
+            summary = Path(td) / "summary.md"
+            baseline = Path(td) / "base.jsonl"
+            current = Path(td) / "cur.jsonl"
+            baseline.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\n', encoding="utf-8"
+            )
+            current.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\n{"type":"phantom_xyz"}\n',
+                encoding="utf-8",
+            )
+            summary.touch()
+
+            old = dict(os.environ)
+            try:
+                os.environ["NS_SUMMARY"] = str(summary)
+                os.environ["NS_BASELINE"] = str(baseline)
+                os.environ["NS_CURRENT"] = str(current)
+                os.environ["NS_MARKER"] = "unit"
+                os.environ["COLDSTEP_DIFF_STRICT"] = "0"
+                rc = MOD.main()
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+            self.assertEqual(0, rc)
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("unit.unclassified.base_total=0", text)
+            self.assertIn("unit.unclassified.current_total=1", text)
+            self.assertIn("phantom_xyz", text)
+
 
 if __name__ == "__main__":
     unittest.main()
