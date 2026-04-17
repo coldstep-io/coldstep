@@ -764,7 +764,13 @@ func denyDigestRowFromEvent(ev telemetry.DenyEvent) report.DenyDigestRow {
 // When enableTLSSNI is true, sets tls_agent_cfg map so BPF emits TLS ClientHello captures.
 func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, err error) {
 	objs = new(traceconnect.TraceconnectObjects)
-	if err = traceconnect.LoadTraceconnectObjects(objs, nil); err != nil {
+	traceLoadOpts := &ebpf.CollectionOptions{
+		Programs: ebpf.ProgramOptions{
+			LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
+			LogSizeStart: 512 * 1024,
+		},
+	}
+	if err = traceconnect.LoadTraceconnectObjects(objs, traceLoadOpts); err != nil {
 		return nil, nil, nil, nil, nil, nil, err
 	}
 

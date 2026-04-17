@@ -55,8 +55,14 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			ev->_pad[0] = 0;
 			ev->_pad[1] = 0;
 			{
+				/*
+				 * Constant read size for strict verifiers (same pattern as HTTP sniff —
+				 * variable len trips R2 on some matrix legs; see trace_http_obs.inc).
+				 */
+				_Static_assert(sizeof(ev->payload) == TLS_PAYLOAD_MAX,
+					       "tls sniff payload array vs TLS_PAYLOAD_MAX");
 				ev->capture_len = (__u16)len;
-				if (bpf_probe_read_user(ev->payload, len, (void *)buf_ptr)) {
+				if (bpf_probe_read_user(ev->payload, sizeof(ev->payload), (void *)buf_ptr)) {
 					bpf_ringbuf_discard(ev, 0);
 					return;
 				}

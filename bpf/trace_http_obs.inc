@@ -22,14 +22,17 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 	he->_pad[1] = 0;
 	{
 		/*
-		 * If HTTP_PAYLOAD_MAX is raised above 255, revisit the verifier upper bound
-		 * for bpf_probe_read_user (and this _Static_assert).
+		 * Verifier (GitHub ubuntu-22.04 / 6.8-azure): variable bpf_probe_read_user size
+		 * from syscall-derived scalars may keep R2 in a signed-range merge even after masks
+		 * (see iovisor/bcc#2391, #5251). Read the full destination array with a compile-time
+		 * constant size; capture_len still reflects the bounded logical length.
 		 */
-		_Static_assert(HTTP_PAYLOAD_MAX <= 255, "http sniff: raise read bound if HTTP_PAYLOAD_MAX > 255");
+		_Static_assert(sizeof(he->payload) == HTTP_PAYLOAD_MAX,
+			       "http sniff payload array vs HTTP_PAYLOAD_MAX");
 		__u32 sz = coldstep_probe_user_sz_http(len);
 
 		he->capture_len = (__u16)sz;
-		if (bpf_probe_read_user(he->payload, sz, (void *)buf_ptr)) {
+		if (bpf_probe_read_user(he->payload, sizeof(he->payload), (void *)buf_ptr)) {
 			bpf_ringbuf_discard(he, 0);
 			return;
 		}
