@@ -15,6 +15,8 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/cilium/ebpf"
+
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/report"
@@ -556,6 +558,43 @@ func TestLoadIgnoredLPMMap_EmptyNetsNoop(t *testing.T) {
 	}
 	if err := loadIgnoredLPMMap(nil, []*net.IPNet{}); err != nil {
 		t.Fatalf("expected nil error for empty net slice, got %v", err)
+	}
+}
+
+// B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadEnforceMaps.
+func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_ign_lpm",
+		Type:       ebpf.LPMTrie,
+		KeySize:    8,
+		ValueSize:  1,
+		MaxEntries: 8,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close map: %v", err)
+	}
+
+	_, n, err := net.ParseCIDR("192.0.2.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = loadIgnoredLPMMap(m, []*net.IPNet{n})
+	if err == nil {
+		t.Fatal("expected error programming closed map")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ignored_ipv4_lpm update") {
+		t.Fatalf("missing contextual prefix: %v", err)
+	}
+	if !strings.Contains(msg, "192.0.2.0/24") {
+		t.Fatalf("missing CIDR string in message: %v", err)
+	}
+	if errors.Unwrap(err) == nil {
+		t.Fatalf("expected %%w chain from Map.Update: %v", err)
 	}
 }
 
