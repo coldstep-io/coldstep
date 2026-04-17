@@ -33,11 +33,11 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 
 		{
 			unsigned char peek[8];
-			__u32 peeksz = 6;
 
-			if (len < peeksz)
+			if (len < 6)
 				return;
-			if (bpf_probe_read_user(peek, peeksz, (void *)buf_ptr))
+			/* Constant read size — variable peeksz trips strict verifiers on some runners. */
+			if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 				return;
 			if (peek[0] != 0x16)
 				return;

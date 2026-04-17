@@ -155,19 +155,26 @@ struct http_sniff_event {
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {
-	void *sa = (void *)sockaddr_ptr;
-	__u16 family;
+	/*
+	 * One bounded userspace read (Linux struct sockaddr_in layout for AF_INET).
+	 * Avoid (char *)sa+N follow-up probe reads — older kernels mis-track sizes/pointers
+	 * (Verifier: bpf_probe_read_user … R2 min value is negative).
+	 */
+	__u8 scratch[16];
 
-	if (!sa)
+	if (!sockaddr_ptr || !port || !addr)
 		return -1;
-	if (bpf_probe_read_user(&family, sizeof(family), sa))
+	if (bpf_probe_read_user(scratch, sizeof(scratch), (void *)sockaddr_ptr))
 		return -1;
-	if (family != AF_INET)
-		return -1;
-	if (bpf_probe_read_user(port, sizeof(*port), (void *)((char *)sa + 2)))
-		return -1;
-	if (bpf_probe_read_user(addr, sizeof(*addr), (void *)((char *)sa + 4)))
-		return -1;
+	{
+		__u16 family;
+
+		__builtin_memcpy(&family, scratch, sizeof(family));
+		if (family != (__u16)AF_INET)
+			return -1;
+	}
+	__builtin_memcpy(port, scratch + 2, sizeof(*port));
+	__builtin_memcpy(addr, scratch + 4, sizeof(*addr));
 	return 0;
 }
 
@@ -177,7 +184,8 @@ static __always_inline int http_prefix_looks_like_request(const void *buf, __u32
 
 	if (cap < 4)
 		return 0;
-	if (bpf_probe_read_user(p, sizeof(p), buf))
+	/* Constant size 4 for strict verifiers (see read_ipv4_sockaddr). */
+	if (bpf_probe_read_user(p, 4, buf))
 		return 0;
 	/* GET / POST / HEAD / PUT — space or T for POST */
 	if (p[0] == 'G' && p[1] == 'E' && p[2] == 'T' && p[3] == ' ')
