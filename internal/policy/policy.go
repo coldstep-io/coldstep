@@ -32,7 +32,7 @@ const (
 type Policy struct {
 	enabled      bool
 	exactHosts   map[string]struct{}
-	wildSuffixes []string // "*.example.com" -> suffix "example.com"
+	wildSuffixes []string            // "*.example.com" -> suffix "example.com"
 	ips          map[string]struct{} // IPv4 literals from allowed-ips (4-byte key string)
 	ipsV6        map[string]struct{} // IPv6 literals from allowed-ips (16-byte address string)
 	ignored      []*net.IPNet        // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
