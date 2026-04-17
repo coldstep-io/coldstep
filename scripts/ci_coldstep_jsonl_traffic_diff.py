@@ -16,22 +16,31 @@ from pathlib import PurePosixPath
 import sys
 
 
-def load_events(path: str) -> tuple[list[dict], int]:
+def load_events(path: str) -> tuple[list[dict], int, int]:
+    """Load JSONL objects; skip empty lines after strip.
+
+    Returns:
+        events: successfully parsed JSON objects (order preserved).
+        invalid: count of non-empty lines that raised json.JSONDecodeError.
+        lines: count of non-empty lines after strip (attempted JSON lines).
+    """
     out: list[dict] = []
     invalid = 0
+    lines = 0
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
+            for raw in f:
+                line = raw.strip()
                 if not line:
                     continue
+                lines += 1
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
                     invalid += 1
     except OSError:
-        return [], invalid
-    return out, invalid
+        return [], 0, 0
+    return out, invalid, lines
 
 
 def traffic_fingerprint(ev: dict) -> str | None:
@@ -169,13 +178,17 @@ def main() -> int:
     if not summary_path or not base_path or not cur_path:
         return 1
 
-    base_ev, base_invalid = load_events(base_path)
-    cur_ev, cur_invalid = load_events(cur_path)
+    base_ev, base_invalid, base_lines = load_events(base_path)
+    cur_ev, cur_invalid, cur_lines = load_events(cur_path)
     if not base_ev or not cur_ev:
+        parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
         with open(summary_path, "a", encoding="utf-8") as out:
             out.write(f"\n- {marker}.result=unavailable (empty JSONL after parse)\n")
             out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
             out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
+            out.write(f"- {marker}.parse.base_lines={base_lines}\n")
+            out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
+            out.write(f"- {marker}.parse.health={parse_health}\n")
             if not strict_mode:
                 out.write(
                     f"- {marker}.policy=relaxed (COLDSTEP_DIFF_STRICT!=1, unavailable diff does not fail here)\n"
@@ -286,8 +299,12 @@ def main() -> int:
         )
 
         out.write("\n")
+        parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
         out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
         out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
+        out.write(f"- {marker}.parse.base_lines={base_lines}\n")
+        out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
+        out.write(f"- {marker}.parse.health={parse_health}\n")
         out.write(f"- {marker}.unclassified.base_total={sum(prev_un.values())}\n")
         out.write(f"- {marker}.unclassified.current_total={sum(cur_un.values())}\n")
         if changed:
@@ -301,6 +318,8 @@ def main() -> int:
                 "- **No drift:** traffic and other fingerprints match between runs "
                 "(per-type volume table above may still differ).\n"
             )
+    if strict_mode and (base_invalid or cur_invalid):
+        return 1
     return 0
 
 

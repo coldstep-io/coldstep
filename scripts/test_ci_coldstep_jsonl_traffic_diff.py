@@ -17,9 +17,18 @@ class DiffScriptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "events.jsonl"
             p.write_text('{"type":"tcp"}\nnot-json\n{"type":"udp"}\n', encoding="utf-8")
-            events, invalid = MOD.load_events(str(p))
+            events, invalid, _lines = MOD.load_events(str(p))
             self.assertEqual(2, len(events))
             self.assertEqual(1, invalid)
+
+    def test_load_events_counts_non_empty_lines(self):
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "events.jsonl"
+            p.write_text('{"type":"tcp"}\n\nnot-json\n', encoding="utf-8")
+            events, invalid, nlines = MOD.load_events(str(p))
+            self.assertEqual(1, len(events))
+            self.assertEqual(1, invalid)
+            self.assertEqual(2, nlines)
 
     def test_http_fingerprint_retains_entropy_for_long_paths(self):
         prefix = "/api/v1/resource/" + ("a" * 120)
@@ -99,6 +108,62 @@ class DiffScriptTests(unittest.TestCase):
             text = summary.read_text(encoding="utf-8")
             self.assertIn("unit.result=unavailable", text)
             self.assertNotIn("unit.policy=relaxed", text)
+
+    def test_main_strict_fails_when_diff_ok_but_parse_degraded(self):
+        with tempfile.TemporaryDirectory() as td:
+            summary = Path(td) / "summary.md"
+            baseline = Path(td) / "base.jsonl"
+            current = Path(td) / "cur.jsonl"
+            baseline.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\nbad\n', encoding="utf-8"
+            )
+            current.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\nbad\n', encoding="utf-8"
+            )
+
+            old = dict(os.environ)
+            try:
+                os.environ["NS_SUMMARY"] = str(summary)
+                os.environ["NS_BASELINE"] = str(baseline)
+                os.environ["NS_CURRENT"] = str(current)
+                os.environ["NS_MARKER"] = "unit"
+                os.environ["COLDSTEP_DIFF_STRICT"] = "1"
+                rc = MOD.main()
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+            self.assertEqual(1, rc)
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("unit.parse.health=degraded", text)
+
+    def test_main_non_strict_ok_when_parse_degraded(self):
+        with tempfile.TemporaryDirectory() as td:
+            summary = Path(td) / "summary.md"
+            baseline = Path(td) / "base.jsonl"
+            current = Path(td) / "cur.jsonl"
+            baseline.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\nbad\n', encoding="utf-8"
+            )
+            current.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\nbad\n', encoding="utf-8"
+            )
+
+            old = dict(os.environ)
+            try:
+                os.environ["NS_SUMMARY"] = str(summary)
+                os.environ["NS_BASELINE"] = str(baseline)
+                os.environ["NS_CURRENT"] = str(current)
+                os.environ["NS_MARKER"] = "unit"
+                os.environ["COLDSTEP_DIFF_STRICT"] = "0"
+                rc = MOD.main()
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+            self.assertEqual(0, rc)
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("unit.parse.health=degraded", text)
 
 
 if __name__ == "__main__":
