@@ -120,6 +120,58 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	}
 }
 
+// stableRingDropKinds lists every stats.addDropped kind used on ring/decode/jsonl paths in agent_linux.go.
+func stableRingDropKinds() []string {
+	return []string{
+		"exec_decode", "exec_jsonl",
+		"proc_fork_decode", "proc_fork_jsonl",
+		"fs_decode", "fs_jsonl", "fs_cap",
+		"tcp_decode", "tcp_jsonl",
+		"tls_decode", "tls_jsonl",
+		"tls_sni_parse",
+		"udp_decode", "udp_jsonl",
+		"http_decode", "http_jsonl",
+		"http_prefix_parse",
+		"dns_decode",
+	}
+}
+
+func TestRun_DroppedKinds_PropagateToDigestInput(t *testing.T) {
+	stats := newRunStats()
+	for _, k := range stableRingDropKinds() {
+		stats.addDropped(k)
+	}
+
+	in := buildDigestInput(
+		stats,
+		[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		"",
+		1,
+		120,
+		networkSectionSnapshot{},
+		enforcementSnapshot{},
+		nil,
+		false,
+		forkSectionSnapshot{},
+		false,
+		false,
+		nil,
+		fsSectionSnapshot{},
+		false,
+	)
+
+	for _, k := range stableRingDropKinds() {
+		if in.DroppedCounts[k] != 1 {
+			t.Fatalf("drop kind %s: want count 1, got %+v", k, in.DroppedCounts)
+		}
+	}
+}
+
 func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
 	stats := newRunStats()
 	stats.addUDP(policy.ClassMonitor)

@@ -1026,6 +1026,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 		count++
 		stats.addFS() // count all events even when rate-capped
 		if count > maxFSEventsTotal {
+			stats.addDropped("fs_cap")
 			if count == maxFSEventsTotal+1 {
 				slog.Warn("fs event cap reached; further events counted but not written to JSONL or rows", "cap", maxFSEventsTotal)
 			}
@@ -1166,6 +1167,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		comm := string(bytes.TrimRight(commb[:], "\x00"))
 		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
 		if !parsed {
+			stats.addDropped("tls_sni_parse")
 			continue
 		}
 		cl := pol.Classify(sni, ip)
@@ -1303,6 +1305,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 		comm := string(bytes.TrimRight(commb[:], "\x00"))
 		method, host, path, parsed := telemetry.ParseHTTPRequestPrefix(rawPay)
 		if !parsed {
+			stats.addDropped("http_prefix_parse")
 			continue
 		}
 		cl := pol.Classify(host, ip)
@@ -1337,7 +1340,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 	}
 }
 
-func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache) error {
+func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats *runStats) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1352,6 +1355,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache) error
 		}
 		pkt, ok := decodeDNSSniffSample(record.RawSample)
 		if !ok || len(pkt) < 12 {
+			stats.addDropped("dns_decode")
 			continue
 		}
 		cache.AddFromPacket(pkt)
@@ -2207,7 +2211,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDNSRing(runCtx, dnsRd, dnsCache)
+			errCh <- readDNSRing(runCtx, dnsRd, dnsCache, stats)
 		}()
 	}
 
