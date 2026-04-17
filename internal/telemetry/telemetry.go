@@ -40,6 +40,8 @@ type Summary struct {
 	TLSEvents                   int            `json:"tls_events,omitempty"`
 	ProcForkEvents              int            `json:"proc_fork_events,omitempty"`
 	Connect4TupleUpdateFailures int            `json:"connect4_tuple_update_failures,omitempty"`
+	UDPRingbufReserveFailures   int            `json:"udp_ringbuf_reserve_failures,omitempty"`
+	DNSRingbufReserveFailures   int            `json:"dns_ringbuf_reserve_failures,omitempty"`
 	DroppedCounts               map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                map[string]int `json:"policy_counts"`
 	BPF                         []BPFStatus    `json:"bpf,omitempty"`

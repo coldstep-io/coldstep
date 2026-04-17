@@ -54,6 +54,8 @@ type runStats struct {
 	procForkN                    int
 	fsN                          int
 	connect4TupleUpdateFailuresN int
+	udpRingbufReserveFailuresN   int
+	dnsRingbufReserveFailuresN   int
 	policyCounts                 map[string]int
 	droppedCounts                map[string]int
 }
@@ -443,6 +445,30 @@ func (s *runStats) connect4TupleUpdateFailures() int {
 	return s.connect4TupleUpdateFailuresN
 }
 
+func (s *runStats) setUDPRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.udpRingbufReserveFailuresN = n
+}
+
+func (s *runStats) udpRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udpRingbufReserveFailuresN
+}
+
+func (s *runStats) setDNSRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.dnsRingbufReserveFailuresN = n
+}
+
+func (s *runStats) dnsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dnsRingbufReserveFailuresN
+}
+
 func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) telemetry.Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -464,6 +490,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		TLSEvents:                   s.tlsN,
 		ProcForkEvents:              s.procForkN,
 		Connect4TupleUpdateFailures: s.connect4TupleUpdateFailuresN,
+		UDPRingbufReserveFailures:   s.udpRingbufReserveFailuresN,
+		DNSRingbufReserveFailures:   s.dnsRingbufReserveFailuresN,
 		DroppedCounts:               dropped,
 		PolicyCounts:                pc,
 		KernelRelease:               kernel,
@@ -1443,6 +1471,30 @@ func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects)
 	return int(v)
 }
 
+func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.UdpRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.DnsRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 // loadEnforceMaps programs the BPF allowlist map from a one-time IPv4 resolution of domains at agent
 // startup (short CI jobs); it does not track live DNS changes for already-loaded addresses.
 func loadEnforceMaps(ctx context.Context, objs *traceenforce.TraceenforceObjects, domains []string, resolver policy.LookupIPFunc, maxAttempts int, pol *policy.Policy) (int, error) {
@@ -1700,6 +1752,8 @@ func buildDigestInput(
 		EnforcementDenyReserveFailures: enforceState.denyReserveFailures,
 		EnforcementFirstDeny:           enforceState.firstDeny,
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
+		UDPRingbufReserveFailures:      stats.udpRingbufReserveFailures(),
+		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),
 		DroppedCounts:                  stats.snapshotDroppedCounts(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
@@ -1847,6 +1901,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer func() {
 			if syscallObjs != nil {
 				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
+				stats.setUDPRingbufReserveFailures(readUDPRingbufReserveFailureCount(syscallObjs))
 			}
 		}()
 		defer connRd.Close()
@@ -1910,6 +1965,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer dnsLnkExit.Close()
 		defer dnsLnkEnter.Close()
 		defer dnsObjs.Close()
+		defer func() {
+			if dnsObjs != nil {
+				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
+			}
+		}()
 		defer dnsRd.Close()
 	}
 

@@ -1,7 +1,7 @@
 /*
  * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64):
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
- *   - IPv4-only UDP via sendto(2) (not complete for all UDP egress paths)
+ *   - IPv4-only UDP via sendto(2) and sendmsg(2) (not complete for all UDP egress paths)
  *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/sendto
  *   - close(2) clears (tgid,fd) map entries
  *
@@ -61,6 +61,13 @@ struct {
 } connect4_tuple_update_failures SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} udp_ringbuf_reserve_failures SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
@@ -76,8 +83,19 @@ static __always_inline void note_connect4_tuple_update_failed(void)
 	__sync_fetch_and_add(v, 1);
 }
 
+static __always_inline void note_udp_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&udp_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 #include "trace_tcp_obs.inc"
 #include "trace_udp_obs.inc"
+#include "trace_udp_sendmsg.inc"
 #include "trace_http_obs.inc"
 #include "trace_tls_write.inc"
 
@@ -142,6 +160,16 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 		try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
 		return 0;
+	}
+
+	if (id == (long)COLDSTEP_NR_SENDMSG) {
+		unsigned long di_ul = 0, msg_hdr_ptr = 0;
+
+		if (ns_read_syscall_arg(regs, 0, &di_ul))
+			return 0;
+		if (ns_read_syscall_arg(regs, 1, &msg_hdr_ptr))
+			return 0;
+		return handle_udp_obs_sendmsg((__u32)di_ul, msg_hdr_ptr);
 	}
 
 	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_CLOSE) {

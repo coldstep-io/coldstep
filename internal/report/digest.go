@@ -144,6 +144,8 @@ type DigestInput struct {
 	EnforcementFirstDeny           *DenyDigestRow
 
 	Connect4TupleUpdateFailures int
+	UDPRingbufReserveFailures   int
+	DNSRingbufReserveFailures   int
 	DroppedCounts               map[string]int
 }
 
@@ -174,6 +176,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.Connect4TupleUpdateFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
 	}
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures))
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
+	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
 		droppedTotal += v
@@ -189,7 +197,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if fsKPIVisible(in) {
 		b.WriteString(fmt.Sprintf("| **fs_event** | %d |\n", in.FSTotal))
 	}
-	b.WriteString("<sub>UDP KPI counts IPv4 sendto egress. HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
+	b.WriteString("<sub>UDP KPI counts IPv4 sendto and sendmsg egress (first iovec length; destination from msg_name or connected socket cache). HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
 	if tlsKPIVisible(in) {
 		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first `write(2)` after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
 	}
@@ -201,6 +209,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.Connect4TupleUpdateFailures > 0 {
 		b.WriteString(" **connect4** row: BPF could not insert some `(tgid,fd)→tuple` entries (hash pressure); TCP connect ringbuf events are unchanged, but TLS ClientHello correlation may degrade.")
+	}
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString(" **udp_events** reserve failures indicate ringbuf pressure; some UDP egress may be unobserved.")
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
 	}
 	b.WriteString("</sub>\n\n")
 

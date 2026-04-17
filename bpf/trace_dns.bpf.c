@@ -40,6 +40,23 @@ struct {
 	__uint(max_entries, 1 << 22);
 } dns_events SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} dns_ringbuf_reserve_failures SEC(".maps");
+
+static __always_inline void note_dns_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&dns_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 SEC("raw_tp/sys_enter")
 int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -118,8 +135,10 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	ev = bpf_ringbuf_reserve(&dns_events, sizeof(*ev), 0);
-	if (!ev)
+	if (!ev) {
+		note_dns_ringbuf_reserve_failed();
 		return 0;
+	}
 
 	ev->len = copy_len;
 	if (bpf_probe_read_user(ev->data, copy_len, (void *)pending->buf_user)) {
