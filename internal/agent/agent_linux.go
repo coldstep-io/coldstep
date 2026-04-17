@@ -1732,6 +1732,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("ringbuf reader exec: %w", err)
 	}
+	// execRd is normally closed when runCtx is cancelled (see goroutine below). Any return
+	// before that goroutine is registered would otherwise leak the reader (e.g. enforce mode
+	// when syscall trace attach fails, or enforce BPF/map/attach errors).
+	closeExecRdOnEarlyExit := true
+	defer func() {
+		if closeExecRdOnEarlyExit {
+			_ = execRd.Close()
+		}
+	}()
 
 	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
 	var denyRd *ringbuf.Reader
@@ -2077,6 +2086,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			retErr = err
 		}
 	}
+	closeExecRdOnEarlyExit = false
 	return retErr
 }
 
