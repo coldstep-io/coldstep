@@ -11,6 +11,10 @@
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
+/*
+ * Keep user-read size bounded for verifier/runtime safety. Note this can miss
+ * larger EDNS-enabled DNS responses; telemetry is best-effort, not full replay.
+ */
 #define DNS_SNIFF_MAX 512
 
 struct recvfrom_pending {

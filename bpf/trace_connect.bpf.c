@@ -43,7 +43,11 @@ struct {
 } tls_agent_cfg SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	/*
+	 * Correlation cache can retain stale entries when close/exit paths are missed.
+	 * LRU bounds stale pressure while preserving best-effort tuple correlation.
+	 */
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 16384);
 	__type(key, __u64);
 	__type(value, struct connect4_tuple);
@@ -68,11 +72,8 @@ static __always_inline void note_connect4_tuple_update_failed(void)
 
 	if (!v)
 		return;
-	{
-		__u32 n = *v + 1;
-
-		bpf_map_update_elem(&connect4_tuple_update_failures, &k, &n, BPF_ANY);
-	}
+	/* Shared map value may be updated concurrently; use atomic increment. */
+	__sync_fetch_and_add(v, 1);
 }
 
 #include "trace_tcp_obs.inc"

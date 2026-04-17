@@ -116,11 +116,8 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 	if (!v)
 		return;
-	{
-		__u32 n = *v + 1;
-
-		bpf_map_update_elem(&deny_reserve_failures, &k, &n, BPF_ANY);
-	}
+	/* Shared map value may be updated concurrently; use atomic increment. */
+	__sync_fetch_and_add(v, 1);
 }
 
 static __always_inline void emit_deny_event(__u8 protocol, __be32 daddr, __be16 dport, __u8 reason)
