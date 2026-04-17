@@ -148,7 +148,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 				return 0;
 		}
 
-		len = (__u32)len_ul;
+		len = coldstep_syscall_len_u32(len_ul);
 		if (len > 0x00100000)
 			len = 0x00100000;
 

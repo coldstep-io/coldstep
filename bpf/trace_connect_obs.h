@@ -106,6 +106,16 @@ static __always_inline int coldstep_read_orig_syscall_nr(struct pt_regs *regs, u
 #define TLS_PAYLOAD_MAX 256
 
 /*
+ * bpf_core_read of syscall registers yields unsigned long scalars; some kernel verifiers still
+ * infer signed-range quirks once those values reach bpf_probe_read_user size (R2). Force an
+ * explicit low-32-bit domain before length feeds HTTP/TLS sniff helpers.
+ */
+static __always_inline __u32 coldstep_syscall_len_u32(unsigned long raw)
+{
+	return (__u32)(raw & 0xffffffffULL);
+}
+
+/*
  * Strict kernels (GitHub ubuntu-22.04 image + Azure 6.x, etc.) track syscall-derived lengths as
  * scalars whose signed min/max confuse bpf_probe_read_user size (R2). Keep one clamp+mask path
  * per sniff type so the verifier proves a tight unsigned upper bound on the read size register.

@@ -85,7 +85,7 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 	if (id != (long)COLDSTEP_NR_WRITE)
 		return 0;
 
-	try_emit_tls_clienthello((__u32)di_ul, si_ul, (__u32)dx_ul);
+	try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
 	return 0;
 }
 
