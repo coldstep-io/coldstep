@@ -11,9 +11,6 @@ import (
 // It must match the BPF LPM trie max_entries in trace_enforce.bpf.c.
 const MaxIgnoredIPv4Nets = 128
 
-// MaxAllowedEnforceIPv6Keys matches allowed_ipv6 max_entries in bpf/trace_enforce.bpf.c.
-const MaxAllowedEnforceIPv6Keys = 4096
-
 // MaxAllowedEnforceIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_enforce.bpf.c.
 const MaxAllowedEnforceIPv4Keys = 4096
 
@@ -34,7 +31,6 @@ type Policy struct {
 	exactHosts   map[string]struct{}
 	wildSuffixes []string            // "*.example.com" -> suffix "example.com"
 	ips          map[string]struct{} // IPv4 literals from allowed-ips (4-byte key string)
-	ipsV6        map[string]struct{} // IPv6 literals from allowed-ips (16-byte address string)
 	ignored      []*net.IPNet        // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
 }
 
@@ -43,7 +39,6 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 	p := &Policy{
 		exactHosts: make(map[string]struct{}),
 		ips:        make(map[string]struct{}),
-		ipsV6:      make(map[string]struct{}),
 	}
 	for _, h := range splitFields(allowedHosts) {
 		h = strings.ToLower(strings.TrimSpace(h))
@@ -73,13 +68,12 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 			p.ips[string(ip4)] = struct{}{}
 			continue
 		}
-		if ip16 := ip.To16(); ip16 != nil {
-			p.ipsV6[string(ip16)] = struct{}{}
-			continue
+		if ip.To16() != nil {
+			return nil, fmt.Errorf("allowed-ips: IPv6 literals are not supported, use IPv4: %q", raw)
 		}
 		return nil, fmt.Errorf("invalid allowed IP %q", raw)
 	}
-	p.enabled = len(p.exactHosts) > 0 || len(p.wildSuffixes) > 0 || len(p.ips) > 0 || len(p.ipsV6) > 0
+	p.enabled = len(p.exactHosts) > 0 || len(p.wildSuffixes) > 0 || len(p.ips) > 0
 	return p, nil
 }
 
@@ -152,34 +146,6 @@ func (p *Policy) MergeLiteralAllowedIPv4Into(s *IPv4Set) {
 	}
 }
 
-// MergeLiteralAllowedIPv6Keys merges static allowed IPv6 literals into a key set for enforce-mode BPF.
-func (p *Policy) MergeLiteralAllowedIPv6Keys(keys map[[16]byte]struct{}) {
-	if p == nil || keys == nil || len(p.ipsV6) == 0 {
-		return
-	}
-	for s := range p.ipsV6 {
-		if len(s) != net.IPv6len {
-			continue
-		}
-		var k [16]byte
-		copy(k[:], s)
-		keys[k] = struct{}{}
-	}
-}
-
-// MergeLiteralAllowedIPv6Into merges static IPv6 literals into s.
-func (p *Policy) MergeLiteralAllowedIPv6Into(s *IPv6Set) {
-	if p == nil || s == nil || len(p.ipsV6) == 0 {
-		return
-	}
-	for sKey := range p.ipsV6 {
-		if len(sKey) != net.IPv6len {
-			continue
-		}
-		s.Add(net.IP([]byte(sKey)))
-	}
-}
-
 func splitFields(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
@@ -202,11 +168,6 @@ func (p *Policy) Classify(fqdn string, ip net.IP) Class {
 	ip4 := ip.To4()
 	if ip4 != nil && p.enabled {
 		if _, ok := p.ips[string(ip4)]; ok {
-			return ClassAllowed
-		}
-	}
-	if ip16 := ip.To16(); ip16 != nil && ip.To4() == nil && p.enabled {
-		if _, ok := p.ipsV6[string(ip16)]; ok {
 			return ClassAllowed
 		}
 	}

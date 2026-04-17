@@ -414,7 +414,7 @@ func TestRun_DetectModeUnchangedForEnforceAllowlistCompile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect mode should not fail enforce preflight: %v", err)
 	}
-	if res.AllowedIPv4.Len() != 0 || res.AllowedIPv6.Len() != 0 || len(res.Domains) != 0 || len(res.UnresolvedDomains) != 0 {
+	if res.AllowedIPv4.Len() != 0 || len(res.Domains) != 0 || len(res.UnresolvedDomains) != 0 {
 		t.Fatalf("detect mode expected empty compile result, got %#v", res)
 	}
 }

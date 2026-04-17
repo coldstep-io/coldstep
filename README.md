@@ -63,7 +63,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). IPv4 uses cgroup **connect4** / **sendmsg4**. Optional **`enforce-ipv6`** attaches **connect6** / **sendmsg6** and loads **AAAA** resolutions plus IPv6 literals into **`allowed_ipv6`** (default **off**, so IPv6 egress is not cgroup-governed unless enabled). |
+| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Enforcement uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -85,8 +85,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | :---- | :------ |
 | `mode` | `detect` or `enforce`. |
 | `allowed-domains` | Enforce-mode domain allowlist (required for enforce). |
-| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 or IPv6 literals (see **`action.yml`**). |
-| `enforce-ipv6` | When **`true`** with **`mode: enforce`**, attach IPv6 cgroup programs and program **`allowed_ipv6`** (default **`false`**). |
+| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
 | `report-job-summary` | Merge digest into the job Summary. |

@@ -247,17 +247,13 @@ func TestParseFeatureGates_InvalidPairsIgnored(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_EnforceIPv6AndCgroupPath(t *testing.T) {
+func TestLoadFromEnv_CgroupPath(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "detect")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
-	t.Setenv("COLDSTEP_ENFORCE_IPV6", "true")
 	cfg, err := LoadFromEnv()
 	if err != nil {
 		t.Fatal(err)
-	}
-	if !cfg.EnforceIPv6 {
-		t.Fatal("expected EnforceIPv6")
 	}
 	if cfg.CgroupAttachPath == "" {
 		t.Fatal("expected non-empty CgroupAttachPath")

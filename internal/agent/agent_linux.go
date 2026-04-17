@@ -1368,9 +1368,8 @@ func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver po
 		return policy.CompileResult{}, perr
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
-	pol.MergeLiteralAllowedIPv6Into(&compiled.AllowedIPv6)
-	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 {
-		msg := "enforce allowlist effective allowlist is empty (no IPv4 A-record or IPv6 AAAA resolutions; add literals to allowed-ips if needed)"
+	if compiled.AllowedIPv4.Len() == 0 {
+		msg := "enforce allowlist effective allowlist is empty (no IPv4 A-record resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
 		}
@@ -1467,7 +1466,7 @@ func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 }
 
 // loadEnforceMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
-func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.CompileResult, pol *policy.Policy, cfg config.Config) (int, error) {
+func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, error) {
 	if objs == nil {
 		return 0, fmt.Errorf("traceenforce objects are required for enforce mode")
 	}
@@ -1491,20 +1490,7 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 		return 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", len(v4keys), policy.MaxAllowedEnforceIPv4Keys)
 	}
 
-	v6keys := make(map[[16]byte]struct{}, compiled.AllowedIPv6.Len())
-	compiled.AllowedIPv6.ForEach(func(k [16]byte) { v6keys[k] = struct{}{} })
-	if pol != nil {
-		pol.MergeLiteralAllowedIPv6Keys(v6keys)
-	}
-	if len(v6keys) > policy.MaxAllowedEnforceIPv6Keys {
-		return 0, fmt.Errorf("allowed_ipv6: %d entries exceeds BPF max %d", len(v6keys), policy.MaxAllowedEnforceIPv6Keys)
-	}
-
-	if !cfg.EnforceIPv6 && len(v6keys) > 0 && len(v4keys) == 0 {
-		return 0, fmt.Errorf("enforce allowlist resolves to IPv6 only, but COLDSTEP_ENFORCE_IPV6 is false (set true or add IPv4 allowlist entries)")
-	}
-
-	if len(v4keys) == 0 && len(v6keys) == 0 {
+	if len(v4keys) == 0 {
 		return 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
 	}
 
@@ -1516,20 +1502,7 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 		}
 	}
 
-	if cfg.EnforceIPv6 {
-		for addr := range v6keys {
-			addrCopy := addr
-			if err := objs.AllowedIpv6.Update(&addrCopy, &allow, ebpf.UpdateAny); err != nil {
-				return 0, fmt.Errorf("load allowed_ipv6 map: %w", err)
-			}
-		}
-	}
-
-	n := len(v4keys)
-	if cfg.EnforceIPv6 {
-		n += len(v6keys)
-	}
-	return n, nil
+	return len(v4keys), nil
 }
 
 func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) (telemetry.DenyEvent, error) {
@@ -1900,8 +1873,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var syscallLnk link.Link
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
-	var enforceConnect6Lnk link.Link
-	var enforceSendmsg6Lnk link.Link
 	if cR, uR, hR, tR, objs, lnk, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
@@ -1935,7 +1906,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				_ = enforceObjs.Close()
 			}()
 
-			allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol, cfg)
+			allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol)
 			if loadErr != nil {
 				return loadErr
 			}
@@ -1970,28 +1941,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 				return fmt.Errorf("attach enforce_sendmsg4: %w", err)
 			}
 			defer enforceSendmsgLnk.Close()
-
-			if cfg.EnforceIPv6 {
-				enforceConnect6Lnk, err = link.AttachCgroup(link.CgroupOptions{
-					Path:    cgPath,
-					Attach:  ebpf.AttachCGroupInet6Connect,
-					Program: enforceObjs.EnforceConnect6,
-				})
-				if err != nil {
-					return fmt.Errorf("attach enforce_connect6: %w", err)
-				}
-				defer enforceConnect6Lnk.Close()
-
-				enforceSendmsg6Lnk, err = link.AttachCgroup(link.CgroupOptions{
-					Path:    cgPath,
-					Attach:  ebpf.AttachCGroupUDP6Sendmsg,
-					Program: enforceObjs.EnforceSendmsg6,
-				})
-				if err != nil {
-					return fmt.Errorf("attach enforce_sendmsg6: %w", err)
-				}
-				defer enforceSendmsg6Lnk.Close()
-			}
 		}
 	}
 

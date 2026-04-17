@@ -47,10 +47,10 @@ func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	if len(got.UnresolvedDomains) != 0 {
 		t.Fatalf("UnresolvedDomains: got %v want empty", got.UnresolvedDomains)
 	}
-	if calls["ip4|example.com"] != 1 || calls["ip6|example.com"] != 1 {
+	if calls["ip4|example.com"] != 1 {
 		t.Fatalf("resolver calls example.com: got %v", calls)
 	}
-	if calls["ip4|api.example.com"] != 1 || calls["ip6|api.example.com"] != 1 {
+	if calls["ip4|api.example.com"] != 1 {
 		t.Fatalf("resolver calls api.example.com: got %v", calls)
 	}
 }
@@ -68,12 +68,6 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 			}
 			return nil, nil
 		case "ipv6-only.example.com":
-			if network == "ip4" {
-				return nil, nil
-			}
-			if network == "ip6" {
-				return []net.IP{net.ParseIP("2001:db8::1")}, nil
-			}
 			return nil, nil
 		case "down.example.com":
 			return nil, errors.New("dns down")
@@ -91,25 +85,21 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	if !got.AllowedIPv4.Contains(net.ParseIP("3.3.3.3")) {
 		t.Fatal("expected 3.3.3.3 to be present")
 	}
-	if got.AllowedIPv6.Len() != 1 || !got.AllowedIPv6.Contains(net.ParseIP("2001:db8::1")) {
-		t.Fatalf("expected 2001:db8::1 in v6 set, got len=%d", got.AllowedIPv6.Len())
-	}
 
 	if got.AllowedIPv4.Contains(net.ParseIP("4.4.4.4")) {
 		t.Fatal("did not expect 4.4.4.4 to be present")
 	}
-	wantUnresolved := []string{"down.example.com"}
+	wantUnresolved := []string{"down.example.com", "ipv6-only.example.com"}
 	if !reflect.DeepEqual(got.UnresolvedDomains, wantUnresolved) {
 		t.Fatalf("UnresolvedDomains: got %v want %v", got.UnresolvedDomains, wantUnresolved)
 	}
-	if calls["ip4|down.example.com"] != 2 || calls["ip6|down.example.com"] != 2 {
-		t.Fatalf("calls for unresolved domain: got ip4=%d ip6=%d want 2 each",
-			calls["ip4|down.example.com"], calls["ip6|down.example.com"])
+	if calls["ip4|down.example.com"] != 2 {
+		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", calls["ip4|down.example.com"])
 	}
-	if calls["ip4|ok.example.com"] != 1 || calls["ip6|ok.example.com"] != 1 {
+	if calls["ip4|ok.example.com"] != 1 {
 		t.Fatalf("calls for resolved domain ok: got %v", calls)
 	}
-	if calls["ip4|ipv6-only.example.com"] != 1 || calls["ip6|ipv6-only.example.com"] != 1 {
+	if calls["ip4|ipv6-only.example.com"] != 2 {
 		t.Fatalf("calls for ipv6-only domain: got %v", calls)
 	}
 }
@@ -131,17 +121,6 @@ func TestIPv4SetContains(t *testing.T) {
 	}
 	if s.Contains(nil) {
 		t.Fatal("did not expect nil IP to match")
-	}
-}
-
-func TestIPv6SetContains(t *testing.T) {
-	var s IPv6Set
-	s.Add(net.ParseIP("2001:db8::1"))
-	s.Add(net.ParseIP("2001:db8::2"))
-	s.Add(net.ParseIP("10.0.0.1"))
-
-	if s.Len() != 2 {
-		t.Fatalf("IPv6Set len: got %d want 2", s.Len())
 	}
 }
 
@@ -172,7 +151,7 @@ func TestCompileDomainAllowlist_MaxAttemptsFloor(t *testing.T) {
 	}
 
 	_ = CompileDomainAllowlist(ctx, []string{"a.example.com"}, resolver, 0)
-	if calls != 2 {
-		t.Fatalf("resolver calls: got %d want 2 (ip4+ip6 once) when maxAttempts <= 0", calls)
+	if calls != 1 {
+		t.Fatalf("resolver calls: got %d want 1 (ip4 once) when maxAttempts <= 0", calls)
 	}
 }

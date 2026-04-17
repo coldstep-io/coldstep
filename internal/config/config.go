@@ -36,8 +36,6 @@ type Config struct {
 	AgentStatusPath      string
 	// FeatureGates holds parsed COLDSTEP_FEATURE_GATES (lowercase keys).
 	FeatureGates map[string]string
-	// EnforceIPv6, when true in enforce mode, attaches cgroup connect6/sendmsg6 and programs allowed_ipv6.
-	EnforceIPv6 bool
 	// CgroupAttachPath is the unified cgroup2 path for link.AttachCgroup (from COLDSTEP_CGROUP_PATH or /proc/self/cgroup).
 	CgroupAttachPath string
 }
@@ -121,7 +119,6 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	gates := ParseFeatureGates(os.Getenv("COLDSTEP_FEATURE_GATES"))
-	enforceIPv6 := envBoolTrue("COLDSTEP_ENFORCE_IPV6")
 	cgPath, err := cgroup.AttachPath(os.Getenv("COLDSTEP_CGROUP_PATH"))
 	if err != nil {
 		return Config{}, err
@@ -141,7 +138,6 @@ func LoadFromEnv() (Config, error) {
 		TelemetrySummaryPath: telemetrySummary,
 		AgentStatusPath:      agentStatus,
 		FeatureGates:         gates,
-		EnforceIPv6:          enforceIPv6,
 		CgroupAttachPath:     cgPath,
 	}, nil
 }

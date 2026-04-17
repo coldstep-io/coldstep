@@ -54,63 +54,10 @@ func (s IPv4Set) ForEach(fn func(k [4]byte)) {
 	}
 }
 
-// IPv6Set stores unique IPv6 addresses in 16-byte form.
-type IPv6Set struct {
-	items map[[16]byte]struct{}
-}
-
-// Add inserts an IPv6 address into the set.
-func (s *IPv6Set) Add(ip net.IP) {
-	if ip.To4() != nil {
-		return
-	}
-	ip16 := ip.To16()
-	if ip16 == nil || len(ip16) != net.IPv6len {
-		return
-	}
-	if s.items == nil {
-		s.items = make(map[[16]byte]struct{})
-	}
-	var key [16]byte
-	copy(key[:], ip16)
-	s.items[key] = struct{}{}
-}
-
-// Len returns the number of unique IPv6 addresses in the set.
-func (s IPv6Set) Len() int {
-	return len(s.items)
-}
-
-// ForEach calls fn for every key in the set.
-func (s IPv6Set) ForEach(fn func(k [16]byte)) {
-	for k := range s.items {
-		fn(k)
-	}
-}
-
-// Contains reports whether a non-IPv4-mapped IPv6 address is in the set.
-func (s IPv6Set) Contains(ip net.IP) bool {
-	if ip == nil {
-		return false
-	}
-	if ip.To4() != nil {
-		return false
-	}
-	ip16 := ip.To16()
-	if ip16 == nil || len(s.items) == 0 {
-		return false
-	}
-	var key [16]byte
-	copy(key[:], ip16)
-	_, ok := s.items[key]
-	return ok
-}
-
 // CompileResult is the deterministic output from allowlist compilation.
 type CompileResult struct {
 	Domains           []string
 	AllowedIPv4       IPv4Set
-	AllowedIPv6       IPv6Set
 	UnresolvedDomains []string
 }
 
@@ -127,7 +74,6 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 	result := CompileResult{
 		Domains:     normalized,
 		AllowedIPv4: IPv4Set{items: make(map[[4]byte]struct{})},
-		AllowedIPv6: IPv6Set{items: make(map[[16]byte]struct{})},
 	}
 
 	for _, domain := range normalized {
@@ -144,22 +90,6 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 				for _, ip := range ips4 {
 					if ip4 := ip.To4(); ip4 != nil {
 						result.AllowedIPv4.Add(ip4)
-						resolved = true
-					}
-				}
-			}
-
-			ips6, err6 := resolver(ctx, "ip6", domain)
-			if err6 != nil && (errors.Is(err6, context.Canceled) || errors.Is(err6, context.DeadlineExceeded)) {
-				break
-			}
-			if err6 == nil {
-				for _, ip := range ips6 {
-					if ip.To4() != nil {
-						continue
-					}
-					if ip16 := ip.To16(); ip16 != nil {
-						result.AllowedIPv6.Add(ip)
 						resolved = true
 					}
 				}
