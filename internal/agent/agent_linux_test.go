@@ -502,6 +502,9 @@ func TestLoadIgnoredLPMMap_EmptyNetsNoop(t *testing.T) {
 	if err := loadIgnoredLPMMap(nil, nil); err != nil {
 		t.Fatalf("expected nil error for empty net list, got %v", err)
 	}
+	if err := loadIgnoredLPMMap(nil, []*net.IPNet{}); err != nil {
+		t.Fatalf("expected nil error for empty net slice, got %v", err)
+	}
 }
 
 func TestCapabilityEnabled_RequiresGateAndHealthyHook(t *testing.T) {

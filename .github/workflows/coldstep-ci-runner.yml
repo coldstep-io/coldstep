@@ -45,6 +45,8 @@ jobs:
           staticcheck ./...
       - name: Unit tests
         run: go test ./... -count=1
+      - name: Race detector (Go agent)
+        run: go test -race -count=1 ./internal/agent/... -timeout 15m
 
   unit-arm64:
     runs-on: ubuntu-24.04-arm
@@ -69,6 +71,8 @@ jobs:
           staticcheck ./...
       - name: Unit tests
         run: go test ./... -count=1
+      - name: Race detector (Go agent)
+        run: go test -race -count=1 ./internal/agent/... -timeout 15m
 
   integration:
     runs-on: ubuntu-latest

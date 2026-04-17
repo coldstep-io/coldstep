@@ -1,3 +1,4 @@
+import collections
 import importlib.util
 import os
 import tempfile
@@ -164,6 +165,15 @@ class DiffScriptTests(unittest.TestCase):
             self.assertEqual(0, rc)
             text = summary.read_text(encoding="utf-8")
             self.assertIn("unit.parse.health=degraded", text)
+
+    def test_multiset_diff_ordering_deterministic(self):
+        # prev={a:1,b:2} curr={b:3,c:1} => new c, gone a, chg b (2->3)
+        prev = collections.Counter({"b": 2, "a": 1})
+        curr = collections.Counter({"b": 3, "c": 1})
+        new, gone, chg = MOD.multiset_diff(prev, curr)
+        self.assertEqual([(1, "c")], new)
+        self.assertEqual([(1, "a")], gone)
+        self.assertEqual([(2, 3, "b")], chg)
 
 
 if __name__ == "__main__":
