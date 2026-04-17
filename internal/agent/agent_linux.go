@@ -1858,7 +1858,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}()
 
-	enforceCompiled, err := compileEnforceAllowlist(ctx, cfg, nil, 2)
+	compileCtx, compileCancel := context.WithTimeout(ctx, 120*time.Second)
+	defer compileCancel()
+	enforceCompiled, err := compileEnforceAllowlist(compileCtx, cfg, nil, 2)
 	if err != nil {
 		return err
 	}
