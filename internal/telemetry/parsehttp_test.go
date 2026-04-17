@@ -17,3 +17,19 @@ func TestParseHTTPRequestPrefix_partial(t *testing.T) {
 		t.Fatalf("got %q %q ok=%v", m, p, ok)
 	}
 }
+
+func TestParseHTTPRequestPrefix_hostIPv6BracketWithPort(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nHost: [2001:db8::1]:8080\r\n\r\n")
+	m, h, p, ok := ParseHTTPRequestPrefix(raw)
+	if !ok || m != "GET" || h != "2001:db8::1" || p != "/" {
+		t.Fatalf("got method=%q host=%q path=%q ok=%v", m, h, p, ok)
+	}
+}
+
+func TestParseHTTPRequestPrefix_hostIPv6BracketNoPort(t *testing.T) {
+	raw := []byte("GET /x HTTP/1.1\r\nHost: [2001:db8::2]\r\n\r\n")
+	m, h, p, ok := ParseHTTPRequestPrefix(raw)
+	if !ok || m != "GET" || h != "2001:db8::2" || p != "/x" {
+		t.Fatalf("got method=%q host=%q path=%q ok=%v", m, h, p, ok)
+	}
+}

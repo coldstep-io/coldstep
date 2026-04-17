@@ -303,6 +303,45 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	}
 }
 
+func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{Mode: config.ModeEnforce}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state)
+	if err == nil {
+		t.Fatal("expected decode error")
+	}
+}
+
+func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.Mkdir(blocked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{Mode: config.ModeEnforce, EventsLogPath: blocked}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	raw := make([]byte, denyEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 1)
+	binary.LittleEndian.PutUint32(raw[4:8], 1)
+	raw[24] = denyProtoTCP
+	raw[25] = denyReasonDstNotAllowlisted
+	copy(raw[28:32], net.ParseIP("1.1.1.1").To4())
+	binary.BigEndian.PutUint16(raw[32:34], 443)
+
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state)
+	if err == nil {
+		t.Fatal("expected append deny jsonl error")
+	}
+}
+
 func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()

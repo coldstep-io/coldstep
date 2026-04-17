@@ -134,11 +134,19 @@ jobs:
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
-      - name: Install nmap (apt)
+      - name: Install runtime probes
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Assert required tools are present
+        run: |
+          set -euo pipefail
+          command -v dig
+          command -v nc
+          command -v nmap
+          command -v curl
 
       - name: Capability probes (detect mode)
         run: |
@@ -352,11 +360,19 @@ jobs:
         with:
           go-version: '1.24.x'
 
-      - name: Install nmap (apt — before enforce so mirrors/DNS still work)
+      - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Assert required tools are present
+        run: |
+          set -euo pipefail
+          command -v dig
+          command -v nc
+          command -v nmap
+          command -v curl
 
       - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
         run: |
