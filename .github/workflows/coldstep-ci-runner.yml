@@ -22,6 +22,8 @@ jobs:
       - uses: actions/checkout@v6
       - name: Assert tracked text is UTF-8 (not UTF-16)
         run: python3 scripts/assert_utf8_text.py
+      - name: Check workflow action pins (no @main; marketplace tag)
+        run: python3 scripts/check_workflow_action_pins.py
 
   unit:
     name: unit (${{ matrix.os }})
