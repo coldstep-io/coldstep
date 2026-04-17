@@ -33,3 +33,11 @@ func TestParseHTTPRequestPrefix_hostIPv6BracketNoPort(t *testing.T) {
 		t.Fatalf("got method=%q host=%q path=%q ok=%v", m, h, p, ok)
 	}
 }
+
+func TestParseHTTPRequestPrefix_hostMalformedIPv6Bracket(t *testing.T) {
+	raw := []byte("GET / HTTP/1.1\r\nHost: [::1\r\n\r\n")
+	_, h, _, ok := ParseHTTPRequestPrefix(raw)
+	if !ok || h != "?" {
+		t.Fatalf("want placeholder host for unclosed bracket, ok=%v host=%q", ok, h)
+	}
+}
