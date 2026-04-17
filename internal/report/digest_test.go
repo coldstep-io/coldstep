@@ -336,3 +336,22 @@ func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
 		}
 	}
 }
+
+func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DroppedCounts: map[string]int{
+			"udp_decode": 2,
+			"http_jsonl": 1,
+		},
+	})
+	for _, needle := range []string{
+		"| **dropped events (decode/jsonl)** | 3 |",
+		"**Dropped event counters**",
+		"`udp_decode`=2",
+		"`http_jsonl`=1",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}

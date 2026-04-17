@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -27,6 +28,9 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	stats.addUDP(policy.ClassMonitor)
 	stats.addUDP(policy.ClassMonitor)
 	stats.addHTTP(policy.ClassNotListed)
+	stats.addDropped("udp_decode")
+	stats.addDropped("udp_decode")
+	stats.addDropped("http_jsonl")
 
 	state := newNetworkSectionState()
 	state.addUDPReaderError()
@@ -78,6 +82,9 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	}
 	if in.UDPTotal != 2 || in.HTTPTotal != 1 {
 		t.Fatalf("totals udp=%d http=%d", in.UDPTotal, in.HTTPTotal)
+	}
+	if in.DroppedCounts["udp_decode"] != 2 || in.DroppedCounts["http_jsonl"] != 1 {
+		t.Fatalf("DroppedCounts not propagated: %+v", in.DroppedCounts)
 	}
 }
 
@@ -411,6 +418,71 @@ func TestRun_DenyMappings(t *testing.T) {
 		Reason:   "dst_not_allowlisted",
 	}) {
 		t.Fatalf("unexpected deny digest row: %+v", row)
+	}
+}
+
+func TestPreferRunError_EnforceDenyWinsOverGeneric(t *testing.T) {
+	generic := fmt.Errorf("boom")
+	deny := newEnforceDenyError(telemetry.DenyEvent{
+		Protocol: "tcp",
+		Dst:      "1.2.3.4",
+		Dport:    443,
+		Reason:   "dst_not_allowlisted",
+	})
+	got := preferRunError(generic, deny)
+	if !isEnforceDenyError(got) {
+		t.Fatalf("expected enforce deny to win, got %v", got)
+	}
+}
+
+func TestPreferRunError_IgnoresContextCanceled(t *testing.T) {
+	generic := fmt.Errorf("boom")
+	got := preferRunError(generic, context.Canceled)
+	if got != generic {
+		t.Fatalf("expected generic error to remain, got %v", got)
+	}
+}
+
+func TestLoadIgnoredLPMMap_NilMapIncludesCIDRCount(t *testing.T) {
+	_, n, err := net.ParseCIDR("10.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parse cidr: %v", err)
+	}
+	err = loadIgnoredLPMMap(nil, []*net.IPNet{n})
+	if err == nil {
+		t.Fatal("expected nil-map error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "ignored_ipv4_lpm map is nil") || !strings.Contains(msg, "1 ignored CIDR") {
+		t.Fatalf("expected contextual nil-map error, got: %v", err)
+	}
+}
+
+func TestLoadIgnoredLPMMap_EmptyNetsNoop(t *testing.T) {
+	if err := loadIgnoredLPMMap(nil, nil); err != nil {
+		t.Fatalf("expected nil error for empty net list, got %v", err)
+	}
+}
+
+func TestCapabilityEnabled_RequiresGateAndHealthyHook(t *testing.T) {
+	hook := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
+	healthy := []telemetry.BPFStatus{{Name: hook, OK: true}}
+	degraded := []telemetry.BPFStatus{{Name: hook, OK: false, Detail: "disabled"}}
+
+	if !capabilityEnabled(true, healthy, hook) {
+		t.Fatal("expected capability enabled when gate on and hook healthy")
+	}
+	if capabilityEnabled(true, degraded, hook) {
+		t.Fatal("expected capability disabled when hook degraded")
+	}
+	if capabilityEnabled(false, healthy, hook) {
+		t.Fatal("expected capability disabled when gate off")
+	}
+}
+
+func TestCapabilityEnabled_MissingHookIsDisabled(t *testing.T) {
+	if capabilityEnabled(true, []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}}, "sched_process_fork") {
+		t.Fatal("expected capability disabled when hook status is missing")
 	}
 }
 

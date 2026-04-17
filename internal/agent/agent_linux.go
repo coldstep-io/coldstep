@@ -55,6 +55,7 @@ type runStats struct {
 	fsN                          int
 	connect4TupleUpdateFailuresN int
 	policyCounts                 map[string]int
+	droppedCounts                map[string]int
 }
 
 type forkSectionState struct {
@@ -203,6 +204,31 @@ type enforcementSnapshot struct {
 	firstDeny           *report.DenyDigestRow
 }
 
+type enforceDenyError struct {
+	protocol string
+	dst      string
+	dport    uint16
+	reason   string
+}
+
+func (e enforceDenyError) Error() string {
+	return fmt.Sprintf("enforce deny: protocol=%s dst=%s dport=%d reason=%s", e.protocol, e.dst, e.dport, e.reason)
+}
+
+func newEnforceDenyError(ev telemetry.DenyEvent) error {
+	return enforceDenyError{
+		protocol: ev.Protocol,
+		dst:      ev.Dst,
+		dport:    ev.Dport,
+		reason:   ev.Reason,
+	}
+}
+
+func isEnforceDenyError(err error) bool {
+	var e enforceDenyError
+	return errors.As(err, &e)
+}
+
 func newEnforcementState() *enforcementState {
 	return &enforcementState{}
 }
@@ -324,7 +350,29 @@ func (s *networkSectionState) snapshot() networkSectionSnapshot {
 }
 
 func newRunStats() *runStats {
-	return &runStats{policyCounts: make(map[string]int)}
+	return &runStats{
+		policyCounts:  make(map[string]int),
+		droppedCounts: make(map[string]int),
+	}
+}
+
+func (s *runStats) addDropped(kind string) {
+	if strings.TrimSpace(kind) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.droppedCounts[kind]++
+}
+
+func (s *runStats) snapshotDroppedCounts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.droppedCounts))
+	for k, v := range s.droppedCounts {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *runStats) addExec() {
@@ -402,6 +450,10 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 	for k, v := range s.policyCounts {
 		pc[k] = v
 	}
+	dropped := make(map[string]int, len(s.droppedCounts))
+	for k, v := range s.droppedCounts {
+		dropped[k] = v
+	}
 	return telemetry.Summary{
 		Version:                     2,
 		SchemaVersion:               telemetry.SchemaVersion,
@@ -412,6 +464,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		TLSEvents:                   s.tlsN,
 		ProcForkEvents:              s.procForkN,
 		Connect4TupleUpdateFailures: s.connect4TupleUpdateFailuresN,
+		DroppedCounts:               dropped,
 		PolicyCounts:                pc,
 		KernelRelease:               kernel,
 		BPF:                         bpf,
@@ -785,6 +838,7 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 
 		var ev execEvent
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
+			stats.addDropped("exec_decode")
 			slog.Warn("decode exec", "err", err)
 			continue
 		}
@@ -809,6 +863,7 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
 			jsonlMu.Unlock()
 			if err != nil {
+				stats.addDropped("exec_jsonl")
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
@@ -840,6 +895,7 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		var ev forkEventWire
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
 			forkState.addReadError()
+			stats.addDropped("proc_fork_decode")
 			slog.Warn("decode fork", "err", err)
 			continue
 		}
@@ -867,6 +923,7 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
 			jsonlMu.Unlock()
 			if werr != nil {
+				stats.addDropped("proc_fork_jsonl")
 				slog.Warn("events jsonl", "err", werr)
 			}
 		}
@@ -923,6 +980,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 		var ev fsEventWire
 		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &ev); err != nil {
 			fsState.addReadError()
+			stats.addDropped("fs_decode")
 			slog.Warn("decode fs event", "err", err)
 			continue
 		}
@@ -960,6 +1018,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
 			jsonlMu.Unlock()
 			if werr != nil {
+				stats.addDropped("fs_jsonl")
 				slog.Warn("events jsonl", "err", werr)
 			}
 		}
@@ -983,6 +1042,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 
 		tgid, tid, commb, daddr, port, decOK := decodeConnectEvent(record.RawSample)
 		if !decOK {
+			stats.addDropped("tcp_decode")
 			slog.Warn("decode tcp", "len", len(record.RawSample))
 			continue
 		}
@@ -1025,6 +1085,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
 			jsonlMu.Unlock()
 			if err != nil {
+				stats.addDropped("tcp_jsonl")
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
@@ -1056,6 +1117,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			if sectionState != nil {
 				sectionState.addTLSDecodeError()
 			}
+			stats.addDropped("tls_decode")
 			slog.Warn("decode tls sniff", "len", len(record.RawSample))
 			continue
 		}
@@ -1093,6 +1155,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
 			jsonlMu.Unlock()
 			if err != nil {
+				stats.addDropped("tls_jsonl")
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
@@ -1122,6 +1185,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			if sectionState != nil {
 				sectionState.addUDPDecodeError()
 			}
+			stats.addDropped("udp_decode")
 			slog.Warn("decode udp", "len", len(record.RawSample))
 			continue
 		}
@@ -1160,6 +1224,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
 			jsonlMu.Unlock()
 			if err != nil {
+				stats.addDropped("udp_jsonl")
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
@@ -1189,6 +1254,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 			if sectionState != nil {
 				sectionState.addHTTPDecodeError()
 			}
+			stats.addDropped("http_decode")
 			slog.Warn("decode http sniff", "len", len(record.RawSample))
 			continue
 		}
@@ -1226,6 +1292,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
 			jsonlMu.Unlock()
 			if err != nil {
+				stats.addDropped("http_jsonl")
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
@@ -1455,7 +1522,7 @@ func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, 
 	if err != nil {
 		return err
 	}
-	return fmt.Errorf("enforce deny: protocol=%s dst=%s dport=%d reason=%s", deny.Protocol, deny.Dst, deny.Dport, deny.Reason)
+	return newEnforceDenyError(deny)
 }
 
 func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, cancelRun context.CancelFunc) error {
@@ -1501,7 +1568,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 					if cancelRun != nil {
 						cancelRun()
 					}
-					return ctx.Err()
+					return newEnforceDenyError(firstDeny)
 				}
 				rd.SetDeadline(time.Time{})
 				slog.Warn("ringbuf read (deny drain)", "err", err2)
@@ -1520,8 +1587,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 		if cancelRun != nil {
 			cancelRun()
 		}
-		return fmt.Errorf("enforce deny: protocol=%s dst=%s dport=%d reason=%s",
-			firstDeny.Protocol, firstDeny.Dst, firstDeny.Dport, firstDeny.Reason)
+		return newEnforceDenyError(firstDeny)
 	}
 }
 
@@ -1535,6 +1601,19 @@ func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen,
 	}
 	slog.Debug("enforce deny", "protocol", deny.Protocol, "dst", deny.Dst, "dport", deny.Dport,
 		"reason", deny.Reason, "comm", deny.Comm)
+}
+
+func preferRunError(current error, candidate error) error {
+	if candidate == nil || errors.Is(candidate, context.Canceled) {
+		return current
+	}
+	if current == nil {
+		return candidate
+	}
+	if isEnforceDenyError(candidate) && !isEnforceDenyError(current) {
+		return candidate
+	}
+	return current
 }
 
 func bpfDetail(err error) string {
@@ -1556,6 +1635,10 @@ func hookDegraded(bpf []telemetry.BPFStatus, hookName string) bool {
 		}
 	}
 	return true
+}
+
+func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bool {
+	return gate && !hookDegraded(bpf, hookName)
 }
 
 func buildDigestInput(
@@ -1617,6 +1700,7 @@ func buildDigestInput(
 		EnforcementDenyReserveFailures: enforceState.denyReserveFailures,
 		EnforcementFirstDeny:           enforceState.firstDeny,
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
+		DroppedCounts:                  stats.snapshotDroppedCounts(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
 		FSRows:                         fsRows,
@@ -1943,19 +2027,19 @@ func Run(ctx context.Context, cfg config.Config) error {
 		if err != nil {
 			slog.Warn("build meta", "err", err)
 		} else {
-			if procTreeGate {
+			if capabilityEnabled(procTreeGate, bpfSt, "sched_process_fork") {
 				if meta.Capabilities == nil {
 					meta.Capabilities = make(map[string]bool)
 				}
 				meta.Capabilities["proc_tree"] = true
 			}
-			if tlsSNIGate {
+			if capabilityEnabled(tlsSNIGate, bpfSt, "raw_tp/sys_enter (connect, sendto, http sniff, tls)") {
 				if meta.Capabilities == nil {
 					meta.Capabilities = make(map[string]bool)
 				}
 				meta.Capabilities["tls_sni"] = true
 			}
-			if fsGate {
+			if capabilityEnabled(fsGate, bpfSt, "raw_tp/sys_enter (fs)") {
 				if meta.Capabilities == nil {
 					meta.Capabilities = make(map[string]bool)
 				}
@@ -2074,17 +2158,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	var retErr error
 	for err := range errCh {
-		if err == nil || errors.Is(err, context.Canceled) {
-			continue
-		}
-		if retErr == nil {
-			retErr = err
-			continue
-		}
-		// Reader shutdown order is nondeterministic; prefer the synthetic enforce deny error.
-		if strings.HasPrefix(err.Error(), "enforce deny:") && !strings.HasPrefix(retErr.Error(), "enforce deny:") {
-			retErr = err
-		}
+		retErr = preferRunError(retErr, err)
 	}
 	closeExecRdOnEarlyExit = false
 	return retErr

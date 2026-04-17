@@ -144,6 +144,7 @@ type DigestInput struct {
 	EnforcementFirstDeny           *DenyDigestRow
 
 	Connect4TupleUpdateFailures int
+	DroppedCounts               map[string]int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -172,6 +173,13 @@ func BuildDetectMarkdown(in DigestInput) string {
 	b.WriteString(fmt.Sprintf("| **tcp** | %d |\n", in.TCPTotal))
 	if in.Connect4TupleUpdateFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
+	}
+	droppedTotal := 0
+	for _, v := range in.DroppedCounts {
+		droppedTotal += v
+	}
+	if droppedTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **dropped events (decode/jsonl)** | %d |\n", droppedTotal))
 	}
 	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
 	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
@@ -208,6 +216,32 @@ func BuildDetectMarkdown(in DigestInput) string {
 		}
 		var list []kv
 		for k, v := range in.PolicyCounts {
+			list = append(list, kv{k, v})
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].v != list[j].v {
+				return list[i].v > list[j].v
+			}
+			return list[i].k < list[j].k
+		})
+		parts := make([]string, 0, len(list))
+		for _, e := range list {
+			parts = append(parts, fmt.Sprintf("`%s`=%d", sanitizeCell(e.k), e.v))
+		}
+		b.WriteString(strings.Join(parts, " · "))
+		b.WriteString("\n\n")
+	}
+	if droppedTotal > 0 {
+		b.WriteString("**Dropped event counters**: ")
+		type kv struct {
+			k string
+			v int
+		}
+		var list []kv
+		for k, v := range in.DroppedCounts {
+			if v <= 0 {
+				continue
+			}
 			list = append(list, kv{k, v})
 		}
 		sort.Slice(list, func(i, j int) bool {
