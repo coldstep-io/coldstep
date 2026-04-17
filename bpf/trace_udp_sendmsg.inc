@@ -14,19 +14,33 @@ struct coldstep_iovec {
 	unsigned long iov_len;
 };
 
+/*
+ * LP64 glibc msghdr: msg_name @0, msg_namelen @8, msg_iov @16, msg_iovlen @24 — read one 32-byte
+ * slab from userspace (strict verifiers reject follow-up bpf_probe_read_user at ptr+16/+24).
+ */
+static __always_inline int coldstep_read_msghdr_head32(unsigned long msg_hdr_ptr, __u8 *out32)
+{
+	if (!msg_hdr_ptr || !out32)
+		return -1;
+	if (bpf_probe_read_user(out32, 32, (void *)msg_hdr_ptr))
+		return -1;
+	return 0;
+}
+
 static __always_inline int coldstep_udp_len_from_msghdr(unsigned long msg_hdr_ptr, __u32 *out_len)
 {
 	unsigned long msg_iov = 0;
 	unsigned long msg_iovlen = 0;
 	struct coldstep_iovec iov0 = {};
+	__u8 hdr[32];
 
 	if (!msg_hdr_ptr || !out_len)
 		return -1;
 
-	if (bpf_probe_read_user(&msg_iov, sizeof(msg_iov), (void *)(msg_hdr_ptr + 16)))
+	if (coldstep_read_msghdr_head32(msg_hdr_ptr, hdr))
 		return -1;
-	if (bpf_probe_read_user(&msg_iovlen, sizeof(msg_iovlen), (void *)(msg_hdr_ptr + 24)))
-		return -1;
+	__builtin_memcpy(&msg_iov, hdr + 16, sizeof(msg_iov));
+	__builtin_memcpy(&msg_iovlen, hdr + 24, sizeof(msg_iovlen));
 	if (!msg_iov || msg_iovlen == 0) {
 		*out_len = 0;
 		return 0;
@@ -45,14 +59,15 @@ static __always_inline int coldstep_udp_dest_from_sendmsg(unsigned long msg_hdr_
 {
 	unsigned long msg_name = 0;
 	__u32 msg_namelen = 0;
+	__u8 hdr[32];
 
 	if (!msg_hdr_ptr || !sin_port || !sin_addr)
 		return -1;
 
-	if (bpf_probe_read_user(&msg_name, sizeof(msg_name), (void *)msg_hdr_ptr))
+	if (coldstep_read_msghdr_head32(msg_hdr_ptr, hdr))
 		return -1;
-	if (bpf_probe_read_user(&msg_namelen, sizeof(msg_namelen), (void *)(msg_hdr_ptr + 8)))
-		return -1;
+	__builtin_memcpy(&msg_name, hdr, sizeof(msg_name));
+	__builtin_memcpy(&msg_namelen, hdr + 8, sizeof(msg_namelen));
 
 	if (msg_name && msg_namelen >= 16 /* sizeof(struct sockaddr_in) userspace */) {
 		if (!read_ipv4_sockaddr(msg_name, sin_port, sin_addr))
