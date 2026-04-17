@@ -561,6 +561,33 @@ func TestLoadIgnoredLPMMap_EmptyNetsNoop(t *testing.T) {
 	}
 }
 
+func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_ign_lpm_nf",
+		Type:       ebpf.LPMTrie,
+		KeySize:    8,
+		ValueSize:  1,
+		MaxEntries: 8,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v", err)
+	}
+	defer m.Close()
+
+	_, ipv6Net, err := net.ParseCIDR("2001:db8::/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = loadIgnoredLPMMap(m, []*net.IPNet{ipv6Net})
+	if err == nil {
+		t.Fatal("expected error when no IPv4 entries could be programmed")
+	}
+	if !strings.Contains(err.Error(), "no entries programmed") {
+		t.Fatalf("expected no entries programmed message, got %v", err)
+	}
+}
+
 // B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadEnforceMaps.
 func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
 	spec := &ebpf.MapSpec{

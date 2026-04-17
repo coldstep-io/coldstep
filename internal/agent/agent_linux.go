@@ -762,7 +762,8 @@ func denyDigestRowFromEvent(ev telemetry.DenyEvent) report.DenyDigestRow {
 // startSyscallTrace loads observability-only BPF (TCP connect + UDP sendto + HTTP sniff + TLS write sniff; single raw_tp attach).
 // cgroup enforcement loads separately (traceenforce) when mode is enforce.
 // When enableTLSSNI is true, sets tls_agent_cfg map so BPF emits TLS ClientHello captures.
-func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, err error) {
+// tlsAgentCfgFailed is set when the map update fails (SNI path stays off in BPF) so callers can mark the hook degraded.
+func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {
 	objs = new(traceconnect.TraceconnectObjects)
 	traceLoadOpts := &ebpf.CollectionOptions{
 		Programs: ebpf.ProgramOptions{
@@ -771,7 +772,7 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 		},
 	}
 	if err = traceconnect.LoadTraceconnectObjects(objs, traceLoadOpts); err != nil {
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 
 	lnk, err = link.AttachRawTracepoint(link.RawTracepointOptions{
@@ -780,21 +781,21 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 	})
 	if err != nil {
 		objs.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 
 	connRd, err = ringbuf.NewReader(objs.ConnectEvents)
 	if err != nil {
 		lnk.Close()
 		objs.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	udpRd, err = ringbuf.NewReader(objs.UdpEvents)
 	if err != nil {
 		connRd.Close()
 		lnk.Close()
 		objs.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	httpRd, err = ringbuf.NewReader(objs.HttpEvents)
 	if err != nil {
@@ -802,7 +803,7 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 		connRd.Close()
 		lnk.Close()
 		objs.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	tlsRd, err = ringbuf.NewReader(objs.TlsEvents)
 	if err != nil {
@@ -811,16 +812,17 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 		connRd.Close()
 		lnk.Close()
 		objs.Close()
-		return nil, nil, nil, nil, nil, nil, err
+		return nil, nil, nil, nil, nil, nil, false, err
 	}
 
 	if enableTLSSNI {
-		if err := objs.TlsAgentCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); err != nil {
-			slog.Warn("tls_sni bpf cfg", "err", err)
+		if uerr := objs.TlsAgentCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); uerr != nil {
+			tlsAgentCfgFailed = true
+			slog.Warn("tls_sni bpf cfg", "err", uerr)
 		}
 	}
 
-	return connRd, udpRd, httpRd, tlsRd, objs, lnk, nil
+	return connRd, udpRd, httpRd, tlsRd, objs, lnk, tlsAgentCfgFailed, nil
 }
 
 func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, link.Link, error) {
@@ -1400,6 +1402,7 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) error {
 		return fmt.Errorf("ignored_ipv4_lpm: %d CIDRs exceeds max %d", len(nets), policy.MaxIgnoredIPv4Nets)
 	}
 	val := uint8(1)
+	programmed := 0
 	for i := 0; i < len(nets); i++ {
 		n := nets[i]
 		if n == nil {
@@ -1423,6 +1426,13 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) error {
 		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
 			return fmt.Errorf("ignored_ipv4_lpm update %s: %w", n.String(), err)
 		}
+		programmed++
+	}
+	if programmed == 0 {
+		return fmt.Errorf(
+			"ignored_ipv4_lpm: no entries programmed from %d configured CIDR(s) (need usable IPv4 prefixes for this LPM map)",
+			len(nets),
+		)
 	}
 	return nil
 }
@@ -1883,7 +1893,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var syscallLnk link.Link
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
-	if cR, uR, hR, tR, objs, lnk, err := startSyscallTrace(tlsSNIGate); err != nil {
+	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
 		if cfg.Mode == config.ModeEnforce {
@@ -1891,7 +1901,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	} else {
 		connRd, udpRd, httpRd, tlsRd, syscallObjs, syscallLnk = cR, uR, hR, tR, objs, lnk
-		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}
+		syscallOK := true
+		syscallDetail := ""
+		if tlsCfgFailed {
+			syscallOK = false
+			syscallDetail = "tls_agent_cfg map update failed (TLS SNI sniff disabled in BPF)"
+		}
+		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
 		defer syscallLnk.Close()
 		defer syscallObjs.Close()
@@ -2037,7 +2053,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 			slog.Info("fs tracing disabled", "err", err)
 			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: bpfDetail(err)})
 		} else {
+			var fsCfgErr error
 			if err := objs.FsAgentCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); err != nil {
+				fsCfgErr = err
 				slog.Warn("fs cfg map update", "err", err)
 			}
 			fsObjs = objs
@@ -2062,7 +2080,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 					fsLnk = nil
 				} else {
 					fsRd = rd
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: true})
+					fsOK := true
+					fsDetail := ""
+					if fsCfgErr != nil {
+						fsOK = false
+						fsDetail = bpfDetail(fsCfgErr)
+						if fsDetail == "" {
+							fsDetail = "fs_agent_cfg map update failed (fs events disabled in BPF)"
+						}
+					}
+					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: fsOK, Detail: fsDetail})
 					slog.Info("tracing fs events (openat+create, unlink, rename, chmod)")
 					defer func() {
 						if fsRd != nil {
@@ -2147,8 +2174,35 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
 
+	// Each reader goroutine sends one error on exit; buffer must fit all sends before wg.Wait returns.
+	readerCount := 1
+	if forkRd != nil && forkBuf != nil && forkState != nil {
+		readerCount++
+	}
+	if fsRd != nil && fsRowBuf != nil && fsSt != nil {
+		readerCount++
+	}
+	if connRd != nil {
+		readerCount++
+	}
+	if udpRd != nil {
+		readerCount++
+	}
+	if httpRd != nil {
+		readerCount++
+	}
+	if tlsRd != nil {
+		readerCount++
+	}
+	if denyRd != nil {
+		readerCount++
+	}
+	if dnsRd != nil {
+		readerCount++
+	}
+
 	var wg sync.WaitGroup
-	errCh := make(chan error, 10)
+	errCh := make(chan error, readerCount)
 
 	wg.Add(1)
 	go func() {
