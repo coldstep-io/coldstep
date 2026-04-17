@@ -155,7 +155,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		handle_udp_obs_emit(sin_port, sin_addr, len);
 
 		if (sin_port == bpf_htons(80) && len >= 4 &&
-		    http_prefix_looks_like_request((void *)buf_ptr, len))
+		    http_prefix_looks_like_request(buf_ptr, len))
 			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 
 		try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);

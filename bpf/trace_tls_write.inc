@@ -3,7 +3,7 @@
 #define TRACE_TLS_WRITE_INC
 
 /* Shared by __NR_write and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
-static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len)
+static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	{
 		__u32 key0 = 0;
@@ -13,12 +13,8 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			return;
 	}
 
-	if (len > TLS_PAYLOAD_MAX)
-		len = TLS_PAYLOAD_MAX;
-	/* Linux 5.15 verifier: bpf_probe_read_user size must have a provable unsigned bound. */
-	len &= 0x1ffu;
-	if (len > TLS_PAYLOAD_MAX)
-		len = TLS_PAYLOAD_MAX;
+	__u32 len = coldstep_probe_user_sz_tls(len_in);
+
 	if (len < 6 || !buf_ptr)
 		return;
 
@@ -34,8 +30,6 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 		{
 			unsigned char peek[8];
 
-			if (len < 6)
-				return;
 			/* Constant read size — variable peeksz trips strict verifiers on some runners. */
 			if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 				return;
@@ -61,14 +55,8 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			ev->_pad[0] = 0;
 			ev->_pad[1] = 0;
 			{
-				/* capture_len must match bytes read (userspace caps at TLS_PAYLOAD_MAX). */
-				__u32 cap_len = len;
-
-				cap_len &= 0x1ffu;
-				if (cap_len > TLS_PAYLOAD_MAX)
-					cap_len = TLS_PAYLOAD_MAX;
-				ev->capture_len = (__u16)cap_len;
-				if (bpf_probe_read_user(ev->payload, cap_len, (void *)buf_ptr)) {
+				ev->capture_len = (__u16)len;
+				if (bpf_probe_read_user(ev->payload, len, (void *)buf_ptr)) {
 					bpf_ringbuf_discard(ev, 0);
 					return;
 				}

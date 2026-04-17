@@ -105,6 +105,33 @@ static __always_inline int coldstep_read_orig_syscall_nr(struct pt_regs *regs, u
 #define HTTP_PAYLOAD_MAX 192
 #define TLS_PAYLOAD_MAX 256
 
+/*
+ * Strict kernels (GitHub ubuntu-22.04 image + Azure 6.x, etc.) track syscall-derived lengths as
+ * scalars whose signed min/max confuse bpf_probe_read_user size (R2). Keep one clamp+mask path
+ * per sniff type so the verifier proves a tight unsigned upper bound on the read size register.
+ */
+static __always_inline __u32 coldstep_probe_user_sz_http(__u32 len_in)
+{
+	__u32 s = len_in;
+
+	if (s > HTTP_PAYLOAD_MAX)
+		s = HTTP_PAYLOAD_MAX;
+	s &= 0xffu;
+	return s;
+}
+
+static __always_inline __u32 coldstep_probe_user_sz_tls(__u32 len_in)
+{
+	__u32 s = len_in;
+
+	if (s > TLS_PAYLOAD_MAX)
+		s = TLS_PAYLOAD_MAX;
+	s &= 0x1ffu;
+	if (s > TLS_PAYLOAD_MAX)
+		s = TLS_PAYLOAD_MAX;
+	return s;
+}
+
 /* Last IPv4 connect tuple observed for (tgid, fd); used to attribute TLS ClientHello writes. */
 struct connect4_tuple {
 	__u8 daddr[4];
@@ -178,14 +205,16 @@ static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16
 	return 0;
 }
 
-static __always_inline int http_prefix_looks_like_request(const void *buf, __u32 cap)
+static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr, __u32 cap)
 {
 	char p[4];
 
 	if (cap < 4)
 		return 0;
+	if (!buf_ptr)
+		return 0;
 	/* Constant size 4 for strict verifiers (see read_ipv4_sockaddr). */
-	if (bpf_probe_read_user(p, 4, buf))
+	if (bpf_probe_read_user(p, 4, (void *)buf_ptr))
 		return 0;
 	/* GET / POST / HEAD / PUT — space or T for POST */
 	if (p[0] == 'G' && p[1] == 'E' && p[2] == 'T' && p[3] == ' ')
