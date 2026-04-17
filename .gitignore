@@ -18,7 +18,7 @@ scripts/docker-mcp-reconnect.ps1
 # Secrets
 .env
 
-# Editor / machine-local (not published)
+# Editor / machine-local (not published), including Cursor rules
 /.cursor/
 /.vscode/
 /specs/
@@ -28,3 +28,11 @@ AGENTS.md
 .coldstep-detect.md
 scripts/__pycache__/
 /docs/
+
+# Markdown / Obsidian vault (entire tree local only; do not commit anything under knowledge/).
+# knowledge/README.md is included: it must stay in the working tree as the vault convention doc
+# (update when the pipeline changes; do not delete). It is never tracked—do not git add -f it.
+/knowledge/
+
+# Knowledge vault tooling used to live here; keep ignored so it is never committed by mistake.
+/scripts/knowledge_records_backfill.py
