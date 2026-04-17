@@ -30,6 +30,8 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 		 * for bpf_probe_read_user (and this _Static_assert).
 		 */
 		_Static_assert(HTTP_PAYLOAD_MAX <= 255, "http sniff: raise read bound if HTTP_PAYLOAD_MAX > 255");
+		/* Linux 5.15 verifier: prove read size is unsigned-bounded (ubuntu-22.04 runners). */
+		sz &= 0xffu;
 		he->capture_len = (__u16)sz;
 		if (bpf_probe_read_user(he->payload, sz, (void *)buf_ptr)) {
 			bpf_ringbuf_discard(he, 0);

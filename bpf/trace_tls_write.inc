@@ -15,6 +15,10 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 
 	if (len > TLS_PAYLOAD_MAX)
 		len = TLS_PAYLOAD_MAX;
+	/* Linux 5.15 verifier: bpf_probe_read_user size must have a provable unsigned bound. */
+	len &= 0x1ffu;
+	if (len > TLS_PAYLOAD_MAX)
+		len = TLS_PAYLOAD_MAX;
 	if (len < 6 || !buf_ptr)
 		return;
 
@@ -60,6 +64,9 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 				/* capture_len must match bytes read (userspace caps at TLS_PAYLOAD_MAX). */
 				__u32 cap_len = len;
 
+				cap_len &= 0x1ffu;
+				if (cap_len > TLS_PAYLOAD_MAX)
+					cap_len = TLS_PAYLOAD_MAX;
 				ev->capture_len = (__u16)cap_len;
 				if (bpf_probe_read_user(ev->payload, cap_len, (void *)buf_ptr)) {
 					bpf_ringbuf_discard(ev, 0);
