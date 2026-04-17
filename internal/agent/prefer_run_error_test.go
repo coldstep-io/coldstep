@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -34,7 +35,9 @@ func TestPreferRunError_Precedence(t *testing.T) {
 	}{
 		{"nil current takes candidate", nil, plain, plain},
 		{"suppress canceled candidate", plain, cancelErr, plain},
+		{"suppress wrapped canceled candidate", plain, fmt.Errorf("shutdown: %w", context.Canceled), plain},
 		{"enforce deny replaces plain", plain, denyTCP, denyTCP},
+		{"enforce deny wins over context.Canceled as current", context.Canceled, denyTCP, denyTCP},
 		{"keep plain when current is deny", denyTCP, plain, denyTCP},
 		{"enforce deny vs enforce deny keeps current", denyTCP, denyUDP, denyTCP},
 	}
