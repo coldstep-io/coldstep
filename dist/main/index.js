@@ -31042,6 +31042,7 @@ async function run() {
     }
     const allowedHosts = core.getInput('allowed-hosts') || '';
     const allowedIPs = core.getInput('allowed-ips') || '';
+    const enforceIPv6 = inputBoolDefault('enforce-ipv6', false);
     const ignoredIpNets = core.getInput('ignored-ip-nets') || '';
     const noDefaultIgnoredNets = inputBoolDefault('no-default-ignored-nets', false);
     const allowedDomains = core.getInput('allowed-domains') || '';
@@ -31086,6 +31087,7 @@ async function run() {
         COLDSTEP_DETECT_LOG: detectLog,
         COLDSTEP_ALLOWED_HOSTS: allowedHosts,
         COLDSTEP_ALLOWED_IPS: allowedIPs,
+        COLDSTEP_ENFORCE_IPV6: enforceIPv6 ? 'true' : 'false',
         COLDSTEP_IGNORED_IP_NETS: ignoredIpNets,
         COLDSTEP_NO_DEFAULT_IGNORED_NETS: noDefaultIgnoredNets ? 'true' : 'false',
         COLDSTEP_ALLOWED_DOMAINS: allowedDomains,

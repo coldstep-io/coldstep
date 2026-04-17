@@ -28,9 +28,18 @@ inputs:
     required: false
     default: ''
   allowed-ips:
-    description: Comma- or whitespace-separated IPv4 literals allowed for egress classification (v1; no CIDR yet).
+    description: >-
+      Comma- or whitespace-separated IPv4 or IPv6 literals allowed for egress classification (no CIDR).
+      IPv6 literals apply to classification and enforce-mode allowlists when IPv6 enforcement is enabled.
     required: false
     default: ''
+  enforce-ipv6:
+    description: >-
+      When true and mode is enforce, attach cgroup IPv6 hooks (connect6/sendmsg6) and program allowed_ipv6
+      from AAAA resolutions and IPv6 literals. When false (default), IPv6 egress is not cgroup-governed;
+      IPv4 hooks are unchanged.
+    required: false
+    default: 'false'
   ignored-ip-nets:
     description: >-
       Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores

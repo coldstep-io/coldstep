@@ -180,7 +180,9 @@ const (
 	denyProtoTCP                = 1
 	denyProtoUDP                = 2
 	denyReasonDstNotAllowlisted = 1
-	denyEventWireSize           = 34
+	denyEventWireSize           = 46 // bpf deny_event packed: af + daddr[16]
+	linuxAFInet                 = 2
+	linuxAFInet6                = 10
 
 	// After the first enforce deny, read additional deny ringbuf records briefly so JSONL/digest
 	// capture a burst (e.g. TCP + UDP) before fail-fast shutdown.
@@ -709,18 +711,20 @@ func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
 	return raw[4 : 4+int(n)], true
 }
 
-func decodeDenyEvent(raw []byte) (tgid, tid uint32, comm [16]byte, protocol uint8, reason uint8, daddr [4]byte, dport uint16, ok bool) {
+func decodeDenyEvent(raw []byte) (tgid, tid uint32, comm [16]byte, protocol uint8, reason uint8, af uint8,
+	daddr16 [16]byte, dport uint16, ok bool) {
 	if len(raw) < denyEventWireSize {
-		return 0, 0, [16]byte{}, 0, 0, [4]byte{}, 0, false
+		return 0, 0, [16]byte{}, 0, 0, 0, [16]byte{}, 0, false
 	}
 	tgid = binary.LittleEndian.Uint32(raw[0:4])
 	tid = binary.LittleEndian.Uint32(raw[4:8])
 	copy(comm[:], raw[8:24])
 	protocol = raw[24]
 	reason = raw[25]
-	copy(daddr[:], raw[28:32])
-	dport = binary.BigEndian.Uint16(raw[32:34])
-	return tgid, tid, comm, protocol, reason, daddr, dport, true
+	af = raw[26]
+	copy(daddr16[:], raw[28:44])
+	dport = binary.BigEndian.Uint16(raw[44:46])
+	return tgid, tid, comm, protocol, reason, af, daddr16, dport, true
 }
 
 func denyProtocolLabel(protocol uint8) string {
@@ -1364,48 +1368,15 @@ func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver po
 		return policy.CompileResult{}, perr
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
-	if compiled.AllowedIPv4.Len() == 0 {
-		msg := "enforce allowlist effective allowlist is empty (no IPv4 resolutions; v1 enforce uses IPv4 A records only)"
+	pol.MergeLiteralAllowedIPv6Into(&compiled.AllowedIPv6)
+	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 {
+		msg := "enforce allowlist effective allowlist is empty (no IPv4 A-record or IPv6 AAAA resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
 		}
 		return policy.CompileResult{}, fmt.Errorf("%s", msg)
 	}
 	return compiled, nil
-}
-
-func resolveAllowlistIPv4Keys(ctx context.Context, domains []string, resolver policy.LookupIPFunc, maxAttempts int) map[[4]byte]struct{} {
-	if resolver == nil {
-		resolver = net.DefaultResolver.LookupIP
-	}
-	if maxAttempts < 1 {
-		maxAttempts = 1
-	}
-	keys := make(map[[4]byte]struct{})
-	for _, domain := range domains {
-		for attempt := 0; attempt < maxAttempts; attempt++ {
-			if ctx != nil && ctx.Err() != nil {
-				return keys
-			}
-			ips, err := resolver(ctx, "ip4", domain)
-			if err != nil {
-				continue
-			}
-			for _, ip := range ips {
-				ip4 := ip.To4()
-				if ip4 == nil {
-					continue
-				}
-				var key [4]byte
-				copy(key[:], ip4)
-				keys[key] = struct{}{}
-			}
-			if len(ips) > 0 {
-				break
-			}
-		}
-	}
-	return keys
 }
 
 // loadIgnoredLPMMap programs the BPF LPM trie used to bypass denies for ignored IPv4 CIDRs.
@@ -1495,9 +1466,8 @@ func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 	return int(v)
 }
 
-// loadEnforceMaps programs the BPF allowlist map from a one-time IPv4 resolution of domains at agent
-// startup (short CI jobs); it does not track live DNS changes for already-loaded addresses.
-func loadEnforceMaps(ctx context.Context, objs *traceenforce.TraceenforceObjects, domains []string, resolver policy.LookupIPFunc, maxAttempts int, pol *policy.Policy) (int, error) {
+// loadEnforceMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
+func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.CompileResult, pol *policy.Policy, cfg config.Config) (int, error) {
 	if objs == nil {
 		return 0, fmt.Errorf("traceenforce objects are required for enforce mode")
 	}
@@ -1511,31 +1481,73 @@ func loadEnforceMaps(ctx context.Context, objs *traceenforce.TraceenforceObjects
 			return 0, err
 		}
 	}
-	keys := resolveAllowlistIPv4Keys(ctx, domains, resolver, maxAttempts)
+
+	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
+	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
 	if pol != nil {
-		pol.MergeLiteralAllowedIPv4Keys(keys)
+		pol.MergeLiteralAllowedIPv4Keys(v4keys)
 	}
-	if len(keys) == 0 {
-		return 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no IPv4 map entries; v1 enforce uses IPv4 A records only)")
+	if len(v4keys) > policy.MaxAllowedEnforceIPv4Keys {
+		return 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", len(v4keys), policy.MaxAllowedEnforceIPv4Keys)
 	}
+
+	v6keys := make(map[[16]byte]struct{}, compiled.AllowedIPv6.Len())
+	compiled.AllowedIPv6.ForEach(func(k [16]byte) { v6keys[k] = struct{}{} })
+	if pol != nil {
+		pol.MergeLiteralAllowedIPv6Keys(v6keys)
+	}
+	if len(v6keys) > policy.MaxAllowedEnforceIPv6Keys {
+		return 0, fmt.Errorf("allowed_ipv6: %d entries exceeds BPF max %d", len(v6keys), policy.MaxAllowedEnforceIPv6Keys)
+	}
+
+	if !cfg.EnforceIPv6 && len(v6keys) > 0 && len(v4keys) == 0 {
+		return 0, fmt.Errorf("enforce allowlist resolves to IPv6 only, but COLDSTEP_ENFORCE_IPV6 is false (set true or add IPv4 allowlist entries)")
+	}
+
+	if len(v4keys) == 0 && len(v6keys) == 0 {
+		return 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
+	}
+
 	allow := uint8(1)
-	for addr := range keys {
+	for addr := range v4keys {
 		addrCopy := addr
 		if err := objs.AllowedIpv4.Update(&addrCopy, &allow, ebpf.UpdateAny); err != nil {
 			return 0, fmt.Errorf("load allowed_ipv4 map: %w", err)
 		}
 	}
-	return len(keys), nil
+
+	if cfg.EnforceIPv6 {
+		for addr := range v6keys {
+			addrCopy := addr
+			if err := objs.AllowedIpv6.Update(&addrCopy, &allow, ebpf.UpdateAny); err != nil {
+				return 0, fmt.Errorf("load allowed_ipv6 map: %w", err)
+			}
+		}
+	}
+
+	n := len(v4keys)
+	if cfg.EnforceIPv6 {
+		n += len(v6keys)
+	}
+	return n, nil
 }
 
 func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) (telemetry.DenyEvent, error) {
-	tgid, tid, commb, protocolRaw, reasonRaw, daddr, dport, ok := decodeDenyEvent(raw)
+	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
 		return telemetry.DenyEvent{}, fmt.Errorf("decode deny event")
 	}
 	protocol := denyProtocolLabel(protocolRaw)
 	reason := denyReasonLabel(reasonRaw)
-	dst := net.IP(daddr[:]).String()
+	var dst string
+	switch af {
+	case linuxAFInet:
+		dst = net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
+	case linuxAFInet6:
+		dst = net.IP(daddr16[:]).String()
+	default:
+		dst = net.IP(daddr16[:]).String()
+	}
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	deny := telemetry.DenyEvent{
@@ -1886,6 +1898,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var syscallLnk link.Link
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
+	var enforceConnect6Lnk link.Link
+	var enforceSendmsg6Lnk link.Link
 	if cR, uR, hR, tR, objs, lnk, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
@@ -1919,7 +1933,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				_ = enforceObjs.Close()
 			}()
 
-			allowlistSize, loadErr := loadEnforceMaps(ctx, enforceObjs, enforceCompiled.Domains, nil, 2, pol)
+			allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol, cfg)
 			if loadErr != nil {
 				return loadErr
 			}
@@ -1930,8 +1944,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 			}
 			defer denyRd.Close()
 
+			cgPath := cfg.CgroupAttachPath
+			if cgPath == "" {
+				cgPath = "/sys/fs/cgroup"
+			}
+
 			enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    "/sys/fs/cgroup",
+				Path:    cgPath,
 				Attach:  ebpf.AttachCGroupInet4Connect,
 				Program: enforceObjs.EnforceConnect4,
 			})
@@ -1941,7 +1960,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			defer enforceConnectLnk.Close()
 
 			enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    "/sys/fs/cgroup",
+				Path:    cgPath,
 				Attach:  ebpf.AttachCGroupUDP4Sendmsg,
 				Program: enforceObjs.EnforceSendmsg4,
 			})
@@ -1949,6 +1968,28 @@ func Run(ctx context.Context, cfg config.Config) error {
 				return fmt.Errorf("attach enforce_sendmsg4: %w", err)
 			}
 			defer enforceSendmsgLnk.Close()
+
+			if cfg.EnforceIPv6 {
+				enforceConnect6Lnk, err = link.AttachCgroup(link.CgroupOptions{
+					Path:    cgPath,
+					Attach:  ebpf.AttachCGroupInet6Connect,
+					Program: enforceObjs.EnforceConnect6,
+				})
+				if err != nil {
+					return fmt.Errorf("attach enforce_connect6: %w", err)
+				}
+				defer enforceConnect6Lnk.Close()
+
+				enforceSendmsg6Lnk, err = link.AttachCgroup(link.CgroupOptions{
+					Path:    cgPath,
+					Attach:  ebpf.AttachCGroupUDP6Sendmsg,
+					Program: enforceObjs.EnforceSendmsg6,
+				})
+				if err != nil {
+					return fmt.Errorf("attach enforce_sendmsg6: %w", err)
+				}
+				defer enforceSendmsg6Lnk.Close()
+			}
 		}
 	}
 

@@ -24,6 +24,19 @@ func TestParse_Empty(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedIPv6Literal(t *testing.T) {
+	p, err := Parse("", "2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.enabled {
+		t.Fatal("expected enabled policy with IPv6 literal")
+	}
+	if g := p.Classify("", net.ParseIP("2001:db8::1")); g != ClassAllowed {
+		t.Fatalf("got %q want allowed", g)
+	}
+}
+
 func TestParse_AllowedIP(t *testing.T) {
 	p, err := Parse("", "1.1.1.1, 8.8.8.8")
 	if err != nil {
@@ -55,6 +68,21 @@ func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
 	}
 	var nilP *Policy
 	nilP.MergeLiteralAllowedIPv4Into(&s) // no panic
+}
+
+func TestPolicy_MergeLiteralAllowedIPv6Keys(t *testing.T) {
+	p, err := Parse("", "2001:db8::1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make(map[[16]byte]struct{})
+	p.MergeLiteralAllowedIPv6Keys(keys)
+	ip := net.ParseIP("2001:db8::1").To16()
+	var wk [16]byte
+	copy(wk[:], ip)
+	if _, ok := keys[wk]; !ok {
+		t.Fatalf("expected IPv6 literal in keys")
+	}
 }
 
 func TestPolicy_MergeLiteralAllowedIPv4Keys(t *testing.T) {

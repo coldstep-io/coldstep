@@ -1,6 +1,6 @@
 /*
- * cgroup egress enforcement for mode: enforce — IPv4 only, hooks cgroup/connect4 and
- * cgroup/sendmsg4 (no IPv6). Intended for GitHub-hosted ephemeral Linux runners.
+ * cgroup egress enforcement for mode: enforce — IPv4 (connect4/sendmsg4) and optional IPv6
+ * (connect6/sendmsg6) on supporting kernels. Intended for GitHub-hosted ephemeral Linux runners.
  * Loaded as a separate BPF collection from syscall observability programs.
  */
 #include "vmlinux.h"
@@ -17,6 +17,14 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define IPPROTO_UDP 17
 #endif
 
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+
 #define COLDSTEP_ENFORCE_KEY_MODE 0
 #define COLDSTEP_ENFORCE_MODE_DETECT 0
 #define COLDSTEP_ENFORCE_MODE_ENFORCE 1
@@ -26,16 +34,18 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
 
+/* Packed wire format for userspace (see internal/agent decodeDenyEvent). */
 struct deny_event {
 	__u32 tgid;
 	__u32 tid;
 	__u8 comm[16];
 	__u8 protocol;
 	__u8 reason;
-	__u8 _pad[2];
-	__u8 daddr[4];
+	__u8 af;
+	__u8 _pad;
+	__u8 daddr[16];
 	__u8 dport[2];
-};
+} __attribute__((packed));
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -63,6 +73,13 @@ struct {
 	__type(value, __u8);
 } allowed_ipv4 SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 4096);
+	__type(key, __u8[16]);
+	__type(value, __u8);
+} allowed_ipv6 SEC(".maps");
+
 struct ns_lpm4_key {
 	__u32 prefixlen;
 	__be32 addr;
@@ -87,6 +104,18 @@ static __always_inline int enforcement_enabled(void)
 static __always_inline int dst_is_allowlisted(__be32 addr)
 {
 	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv4, &addr);
+
+	return ok != 0;
+}
+
+static __always_inline int dst_is_allowlisted_v6(const __u8 *addr /* 16 bytes */)
+{
+	__u8 key[16];
+
+	if (!addr)
+		return 0;
+	__builtin_memcpy(key, addr, sizeof(key));
+	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv6, &key);
 
 	return ok != 0;
 }
@@ -120,7 +149,8 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 	__sync_fetch_and_add(v, 1);
 }
 
-static __always_inline void emit_deny_event(__u8 protocol, __be32 daddr, __be16 dport, __u8 reason)
+static __always_inline void emit_deny_event_inet(__u8 protocol, __u8 af, const __u8 *dst, __be16 dport,
+						__u8 reason)
 {
 	struct deny_event *de = bpf_ringbuf_reserve(&deny_events, sizeof(*de), 0);
 
@@ -137,9 +167,16 @@ static __always_inline void emit_deny_event(__u8 protocol, __be32 daddr, __be16 
 	bpf_get_current_comm(&de->comm, sizeof(de->comm));
 	de->protocol = protocol;
 	de->reason = reason;
-	de->_pad[0] = 0;
-	de->_pad[1] = 0;
-	__builtin_memcpy(de->daddr, &daddr, sizeof(de->daddr));
+	de->af = af;
+	de->_pad = 0;
+	if (af == AF_INET && dst) {
+		__builtin_memset(de->daddr, 0, sizeof(de->daddr));
+		__builtin_memcpy(de->daddr, dst, 4);
+	} else if (af == AF_INET6 && dst) {
+		__builtin_memcpy(de->daddr, dst, 16);
+	} else {
+		__builtin_memset(de->daddr, 0, sizeof(de->daddr));
+	}
 	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
 	bpf_ringbuf_submit(de, 0);
 }
@@ -150,6 +187,7 @@ int enforce_connect4(struct bpf_sock_addr *ctx)
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
 	__u8 protocol = protocol_from_sock_ctx(ctx);
+	__u8 addr4[4];
 
 	if (!enforcement_enabled())
 		return 1;
@@ -158,8 +196,9 @@ int enforce_connect4(struct bpf_sock_addr *ctx)
 	if (dst_is_allowlisted(daddr))
 		return 1;
 
-	emit_deny_event(protocol, daddr, dport,
-			COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
+	emit_deny_event_inet(protocol, AF_INET, addr4, dport,
+			     COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }
 
@@ -168,6 +207,7 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
+	__u8 addr4[4];
 
 	if (!enforcement_enabled())
 		return 1;
@@ -176,7 +216,39 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 	if (dst_is_allowlisted(daddr))
 		return 1;
 
-	emit_deny_event(COLDSTEP_PROTO_UDP, daddr, dport,
-			COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
+	emit_deny_event_inet(COLDSTEP_PROTO_UDP, AF_INET, addr4, dport,
+			     COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	return 0;
+}
+
+SEC("cgroup/connect6")
+int enforce_connect6(struct bpf_sock_addr *ctx)
+{
+	__be16 dport = (__be16)ctx->user_port;
+	__u8 protocol = protocol_from_sock_ctx(ctx);
+
+	if (!enforcement_enabled())
+		return 1;
+	if (dst_is_allowlisted_v6((const __u8 *)ctx->user_ip6))
+		return 1;
+
+	emit_deny_event_inet(protocol, AF_INET6, (const __u8 *)ctx->user_ip6, dport,
+			     COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	return 0;
+}
+
+SEC("cgroup/sendmsg6")
+int enforce_sendmsg6(struct bpf_sock_addr *ctx)
+{
+	__be16 dport = (__be16)ctx->user_port;
+
+	if (!enforcement_enabled())
+		return 1;
+	if (dst_is_allowlisted_v6((const __u8 *)ctx->user_ip6))
+		return 1;
+
+	emit_deny_event_inet(COLDSTEP_PROTO_UDP, AF_INET6, (const __u8 *)ctx->user_ip6, dport,
+			     COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }

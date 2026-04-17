@@ -21,6 +21,38 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+func fillTestDenyRawV4(tgid, tid uint32, comm string, proto, reason uint8, ip net.IP, dport uint16) []byte {
+	raw := make([]byte, denyEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], tgid)
+	binary.LittleEndian.PutUint32(raw[4:8], tid)
+	copy(raw[8:24], comm)
+	raw[24] = proto
+	raw[25] = reason
+	raw[26] = uint8(linuxAFInet)
+	raw[27] = 0
+	if ip4 := ip.To4(); ip4 != nil {
+		copy(raw[28:32], ip4)
+	}
+	binary.BigEndian.PutUint16(raw[44:46], dport)
+	return raw
+}
+
+func fillTestDenyRawV6(tgid, tid uint32, comm string, proto, reason uint8, ip net.IP, dport uint16) []byte {
+	raw := make([]byte, denyEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], tgid)
+	binary.LittleEndian.PutUint32(raw[4:8], tid)
+	copy(raw[8:24], comm)
+	raw[24] = proto
+	raw[25] = reason
+	raw[26] = uint8(linuxAFInet6)
+	raw[27] = 0
+	if ip16 := ip.To16(); ip16 != nil {
+		copy(raw[28:44], ip16)
+	}
+	binary.BigEndian.PutUint16(raw[44:46], dport)
+	return raw
+}
+
 func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	stats := newRunStats()
 	stats.addExec()
@@ -207,14 +239,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	raw := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(raw[0:4], 4321)
-	binary.LittleEndian.PutUint32(raw[4:8], 5001)
-	copy(raw[8:24], []byte("curl"))
-	raw[24] = denyProtoTCP
-	raw[25] = denyReasonDstNotAllowlisted
-	copy(raw[28:32], net.ParseIP("1.2.3.4").To4())
-	binary.BigEndian.PutUint16(raw[32:34], 443)
+	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 
 	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state)
 	if err == nil {
@@ -265,23 +290,9 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	rawTCP := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(rawTCP[0:4], 100)
-	binary.LittleEndian.PutUint32(rawTCP[4:8], 200)
-	copy(rawTCP[8:24], []byte("curl"))
-	rawTCP[24] = denyProtoTCP
-	rawTCP[25] = denyReasonDstNotAllowlisted
-	copy(rawTCP[28:32], net.ParseIP("10.0.0.1").To4())
-	binary.BigEndian.PutUint16(rawTCP[32:34], 443)
+	rawTCP := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	rawUDP := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(rawUDP[0:4], 101)
-	binary.LittleEndian.PutUint32(rawUDP[4:8], 201)
-	copy(rawUDP[8:24], []byte("dig"))
-	rawUDP[24] = denyProtoUDP
-	rawUDP[25] = denyReasonDstNotAllowlisted
-	copy(rawUDP[28:32], net.ParseIP("8.8.8.8").To4())
-	binary.BigEndian.PutUint16(rawUDP[32:34], 53)
+	rawUDP := fillTestDenyRawV6(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("2001:db8::53"), 53)
 
 	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state); err != nil {
 		t.Fatalf("append tcp: %v", err)
@@ -300,6 +311,9 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	s := string(b)
 	if !strings.Contains(s, `"protocol":"tcp"`) || !strings.Contains(s, `"protocol":"udp"`) {
 		t.Fatalf("expected both protocols in JSONL:\n%s", s)
+	}
+	if !strings.Contains(s, `"dst":"2001:db8::53"`) {
+		t.Fatalf("expected IPv6 dst in JSONL:\n%s", s)
 	}
 }
 
@@ -328,13 +342,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	raw := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(raw[0:4], 1)
-	binary.LittleEndian.PutUint32(raw[4:8], 1)
-	raw[24] = denyProtoTCP
-	raw[25] = denyReasonDstNotAllowlisted
-	copy(raw[28:32], net.ParseIP("1.1.1.1").To4())
-	binary.BigEndian.PutUint16(raw[32:34], 443)
+	raw := fillTestDenyRawV4(1, 1, "", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 
 	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state)
 	if err == nil {
@@ -375,14 +383,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	raw := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(raw[0:4], 100)
-	binary.LittleEndian.PutUint32(raw[4:8], 200)
-	copy(raw[8:24], []byte("curl"))
-	raw[24] = denyProtoTCP
-	raw[25] = denyReasonDstNotAllowlisted
-	copy(raw[28:32], net.ParseIP("10.0.0.1").To4())
-	binary.BigEndian.PutUint16(raw[32:34], 443)
+	raw := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
 	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state)
 	if state.denyCount() != 0 {
@@ -413,7 +414,7 @@ func TestRun_DetectModeUnchangedForEnforceAllowlistCompile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("detect mode should not fail enforce preflight: %v", err)
 	}
-	if res.AllowedIPv4.Len() != 0 || len(res.Domains) != 0 || len(res.UnresolvedDomains) != 0 {
+	if res.AllowedIPv4.Len() != 0 || res.AllowedIPv6.Len() != 0 || len(res.Domains) != 0 || len(res.UnresolvedDomains) != 0 {
 		t.Fatalf("detect mode expected empty compile result, got %#v", res)
 	}
 }
