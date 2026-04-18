@@ -1,5 +1,7 @@
 import importlib.util
 import json
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -61,7 +63,6 @@ class BuildReportModelTests(unittest.TestCase):
             self.assertGreaterEqual(row["count"], 1)
 
     def test_load_jsonl_skips_garbage_lines_silently(self):
-        import tempfile
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "mixed.jsonl"
             p.write_text(
@@ -77,7 +78,6 @@ class BuildReportModelTests(unittest.TestCase):
             self.assertEqual(counts.get("udp"), 1)
 
     def test_run_run_id_falls_back_to_env_when_no_meta_event(self):
-        import os, tempfile
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "no-meta.jsonl"
             p.write_text(
