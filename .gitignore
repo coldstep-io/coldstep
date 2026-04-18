@@ -33,9 +33,11 @@ scripts/__pycache__/
 # Local deep-debug pass output (scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
-# Markdown / Obsidian vault (entire tree local only; do not commit anything under knowledge/).
-# knowledge/README.md is included: it must stay in the working tree as the vault convention doc
-# (update when the pipeline changes; do not delete). It is never tracked—do not git add -f it.
+# Agent/design specs (local only; do not publish)
+/.github/design/
+
+# Markdown / Obsidian vault — entire tree local only; nothing under knowledge/ is committed (see AGENTS.md).
+# Keep knowledge/README.md and knowledge/Index.md in your working tree; do not delete them; do not git add -f.
 /knowledge/
 
 # Knowledge vault tooling used to live here; keep ignored so it is never committed by mistake.
