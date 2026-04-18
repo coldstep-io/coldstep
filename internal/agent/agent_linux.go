@@ -1872,33 +1872,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	dnsCache := NewDNSCache()
 
-	var execObjs traceexec.TraceexecObjects
-	if err := traceexec.LoadTraceexecObjects(&execObjs, nil); err != nil {
-		return fmt.Errorf("load bpf objects: %w", err)
-	}
-	defer execObjs.Close()
-
-	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
-	if err != nil {
-		return fmt.Errorf("attach tracepoint sched_process_exec: %w", err)
-	}
-	defer execLnk.Close()
-	bpfSt[0] = telemetry.BPFStatus{Name: "sched_process_exec", OK: true}
-
-	execRd, err := ringbuf.NewReader(execObjs.Events)
-	if err != nil {
-		return fmt.Errorf("ringbuf reader exec: %w", err)
-	}
-	// execRd is normally closed when runCtx is cancelled (see goroutine below). Any return
-	// before that goroutine is registered would otherwise leak the reader (e.g. enforce mode
-	// when syscall trace attach fails, or enforce BPF/map/attach errors).
-	closeExecRdOnEarlyExit := true
-	defer func() {
-		if closeExecRdOnEarlyExit {
-			_ = execRd.Close()
-		}
-	}()
-
 	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
 	var denyRd *ringbuf.Reader
 	var syscallObjs *traceconnect.TraceconnectObjects
@@ -1906,9 +1879,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
 
-	// Enforce mode: load cgroup programs before traceconnect. LoadTraceconnectObjects can take
-	// minutes on hosted runners (verifier); fail-on-error waits on .coldstep-ready.json and must
-	// not block until syscall-trace BPF finishes. Cgroup attach is sufficient for egress policy.
+	// Enforce mode: cgroup attach before traceexec/traceconnect. sched_process_exec and
+	// raw_tp/sys_enter BPF loads can each take minutes on hosted runners; GitHub Actions
+	// fail-on-error polls .coldstep-ready.json with a bounded timeout.
 	if cfg.Mode == config.ModeEnforce {
 		enforceObjs := new(traceenforce.TraceenforceObjects)
 		if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
@@ -1960,6 +1933,33 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("agent ready status: %w", err)
 		}
 	}
+
+	var execObjs traceexec.TraceexecObjects
+	if err := traceexec.LoadTraceexecObjects(&execObjs, nil); err != nil {
+		return fmt.Errorf("load bpf objects: %w", err)
+	}
+	defer execObjs.Close()
+
+	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
+	if err != nil {
+		return fmt.Errorf("attach tracepoint sched_process_exec: %w", err)
+	}
+	defer execLnk.Close()
+	bpfSt[0] = telemetry.BPFStatus{Name: "sched_process_exec", OK: true}
+
+	execRd, err := ringbuf.NewReader(execObjs.Events)
+	if err != nil {
+		return fmt.Errorf("ringbuf reader exec: %w", err)
+	}
+	// execRd is normally closed when runCtx is cancelled (see goroutine below). Any return
+	// before that goroutine is registered would otherwise leak the reader (e.g. enforce mode
+	// when syscall trace attach fails, or enforce BPF/map/attach errors).
+	closeExecRdOnEarlyExit := true
+	defer func() {
+		if closeExecRdOnEarlyExit {
+			_ = execRd.Close()
+		}
+	}()
 
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
