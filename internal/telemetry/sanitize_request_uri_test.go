@@ -43,6 +43,10 @@ func TestSanitizeRequestURI(t *testing.T) {
 		{"sid", "/x?sid=s", "/x?sid=REDACTED"},
 		{"state", "/x?state=st", "/x?state=REDACTED"},
 		{"bearer_key", "/x?bearer=t", "/x?bearer=REDACTED"},
+		{"auth_query_key", "/x?auth=tok", "/x?auth=REDACTED"},
+		{"credential_query_key", "/x?credential=c", "/x?credential=REDACTED"},
+		{"credentials_query_key", "/x?credentials=c", "/x?credentials=REDACTED"},
+		{"authorization_query_key", "/x?authorization=basic", "/x?authorization=REDACTED"},
 		{"query_key_case_insensitive", "/x?TOKEN=secret", "/x?TOKEN=REDACTED"},
 		{"jwt_in_non_secret_value", "/p?x=eyJhbGciOiJIUzI1NiJ9.e30.signature", "/p?x=REDACTED"},
 		{
@@ -65,6 +69,21 @@ func TestSanitizeRequestURI(t *testing.T) {
 		{"stripe_sk_live_in_query", "/x?k=sk_live_ABCDEFGHIJ", "/x?k=" + redactedCredential},
 		{"aws_access_key_in_query", "/x?k=" + awsKey, "/x?k=" + redactedCredential},
 		{
+			"openai_proj_key_in_query",
+			"/x?k=sk-proj-" + strings.Repeat("a", 24),
+			"/x?k=" + redactedCredential,
+		},
+		{
+			"google_api_key_in_query",
+			"/x?k=AIza" + strings.Repeat("0", 35),
+			"/x?k=" + redactedCredential,
+		},
+		{
+			"sendgrid_key_in_query",
+			"/x?k=SG." + strings.Repeat("a", 22) + "." + strings.Repeat("b", 43),
+			"/x?k=" + redactedCredential,
+		},
+		{
 			"ghs_pat",
 			"/x?t=ghs_" + strings.Repeat("b", 20),
 			"/x?t=" + redactedCredential,
@@ -75,9 +94,9 @@ func TestSanitizeRequestURI(t *testing.T) {
 			redactedCredential,
 		},
 		{
-			"bare_string_no_slash_query_not_structured",
+			"relative_no_leading_slash_query_redacted",
 			"relative?token=still-visible",
-			"relative?token=still-visible",
+			"/relative?token=REDACTED",
 		},
 		{
 			"userinfo_omitted_password_not_echoed",
