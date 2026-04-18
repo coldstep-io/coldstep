@@ -1,3 +1,5 @@
+// Package policy implements Coldstep v1 IPv4-centric egress allowlists. IPv6 literals and IPv6
+// ignored CIDRs are rejected at parse time; BPF enforcement uses IPv4 maps only (see bpf/trace_enforce.bpf.c).
 package policy
 
 import (

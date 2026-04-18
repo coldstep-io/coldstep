@@ -1,4 +1,8 @@
-/* UDP sendto observability (IPv4 sendto → udp_events ringbuf). */
+/*
+ * IPv4 sendto/sendmsg-length observability → `udp_events` ringbuf.
+ * Despite the map name, payloads here include TCP segments sent via `sendto`/`sendmsg` paths
+ * (same helper); distinguish by protocol in userspace from JSONL / digest if needed.
+ */
 #ifndef TRACE_UDP_OBS_INC
 #define TRACE_UDP_OBS_INC
 

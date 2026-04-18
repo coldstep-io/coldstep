@@ -1,7 +1,9 @@
 /*
- * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64):
+ * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64).
+ * Scope is IPv4-centric (IPv6 syscall/cgroup enforcement is out of project scope for v1).
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
- *   - IPv4-only UDP via sendto(2) and sendmsg(2) (not complete for all UDP egress paths)
+ *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
+ *     not complete for all UDP egress paths)
  *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/sendto
  *   - LRU map eviction handles stale (tgid,fd) entries (close(2) cleanup removed)
  *
