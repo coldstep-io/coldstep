@@ -1905,10 +1905,69 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var syscallLnk link.Link
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
+
+	// Enforce mode: load cgroup programs before traceconnect. LoadTraceconnectObjects can take
+	// minutes on hosted runners (verifier); fail-on-error waits on .coldstep-ready.json and must
+	// not block until syscall-trace BPF finishes. Cgroup attach is sufficient for egress policy.
+	if cfg.Mode == config.ModeEnforce {
+		enforceObjs := new(traceenforce.TraceenforceObjects)
+		if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
+			return fmt.Errorf("load enforce bpf objects: %w", err)
+		}
+		defer func() {
+			enforceState.setDenyReserveFailures(readDenyReserveFailureCount(enforceObjs))
+			_ = enforceObjs.Close()
+		}()
+
+		allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol)
+		if loadErr != nil {
+			return loadErr
+		}
+		enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize)
+		var err error
+		denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
+		if err != nil {
+			return fmt.Errorf("ringbuf reader deny: %w", err)
+		}
+		defer denyRd.Close()
+
+		cgPath := cfg.CgroupAttachPath
+		if cgPath == "" {
+			cgPath = "/sys/fs/cgroup"
+		}
+
+		enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupInet4Connect,
+			Program: enforceObjs.EnforceConnect4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_connect4: %w", err)
+		}
+		defer enforceConnectLnk.Close()
+
+		enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupUDP4Sendmsg,
+			Program: enforceObjs.EnforceSendmsg4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_sendmsg4: %w", err)
+		}
+		defer enforceSendmsgLnk.Close()
+
+		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+			return fmt.Errorf("agent ready status: %w", err)
+		}
+	}
+
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
 		if cfg.Mode == config.ModeEnforce {
+			if p := strings.TrimSpace(cfg.AgentStatusPath); p != "" {
+				_ = os.Remove(p)
+			}
 			return fmt.Errorf("enforce mode requires syscall trace attach: %w", err)
 		}
 	} else {
@@ -1933,61 +1992,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer udpRd.Close()
 		defer httpRd.Close()
 		defer tlsRd.Close()
-
-		if cfg.Mode == config.ModeEnforce {
-			enforceObjs := new(traceenforce.TraceenforceObjects)
-			if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
-				return fmt.Errorf("load enforce bpf objects: %w", err)
-			}
-			defer func() {
-				enforceState.setDenyReserveFailures(readDenyReserveFailureCount(enforceObjs))
-				_ = enforceObjs.Close()
-			}()
-
-			allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol)
-			if loadErr != nil {
-				return loadErr
-			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize)
-			denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
-			if err != nil {
-				return fmt.Errorf("ringbuf reader deny: %w", err)
-			}
-			defer denyRd.Close()
-
-			cgPath := cfg.CgroupAttachPath
-			if cgPath == "" {
-				cgPath = "/sys/fs/cgroup"
-			}
-
-			enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupInet4Connect,
-				Program: enforceObjs.EnforceConnect4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_connect4: %w", err)
-			}
-			defer enforceConnectLnk.Close()
-
-			enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupUDP4Sendmsg,
-				Program: enforceObjs.EnforceSendmsg4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_sendmsg4: %w", err)
-			}
-			defer enforceSendmsgLnk.Close()
-		}
 	}
 
-	// Mark ready for the GitHub Action (and any fail-on-error wait) as soon as the core path is up:
-	// sched:exec, raw_tp sys_enter (connect/HTTP/TLS), and — in enforce mode — cgroup connect4/sendmsg4.
-	// Optional DNS, proc_tree, and fs programs add more BPF load and raw_tp attachments; doing those
-	// before this file was written could exceed waitForAgentReady on hosted runners.
-	if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-		return fmt.Errorf("agent ready status: %w", err)
+	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after cgroup attach.
+	if cfg.Mode != config.ModeEnforce {
+		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+			return fmt.Errorf("agent ready status: %w", err)
+		}
 	}
 
 	var dnsRd *ringbuf.Reader
