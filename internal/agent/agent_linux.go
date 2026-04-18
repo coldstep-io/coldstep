@@ -1982,6 +1982,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
+	// Mark ready for the GitHub Action (and any fail-on-error wait) as soon as the core path is up:
+	// sched:exec, raw_tp sys_enter (connect/HTTP/TLS), and — in enforce mode — cgroup connect4/sendmsg4.
+	// Optional DNS, proc_tree, and fs programs add more BPF load and raw_tp attachments; doing those
+	// before this file was written could exceed waitForAgentReady on hosted runners.
+	if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+		return fmt.Errorf("agent ready status: %w", err)
+	}
+
 	var dnsRd *ringbuf.Reader
 	var dnsObjs *tracedns.TracednsObjects
 	var dnsLnkEnter, dnsLnkExit link.Link
@@ -2117,10 +2125,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 				}
 			}
 		}
-	}
-
-	if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-		return fmt.Errorf("agent ready status: %w", err)
 	}
 
 	if cfg.EventsLogPath != "" {
