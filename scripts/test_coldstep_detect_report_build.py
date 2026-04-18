@@ -77,6 +77,11 @@ class BuildReportModelTests(unittest.TestCase):
             self.assertEqual(counts.get("tcp"), 1)
             self.assertEqual(counts.get("udp"), 1)
 
+    def test_events_by_type_excludes_meta_envelope(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        types = {row["type"] for row in model["events_by_type"]}
+        self.assertNotIn("meta", types)
+
     def test_run_run_id_falls_back_to_env_when_no_meta_event(self):
         with tempfile.TemporaryDirectory() as td:
             p = Path(td) / "no-meta.jsonl"

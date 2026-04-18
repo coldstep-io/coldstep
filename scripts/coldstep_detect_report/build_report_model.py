@@ -72,7 +72,9 @@ def _capability_matrix(events: list[dict]) -> list[dict]:
 
 
 def _events_by_type(events: list[dict]) -> list[dict]:
-    seen = collections.Counter(ev.get("type", "<missing>") for ev in events)
+    seen = collections.Counter(
+        ev.get("type", "<missing>") for ev in events if ev.get("type") != "meta"
+    )
     return [{"type": t, "count": n} for t, n in sorted(seen.items(), key=lambda x: (-x[1], x[0]))]
 
 
