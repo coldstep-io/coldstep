@@ -604,7 +604,9 @@ func writeAgentStatus(path string, ok bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o600)
+	// GitHub Actions polls this path as the runner user while the agent runs under sudo; 0o600
+	// root-owned files are unreadable (EACCES). Payload is non-secret (ok + version only).
+	return os.WriteFile(path, b, 0o644)
 }
 
 func agentVersionString() string {
