@@ -31021,6 +31021,18 @@ function tailUtf8File(filePath, maxChars) {
         return '';
     }
 }
+function headUtf8File(filePath, maxChars) {
+    try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        if (raw.length <= maxChars) {
+            return raw;
+        }
+        return raw.slice(0, maxChars);
+    }
+    catch {
+        return '';
+    }
+}
 function inputBoolDefault(name, defaultVal) {
     const v = core.getInput(name);
     if (v === '') {
@@ -31290,6 +31302,12 @@ async function run() {
             progressEveryMs: 45_000,
         });
         if (outcome !== 'ready') {
+            if (fs.existsSync(agentStatus)) {
+                const head = headUtf8File(agentStatus, 220);
+                if (head.trim() !== '') {
+                    core.error(`coldstep-ready snapshot (${agentStatus}, first 220 chars):\n${head}${head.length >= 220 ? '…' : ''}`);
+                }
+            }
             const tail = tailUtf8File(stderrLog, 14_000);
             if (tail.trim() !== '') {
                 core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);

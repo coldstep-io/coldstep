@@ -15,6 +15,18 @@ function tailUtf8File(filePath: string, maxChars: number): string {
   }
 }
 
+function headUtf8File(filePath: string, maxChars: number): string {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (raw.length <= maxChars) {
+      return raw;
+    }
+    return raw.slice(0, maxChars);
+  } catch {
+    return '';
+  }
+}
+
 function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   const v = core.getInput(name);
   if (v === '') {
@@ -321,6 +333,14 @@ async function run(): Promise<void> {
       progressEveryMs: 45_000,
     });
     if (outcome !== 'ready') {
+      if (fs.existsSync(agentStatus)) {
+        const head = headUtf8File(agentStatus, 220);
+        if (head.trim() !== '') {
+          core.error(
+            `coldstep-ready snapshot (${agentStatus}, first 220 chars):\n${head}${head.length >= 220 ? '…' : ''}`,
+          );
+        }
+      }
       const tail = tailUtf8File(stderrLog, 14_000);
       if (tail.trim() !== '') {
         core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
