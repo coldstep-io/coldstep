@@ -20,7 +20,7 @@ var sensitiveQueryKeys = map[string]struct{}{
 	"session": {}, "sessionid": {}, "sid": {},
 	"state":  {}, // OAuth state (often high-entropy)
 	"bearer": {},
-	"auth": {}, "credential": {}, "credentials": {}, "authorization": {},
+	"auth":   {}, "credential": {}, "credentials": {}, "authorization": {},
 }
 
 var (
