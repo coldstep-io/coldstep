@@ -31167,12 +31167,14 @@ async function run() {
         core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
-        // Hosted runners may spend minutes on apt/kernel churn before the agent starts; enforce mode
-        // resolves allowlist domains under a bounded compile context in Go, then loads several BPF
-        // collections — cumulative startup can exceed a short wall clock even when healthy.
-        const ok = await waitForAgentReady(agentStatus, 300_000, child);
+        // Hosted runners: apt/kernel setup, allowlist DNS (bounded in Go), then BPF collection loads.
+        // traceenforce/traceconnect verifier time alone can exceed several minutes on ubuntu-latest;
+        // use a generous wall clock so healthy runs are not mistaken for failures.
+        const readyBudgetMs = 900_000;
+        core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file)`);
+        const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child);
         if (!ok) {
-            core.setFailed('coldstep agent did not become ready (BPF/load/DNS); see job logs and ensure ubuntu-latest.');
+            core.setFailed('coldstep agent did not become ready in time (BPF verifier/load/DNS); ensure ubuntu-latest and see COLDSTEP_BPF_VERBOSE_VERIFY in README for diagnostics.');
             try {
                 process.kill(child.pid, 'SIGTERM');
             }
