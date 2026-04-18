@@ -29,12 +29,12 @@ func TestAppendJSONL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := bytesCountNewlines(b); c != 2 {
+	if c := countNewlines(b); c != 2 {
 		t.Fatalf("lines: got %d want 2, body=%s", c, string(b))
 	}
 }
 
-func bytesCountNewlines(b []byte) int {
+func countNewlines(b []byte) int {
 	n := 0
 	for _, c := range b {
 		if c == '\n' {
