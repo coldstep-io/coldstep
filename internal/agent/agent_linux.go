@@ -46,29 +46,29 @@ type execEvent struct {
 }
 
 type runStats struct {
-	mu                              sync.Mutex
-	execN                           int
-	tcpN                            int
-	udpN                            int
-	httpN                           int
-	tlsN                            int
-	procForkN                       int
-	fsN                             int
-	connect4TupleUpdateFailuresN    int
-	udpRingbufReserveFailuresN      int
-	dnsRingbufReserveFailuresN      int
-	connectRingbufReserveFailuresN  int
-	httpRingbufReserveFailuresN     int
-	tlsRingbufReserveFailuresN      int
-	execRingbufReserveFailuresN     int
-	forkRingbufReserveFailuresN     int
-	fsRingbufReserveFailuresN       int
-	udpSendmsgMultiIovecObservedN   int
-	tlsWritevMultiIovecObservedN    int
-	unobservedEgressSyscallsN       int
-	tcpDNSResponsesObservedN        int
-	policyCounts                    map[string]int
-	droppedCounts                   map[string]int
+	mu                             sync.Mutex
+	execN                          int
+	tcpN                           int
+	udpN                           int
+	httpN                          int
+	tlsN                           int
+	procForkN                      int
+	fsN                            int
+	connect4TupleUpdateFailuresN   int
+	udpRingbufReserveFailuresN     int
+	dnsRingbufReserveFailuresN     int
+	connectRingbufReserveFailuresN int
+	httpRingbufReserveFailuresN    int
+	tlsRingbufReserveFailuresN     int
+	execRingbufReserveFailuresN    int
+	forkRingbufReserveFailuresN    int
+	fsRingbufReserveFailuresN      int
+	udpSendmsgMultiIovecObservedN  int
+	tlsWritevMultiIovecObservedN   int
+	unobservedEgressSyscallsN      int
+	tcpDNSResponsesObservedN       int
+	policyCounts                   map[string]int
+	droppedCounts                  map[string]int
 }
 
 type forkSectionState struct {
@@ -202,14 +202,14 @@ const (
 	// `_Static_assert(sizeof(struct X) == N)` in the matching bpf/*.c file
 	// so that any drift on either side fails compilation immediately.
 	// Values were determined empirically (clang -target bpf, sizeof()).
-	connectEventWireSize    = 32   // 4+4+16+4+2 fields, aligned to 4 → 32
-	udpSendEventWireSize    = 36   // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
-	httpSniffEventWireSize  = 228  // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
-	tlsSniffEventWireSize   = 292  // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
-	execEventWireSize       = 280  // 4+4+16+exe_path[256] → 280
-	forkEventWireSize       = 40   // 4+4+parent_comm[16]+child_comm[16] → 40
-	fsEventWireSize         = 284  // 4+4+16+1+path[256]+_pad[3] → 284
-	denyEventWireSize       = 46   // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
+	connectEventWireSize     = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
+	udpSendEventWireSize     = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
+	httpSniffEventWireSize   = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
+	tlsSniffEventWireSize    = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
+	execEventWireSize        = 280 // 4+4+16+exe_path[256] → 280
+	forkEventWireSize        = 40  // 4+4+parent_comm[16]+child_comm[16] → 40
+	fsEventWireSize          = 284 // 4+4+16+1+path[256]+_pad[3] → 284
+	denyEventWireSize        = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
 	dnsSniffEventMinWireSize = 4   // header __u32 len; payload follows up to DNS_SNIFF_MAX
 
 	// Header-only sub-sizes used by the http/tls capture decoders to slice
