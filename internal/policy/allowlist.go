@@ -47,6 +47,13 @@ func (s IPv4Set) Len() int {
 	return len(s.items)
 }
 
+// ForEach calls fn for every key in the set.
+func (s IPv4Set) ForEach(fn func(k [4]byte)) {
+	for k := range s.items {
+		fn(k)
+	}
+}
+
 // CompileResult is the deterministic output from allowlist compilation.
 type CompileResult struct {
 	Domains           []string
@@ -75,24 +82,20 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 			if ctx != nil && ctx.Err() != nil {
 				break
 			}
-			ips, err := resolver(ctx, "ip4", domain)
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-					break
-				}
-				continue
+			ips4, err4 := resolver(ctx, "ip4", domain)
+			if err4 != nil && (errors.Is(err4, context.Canceled) || errors.Is(err4, context.DeadlineExceeded)) {
+				break
 			}
-			addedIPv4 := false
-			for _, ip := range ips {
-				ip4 := ip.To4()
-				if ip4 == nil {
-					continue
+			if err4 == nil {
+				for _, ip := range ips4 {
+					if ip4 := ip.To4(); ip4 != nil {
+						result.AllowedIPv4.Add(ip4)
+						resolved = true
+					}
 				}
-				result.AllowedIPv4.Add(ip4)
-				addedIPv4 = true
 			}
-			if addedIPv4 {
-				resolved = true
+
+			if resolved {
 				break
 			}
 		}

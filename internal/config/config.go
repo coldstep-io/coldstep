@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coldstep-io/coldstep/internal/cgroup"
 	"github.com/coldstep-io/coldstep/internal/policy"
 )
 
@@ -35,6 +36,8 @@ type Config struct {
 	AgentStatusPath      string
 	// FeatureGates holds parsed COLDSTEP_FEATURE_GATES (lowercase keys).
 	FeatureGates map[string]string
+	// CgroupAttachPath is the unified cgroup2 path for link.AttachCgroup (from COLDSTEP_CGROUP_PATH or /proc/self/cgroup).
+	CgroupAttachPath string
 }
 
 func normalizeDomains(raw string) []string {
@@ -116,6 +119,10 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	gates := ParseFeatureGates(os.Getenv("COLDSTEP_FEATURE_GATES"))
+	cgPath, err := cgroup.AttachPath(os.Getenv("COLDSTEP_CGROUP_PATH"))
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		Mode:                 mode,
@@ -131,6 +138,7 @@ func LoadFromEnv() (Config, error) {
 		TelemetrySummaryPath: telemetrySummary,
 		AgentStatusPath:      agentStatus,
 		FeatureGates:         gates,
+		CgroupAttachPath:     cgPath,
 	}, nil
 }
 

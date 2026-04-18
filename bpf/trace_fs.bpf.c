@@ -3,13 +3,23 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 
+#include "trace_connect_obs.h"
+
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
-/* Linux x86_64 syscall numbers only (matches GitHub-hosted ubuntu-latest amd64). */
+#if defined(bpf_target_arm64)
+#define FS_NR_OPENAT    56
+#define FS_NR_UNLINKAT  35
+#define FS_NR_RENAMEAT2 276
+#define FS_NR_FCHMODAT  53
+#elif defined(bpf_target_x86)
 #define FS_NR_OPENAT    257
 #define FS_NR_UNLINKAT  263
 #define FS_NR_RENAMEAT2 316
 #define FS_NR_FCHMODAT  268
+#else
+#error "coldstep trace_fs: unsupported BPF arch (need bpf_target_x86/arm64)"
+#endif
 
 #define O_CREAT 0x40
 
@@ -74,8 +84,8 @@ static __always_inline void submit_fs_event(unsigned long path_ptr, __u8 op)
 }
 
 /*
- * raw_tp/sys_enter: ctx->args[0] is struct pt_regs * on x86_64;
- * ctx->args[1] is the syscall number. Arguments from regs->si/dx/r10 per ABI.
+ * raw_tp/sys_enter: ctx->args[0] is struct pt_regs *; ctx->args[1] is syscall number.
+ * Args via ns_read_syscall_arg (x86_64 + arm64).
  */
 SEC("raw_tp/sys_enter")
 int handle_fs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
@@ -92,9 +102,9 @@ int handle_fs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	if (id == FS_NR_OPENAT) {
 		unsigned long arg1, arg2;
 
-		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+		if (ns_read_syscall_arg(regs, 1, &arg1))
 			return 0;
-		if (bpf_core_read(&arg2, sizeof(arg2), &regs->dx))
+		if (ns_read_syscall_arg(regs, 2, &arg2))
 			return 0;
 		if (!(arg2 & O_CREAT))
 			return 0;
@@ -102,20 +112,20 @@ int handle_fs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	} else if (id == FS_NR_UNLINKAT) {
 		unsigned long arg1;
 
-		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+		if (ns_read_syscall_arg(regs, 1, &arg1))
 			return 0;
 		submit_fs_event(arg1, FS_OP_UNLINK);
 	} else if (id == FS_NR_RENAMEAT2) {
 		unsigned long arg3;
 
 		/* emit destination path (arg3 = newpath) */
-		if (bpf_core_read(&arg3, sizeof(arg3), &regs->r10))
+		if (ns_read_syscall_arg(regs, 3, &arg3))
 			return 0;
 		submit_fs_event(arg3, FS_OP_RENAME);
 	} else if (id == FS_NR_FCHMODAT) {
 		unsigned long arg1;
 
-		if (bpf_core_read(&arg1, sizeof(arg1), &regs->si))
+		if (ns_read_syscall_arg(regs, 1, &arg1))
 			return 0;
 		submit_fs_event(arg1, FS_OP_CHMOD);
 	}

@@ -9,26 +9,38 @@ consecutive runs can be compared on egress shape (TCP/UDP/HTTP/TLS/deny).
 from __future__ import annotations
 
 import collections
+import hashlib
 import json
 import os
+from pathlib import PurePosixPath
 import sys
 
 
-def load_events(path: str) -> list[dict]:
+def load_events(path: str) -> tuple[list[dict], int, int]:
+    """Load JSONL objects; skip empty lines after strip.
+
+    Returns:
+        events: successfully parsed JSON objects (order preserved).
+        invalid: count of non-empty lines that raised json.JSONDecodeError.
+        lines: count of non-empty lines after strip (attempted JSON lines).
+    """
     out: list[dict] = []
+    invalid = 0
+    lines = 0
     try:
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
+            for raw in f:
+                line = raw.strip()
                 if not line:
                     continue
+                lines += 1
                 try:
                     out.append(json.loads(line))
                 except json.JSONDecodeError:
-                    continue
+                    invalid += 1
     except OSError:
-        return []
-    return out
+        return [], 0, 0
+    return out, invalid, lines
 
 
 def traffic_fingerprint(ev: dict) -> str | None:
@@ -46,13 +58,17 @@ def traffic_fingerprint(ev: dict) -> str | None:
             f"{(ev.get('fqdn') or '')} » {ev.get('direction', '')} » {ev.get('policy', '')}"
         )
     if t == "http":
-        path = ev.get("path") or ""
-        if len(path) > 120:
-            path = path[:120] + "\u2026"
+        full_path = ev.get("path") or ""
+        path = full_path
+        if len(full_path) > 120:
+            path = full_path[:120] + "\u2026"
+        # Keep summary readable, but retain full-path entropy for stable diffing.
+        path_hash = hashlib.sha256(full_path.encode("utf-8")).hexdigest()[:10]
         return (
             "traffic » http » "
             f"{ev.get('dst', '')} » {ev.get('dport', '')} » "
-            f"{(ev.get('host') or '')} » {ev.get('method', '')} » {path} » {ev.get('policy', '')}"
+            f"{(ev.get('host') or '')} » {ev.get('method', '')} » "
+            f"{path} » h={path_hash} » {ev.get('policy', '')}"
         )
     if t == "tls":
         return (
@@ -72,9 +88,14 @@ def traffic_fingerprint(ev: dict) -> str | None:
 def other_fingerprint(ev: dict) -> str | None:
     t = ev.get("type")
     if t == "exec":
-        return f"other » exec » {(ev.get('exe') or '')} » {(ev.get('comm') or '')}"
+        exe = (ev.get("exe") or "").strip()
+        base = PurePosixPath(exe).name if exe else ""
+        return f"other » exec » {base}"
     if t == "fs_event":
-        return f"other » fs_event » {ev.get('op', '')} » {(ev.get('path') or '')}"
+        op = ev.get("op", "")
+        path = (ev.get("path") or "").strip()
+        base = PurePosixPath(path).name if path else ""
+        return f"other » fs_event » {op} » {base}"
     if t == "proc_fork":
         return (
             "other » proc_fork » "
@@ -83,9 +104,10 @@ def other_fingerprint(ev: dict) -> str | None:
     return None
 
 
-def count_fps(events: list[dict]) -> tuple[collections.Counter[str], collections.Counter[str]]:
+def count_fps(events: list[dict]) -> tuple[collections.Counter[str], collections.Counter[str], collections.Counter[str]]:
     traffic: collections.Counter[str] = collections.Counter()
     other: collections.Counter[str] = collections.Counter()
+    unclassified: collections.Counter[str] = collections.Counter()
     for ev in events:
         fp = traffic_fingerprint(ev)
         if fp is not None:
@@ -94,7 +116,9 @@ def count_fps(events: list[dict]) -> tuple[collections.Counter[str], collections
         fp2 = other_fingerprint(ev)
         if fp2 is not None:
             other[fp2] += 1
-    return traffic, other
+            continue
+        unclassified[str(ev.get("type") or "<missing-type>")] += 1
+    return traffic, other, unclassified
 
 
 def multiset_diff(
@@ -149,25 +173,37 @@ def main() -> int:
     base_path = os.environ.get("NS_BASELINE", "")
     cur_path = os.environ.get("NS_CURRENT", "")
     marker = os.environ.get("NS_MARKER", "coldstep-prev-diff")
+    strict_mode = os.environ.get("COLDSTEP_DIFF_STRICT", "0").strip() == "1"
 
     if not summary_path or not base_path or not cur_path:
         return 1
 
-    base_ev = load_events(base_path)
-    cur_ev = load_events(cur_path)
+    base_ev, base_invalid, base_lines = load_events(base_path)
+    cur_ev, cur_invalid, cur_lines = load_events(cur_path)
     if not base_ev or not cur_ev:
+        parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
         with open(summary_path, "a", encoding="utf-8") as out:
             out.write(f"\n- {marker}.result=unavailable (empty JSONL after parse)\n")
-        return 0
+            out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
+            out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
+            out.write(f"- {marker}.parse.base_lines={base_lines}\n")
+            out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
+            out.write(f"- {marker}.parse.health={parse_health}\n")
+            if not strict_mode:
+                out.write(
+                    f"- {marker}.policy=relaxed (COLDSTEP_DIFF_STRICT!=1, unavailable diff does not fail here)\n"
+                )
+        return 1 if strict_mode else 0
 
-    prev_tr, prev_ot = count_fps(base_ev)
-    cur_tr, cur_ot = count_fps(cur_ev)
+    prev_tr, prev_ot, prev_un = count_fps(base_ev)
+    cur_tr, cur_ot, cur_un = count_fps(cur_ev)
 
     tr_new, tr_gone, tr_chg = multiset_diff(prev_tr, cur_tr)
     ot_new, ot_gone, ot_chg = multiset_diff(prev_ot, cur_ot)
+    un_new, un_gone, un_chg = multiset_diff(prev_un, cur_un)
 
     changed = bool(
-        tr_new or tr_gone or tr_chg or ot_new or ot_gone or ot_chg
+        tr_new or tr_gone or tr_chg or ot_new or ot_gone or ot_chg or un_new or un_gone or un_chg
     )
 
     max_rows = 30
@@ -242,7 +278,35 @@ def main() -> int:
                 f"\n_Showing first {max_rows} of {len(ot_chg)} other multiplicity changes._\n"
             )
 
+        out.write("\n#### Unclassified event-type diff\n\n")
+        write_table(
+            out,
+            "New unclassified event types",
+            [(c, k) for c, k in un_new[:max_rows]],
+            ["Current count", "Event type"],
+        )
+        write_table(
+            out,
+            "Missing unclassified event types",
+            [(c, k) for c, k in un_gone[:max_rows]],
+            ["Baseline count", "Event type"],
+        )
+        write_table(
+            out,
+            "Unclassified multiplicity changes",
+            [(a, b, k) for a, b, k in un_chg[:max_rows]],
+            ["Baseline", "Current", "Event type"],
+        )
+
         out.write("\n")
+        parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
+        out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
+        out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
+        out.write(f"- {marker}.parse.base_lines={base_lines}\n")
+        out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
+        out.write(f"- {marker}.parse.health={parse_health}\n")
+        out.write(f"- {marker}.unclassified.base_total={sum(prev_un.values())}\n")
+        out.write(f"- {marker}.unclassified.current_total={sum(cur_un.values())}\n")
         if changed:
             out.write(f"- {marker}.result=changed\n")
             out.write(
@@ -254,6 +318,8 @@ def main() -> int:
                 "- **No drift:** traffic and other fingerprints match between runs "
                 "(per-type volume table above may still differ).\n"
             )
+    if strict_mode and (base_invalid or cur_invalid):
+        return 1
     return 0
 
 

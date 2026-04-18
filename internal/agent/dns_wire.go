@@ -4,6 +4,11 @@ import (
 	"encoding/binary"
 )
 
+const (
+	dnsNameMaxPointerDepth = 32
+	dnsNameMaxLabelSteps   = 128
+)
+
 // ipv4DNSAnswer is one A record worth of metadata from a DNS response.
 type ipv4DNSAnswer struct {
 	name string
@@ -66,9 +71,15 @@ func parseDNSResponseIPv4(packet []byte) map[[4]byte]ipv4DNSAnswer {
 }
 
 func readDNSName(packet []byte, offset int) (string, int, bool) {
+	return readDNSNameSafe(packet, offset, make(map[int]struct{}), 0)
+}
+
+func readDNSNameSafe(packet []byte, offset int, visited map[int]struct{}, depth int) (string, int, bool) {
+	if depth > dnsNameMaxPointerDepth {
+		return "", 0, false
+	}
 	var labels []string
-	jumps := 0
-	for jumps < 16 {
+	for step := 0; step < dnsNameMaxLabelSteps; step++ {
 		if offset >= len(packet) {
 			return "", 0, false
 		}
@@ -83,7 +94,14 @@ func readDNSName(packet []byte, offset int) (string, int, bool) {
 			}
 			ptr := (b&0x3F)<<8 | int(packet[offset])
 			offset++
-			suffix, _, ok := readDNSName(packet, ptr)
+			if ptr >= len(packet) {
+				return "", 0, false
+			}
+			if _, dup := visited[ptr]; dup {
+				return "", 0, false
+			}
+			visited[ptr] = struct{}{}
+			suffix, _, ok := readDNSNameSafe(packet, ptr, visited, depth+1)
 			if !ok {
 				return "", 0, false
 			}
@@ -97,7 +115,6 @@ func readDNSName(packet []byte, offset int) (string, int, bool) {
 		}
 		labels = append(labels, string(packet[offset:offset+b]))
 		offset += b
-		jumps++
 	}
 	return "", 0, false
 }

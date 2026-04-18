@@ -10,6 +10,11 @@ name: coldstep-demo-detect
 
 on:
   workflow_dispatch:
+    inputs:
+      coldstep_diff_strict:
+        description: Fail job if previous-run JSONL diff cannot be computed
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -18,11 +23,13 @@ env:
 jobs:
   demo:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
     env:
       COLDSTEP_DIFF_PREV_RUN: "1"
+      COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -36,10 +43,19 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p bin
-          gh release download "${COLDSTEP_AGENT_VERSION}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'coldstep-linux-amd64' \
-            --dir bin
+          for attempt in 1 2 3; do
+            if gh release download "${COLDSTEP_AGENT_VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'coldstep-linux-amd64' \
+              --dir bin; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "failed to download coldstep release artifact after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 
@@ -54,11 +70,19 @@ jobs:
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           release-path: bin/coldstep
 
-      - name: Install nmap (apt)
+      - name: Install runtime probes
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Assert required tools are present
+        run: |
+          set -euo pipefail
+          command -v dig
+          command -v nc
+          command -v nmap
+          command -v curl
 
       - name: Capability probes (detect mode)
         run: |
@@ -154,17 +178,25 @@ jobs:
           summary="${GITHUB_STEP_SUMMARY}"
           current_file="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
           marker_prefix="coldstep-prev-diff"
+          fail_diff_unavailable() {
+            local reason="$1"
+            echo "- ${marker_prefix}.result=unavailable (${reason})" >> "${summary}"
+            if [[ "${COLDSTEP_DIFF_STRICT:-0}" == "1" ]]; then
+              echo "::error::${reason}"
+              exit 1
+            fi
+            exit 0
+          }
           echo "### Previous Run Diff" >> "${summary}"
           echo "" >> "${summary}"
           echo "- Feature flag: enabled (\`COLDSTEP_DIFF_PREV_RUN=1\`)" >> "${summary}"
 
           if [[ ! -f "${current_file}" ]]; then
-            echo "- ${marker_prefix}.result=unavailable (current JSONL missing)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "current JSONL missing"
           fi
 
           current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_REF_NAME}"
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
           baseline_run="$(
             gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \
@@ -182,8 +214,7 @@ jobs:
 
           if [[ -z "${baseline_run}" ]]; then
             echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
-            echo "- ${marker_prefix}.result=unavailable (no prior successful run found)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "no prior successful run found"
           fi
 
           echo "- ${marker_prefix}.baseline_run_id=${baseline_run}" >> "${summary}"
@@ -193,23 +224,19 @@ jobs:
           mkdir -p prev-state
           baseline_artifact="coldstep-events-baseline-${NS_RUNNER_LABEL}"
           if ! gh run download "${baseline_run}" --name "${baseline_artifact}" --dir prev-state >/dev/null 2>&1; then
-            echo "- ${marker_prefix}.result=unavailable (baseline artifact missing for run ${baseline_run})" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "baseline artifact missing for run ${baseline_run}"
           fi
 
           baseline_file="prev-state/.coldstep-events.jsonl"
           if [[ ! -f "${baseline_file}" ]]; then
-            echo "- ${marker_prefix}.result=unavailable (downloaded artifact missing .coldstep-events.jsonl)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
           if ! jq -r '.type // "unknown"' "${baseline_file}" | sort | uniq -c > prev_counts.raw; then
-            echo "- ${marker_prefix}.result=unavailable (baseline JSONL parse failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "baseline JSONL parse failed"
           fi
           if ! jq -r '.type // "unknown"' "${current_file}" | sort | uniq -c > curr_counts.raw; then
-            echo "- ${marker_prefix}.result=unavailable (current JSONL parse failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "current JSONL parse failed"
           fi
 
           declare -A prev_counts curr_counts all_types
@@ -242,8 +269,7 @@ jobs:
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
           if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
-            echo "- ${marker_prefix}.result=unavailable (traffic diff script failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "traffic diff script failed"
           fi
 
       - name: Persist detect JSONL baseline artifact

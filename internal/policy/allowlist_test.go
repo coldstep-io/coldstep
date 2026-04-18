@@ -14,15 +14,19 @@ func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	ctx := context.Background()
 	calls := map[string]int{}
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
-		if network != "ip4" {
-			t.Fatalf("network: got %q want ip4", network)
-		}
-		calls[host]++
+		key := network + "|" + host
+		calls[key]++
 		switch host {
 		case "example.com":
-			return []net.IP{net.ParseIP("1.1.1.1")}, nil
+			if network == "ip4" {
+				return []net.IP{net.ParseIP("1.1.1.1")}, nil
+			}
+			return nil, nil
 		case "api.example.com":
-			return []net.IP{net.ParseIP("2.2.2.2")}, nil
+			if network == "ip4" {
+				return []net.IP{net.ParseIP("2.2.2.2")}, nil
+			}
+			return nil, nil
 		default:
 			return nil, errors.New("unexpected host")
 		}
@@ -43,8 +47,11 @@ func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	if len(got.UnresolvedDomains) != 0 {
 		t.Fatalf("UnresolvedDomains: got %v want empty", got.UnresolvedDomains)
 	}
-	if calls["example.com"] != 1 || calls["api.example.com"] != 1 {
-		t.Fatalf("resolver calls: got %v want one call per deduped domain", calls)
+	if calls["ip4|example.com"] != 1 {
+		t.Fatalf("resolver calls example.com: got %v", calls)
+	}
+	if calls["ip4|api.example.com"] != 1 {
+		t.Fatalf("resolver calls api.example.com: got %v", calls)
 	}
 }
 
@@ -52,15 +59,16 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	ctx := context.Background()
 	calls := map[string]int{}
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
-		if network != "ip4" {
-			t.Fatalf("network: got %q want ip4", network)
-		}
-		calls[host]++
+		key := network + "|" + host
+		calls[key]++
 		switch host {
 		case "ok.example.com":
-			return []net.IP{net.ParseIP("3.3.3.3")}, nil
+			if network == "ip4" {
+				return []net.IP{net.ParseIP("3.3.3.3")}, nil
+			}
+			return nil, nil
 		case "ipv6-only.example.com":
-			return []net.IP{net.ParseIP("2001:db8::1")}, nil
+			return nil, nil
 		case "down.example.com":
 			return nil, errors.New("dns down")
 		default:
@@ -77,6 +85,7 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	if !got.AllowedIPv4.Contains(net.ParseIP("3.3.3.3")) {
 		t.Fatal("expected 3.3.3.3 to be present")
 	}
+
 	if got.AllowedIPv4.Contains(net.ParseIP("4.4.4.4")) {
 		t.Fatal("did not expect 4.4.4.4 to be present")
 	}
@@ -84,11 +93,14 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	if !reflect.DeepEqual(got.UnresolvedDomains, wantUnresolved) {
 		t.Fatalf("UnresolvedDomains: got %v want %v", got.UnresolvedDomains, wantUnresolved)
 	}
-	if calls["down.example.com"] != 2 || calls["ipv6-only.example.com"] != 2 {
-		t.Fatalf("calls for unresolved domains: got %v want 2 retries", calls)
+	if calls["ip4|down.example.com"] != 2 {
+		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", calls["ip4|down.example.com"])
 	}
-	if calls["ok.example.com"] != 1 {
-		t.Fatalf("calls for resolved domain: got %d want 1", calls["ok.example.com"])
+	if calls["ip4|ok.example.com"] != 1 {
+		t.Fatalf("calls for resolved domain ok: got %v", calls)
+	}
+	if calls["ip4|ipv6-only.example.com"] != 2 {
+		t.Fatalf("calls for ipv6-only domain: got %v", calls)
 	}
 }
 
@@ -140,6 +152,6 @@ func TestCompileDomainAllowlist_MaxAttemptsFloor(t *testing.T) {
 
 	_ = CompileDomainAllowlist(ctx, []string{"a.example.com"}, resolver, 0)
 	if calls != 1 {
-		t.Fatalf("resolver calls: got %d want 1 when maxAttempts <= 0", calls)
+		t.Fatalf("resolver calls: got %d want 1 (ip4 once) when maxAttempts <= 0", calls)
 	}
 }

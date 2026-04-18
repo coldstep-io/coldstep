@@ -1,8 +1,8 @@
 /*
- * Observability-only BPF: raw_tp/sys_enter for GitHub-hosted ubuntu-latest (amd64):
- *   - IPv4 TCP connect (__NR_connect 42) + (tgid,fd)->dst map for TLS write sniff
- *   - IPv4 UDP sendto (__NR_sendto 44) + optional HTTP/1 request sniff (dport 80)
- *   - Optional TLS ClientHello sniff on write(2) or sendto(2) (NULL dest) when cfg map on
+ * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64):
+ *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
+ *   - IPv4-only UDP via sendto(2) and sendmsg(2) (not complete for all UDP egress paths)
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/sendto
  *   - close(2) clears (tgid,fd) map entries
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
@@ -43,19 +43,59 @@ struct {
 } tls_agent_cfg SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	/*
+	 * Correlation cache can retain stale entries when close/exit paths are missed.
+	 * LRU bounds stale pressure while preserving best-effort tuple correlation.
+	 */
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 16384);
 	__type(key, __u64);
 	__type(value, struct connect4_tuple);
 } connect4_by_tgid_fd SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} connect4_tuple_update_failures SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} udp_ringbuf_reserve_failures SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
 
+static __always_inline void note_connect4_tuple_update_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&connect4_tuple_update_failures, &k);
+
+	if (!v)
+		return;
+	/* Shared map value may be updated concurrently; use atomic increment. */
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_udp_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&udp_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 #include "trace_tcp_obs.inc"
 #include "trace_udp_obs.inc"
+#include "trace_udp_sendmsg.inc"
 #include "trace_http_obs.inc"
 #include "trace_tls_write.inc"
 
@@ -108,18 +148,28 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 				return 0;
 		}
 
-		len = (__u32)len_ul;
+		len = coldstep_syscall_len_u32(len_ul);
 		if (len > 0x00100000)
 			len = 0x00100000;
 
 		handle_udp_obs_emit(sin_port, sin_addr, len);
 
 		if (sin_port == bpf_htons(80) && len >= 4 &&
-		    http_prefix_looks_like_request((void *)buf_ptr, len))
+		    http_prefix_looks_like_request(buf_ptr, len))
 			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 
 		try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
 		return 0;
+	}
+
+	if (id == (long)COLDSTEP_NR_SENDMSG) {
+		unsigned long di_ul = 0, msg_hdr_ptr = 0;
+
+		if (ns_read_syscall_arg(regs, 0, &di_ul))
+			return 0;
+		if (ns_read_syscall_arg(regs, 1, &msg_hdr_ptr))
+			return 0;
+		return handle_udp_obs_sendmsg((__u32)di_ul, msg_hdr_ptr);
 	}
 
 	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_CLOSE) {

@@ -71,7 +71,7 @@ func TestBuildDetectMarkdown_KPIAndSections(t *testing.T) {
 		"### KPI", "| **exec** | 1 |", "| **udp** | 3 |", "| **http** | 4 |",
 		"UDP sendto", "HTTP/1 cleartext", "Canonical log (JSONL)", "connect(2)",
 		"PID (TGID)", "| `99` |", "`sh`", "Executable (BPF-capped)", "`/bin/sh`",
-		"UDP KPI counts IPv4 sendto egress.",
+		"IPv4 sendto and sendmsg egress",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
@@ -330,6 +330,25 @@ func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
 		"## Coldstep · enforce",
 		"### Enforcement",
 		"| Deny ringbuf reserve failures (blocked, no JSONL) | 5 |",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DroppedCounts: map[string]int{
+			"udp_decode": 2,
+			"http_jsonl": 1,
+		},
+	})
+	for _, needle := range []string{
+		"| **dropped events (decode/jsonl)** | 3 |",
+		"**Dropped event counters**",
+		"`udp_decode`=2",
+		"`http_jsonl`=1",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)

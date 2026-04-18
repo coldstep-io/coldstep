@@ -1,0 +1,50 @@
+#Requires -Version 5.1
+<#
+.SYNOPSIS
+  Template: re-enable Docker MCP Toolkit wiring after reboot or clone.
+
+.NOTES
+  Copy to scripts/docker-mcp-reconnect.ps1 (gitignored) and run, or run this file directly:
+    powershell -NoProfile -ExecutionPolicy Bypass -File scripts/docker-mcp-reconnect.ps1.example
+
+  Tracked as .example so clones keep a canonical script; the non-.example name is gitignored for local edits.
+#>
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
+$RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+Set-Location $RepoRoot
+
+Write-Host "Checking Docker CLI..."
+& docker version *> $null
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "Docker CLI failed. Start Docker Desktop and retry."
+}
+
+Write-Host "Enabling docker MCP server (idempotent)..."
+& docker mcp server enable docker
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "docker mcp server enable docker failed (exit $LASTEXITCODE)."
+}
+
+Write-Host "Connecting Cursor for this repo: $RepoRoot"
+& docker mcp client connect cursor
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "docker mcp client connect cursor failed (exit $LASTEXITCODE)."
+}
+
+Write-Host "Connecting Gordon (global)..."
+& docker mcp client connect gordon -g
+if ($LASTEXITCODE -ne 0) {
+  Write-Error "docker mcp client connect gordon -g failed (exit $LASTEXITCODE). If Gordon is not installed, skip or install Docker Gordon."
+}
+
+Write-Host ""
+Write-Host "--- docker mcp client ls (project) ---"
+& docker mcp client ls
+Write-Host ""
+Write-Host "--- docker mcp server ls ---"
+& docker mcp server ls
+
+Write-Host ""
+Write-Host "Done. Restart Cursor and/or Docker Desktop (Gordon) if MCP tools do not appear yet."

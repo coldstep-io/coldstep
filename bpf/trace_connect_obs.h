@@ -20,13 +20,17 @@
 #if defined(bpf_target_arm64)
 #define COLDSTEP_NR_CONNECT 203
 #define COLDSTEP_NR_SENDTO 206
+#define COLDSTEP_NR_SENDMSG 211
 #define COLDSTEP_NR_WRITE 64
 #define COLDSTEP_NR_CLOSE 57
+#define COLDSTEP_NR_RECVFROM 207
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
 #define COLDSTEP_NR_SENDTO 44
+#define COLDSTEP_NR_SENDMSG 46
 #define COLDSTEP_NR_WRITE 1
 #define COLDSTEP_NR_CLOSE 3
+#define COLDSTEP_NR_RECVFROM 45
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif
@@ -77,8 +81,66 @@ static __always_inline int ns_read_syscall_arg(struct pt_regs *regs, unsigned in
 #endif
 }
 
+/* Syscall NR at sys_exit (x86: orig_ax; arm64: syscallno in struct pt_regs BTF). */
+static __always_inline int coldstep_read_orig_syscall_nr(struct pt_regs *regs, unsigned long *out)
+{
+	if (!regs || !out)
+		return -1;
+#if defined(bpf_target_x86)
+	return bpf_core_read(out, sizeof(*out), &regs->orig_ax);
+#elif defined(bpf_target_arm64)
+	{
+		__s32 nr;
+
+		if (bpf_core_read(&nr, sizeof(nr), &regs->syscallno))
+			return -1;
+		*out = (unsigned long)nr;
+	}
+	return 0;
+#else
+	return -1;
+#endif
+}
+
 #define HTTP_PAYLOAD_MAX 192
 #define TLS_PAYLOAD_MAX 256
+
+/*
+ * bpf_core_read of syscall registers yields unsigned long scalars; some kernel verifiers still
+ * infer signed-range quirks once those values reach bpf_probe_read_user size (R2). Force an
+ * explicit low-32-bit domain before length feeds HTTP/TLS sniff helpers.
+ */
+static __always_inline __u32 coldstep_syscall_len_u32(unsigned long raw)
+{
+	return (__u32)(raw & 0xffffffffULL);
+}
+
+/*
+ * Strict kernels (GitHub ubuntu-22.04 image + Azure 6.x, etc.) track syscall-derived lengths as
+ * scalars whose signed min/max confuse bpf_probe_read_user size (R2). Keep one clamp+mask path
+ * per sniff type so the verifier proves a tight unsigned upper bound on the read size register.
+ */
+static __always_inline __u32 coldstep_probe_user_sz_http(__u32 len_in)
+{
+	__u32 s = len_in;
+
+	if (s > HTTP_PAYLOAD_MAX)
+		s = HTTP_PAYLOAD_MAX;
+	s &= 0xffu;
+	return s;
+}
+
+static __always_inline __u32 coldstep_probe_user_sz_tls(__u32 len_in)
+{
+	__u32 s = len_in;
+
+	if (s > TLS_PAYLOAD_MAX)
+		s = TLS_PAYLOAD_MAX;
+	s &= 0x1ffu;
+	if (s > TLS_PAYLOAD_MAX)
+		s = TLS_PAYLOAD_MAX;
+	return s;
+}
 
 /* Last IPv4 connect tuple observed for (tgid, fd); used to attribute TLS ClientHello writes. */
 struct connect4_tuple {
@@ -130,29 +192,39 @@ struct http_sniff_event {
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {
-	void *sa = (void *)sockaddr_ptr;
-	__u16 family;
+	/*
+	 * One bounded userspace read (Linux struct sockaddr_in layout for AF_INET).
+	 * Avoid (char *)sa+N follow-up probe reads — older kernels mis-track sizes/pointers
+	 * (Verifier: bpf_probe_read_user … R2 min value is negative).
+	 */
+	__u8 scratch[16];
 
-	if (!sa)
+	if (!sockaddr_ptr || !port || !addr)
 		return -1;
-	if (bpf_probe_read_user(&family, sizeof(family), sa))
+	if (bpf_probe_read_user(scratch, sizeof(scratch), (void *)sockaddr_ptr))
 		return -1;
-	if (family != AF_INET)
-		return -1;
-	if (bpf_probe_read_user(port, sizeof(*port), (void *)((char *)sa + 2)))
-		return -1;
-	if (bpf_probe_read_user(addr, sizeof(*addr), (void *)((char *)sa + 4)))
-		return -1;
+	{
+		__u16 family;
+
+		__builtin_memcpy(&family, scratch, sizeof(family));
+		if (family != (__u16)AF_INET)
+			return -1;
+	}
+	__builtin_memcpy(port, scratch + 2, sizeof(*port));
+	__builtin_memcpy(addr, scratch + 4, sizeof(*addr));
 	return 0;
 }
 
-static __always_inline int http_prefix_looks_like_request(const void *buf, __u32 cap)
+static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr, __u32 cap)
 {
 	char p[4];
 
 	if (cap < 4)
 		return 0;
-	if (bpf_probe_read_user(p, sizeof(p), buf))
+	if (!buf_ptr)
+		return 0;
+	/* Constant size 4 for strict verifiers (see read_ipv4_sockaddr). */
+	if (bpf_probe_read_user(p, 4, (void *)buf_ptr))
 		return 0;
 	/* GET / POST / HEAD / PUT — space or T for POST */
 	if (p[0] == 'G' && p[1] == 'E' && p[2] == 'T' && p[3] == ' ')

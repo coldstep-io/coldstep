@@ -11,6 +11,9 @@ import (
 // It must match the BPF LPM trie max_entries in trace_enforce.bpf.c.
 const MaxIgnoredIPv4Nets = 128
 
+// MaxAllowedEnforceIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_enforce.bpf.c.
+const MaxAllowedEnforceIPv4Keys = 4096
+
 // Class describes egress vs allow lists (v1: never fails the job on policy).
 type Class string
 
@@ -26,9 +29,9 @@ const (
 type Policy struct {
 	enabled      bool
 	exactHosts   map[string]struct{}
-	wildSuffixes []string // "*.example.com" -> suffix "example.com"
-	ips          map[string]struct{}
-	ignored      []*net.IPNet // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
+	wildSuffixes []string            // "*.example.com" -> suffix "example.com"
+	ips          map[string]struct{} // IPv4 literals from allowed-ips (4-byte key string)
+	ignored      []*net.IPNet        // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
 }
 
 // Parse builds a policy from raw action/env strings (comma or ASCII whitespace).
@@ -61,11 +64,14 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 		if ip == nil {
 			return nil, fmt.Errorf("invalid allowed IP %q", raw)
 		}
-		ip4 := ip.To4()
-		if ip4 == nil {
-			return nil, fmt.Errorf("allowed IP must be IPv4: %q", raw)
+		if ip4 := ip.To4(); ip4 != nil {
+			p.ips[string(ip4)] = struct{}{}
+			continue
 		}
-		p.ips[string(ip4)] = struct{}{}
+		if ip.To16() != nil {
+			return nil, fmt.Errorf("allowed-ips: IPv6 literals are not supported, use IPv4: %q", raw)
+		}
+		return nil, fmt.Errorf("invalid allowed IP %q", raw)
 	}
 	p.enabled = len(p.exactHosts) > 0 || len(p.wildSuffixes) > 0 || len(p.ips) > 0
 	return p, nil
@@ -109,6 +115,35 @@ func (p *Policy) IgnoredIPv4Nets() []*net.IPNet {
 		return nil
 	}
 	return p.ignored
+}
+
+// MergeLiteralAllowedIPv4Keys adds IPv4 addresses from COLDSTEP_ALLOWED_IPS-style policy entries
+// into keys (used with domain-resolved IPs for enforce-mode BPF allowed_ipv4).
+func (p *Policy) MergeLiteralAllowedIPv4Keys(keys map[[4]byte]struct{}) {
+	if p == nil || keys == nil || len(p.ips) == 0 {
+		return
+	}
+	for s := range p.ips {
+		if len(s) != net.IPv4len {
+			continue
+		}
+		var k [4]byte
+		copy(k[:], s)
+		keys[k] = struct{}{}
+	}
+}
+
+// MergeLiteralAllowedIPv4Into adds literal allowed IPv4 addresses into s (union with domain resolutions).
+func (p *Policy) MergeLiteralAllowedIPv4Into(s *IPv4Set) {
+	if p == nil || s == nil || len(p.ips) == 0 {
+		return
+	}
+	for sKey := range p.ips {
+		if len(sKey) != net.IPv4len {
+			continue
+		}
+		s.Add(net.IP([]byte(sKey)))
+	}
 }
 
 func splitFields(s string) []string {

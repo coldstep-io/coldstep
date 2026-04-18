@@ -2,7 +2,6 @@ package telemetry
 
 import (
 	"encoding/json"
-	"strings"
 	"sync"
 )
 
@@ -183,13 +182,10 @@ func (s *SeqGen) Last() uint64 {
 	return s.next
 }
 
-// RedactPathForSummary strips query strings for Job Summary tables (tokens often live there).
+// RedactPathForSummary masks secrets and auth-related query parameters (and common token patterns)
+// in a request path or URI for Job Summary / digest tables. Non-credential query keys are kept.
 func RedactPathForSummary(path string) string {
-	path = strings.TrimSpace(path)
-	if i := strings.IndexByte(path, '?'); i >= 0 {
-		return path[:i] + "?…"
-	}
-	return path
+	return SanitizeRequestURI(path)
 }
 
 // EventType returns the discriminated type field for a JSONL line, or "" if missing.

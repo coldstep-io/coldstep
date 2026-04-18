@@ -1,9 +1,15 @@
-# Reusable CI + Coldstep detect/enforce on **ubuntu-latest** (v1).
+# Reusable CI + Coldstep detect/enforce. Agent/BPF build + unit tests + integration run on **ubuntu-latest** /
+# **ubuntu-22.04** (x64) and **ubuntu-24.04-arm** / **ubuntu-22.04-arm** (arm64). Detect/enforce stay on ubuntu-latest.
 
 name: coldstep-ci runner
 
 on:
   workflow_call:
+    inputs:
+      coldstep_diff_strict:
+        description: When true, detect-mode fails if previous-run JSONL diff cannot be computed
+        type: boolean
+        default: true
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -11,13 +17,26 @@ env:
 jobs:
   action_manifest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
       - name: Assert tracked text is UTF-8 (not UTF-16)
         run: python3 scripts/assert_utf8_text.py
+      - name: Check workflow action pins (no @main; marketplace tag)
+        run: python3 scripts/check_workflow_action_pins.py
+      - name: Python script regression tests (diff + pins)
+        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+      - name: Shell contract (prev-diff summary markers)
+        run: bash scripts/test_workflow_diff_markers.sh
 
   unit:
-    runs-on: ubuntu-latest
+    name: unit (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -38,9 +57,48 @@ jobs:
           staticcheck ./...
       - name: Unit tests
         run: go test ./... -count=1
+      - name: Race detector (Go agent)
+        run: go test -race -count=1 ./internal/agent/... -timeout 15m
+
+  unit-arm64:
+    name: unit-arm64 (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.24.x'
+      - name: Go format (gofmt)
+        run: bash scripts/check-gofmt.sh
+      - name: Prepare BPF and generated Go
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+      - name: Go vet
+        run: go vet ./...
+      - name: staticcheck
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          staticcheck ./...
+      - name: Unit tests
+        run: go test ./... -count=1
+      - name: Race detector (Go agent)
+        run: go test -race -count=1 ./internal/agent/... -timeout 15m
 
   integration:
-    runs-on: ubuntu-latest
+    name: integration (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-22.04, ubuntu-24.04-arm, ubuntu-22.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
@@ -64,6 +122,7 @@ jobs:
 
   action_bundle:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-node@v6
@@ -76,11 +135,13 @@ jobs:
 
   detect-mode:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
     env:
       COLDSTEP_DIFF_PREV_RUN: '1'
+      COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -99,11 +160,19 @@ jobs:
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
-      - name: Install nmap (apt)
+      - name: Install runtime probes
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Assert required tools are present
+        run: |
+          set -euo pipefail
+          command -v dig
+          command -v nc
+          command -v nmap
+          command -v curl
 
       - name: Capability probes (detect mode)
         run: |
@@ -193,17 +262,26 @@ jobs:
           summary="${GITHUB_STEP_SUMMARY}"
           current_file="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
           marker_prefix="coldstep-prev-diff"
+          fail_diff_unavailable() {
+            local reason="$1"
+            echo "- ${marker_prefix}.result=unavailable (${reason})" >> "${summary}"
+            if [[ "${COLDSTEP_DIFF_STRICT:-0}" == "1" ]]; then
+              echo "::error::${reason}"
+              exit 1
+            fi
+            exit 0
+          }
           echo "### Previous Run Diff" >> "${summary}"
           echo "" >> "${summary}"
           echo "- Feature flag: enabled (\`COLDSTEP_DIFF_PREV_RUN=1\`)" >> "${summary}"
           
           if [[ ! -f "${current_file}" ]]; then
-            echo "- ${marker_prefix}.result=unavailable (current JSONL missing)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "current JSONL missing"
           fi
           
           current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_REF_NAME}"
+          # pull_request uses GITHUB_REF_NAME like "21/merge"; use the head branch so gh finds prior runs.
+          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           # gh --workflow expects a file name (e.g. coldstep-ci-runner.yml), not the workflow display title.
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
           baseline_run="$(
@@ -222,8 +300,7 @@ jobs:
           
           if [[ -z "${baseline_run}" ]]; then
             echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
-            echo "- ${marker_prefix}.result=unavailable (no prior successful run found)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "no prior successful run found"
           fi
           
           echo "- ${marker_prefix}.baseline_run_id=${baseline_run}" >> "${summary}"
@@ -233,23 +310,19 @@ jobs:
           mkdir -p prev-state
           baseline_artifact="coldstep-events-baseline-${NS_RUNNER_LABEL}"
           if ! gh run download "${baseline_run}" --name "${baseline_artifact}" --dir prev-state >/dev/null 2>&1; then
-            echo "- ${marker_prefix}.result=unavailable (baseline artifact missing for run ${baseline_run})" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "baseline artifact missing for run ${baseline_run}"
           fi
           
           baseline_file="prev-state/.coldstep-events.jsonl"
           if [[ ! -f "${baseline_file}" ]]; then
-            echo "- ${marker_prefix}.result=unavailable (downloaded artifact missing .coldstep-events.jsonl)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
           
           if ! jq -r '.type // "unknown"' "${baseline_file}" | sort | uniq -c > prev_counts.raw; then
-            echo "- ${marker_prefix}.result=unavailable (baseline JSONL parse failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "baseline JSONL parse failed"
           fi
           if ! jq -r '.type // "unknown"' "${current_file}" | sort | uniq -c > curr_counts.raw; then
-            echo "- ${marker_prefix}.result=unavailable (current JSONL parse failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "current JSONL parse failed"
           fi
           
           declare -A prev_counts curr_counts all_types
@@ -282,8 +355,7 @@ jobs:
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
           if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
-            echo "- ${marker_prefix}.result=unavailable (traffic diff script failed)" >> "${summary}"
-            exit 0
+            fail_diff_unavailable "traffic diff script failed"
           fi
       - name: Persist detect JSONL baseline artifact
         if: always()
@@ -303,6 +375,7 @@ jobs:
 
   prevent-mode:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v6
 
@@ -313,11 +386,19 @@ jobs:
         with:
           go-version: '1.24.x'
 
-      - name: Install nmap (apt — before enforce so mirrors/DNS still work)
+      - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Assert required tools are present
+        run: |
+          set -euo pipefail
+          command -v dig
+          command -v nc
+          command -v nmap
+          command -v curl
 
       - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
         run: |
@@ -343,7 +424,10 @@ jobs:
       - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |
           set -euo pipefail
-          timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null || true
+          if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
+            echo "expected direct IP connect to allowlisted target 1.1.1.1:443 to succeed"
+            exit 1
+          fi
 
       - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
         run: |
@@ -364,6 +448,19 @@ jobs:
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
             echo "expected direct IP connect to be blocked under enforce allowlist"
             exit 1
+          fi
+
+      - name: Optional IPv6 egress probe (informational, non-blocking)
+        run: |
+          set -euo pipefail
+          if [[ ! -r /proc/net/if_inet6 ]]; then
+            echo "coldstep-ci: skip IPv6 probe (no /proc/net/if_inet6)"
+            exit 0
+          fi
+          if curl -6 --max-time 4 -fsS https://example.com/ >/dev/null 2>&1; then
+            echo "coldstep-ci: IPv6 HTTPS probe to example.com succeeded"
+          else
+            echo "coldstep-ci: IPv6 HTTPS probe skipped or failed (non-blocking)"
           fi
 
       - name: Stop agent (flush digest to workspace)
@@ -406,7 +503,7 @@ jobs:
             echo "| Detect telemetry | 🟢 | detect-mode job digest + JSONL |"
             echo "| Enforce domain allowlist | 🟢 | nmap to theclouddj.com allowed |"
             echo "| Enforce URL block | 🟢 | deny JSONL dst=192.0.2.1 (example.com) |"
-            echo "| Enforce IP allowlist | 🟡 | probe ran for 1.1.1.1; treat deny/no-deny as runner-path signal |"
+            echo "| Enforce IP allowlist | 🟢 | direct TCP to 1.1.1.1:443 is required to succeed |"
             echo "| Enforce IP block | 🟢 | deny JSONL dst=93.184.216.34 |"
             echo "| Investigate if flaky | 🟡 | rerun job and inspect deny/debug step |"
             echo "| Regression | 🔴 | any assertion above fails |"

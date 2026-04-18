@@ -6,8 +6,10 @@ static __always_inline void handle_udp_obs_emit(__be16 sin_port, __be32 sin_addr
 {
 	struct udp_send_event *ue =
 		bpf_ringbuf_reserve(&udp_events, sizeof(*ue), 0);
-	if (!ue)
+	if (!ue) {
+		note_udp_ringbuf_reserve_failed();
 		return;
+	}
 	{
 		__u64 pt = bpf_get_current_pid_tgid();
 

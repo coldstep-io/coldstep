@@ -28,7 +28,8 @@ inputs:
     required: false
     default: ''
   allowed-ips:
-    description: Comma- or whitespace-separated IPv4 literals allowed for egress classification (v1; no CIDR yet).
+    description: >-
+      Comma- or whitespace-separated IPv4 literals allowed for egress classification (no CIDR).
     required: false
     default: ''
   ignored-ip-nets:

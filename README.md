@@ -63,7 +63,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). |
+| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Enforcement uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -73,7 +73,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | **`.coldstep-detect.md`** | Shutdown digest (KPI tables, collapsible sections). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
-The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default on). Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`.
+The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default on). Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
 ---
 
@@ -85,7 +85,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | :---- | :------ |
 | `mode` | `detect` or `enforce`. |
 | `allowed-domains` | Enforce-mode domain allowlist (required for enforce). |
-| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints (see `action.yml`). |
+| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
 | `report-job-summary` | Merge digest into the job Summary. |

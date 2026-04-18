@@ -1,4 +1,5 @@
-# PR / main / workflow_dispatch CI for **ubuntu-latest** only (v1). Additional GitHub-hosted images may be wired later.
+# PR / main / workflow_dispatch CI (v1): reusable runner workflow runs unit+integration on ubuntu-latest /
+# ubuntu-22.04 (x64) and ubuntu-24.04-arm / ubuntu-22.04-arm (arm64); detect/enforce remain ubuntu-latest x64.
 
 name: coldstep-ci
 
@@ -7,6 +8,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      coldstep_diff_strict:
+        description: Fail detect-mode if previous-run JSONL diff baseline is unavailable (hosted-linux job)
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -19,4 +25,6 @@ concurrency:
 jobs:
   hosted-linux:
     uses: ./.github/workflows/coldstep-ci-runner.yml
+    with:
+      coldstep_diff_strict: ${{ github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict }}
     secrets: inherit

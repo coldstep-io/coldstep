@@ -82,7 +82,7 @@ Detect mode is default. For enforce behavior, reuse the same **`env`** / **`chec
     allowed-domains: google.com,github.com
     # optional:
     # allowed-hosts: api.example.com,*.svc.example.com
-    # allowed-ips: 1.1.1.1,8.8.8.8
+    # allowed-ips: 1.1.1.1,8.8.8.8   # IPv4 literals
 ```
 
 Denied egress appears as `"type":"deny"` in JSONL and in the digest.

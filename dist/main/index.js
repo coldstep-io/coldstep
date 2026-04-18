@@ -31016,24 +31016,46 @@ function inputBoolDefault(name, defaultVal) {
     }
     return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
-async function waitForAgentReady(statusPath, timeoutMs) {
-    const deadline = Date.now() + timeoutMs;
-    while (Date.now() < deadline) {
-        try {
-            if (fs.existsSync(statusPath)) {
-                const raw = fs.readFileSync(statusPath, 'utf8');
-                const j = JSON.parse(raw);
-                if (j.ok === true) {
-                    return true;
+async function waitForAgentReady(statusPath, timeoutMs, child) {
+    let exitedEarly = false;
+    let exitCode = null;
+    let exitSignal = null;
+    const onExit = (code, signal) => {
+        exitedEarly = true;
+        exitCode = code;
+        exitSignal = signal;
+    };
+    if (child) {
+        child.on('exit', onExit);
+    }
+    try {
+        const deadline = Date.now() + timeoutMs;
+        while (Date.now() < deadline) {
+            if (exitedEarly) {
+                core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
+                return false;
+            }
+            try {
+                if (fs.existsSync(statusPath)) {
+                    const raw = fs.readFileSync(statusPath, 'utf8');
+                    const j = JSON.parse(raw);
+                    if (j.ok === true) {
+                        return true;
+                    }
                 }
             }
+            catch {
+                /* retry */
+            }
+            await new Promise((r) => setTimeout(r, 150));
         }
-        catch {
-            /* retry */
-        }
-        await new Promise((r) => setTimeout(r, 150));
+        return false;
     }
-    return false;
+    finally {
+        if (child) {
+            child.off('exit', onExit);
+        }
+    }
 }
 async function run() {
     if (process.platform !== 'linux') {
@@ -31145,9 +31167,11 @@ async function run() {
         core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
-        const ok = await waitForAgentReady(agentStatus, 60_000);
+        // Hosted runners sometimes spend >60s on apt/kernel churn before the agent starts; enforce
+        // mode also resolves allowlist domains sequentially (context timeout is enforced in Go).
+        const ok = await waitForAgentReady(agentStatus, 180_000, child);
         if (!ok) {
-            core.setFailed('coldstep agent did not become ready (BPF/load); see job logs and ensure ubuntu-latest.');
+            core.setFailed('coldstep agent did not become ready (BPF/load/DNS); see job logs and ensure ubuntu-latest.');
             try {
                 process.kill(child.pid, 'SIGTERM');
             }
