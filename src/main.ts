@@ -143,11 +143,13 @@ async function run(): Promise<void> {
     childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
   }
 
-  let stderrStream: fs.WriteStream | undefined;
-  let stdio: 'ignore' | ['ignore', 'ignore', fs.WriteStream] = 'ignore';
+  // Use numeric fds (not WriteStream): with detached:true the stream may still have fd=null and
+  // spawn rejects stdio (see Node child_process validation).
+  let stderrFd: number | undefined;
+  let stdio: 'ignore' | ['ignore', 'ignore', number] = 'ignore';
   if (failOnError) {
-    stderrStream = fs.createWriteStream(stderrLog, { flags: 'w' });
-    stdio = ['ignore', 'ignore', stderrStream];
+    stderrFd = fs.openSync(stderrLog, 'w', 0o600);
+    stdio = ['ignore', 'ignore', stderrFd];
   }
   const child = spawn('sudo', ['-E', binPath, 'run'], {
     cwd: actionPath,
@@ -155,12 +157,18 @@ async function run(): Promise<void> {
     detached: true,
     stdio,
   });
+  if (stderrFd !== undefined) {
+    try {
+      fs.closeSync(stderrFd);
+    } catch {
+      /* ignore */
+    }
+  }
   child.on('error', (err) => {
     core.error(`coldstep: failed to spawn agent (${err.message})`);
   });
   if (child.pid === undefined) {
     // `spawn` can fail asynchronously (e.g. missing sudo); avoid writing `undefined` into the pid file.
-    stderrStream?.end();
     core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
     return;
   }
@@ -210,15 +218,6 @@ async function run(): Promise<void> {
     );
     core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
     const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child);
-    stderrStream?.end();
-    await new Promise<void>((resolve) => {
-      if (stderrStream) {
-        stderrStream.on('close', resolve);
-        setTimeout(resolve, 500);
-      } else {
-        resolve();
-      }
-    });
     if (!ok) {
       const tail = tailUtf8File(stderrLog, 14_000);
       if (tail.trim() !== '') {
