@@ -1748,6 +1748,12 @@ func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 }
 
 // loadEnforceMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
+//
+// PR-G: allowed_ipv4 is now a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP
+// allowlist entries (resolved domain IPs + literal /32s from --allowed-ips)
+// are still programmed individually but with prefixlen=32. Literal CIDR
+// entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
+// single LPM key and cover every address inside the range.
 func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, error) {
 	if objs == nil {
 		return 0, fmt.Errorf("traceenforce objects are required for enforce mode")
@@ -1768,23 +1774,78 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 	if pol != nil {
 		pol.MergeLiteralAllowedIPv4Keys(v4keys)
 	}
-	if len(v4keys) > policy.MaxAllowedEnforceIPv4Keys {
-		return 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", len(v4keys), policy.MaxAllowedEnforceIPv4Keys)
+	var literalNets []*net.IPNet
+	if pol != nil {
+		literalNets = pol.AllowedIPv4Nets()
+	}
+	totalEntries := len(v4keys) + len(literalNets)
+	if totalEntries > policy.MaxAllowedEnforceIPv4Keys {
+		return 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedEnforceIPv4Keys)
 	}
 
-	if len(v4keys) == 0 {
+	if totalEntries == 0 {
 		return 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
 	}
 
-	allow := uint8(1)
-	for addr := range v4keys {
-		addrCopy := addr
-		if err := objs.AllowedIpv4.Update(&addrCopy, &allow, ebpf.UpdateAny); err != nil {
-			return 0, fmt.Errorf("load allowed_ipv4 map: %w", err)
-		}
+	if err := loadAllowedLPMMap(objs.AllowedIpv4, v4keys, literalNets); err != nil {
+		return 0, err
 	}
 
-	return len(v4keys), nil
+	return totalEntries, nil
+}
+
+// loadAllowedLPMMap programs the allowed_ipv4 LPM trie (PR-G).
+//
+// Two-phase fill keeps the kernel call sequence deterministic for tests:
+//  1. Single-IP keys (resolved domain IPs + literal /32s) → prefixlen=32.
+//  2. Literal CIDRs from --allowed-ips → prefixlen from the mask.
+//
+// Key wire format mirrors loadIgnoredLPMMap: 8-byte buffer where bytes [0:4]
+// are the prefix length in CPU/little-endian order (BPF_MAP_TYPE_LPM_TRIE
+// reads it as a u32) and bytes [4:8] are the network address in network byte
+// order. Don't reorder fields without also updating the BPF `struct ns_lpm4_key`
+// definition in bpf/trace_enforce.bpf.c — they share wire format.
+func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPNet) error {
+	if m == nil {
+		if len(ipKeys) > 0 || len(nets) > 0 {
+			return fmt.Errorf("allowed_ipv4 map is nil with %d entries", len(ipKeys)+len(nets))
+		}
+		return nil
+	}
+	val := uint8(1)
+	for addr := range ipKeys {
+		var key [8]byte
+		binary.LittleEndian.PutUint32(key[0:4], 32)
+		copy(key[4:8], addr[:])
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("load allowed_ipv4 map (/32 %d.%d.%d.%d): %w",
+				addr[0], addr[1], addr[2], addr[3], err)
+		}
+	}
+	for _, n := range nets {
+		if n == nil {
+			continue
+		}
+		ones, bits := n.Mask.Size()
+		if bits != 32 || ones < 0 || ones > 32 {
+			continue
+		}
+		ip4 := n.IP.To4()
+		if ip4 == nil {
+			continue
+		}
+		network := ip4.Mask(n.Mask)
+		if network == nil {
+			continue
+		}
+		var key [8]byte
+		binary.LittleEndian.PutUint32(key[0:4], uint32(ones))
+		binary.BigEndian.PutUint32(key[4:8], binary.BigEndian.Uint32(network))
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("load allowed_ipv4 map (cidr %s): %w", n.String(), err)
+		}
+	}
+	return nil
 }
 
 func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) (telemetry.DenyEvent, error) {

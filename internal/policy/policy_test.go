@@ -47,6 +47,39 @@ func TestParse_AllowedIP(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedIPv4CIDR(t *testing.T) {
+	p, err := Parse("", "203.0.113.0/24, 198.51.100.42")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if !p.enabled {
+		t.Fatal("expected enabled with mixed IP + CIDR allowlist")
+	}
+	nets := p.AllowedIPv4Nets()
+	if len(nets) != 1 {
+		t.Fatalf("expected 1 CIDR allowlist entry, got %d", len(nets))
+	}
+	if nets[0].String() != "203.0.113.0/24" {
+		t.Fatalf("CIDR entry: got %q want 203.0.113.0/24", nets[0].String())
+	}
+	if g := p.Classify("", net.ParseIP("203.0.113.7")); g != ClassAllowed {
+		t.Fatalf("CIDR member 203.0.113.7: got %q want allowed", g)
+	}
+	if g := p.Classify("", net.ParseIP("198.51.100.42")); g != ClassAllowed {
+		t.Fatalf("bare IP 198.51.100.42: got %q want allowed", g)
+	}
+	if g := p.Classify("", net.ParseIP("203.0.114.1")); g != ClassUnknown {
+		t.Fatalf("outside-CIDR 203.0.114.1: got %q want unknown", g)
+	}
+}
+
+func TestParse_AllowedIPv6CIDRRejected(t *testing.T) {
+	_, err := Parse("", "2001:db8::/32")
+	if err == nil {
+		t.Fatal("expected error for IPv6 CIDR in allowed-ips")
+	}
+}
+
 func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
 	p, err := Parse("", "1.1.1.1, 8.8.8.8")
 	if err != nil {
