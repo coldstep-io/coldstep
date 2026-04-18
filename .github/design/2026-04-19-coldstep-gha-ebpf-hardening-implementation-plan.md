@@ -26,7 +26,7 @@
 
 **Files:** (none yet)
 
-- [ ] **Step 1: Ensure you are on the integration branch for this work**
+- [x] **Step 1: Ensure you are on the integration branch for this work**
 
 ```bash
 cd /path/to/coldstep
@@ -49,7 +49,7 @@ git checkout -b ebpf_testing
 git push -u origin ebpf_testing
 ```
 
-- [ ] **Step 2: Confirm clean tree before edits**
+- [x] **Step 2: Confirm clean tree before edits**
 
 ```bash
 git status
@@ -57,7 +57,7 @@ git status
 
 Expected: working tree clean or only intentional changes.
 
-- [ ] **Step 3: Commit** — only after completing Tasks 2–4 if you bundle; otherwise skip.
+- [x] **Step 3: Commit** — only after completing Tasks 2–4 if you bundle; otherwise skip.
 
 ---
 
@@ -66,7 +66,7 @@ Expected: working tree clean or only intentional changes.
 **Files:**
 - Create: `.github/design/2026-04-19-coldstep-gha-ebpf-mitigations-design.md`
 
-- [ ] **Step 1: Create the file with exactly this content**
+- [x] **Step 1: Create the file with exactly this content**
 
 ```markdown
 # Coldstep on GitHub Actions — eBPF monitoring limits & mitigations (design)
@@ -107,13 +107,13 @@ Expected: working tree clean or only intentional changes.
 - [Brendan Gregg — eBPF observability tools are not security tools](https://www.brendangregg.com/blog/2023-04-28/ebpf-security-issues.html)
 ```
 
-- [ ] **Step 2: Stage**
+- [x] **Step 2: Stage**
 
 ```bash
 git add .github/design/2026-04-19-coldstep-gha-ebpf-mitigations-design.md
 ```
 
-- [ ] **Step 3: Commit (signed)**
+- [x] **Step 3: Commit (signed)**
 
 ```bash
 git commit -S -m "docs: GHA eBPF mitigations design spec"
@@ -126,7 +126,7 @@ git commit -S -m "docs: GHA eBPF mitigations design spec"
 **Files:**
 - Modify: `SECURITY.md`
 
-- [ ] **Step 1: Append this section before the final newline** (keep existing sections intact)
+- [x] **Step 1: Append this section before the final newline** (keep existing sections intact)
 
 ```markdown
 
@@ -157,13 +157,13 @@ No userland agent can promise **complete** observation of every kernel path on e
 Design spec: **`.github/design/2026-04-19-coldstep-gha-ebpf-mitigations-design.md`** in this repository.
 ```
 
-- [ ] **Step 2: Preview diff**
+- [x] **Step 2: Preview diff**
 
 ```bash
 git diff SECURITY.md
 ```
 
-- [ ] **Step 3: Commit (signed)**
+- [x] **Step 3: Commit (signed)**
 
 ```bash
 git add SECURITY.md
@@ -186,7 +186,7 @@ Example insertion after the Requirements table (after the `| **Node** | ... |` r
 For **security posture on GitHub Actions** (threat model, residual risk, pins), see **[SECURITY.md](SECURITY.md)** — *GitHub Actions: threat model and mitigations*.
 ```
 
-- [ ] **Step 1: Edit, then**
+- [x] **Step 1: Edit, then**
 
 ```bash
 git add README.md
@@ -199,7 +199,7 @@ git commit -S -m "docs: link SECURITY.md for GHA eBPF mitigations"
 
 **Files:** —
 
-- [ ] **Step 1: Push to origin**
+- [x] **Step 1: Push to origin**
 
 ```bash
 git push -u origin ebpf_testing

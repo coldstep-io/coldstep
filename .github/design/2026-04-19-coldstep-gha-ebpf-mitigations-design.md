@@ -26,7 +26,7 @@
 ## 4. Verification & evolution
 
 - **CI:** PR + nightly workflows remain the **supported proof path** (`govulncheck`, race, shuffle as stress — not red-team bypass simulation).
-- **Knowledge:** Vault hub **`[[wiki/ebpf-monitoring-evasion]]`** (local) links external references; update when mitigations ship.
+- **Knowledge:** Vault hub **`[[wiki/ebpf-monitoring-evasion]]`** (under repo `knowledge/`; gitignored locally) links external references; **`[[raw/coldstep-security-github-actions-threat-model]]`** links **SECURITY.md** + design/plan paths; update when mitigations ship.
 - **Backlog:** Track enforce vs telemetry vs docs improvements as **separate small PRs** after this documentation lands.
 
 ## 5. References (external)

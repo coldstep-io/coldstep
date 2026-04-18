@@ -45,6 +45,8 @@ jobs:
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Node** | Composite action uses **Node.js 24** (`node24` in `action.yml`). Set workflow env **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`** to match [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml) and [`.github/workflows/coldstep-demo.yml`](.github/workflows/coldstep-demo.yml). |
 
+For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
+
 ---
 
 ## GitHub Actions pins in this repository
