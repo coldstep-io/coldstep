@@ -8,18 +8,29 @@ import (
 	"net"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"testing"
 )
 
+func bumpCallCount(cm *sync.Map, key string) {
+	actual, _ := cm.LoadOrStore(key, new(atomic.Int64))
+	actual.(*atomic.Int64).Add(1)
+}
+
+func loadCallCount(cm *sync.Map, key string) int64 {
+	v, ok := cm.Load(key)
+	if !ok {
+		return 0
+	}
+	return v.(*atomic.Int64).Load()
+}
+
 func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	ctx := context.Background()
-	var mu sync.Mutex
-	calls := map[string]int{}
+	var calls sync.Map
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
 		key := network + "|" + host
-		mu.Lock()
-		calls[key]++
-		mu.Unlock()
+		bumpCallCount(&calls, key)
 		switch host {
 		case "example.com":
 			if network == "ip4" {
@@ -51,27 +62,20 @@ func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	if len(got.UnresolvedDomains) != 0 {
 		t.Fatalf("UnresolvedDomains: got %v want empty", got.UnresolvedDomains)
 	}
-	mu.Lock()
-	ex := calls["ip4|example.com"]
-	api := calls["ip4|api.example.com"]
-	mu.Unlock()
-	if ex != 1 {
-		t.Fatalf("resolver calls example.com: got %v", ex)
+	if loadCallCount(&calls, "ip4|example.com") != 1 {
+		t.Fatalf("resolver calls example.com: got %v", loadCallCount(&calls, "ip4|example.com"))
 	}
-	if api != 1 {
-		t.Fatalf("resolver calls api.example.com: got %v", api)
+	if loadCallCount(&calls, "ip4|api.example.com") != 1 {
+		t.Fatalf("resolver calls api.example.com: got %v", loadCallCount(&calls, "ip4|api.example.com"))
 	}
 }
 
 func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T) {
 	ctx := context.Background()
-	var mu sync.Mutex
-	calls := map[string]int{}
+	var calls sync.Map
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
 		key := network + "|" + host
-		mu.Lock()
-		calls[key]++
-		mu.Unlock()
+		bumpCallCount(&calls, key)
 		switch host {
 		case "ok.example.com":
 			if network == "ip4" {
@@ -104,19 +108,14 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	if !reflect.DeepEqual(got.UnresolvedDomains, wantUnresolved) {
 		t.Fatalf("UnresolvedDomains: got %v want %v", got.UnresolvedDomains, wantUnresolved)
 	}
-	mu.Lock()
-	down := calls["ip4|down.example.com"]
-	okCalls := calls["ip4|ok.example.com"]
-	v6only := calls["ip4|ipv6-only.example.com"]
-	mu.Unlock()
-	if down != 2 {
-		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", down)
+	if loadCallCount(&calls, "ip4|down.example.com") != 2 {
+		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", loadCallCount(&calls, "ip4|down.example.com"))
 	}
-	if okCalls != 1 {
-		t.Fatalf("calls for resolved domain ok: got %v", okCalls)
+	if loadCallCount(&calls, "ip4|ok.example.com") != 1 {
+		t.Fatalf("calls for resolved domain ok: got %v", loadCallCount(&calls, "ip4|ok.example.com"))
 	}
-	if v6only != 2 {
-		t.Fatalf("calls for ipv6-only domain: got %v", v6only)
+	if loadCallCount(&calls, "ip4|ipv6-only.example.com") != 2 {
+		t.Fatalf("calls for ipv6-only domain: got %v", loadCallCount(&calls, "ip4|ipv6-only.example.com"))
 	}
 }
 

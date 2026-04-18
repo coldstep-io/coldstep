@@ -132,6 +132,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run build
+      - name: Verify composite dist parses (Node)
+        run: node --check dist/main/index.js && node --check dist/post/index.js
 
   detect-mode:
     runs-on: ubuntu-latest
