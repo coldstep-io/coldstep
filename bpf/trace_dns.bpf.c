@@ -12,8 +12,12 @@
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 /*
- * Keep user-read size bounded for verifier/runtime safety. Note this can miss
- * larger EDNS-enabled DNS responses; telemetry is best-effort, not full replay.
+ * DNS_SNIFF_MAX bounds the capture buffer for both the BPF event struct and the
+ * bpf_probe_read_user call (which must use sizeof(ev->data) — a compile-time constant —
+ * not a runtime scalar; strict 6.x azure verifiers reject dynamic R2 sizes).
+ * 4096 covers EDNS0-extended UDP payloads (RFC 6891); standard DNS fits in 512.
+ * bpf_probe_read_user always reads the full buffer regardless of copy_len:
+ * ev->len records the logical length for userspace to slice correctly.
  */
 #define DNS_SNIFF_MAX 4096
 
@@ -37,7 +41,12 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 22);
+	/*
+	 * 1<<24 = 16 MiB: at DNS_SNIFF_MAX=4096 bytes/event this holds ~4,000 events
+	 * before back-pressure, matching connect_events and deny_events capacity.
+	 * Previously 1<<22 (4 MiB) was sized for 512-byte events (~8,000 events).
+	 */
+	__uint(max_entries, 1 << 24);
 } dns_events SEC(".maps");
 
 struct {
@@ -124,7 +133,14 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		copy_len = pending->max_len;
 	if (copy_len < 12)
 		return 0;
-	/* Verifier: bpf_probe_read_user size must be bounded by a constant; map max_len is opaque. */
+	/*
+	 * Verifier safety: bpf_probe_read_user R2 (size) must be a compile-time
+	 * constant. The scalar copy_len is map-derived and opaque to the verifier.
+	 * We always read sizeof(ev->data) bytes into the ring buffer slot; ev->len
+	 * records the logical length so userspace slices only the valid bytes.
+	 * This matches the established pattern in trace_http_obs.inc and
+	 * trace_tls_write.inc (both use sizeof(ev->payload) for the same reason).
+	 */
 	if (copy_len > DNS_SNIFF_MAX)
 		copy_len = DNS_SNIFF_MAX;
 
@@ -141,7 +157,9 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	ev->len = copy_len;
-	if (bpf_probe_read_user(ev->data, copy_len, (void *)pending->buf_user)) {
+	_Static_assert(sizeof(ev->data) == DNS_SNIFF_MAX,
+		       "dns sniff data array vs DNS_SNIFF_MAX");
+	if (bpf_probe_read_user(ev->data, sizeof(ev->data), (void *)pending->buf_user)) {
 		bpf_ringbuf_discard(ev, 0);
 		return 0;
 	}

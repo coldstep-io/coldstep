@@ -22,6 +22,7 @@
 #define COLDSTEP_NR_SENDTO 206
 #define COLDSTEP_NR_SENDMSG 211
 #define COLDSTEP_NR_WRITE 64
+/* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 57
 #define COLDSTEP_NR_RECVFROM 207
 #define COLDSTEP_NR_WRITEV 66
@@ -30,6 +31,7 @@
 #define COLDSTEP_NR_SENDTO 44
 #define COLDSTEP_NR_SENDMSG 46
 #define COLDSTEP_NR_WRITE 1
+/* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 3
 #define COLDSTEP_NR_RECVFROM 45
 #define COLDSTEP_NR_WRITEV 20
@@ -144,6 +146,13 @@ static __always_inline __u32 coldstep_probe_user_sz_tls(__u32 len_in)
 	return s;
 }
 
+/*
+ * LP64 glibc/Linux iovec layout (x86_64 + aarch64):
+ *   offsetof(iov_base) = 0  (pointer, 8 bytes)
+ *   offsetof(iov_len)  = 8  (size_t, 8 bytes)
+ * Used by trace_udp_sendmsg.inc (msghdr->msg_iov[0]) and
+ * trace_tls_write.inc (writev iovec[0]) to extract buffer + length.
+ */
 struct coldstep_iovec {
 	unsigned long iov_base;
 	unsigned long iov_len;

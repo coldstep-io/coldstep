@@ -1,8 +1,8 @@
-/* TLS ClientHello sniff on IPv4 TCP (write(2) or sendto(2) with NULL dest), correlated with prior connect(2). */
+/* TLS ClientHello sniff on IPv4 TCP (write(2), writev(2), or sendto(2) with NULL dest), correlated with prior connect(2). */
 #ifndef TRACE_TLS_WRITE_INC
 #define TRACE_TLS_WRITE_INC
 
-/* Shared by __NR_write and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
+/* Shared by __NR_write, __NR_writev, and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
 static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	{
@@ -85,7 +85,17 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 		struct coldstep_iovec iov0 = {};
 		if (dx_ul > 0 && si_ul) {
 			if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)si_ul) == 0) {
-				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, coldstep_syscall_len_u32(iov0.iov_len));
+				/*
+				 * iov_len comes from untrusted userspace memory. Cap it to
+				 * TLS_PAYLOAD_MAX before the sniff call as defence-in-depth;
+				 * coldstep_probe_user_sz_tls() would also clamp, but an
+				 * explicit pre-cap keeps the verifier scalar range tight and
+				 * makes the intent self-documenting.
+				 */
+				__u32 iov_len = coldstep_syscall_len_u32(iov0.iov_len);
+				if (iov_len > TLS_PAYLOAD_MAX)
+					iov_len = TLS_PAYLOAD_MAX;
+				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, iov_len);
 			}
 		}
 		return 0;
