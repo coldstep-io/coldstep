@@ -27,6 +27,17 @@ struct {
 	__uint(max_entries, 1 << 24);
 } connect_events SEC(".maps");
 
+/*
+ * `udp_events` is a misnomer kept for wire-compat: the ringbuf carries every
+ * IPv4 datagram-style egress observed via the `sendto(2)` / `sendmsg(2)`
+ * raw_tp arms in trace_udp_obs.inc — which on Linux includes TCP sockets that
+ * use those syscalls (e.g. early Postgres clients, some HTTP libraries that
+ * call `sendto(fd, buf, len, 0, NULL, 0)`). Userspace must distinguish UDP
+ * vs TCP from the protocol context (or the connect_events tuple cache) if
+ * the distinction matters; the JSONL `udp_send` row simply records "what was
+ * sent via the udp-style hook" regardless of L4. Renaming the map would
+ * break consumers that grep on the `udp_events` symbol.
+ */
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);

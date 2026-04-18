@@ -40,6 +40,16 @@ func splitIgnoredRawFields(s string) []string {
 
 // DefaultIgnoredIPv4Nets returns the implicit RFC1918 private-network ranges
 // (10.0.0.0/8 and 172.16.0.0/12), matching common CI internal-network baselines.
+//
+// Why 192.168.0.0/16 is intentionally OMITTED from the defaults:
+// GitHub-hosted Azure runners route their VM-internal management traffic
+// through 10.0.0.0/8 and 172.16.0.0/12 only; user-controlled labs / on-prem
+// runners that use 192.168/16 frequently want that traffic captured (NAS,
+// LDAP, internal HTTP services on a home-lab subnet) so silently masking
+// it would degrade observability for the most common self-hosted scenarios.
+// Users on a 192.168/16 LAN that *do* want it masked can pass
+// `--ignored-ip-nets 192.168.0.0/16` explicitly.
+// See knowledge/reports/2026-04-18-deep-ebpf-code-review-synthesis.md F-U3-01.
 func DefaultIgnoredIPv4Nets() ([]*net.IPNet, error) {
 	return ParseIgnoredIPNets("10.0.0.0/8 172.16.0.0/12")
 }
