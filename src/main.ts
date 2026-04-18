@@ -44,12 +44,9 @@ async function waitForAgentReady(
   try {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-      if (exitedEarly) {
-        core.error(
-          `coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`,
-        );
-        return false;
-      }
+      // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
+      // kernel deny event immediately; fail-fast deny handling used to exit the process while the
+      // status file still contained ok:true, and checking exitedEarly first made us miss it.
       try {
         if (fs.existsSync(statusPath)) {
           const raw = fs.readFileSync(statusPath, 'utf8');
@@ -60,6 +57,12 @@ async function waitForAgentReady(
         }
       } catch {
         /* retry */
+      }
+      if (exitedEarly) {
+        core.error(
+          `coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`,
+        );
+        return false;
       }
       await new Promise((r) => setTimeout(r, 150));
     }

@@ -1594,10 +1594,11 @@ func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, 
 	return newEnforceDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, cancelRun context.CancelFunc) error {
-	// First deny triggers a short drain window (more JSONL rows), then we cancel the run
-	// context and return a single "enforce deny" error so Run exits non-zero while BPF
-	// teardown still happens via defers. Other ringbuf readers exit on ctx cancel + map close.
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) error {
+	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
+	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
+	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
+	// would kill the agent before later job steps (nmap/curl) run. Exit only on ctx cancel / closed ring.
 	for {
 		rd.SetDeadline(time.Time{})
 		record, err := rd.Read()
@@ -1612,12 +1613,9 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			continue
 		}
 
-		firstDeny, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state)
-		if err != nil {
-			if cancelRun != nil {
-				cancelRun()
-			}
-			return err
+		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state); err != nil {
+			slog.Warn("deny ring sample skipped", "err", err)
+			continue
 		}
 
 		drainUntil := time.Now().Add(enforceDenyDrainDuration)
@@ -1634,29 +1632,18 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 				}
 				if ctx.Err() != nil {
 					rd.SetDeadline(time.Time{})
-					if cancelRun != nil {
-						cancelRun()
-					}
-					return newEnforceDenyError(firstDeny)
+					return ctx.Err()
 				}
 				rd.SetDeadline(time.Time{})
 				slog.Warn("ringbuf read (deny drain)", "err", err2)
 				continue
 			}
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state); err3 != nil {
-				rd.SetDeadline(time.Time{})
-				if cancelRun != nil {
-					cancelRun()
-				}
-				return err3
+				slog.Warn("deny ring drain sample skipped", "err", err3)
 			}
 			n++
 		}
 		rd.SetDeadline(time.Time{})
-		if cancelRun != nil {
-			cancelRun()
-		}
-		return newEnforceDenyError(firstDeny)
 	}
 }
 
@@ -2285,7 +2272,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, runCancel)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState)
 		}()
 	}
 	if dnsRd != nil {
