@@ -7,7 +7,12 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 )
+
+// coldstepDomainLookupAttemptTimeout caps a single Resolver.LookupIP call so goroutines cannot
+// block wg.Wait() past the parent compile context (hosted runners / flaky resolvers).
+const coldstepDomainLookupAttemptTimeout = 25 * time.Second
 
 // LookupIPFunc resolves hostnames to IPs.
 type LookupIPFunc func(ctx context.Context, network, host string) ([]net.IP, error)
@@ -96,7 +101,9 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 				if ctx != nil && ctx.Err() != nil {
 					break
 				}
-				ips4, err4 := resolver(ctx, "ip4", d)
+				lookupCtx, cancel := context.WithTimeout(ctx, coldstepDomainLookupAttemptTimeout)
+				ips4, err4 := resolver(lookupCtx, "ip4", d)
+				cancel()
 				if err4 != nil && (errors.Is(err4, context.Canceled) || errors.Is(err4, context.DeadlineExceeded)) {
 					break
 				}

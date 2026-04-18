@@ -102,6 +102,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 - **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first **`write(2)`** after **`connect`** (best-effort).
 - **Shared runners**: attribution is **PID / `comm`**-class; not a perfect global process tree.
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
+- **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.
 
 ---
 

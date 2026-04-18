@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -592,6 +593,12 @@ func writeAgentStatus(path string, ok bool) error {
 	if path == "" {
 		return nil
 	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
 	payload := map[string]any{"ok": ok, "version": 1}
 	b, err := json.Marshal(payload)
 	if err != nil {
@@ -763,11 +770,18 @@ func denyDigestRowFromEvent(ev telemetry.DenyEvent) report.DenyDigestRow {
 // tlsAgentCfgFailed is set when the map update fails (SNI path stays off in BPF) so callers can mark the hook degraded.
 func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {
 	objs = new(traceconnect.TraceconnectObjects)
-	traceLoadOpts := &ebpf.CollectionOptions{
-		Programs: ebpf.ProgramOptions{
-			LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
-			LogSizeStart: 512 * 1024,
-		},
+	// Default: fast verifier path (nil opts). Branch + instruction verifier logging makes
+	// LoadTraceconnectObjects disproportionately slow on hosted runners and can exceed the
+	// composite action's waitForAgentReady window (see src/main.ts). Opt in via env for debugging:
+	//   COLDSTEP_BPF_VERBOSE_VERIFY=1
+	var traceLoadOpts *ebpf.CollectionOptions
+	if strings.TrimSpace(os.Getenv("COLDSTEP_BPF_VERBOSE_VERIFY")) != "" {
+		traceLoadOpts = &ebpf.CollectionOptions{
+			Programs: ebpf.ProgramOptions{
+				LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
+				LogSizeStart: 512 * 1024,
+			},
+		}
 	}
 	if err = traceconnect.LoadTraceconnectObjects(objs, traceLoadOpts); err != nil {
 		return nil, nil, nil, nil, nil, nil, false, err
@@ -2106,7 +2120,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-		slog.Warn("agent status", "err", err)
+		return fmt.Errorf("agent ready status: %w", err)
 	}
 
 	if cfg.EventsLogPath != "" {
