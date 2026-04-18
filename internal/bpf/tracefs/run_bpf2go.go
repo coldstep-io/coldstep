@@ -1,5 +1,9 @@
 //go:build ignore
 
+// run_bpf2go.go — generate-time helper for tracefs. See
+// internal/bpf/traceconnect/run_bpf2go.go for the rationale (per-arch
+// `-D__TARGET_ARCH_*` cflag derived from runtime.GOARCH that cannot be
+// expressed concisely in a single `//go:generate` line).
 package main
 
 import (

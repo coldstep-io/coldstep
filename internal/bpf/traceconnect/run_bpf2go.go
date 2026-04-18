@@ -1,5 +1,14 @@
 //go:build ignore
 
+// run_bpf2go.go — generate-time helper for traceconnect.
+//
+// Why this file exists: bpf2go's `//go:generate` line cannot easily express a
+// cflags string that depends on `runtime.GOARCH`. trace_connect.bpf.c (via
+// trace_connect_obs.h) needs `-D__TARGET_ARCH_x86` or `-D__TARGET_ARCH_arm64`
+// to select the correct syscall-number constants for the host architecture
+// being generated for. We compute the right `-D` flag here, then exec
+// bpf2go with the assembled cflags. The `//go:build ignore` tag keeps this
+// file out of the regular build — it only runs under `go generate`.
 package main
 
 import (

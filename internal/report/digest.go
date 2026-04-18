@@ -123,6 +123,8 @@ type DigestInput struct {
 	ProcForkDegraded     bool
 	ProcForkReaderErrors int
 
+	TCPDegradedHook  bool
+	TCPReaderErrors  int
 	UDPDegradedHook  bool
 	UDPReaderErrors  int
 	HTTPDegradedHook bool
@@ -146,7 +148,23 @@ type DigestInput struct {
 	Connect4TupleUpdateFailures int
 	UDPRingbufReserveFailures   int
 	DNSRingbufReserveFailures   int
-	DroppedCounts               map[string]int
+	// Multi-iovec visibility (PR-D). Counts BPF observations of scatter/gather
+	// syscalls that we only capture iov[0] for; non-zero indicates payload past
+	// the first iovec is invisible to the JSONL/digest. Operators can use this
+	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
+	UDPSendmsgMultiIovecObserved int
+	TLSWritevMultiIovecObserved  int
+	// UnobservedEgressSyscalls counts IPv4-egress / fd-write syscalls (sendmmsg,
+	// pwrite64, pwritev, pwritev2, sendfile, sendfile64, splice) observed in
+	// the BPF dispatch arm but not fully sniffed for HTTP/TLS payload (PR-E).
+	// Non-zero indicates Coldstep's observability has a real-workload gap.
+	UnobservedEgressSyscalls int
+	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
+	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
+	// PR-E did not ship. The symbol exists so userspace surfaces the gap
+	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
+	TCPDNSResponsesObserved int
+	DroppedCounts           map[string]int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -182,6 +200,18 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
 	}
+	if in.UDPSendmsgMultiIovecObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
+	}
+	if in.TLSWritevMultiIovecObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
+	}
+	if in.UnobservedEgressSyscalls > 0 {
+		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+	}
+	if in.TCPDNSResponsesObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
+	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
 		droppedTotal += v
@@ -215,6 +245,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
+	}
+	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
+		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
+	}
+	if in.UnobservedEgressSyscalls > 0 {
+		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer (BPF connect/policy enforcement still applied to the underlying TCP/UDP socket).")
 	}
 	b.WriteString("</sub>\n\n")
 
@@ -356,10 +392,14 @@ func BuildDetectMarkdown(in DigestInput) string {
 	writeTCP := func() {
 		b.WriteString("<details open>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
-		for _, r := range in.TCPRows {
-			b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
-				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-				sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy)))
+		if len(in.TCPRows) == 0 {
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(tcpEmptyReason(in))))
+		} else {
+			for _, r := range in.TCPRows {
+				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
+					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+					sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy)))
+			}
 		}
 		b.WriteString("\n</details>\n\n")
 	}
@@ -511,6 +551,16 @@ func tlsKPIVisible(in DigestInput) bool {
 
 func fsKPIVisible(in DigestInput) bool {
 	return in.FSGate
+}
+
+func tcpEmptyReason(in DigestInput) string {
+	if in.TCPDegradedHook {
+		return "degraded hook"
+	}
+	if in.TCPReaderErrors > 0 {
+		return fmt.Sprintf("reader errors (%d)", in.TCPReaderErrors)
+	}
+	return "no events"
 }
 
 func udpEmptyReason(in DigestInput) string {

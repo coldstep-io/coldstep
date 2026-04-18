@@ -29,22 +29,32 @@ func AppendJSONL(path string, v any) error {
 
 // Summary is written once at agent shutdown.
 type Summary struct {
-	Version                     int            `json:"version"`
-	SchemaVersion               int            `json:"schema_version"`
-	Finished                    string         `json:"finished"`
-	KernelRelease               string         `json:"kernel_release,omitempty"`
-	ExecEvents                  int            `json:"exec_events"`
-	TCPEvents                   int            `json:"tcp_events"`
-	UDPEvents                   int            `json:"udp_events"`
-	HTTPEvents                  int            `json:"http_events"`
-	TLSEvents                   int            `json:"tls_events,omitempty"`
-	ProcForkEvents              int            `json:"proc_fork_events,omitempty"`
-	Connect4TupleUpdateFailures int            `json:"connect4_tuple_update_failures,omitempty"`
-	UDPRingbufReserveFailures   int            `json:"udp_ringbuf_reserve_failures,omitempty"`
-	DNSRingbufReserveFailures   int            `json:"dns_ringbuf_reserve_failures,omitempty"`
-	DroppedCounts               map[string]int `json:"dropped_counts,omitempty"`
-	PolicyCounts                map[string]int `json:"policy_counts"`
-	BPF                         []BPFStatus    `json:"bpf,omitempty"`
+	Version                       int            `json:"version"`
+	SchemaVersion                 int            `json:"schema_version"`
+	Finished                      string         `json:"finished"`
+	KernelRelease                 string         `json:"kernel_release,omitempty"`
+	ExecEvents                    int            `json:"exec_events"`
+	TCPEvents                     int            `json:"tcp_events"`
+	UDPEvents                     int            `json:"udp_events"`
+	HTTPEvents                    int            `json:"http_events"`
+	TLSEvents                     int            `json:"tls_events,omitempty"`
+	ProcForkEvents                int            `json:"proc_fork_events,omitempty"`
+	Connect4TupleUpdateFailures   int            `json:"connect4_tuple_update_failures,omitempty"`
+	UDPRingbufReserveFailures     int            `json:"udp_ringbuf_reserve_failures,omitempty"`
+	DNSRingbufReserveFailures     int            `json:"dns_ringbuf_reserve_failures,omitempty"`
+	ConnectRingbufReserveFailures int            `json:"connect_ringbuf_reserve_failures,omitempty"`
+	HTTPRingbufReserveFailures    int            `json:"http_ringbuf_reserve_failures,omitempty"`
+	TLSRingbufReserveFailures     int            `json:"tls_ringbuf_reserve_failures,omitempty"`
+	ExecRingbufReserveFailures    int            `json:"exec_ringbuf_reserve_failures,omitempty"`
+	ForkRingbufReserveFailures    int            `json:"fork_ringbuf_reserve_failures,omitempty"`
+	FSRingbufReserveFailures      int            `json:"fs_ringbuf_reserve_failures,omitempty"`
+	UDPSendmsgMultiIovecObserved  int            `json:"udp_sendmsg_multi_iovec_observed,omitempty"`
+	TLSWritevMultiIovecObserved   int            `json:"tls_writev_multi_iovec_observed,omitempty"`
+	UnobservedEgressSyscalls      int            `json:"unobserved_egress_syscalls_observed,omitempty"`
+	TCPDNSResponsesObserved       int            `json:"tcp_dns_responses_observed,omitempty"`
+	DroppedCounts                 map[string]int `json:"dropped_counts,omitempty"`
+	PolicyCounts                  map[string]int `json:"policy_counts"`
+	BPF                           []BPFStatus    `json:"bpf,omitempty"`
 }
 
 // WriteSummary writes telemetry summary JSON (overwrites).

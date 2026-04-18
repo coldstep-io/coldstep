@@ -1,4 +1,27 @@
 #!/usr/bin/env bash
+#
+# build-agent-linux.sh — single source of truth for building the Coldstep
+# agent on a Linux runner.
+#
+# Responsibilities (in order):
+#   1. apt-get install clang/llvm/libbpf-dev — the BPF compile toolchain.
+#   2. Generate bpf/vmlinux.h from /sys/kernel/btf/vmlinux via bpftool, but
+#      only if bpf/vmlinux.h is missing or empty (committed copies are
+#      reused as-is). bpftool is selected from /usr/lib/linux-tools/<krel>
+#      because the Ubuntu /usr/bin/bpftool wrapper frequently fails on
+#      GitHub-hosted Azure kernels until the kernel-matched linux-tools
+#      package is installed.
+#   3. `go generate ./internal/bpf/.../` for every BPF subpackage. This
+#      invokes bpf2go (or run_bpf2go.go for traceconnect/tracedns/tracefs)
+#      which compiles each .bpf.c into an embedded ELF + Go bindings.
+#      Compile errors here include `_Static_assert` failures from PR-B,
+#      so a struct-size drift on the BPF side fails the build immediately.
+#   4. `go build` the cmd/coldstep agent.
+#
+# Run this script from CI or locally inside a Linux container that mounts
+# the repo. Windows hosts cannot run BPF compile but can run this in
+# Docker (see Dockerfile.deep-debug for a known-good image). The script
+# does NOT need root — it uses sudo for apt-get when EUID != 0.
 set -euo pipefail
 ROOT="${1:?pass repository root as first argument}"
 cd "$ROOT"

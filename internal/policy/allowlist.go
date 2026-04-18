@@ -6,13 +6,28 @@ import (
 	"net"
 	"slices"
 	"strings"
-	"sync"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 // coldstepDomainLookupAttemptTimeout caps a single Resolver.LookupIP call so goroutines cannot
-// block wg.Wait() past the parent compile context (hosted runners / flaky resolvers).
+// block past the parent compile context (hosted runners / flaky resolvers).
 const coldstepDomainLookupAttemptTimeout = 25 * time.Second
+
+// coldstepDomainLookupConcurrencyLimit bounds the number of in-flight DNS
+// resolutions across the whole allowlist compile, preventing fork-bomb of
+// goroutines for large allowlists (Theme F of the 2026-04-18 review).
+//
+// Pre-PR-F the code spawned `len(domains)` goroutines unbounded; an enforce
+// allowlist with 500+ entries (e.g. typical SaaS dependency surface) would
+// trigger 500 simultaneous net.Resolver.LookupIP calls, each with its own
+// /etc/resolv.conf reads + UDP socket + retry timer. That overwhelms the
+// stub-resolver on GitHub-hosted runners and can hit the systemd-resolved
+// per-process socket budget. 32 keeps the resolver pipeline saturated
+// without thrashing it; chosen empirically to be a multiple of typical
+// hosted-runner CPU count (2-4) with headroom for I/O parallelism.
+const coldstepDomainLookupConcurrencyLimit = 32
 
 // LookupIPFunc resolves hostnames to IPs.
 type LookupIPFunc func(ctx context.Context, network, host string) ([]net.IP, error)
@@ -91,17 +106,28 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 	}
 
 	results := make([]domainResult, len(normalized))
-	var wg sync.WaitGroup
+
+	// errgroup.SetLimit bounds in-flight goroutines to N; Go() blocks on the
+	// internal semaphore once N goroutines are running. Workers never return
+	// an error (resolution failures land in domainResult.resolved=false), so
+	// the eg.Wait() error is unconditionally nil — but using errgroup over a
+	// hand-rolled sync.WaitGroup + chan-semaphore keeps the bounded-concurrency
+	// pattern self-documenting and cancels via parent-ctx if Coldstep ever
+	// switches to a context-cancellation model for compile timeouts.
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	eg, gctx := errgroup.WithContext(ctx)
+	eg.SetLimit(coldstepDomainLookupConcurrencyLimit)
 	for i, domain := range normalized {
-		wg.Add(1)
-		go func(idx int, d string) {
-			defer wg.Done()
+		idx, d := i, domain
+		eg.Go(func() error {
 			res := domainResult{domain: d}
 			for attempt := 0; attempt < maxAttempts; attempt++ {
-				if ctx != nil && ctx.Err() != nil {
+				if gctx.Err() != nil {
 					break
 				}
-				lookupCtx, cancel := context.WithTimeout(ctx, coldstepDomainLookupAttemptTimeout)
+				lookupCtx, cancel := context.WithTimeout(gctx, coldstepDomainLookupAttemptTimeout)
 				ips4, err4 := resolver(lookupCtx, "ip4", d)
 				cancel()
 				if err4 != nil && (errors.Is(err4, context.Canceled) || errors.Is(err4, context.DeadlineExceeded)) {
@@ -120,9 +146,10 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 				}
 			}
 			results[idx] = res
-		}(i, domain)
+			return nil
+		})
 	}
-	wg.Wait()
+	_ = eg.Wait()
 
 	// Merge results back into CompileResult (single-threaded; goroutines are done).
 	for _, res := range results {

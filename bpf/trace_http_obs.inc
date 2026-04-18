@@ -7,8 +7,10 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 {
 	struct http_sniff_event *he =
 		bpf_ringbuf_reserve(&http_events, sizeof(*he), 0);
-	if (!he)
+	if (!he) {
+		note_http_ringbuf_reserve_failed();
 		return;
+	}
 	{
 		__u64 pt = bpf_get_current_pid_tgid();
 

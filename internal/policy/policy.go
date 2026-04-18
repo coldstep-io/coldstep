@@ -34,6 +34,7 @@ type Policy struct {
 	exactHosts   map[string]struct{}
 	wildSuffixes []string            // "*.example.com" -> suffix "example.com"
 	ips          map[string]struct{} // IPv4 literals from allowed-ips (4-byte key string)
+	nets         []*net.IPNet        // PR-G: literal IPv4 CIDR allowlist entries (e.g. "10.0.0.0/8")
 	ignored      []*net.IPNet        // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
 }
 
@@ -69,6 +70,18 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 		if raw == "" {
 			continue
 		}
+		// PR-G: accept either bare IPv4 literal (kept as /32 in p.ips for
+		// fast Classify exact-match) or a CIDR like "10.0.0.0/8" (kept in
+		// p.nets and programmed into the BPF allowed_ipv4 LPM trie).
+		// IPv6 literals + IPv6 CIDRs are still rejected (Coldstep v1 scope).
+		if strings.Contains(raw, "/") {
+			ipNet, err := parseIPv4CIDR(raw)
+			if err != nil {
+				return nil, err
+			}
+			p.nets = append(p.nets, ipNet)
+			continue
+		}
 		ip := net.ParseIP(raw)
 		if ip == nil {
 			return nil, fmt.Errorf("invalid allowed IP %q", raw)
@@ -82,8 +95,26 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 		}
 		return nil, fmt.Errorf("invalid allowed IP %q", raw)
 	}
-	p.enabled = len(p.exactHosts) > 0 || len(p.wildSuffixes) > 0 || len(p.ips) > 0
+	p.enabled = len(p.exactHosts) > 0 || len(p.wildSuffixes) > 0 || len(p.ips) > 0 || len(p.nets) > 0
 	return p, nil
+}
+
+// parseIPv4CIDR validates a CIDR string and returns its canonical *net.IPNet.
+// Used by allowed-ips parsing to support whole-range allowlist entries via the
+// BPF LPM trie introduced in PR-G. Rejects IPv6, malformed strings, and host
+// bits that don't align to the network mask (matches the strictness applied
+// to ignored-ip-nets parsing in ParseIgnoredIPNets).
+func parseIPv4CIDR(raw string) (*net.IPNet, error) {
+	ip, ipNet, err := net.ParseCIDR(raw)
+	if err != nil {
+		return nil, fmt.Errorf("allowed-ips: invalid CIDR %q: %w", raw, err)
+	}
+	if ip.To4() == nil {
+		return nil, fmt.Errorf("allowed-ips: IPv6 CIDRs are not supported, use IPv4: %q", raw)
+	}
+	bits, _ := ipNet.Mask.Size()
+	_ = bits
+	return ipNet, nil
 }
 
 // BuildPolicy parses allowlists like Parse, then attaches merged default + user ignored IPv4 CIDRs.
@@ -155,6 +186,17 @@ func (p *Policy) MergeLiteralAllowedIPv4Into(s *IPv4Set) {
 	}
 }
 
+// AllowedIPv4Nets returns literal CIDR allowlist entries (PR-G) parsed from
+// allowed-ips. Bare-IPv4 literals from p.ips are NOT included here — the
+// userspace loadEnforceMaps caller programs them as /32 LPM keys via the
+// existing IPv4Set / map[[4]byte] flow. Returns nil when no CIDRs were given.
+func (p *Policy) AllowedIPv4Nets() []*net.IPNet {
+	if p == nil {
+		return nil
+	}
+	return p.nets
+}
+
 func splitFields(s string) []string {
 	return strings.FieldsFunc(s, func(r rune) bool {
 		return r == ',' || unicode.IsSpace(r)
@@ -177,6 +219,11 @@ func (p *Policy) Classify(fqdn string, ip net.IP) Class {
 	ip4 := ip.To4()
 	if ip4 != nil && p.enabled {
 		if _, ok := p.ips[string(ip4)]; ok {
+			return ClassAllowed
+		}
+		// PR-G: also honour literal CIDR allowlist entries so the Go-side
+		// classifier matches BPF enforcement (which now does LPM lookup).
+		if len(p.nets) > 0 && NetsContains(p.nets, ip4) {
 			return ClassAllowed
 		}
 	}

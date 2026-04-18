@@ -31,6 +31,8 @@ struct dns_sniff_event {
 	__u32 len;
 	__u8 data[DNS_SNIFF_MAX];
 };
+_Static_assert(sizeof(struct dns_sniff_event) == 4 + DNS_SNIFF_MAX,
+	       "dns_sniff_event wire size must match dnsSniffEventWireSize in agent_linux.go");
 
 struct {
 	/*
@@ -68,6 +70,36 @@ struct {
 	__type(key, __u32);
 	__type(value, __u32);
 } dns_recvfrom_buf_update_failures SEC(".maps");
+
+/*
+ * PR-E (Theme C, F-K8-08): TCP DNS response visibility scaffold.
+ *
+ * UDP DNS sniff (above) covers ~95% of public-internet name resolution. TCP
+ * DNS responses occur for:
+ *   - Truncated UDP responses: client retries over TCP (RFC 7766; common for
+ *     DNSSEC, large TXT records, AXFR/IXFR).
+ *   - Stub resolvers configured to use TCP unconditionally (rare but legal).
+ *   - DNS-over-TCP (DoT/DoH wire formats use HTTPS — not this path).
+ *
+ * Full TCP DNS sniff would require:
+ *   1. recv(2)/read(2)/recvmsg(2) sys_exit instrumentation (not just recvfrom).
+ *   2. Reassembling the 2-byte length prefix (RFC 1035 §4.2.2) followed by
+ *      the actual DNS message — multiple TCP reads can split this header.
+ *   3. Per-fd buffer state in a map (similar to recvfrom_buf but stateful),
+ *      indexed by (tgid, fd) and torn down on close(2).
+ *   4. Verifier-friendly bounded read with constant payload size — DNS_SNIFF_MAX
+ *      already accommodates the 16-bit length-prefix message size space.
+ *
+ * For now this PR ships a counter scaffold that always reads zero (no path
+ * bumps it yet) so userspace sees the symbol and the digest can flag the gap
+ * once a future PR fills in the read/recvmsg sys_exit handler.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tcp_dns_responses_observed SEC(".maps");
 
 static __always_inline void note_dns_ringbuf_reserve_failed(void)
 {

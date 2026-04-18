@@ -14,11 +14,30 @@ struct exec_event {
 	__u8 comm[16];
 	__u8 exe_path[EXE_PATH_MAX];
 };
+_Static_assert(sizeof(struct exec_event) == 280,
+	       "exec_event wire size must match execEventWireSize=280 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } events SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} exec_ringbuf_reserve_failures SEC(".maps");
+
+static __always_inline void note_exec_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&exec_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
 
 SEC("tp/sched/sched_process_exec")
 int handle_sched_process_exec(void *ctx)
@@ -32,8 +51,10 @@ int handle_sched_process_exec(void *ctx)
 
 	e = (struct trace_event_raw_sched_process_exec *)ctx;
 	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
-	if (!ev)
+	if (!ev) {
+		note_exec_ringbuf_reserve_failed();
 		return 0;
+	}
 
 	pt = bpf_get_current_pid_tgid();
 	ev->tgid = (__u32)(pt >> 32);

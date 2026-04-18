@@ -71,17 +71,36 @@ struct {
 	__type(value, __u32);
 } enforce_cfg SEC(".maps");
 
-struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
-	__uint(max_entries, 4096);
-	__type(key, __be32);
-	__type(value, __u8);
-} allowed_ipv4 SEC(".maps");
-
+/*
+ * IPv4 LPM key shared by the allowlist + ignored-CIDR maps. Layout matches
+ * what the kernel BPF_MAP_TYPE_LPM_TRIE expects: prefixlen (CPU-endian u32)
+ * followed by the network address in network byte order. Keep packed because
+ * userspace builds the key as `[8]byte` (LE prefixlen | BE addr) and any
+ * implicit padding here would shift the addr field and silently break LPM
+ * matches.
+ */
 struct ns_lpm4_key {
 	__u32 prefixlen;
 	__be32 addr;
 } __attribute__((packed));
+
+/*
+ * PR-G (Theme G of the 2026-04-18 review): promoted allowed_ipv4 from
+ * BPF_MAP_TYPE_HASH (key=__be32, exact /32 only) to BPF_MAP_TYPE_LPM_TRIE
+ * (key={prefixlen, __be32}) so users can allowlist whole CIDR ranges
+ * (e.g. 10.0.0.0/8 for an internal corp network) instead of enumerating
+ * every /32. Backward-compat: bare IPs are programmed by userspace as /32
+ * keys and match identically. max_entries=4096 unchanged so the abi_test.go
+ * map-size guard does not move (and policy.MaxAllowedEnforceIPv4Keys
+ * still reflects the per-LPM-prefix entry budget).
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
+	__uint(max_entries, 4096);
+	__uint(map_flags, BPF_F_NO_PREALLOC);
+	__type(key, struct ns_lpm4_key);
+	__type(value, __u8);
+} allowed_ipv4 SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
@@ -101,7 +120,16 @@ static __always_inline int enforcement_enabled(void)
 
 static __always_inline int dst_is_allowlisted(__be32 addr)
 {
-	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv4, &addr);
+	struct ns_lpm4_key k = {};
+
+	/*
+	 * LPM lookup: prefixlen=32 means "match the longest prefix in the trie
+	 * that covers this exact /32 destination". Returns the value pointer of
+	 * the most-specific matching entry, or NULL if no prefix covers `addr`.
+	 */
+	k.prefixlen = 32;
+	k.addr = addr;
+	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv4, &k);
 
 	return ok != 0;
 }
