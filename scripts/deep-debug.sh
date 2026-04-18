@@ -83,7 +83,8 @@ if [[ "$P0_FAIL" -eq 0 ]]; then
   run_cmd 2 gofmt        bash scripts/check-gofmt.sh                         || S2_OK=1
   run_cmd 2 bpf_build    bash scripts/build-agent-linux.sh "$ROOT"           || S2_OK=1
   run_cmd 2 vet          go vet ./...                                       || S2_OK=1
-  run_cmd 2 staticcheck  bash -lc 'go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && "$(go env GOPATH)/bin/staticcheck" ./...' || S2_OK=1
+  # bash -lc drops Go toolchain PATH on some images; keep explicit /usr/local/go/bin.
+  run_cmd 2 staticcheck bash -c 'export PATH="/usr/local/go/bin:${PATH}" && export PATH="$(go env GOPATH)/bin:${PATH}" && go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && staticcheck ./...' || S2_OK=1
   [[ "$S2_OK" -eq 0 ]] || P0_FAIL=1
 else
   append_report "### Stage 2 skipped (P0 failure earlier)"
@@ -107,7 +108,7 @@ if [[ "$P0_FAIL" -eq 0 && "$FAIL_3A" -eq 0 && "$DEEP_DEBUG_RUN_3B" == "1" ]]; th
     run_cmd 3b shuffle go test ./... -count=1 -shuffle=on -timeout 20m || S3B_ANY=1
   fi
   if [[ "$DEEP_DEBUG_GOVULNCHECK" == "1" ]]; then
-    run_cmd 3b govulncheck bash -lc 'go install golang.org/x/vuln/cmd/govulncheck@latest && "$(go env GOPATH)/bin/govulncheck" ./...' || S3B_ANY=1
+    run_cmd 3b govulncheck bash -c 'export PATH="/usr/local/go/bin:${PATH}" && export PATH="$(go env GOPATH)/bin:${PATH}" && go install golang.org/x/vuln/cmd/govulncheck@latest && govulncheck ./...' || S3B_ANY=1
   fi
   if [[ "$DEEP_DEBUG_RACE_FULL" == "1" ]]; then
     run_cmd 3b race_full go test -race -count=1 ./... -timeout 45m || S3B_ANY=1
