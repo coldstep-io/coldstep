@@ -1,0 +1,67 @@
+name: Event Intelligence & Drift Detection
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  analyze-state:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # Critical for cross-run artifact access
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 1. Hydrate previous state from the last successful run
+      - name: Restore Previous Baseline
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Searching for previous successful run..."
+          PREV_RUN_ID=$(gh run list --workflow "${{ github.workflow }}" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+          
+          if [ -n "$PREV_RUN_ID" ]; then
+            echo "Found run $PREV_RUN_ID. Downloading artifacts..."
+            gh run download "$PREV_RUN_ID" --name "event-baseline" --dir ./previous-state || echo "No baseline artifact found."
+          else
+            echo "No successful prior runs detected. Establishing initial baseline."
+          fi
+
+      # 2. Execution Phase (Generate new .jsonl)
+      - name: Generate Current Events
+        run: |
+          # Replace with your actual generator logic
+          mkdir -p output
+          echo '{"event": "auth_success", "count": 42}' > output/.test-events.jsonl
+          echo '{"event": "db_query", "count": 120}' >> output/.test-events.jsonl
+
+      # 3. Structural Diffing (Normalization + Comparison)
+      - name: Differential Analysis
+        if: hashFiles('previous-state/.test-events.jsonl') != ''
+        run: |
+          echo "### System Drift Report" >> $GITHUB_STEP_SUMMARY
+          
+          # Sort JSON keys to ensure we are diffing data, not serialization order
+          jq -S . previous-state/.test-events.jsonl > prev_sorted.jsonl
+          jq -S . output/.test-events.jsonl > curr_sorted.jsonl
+          
+          if diff prev_sorted.jsonl curr_sorted.jsonl > drift.diff; then
+            echo "✅ No behavioral drift detected." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Behavioral drift detected:" >> $GITHUB_STEP_SUMMARY
+            echo '```diff' >> $GITHUB_STEP_SUMMARY
+            cat drift.diff >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+      # 4. State Persistence (Update the baseline)
+      - name: Archive New Baseline
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: event-baseline
+          path: output/.test-events.jsonl
+          retention-days: 90
