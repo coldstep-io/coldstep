@@ -254,17 +254,13 @@ func (s *enforcementState) noteDeny(row report.DenyDigestRow) {
 	}
 }
 
-func (s *enforcementState) denyCountValue() int {
+func (s *enforcementState) denyCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.denyCountN
 }
 
-func (s *enforcementState) denyCount() int {
-	return s.denyCountValue()
-}
-
-func (s *enforcementState) firstDenyRow() *report.DenyDigestRow {
+func (s *enforcementState) firstDeny() *report.DenyDigestRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.firstDenyRowV == nil {
@@ -272,10 +268,6 @@ func (s *enforcementState) firstDenyRow() *report.DenyDigestRow {
 	}
 	cp := *s.firstDenyRowV
 	return &cp
-}
-
-func (s *enforcementState) firstDeny() *report.DenyDigestRow {
-	return s.firstDenyRow()
 }
 
 func (s *enforcementState) snapshot() enforcementSnapshot {
@@ -536,7 +528,9 @@ func trimRing[T any](s *[]T, max int) {
 	if max <= 0 || len(*s) <= max {
 		return
 	}
-	*s = (*s)[len(*s)-max:]
+	droppedN := len(*s) - max
+	*s = (*s)[droppedN:]
+	slog.Debug("telemetry row buffer trimmed (ring full)", "dropped", droppedN, "retained", max)
 }
 
 func (b *rowBuffer) addExec(r report.ExecDigestRow) {
@@ -603,7 +597,7 @@ func writeAgentStatus(path string, ok bool) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	return os.WriteFile(path, b, 0o600)
 }
 
 func agentVersionString() string {
@@ -668,7 +662,9 @@ func decodeHTTPSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4
 	copy(daddr[:], raw[24:28])
 	dport = binary.BigEndian.Uint16(raw[28:30])
 	capLen := int(binary.LittleEndian.Uint16(raw[32:34]))
-	if capLen < 0 || capLen > 192 {
+	// capLen is derived from Uint16 and cast to int on a 64-bit system;
+	// it is always in [0, 65535]. Only the upper bound needs checking.
+	if capLen > 192 {
 		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
 	}
 	payload = make([]byte, capLen)
@@ -691,7 +687,9 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	copy(daddr[:], raw[24:28])
 	dport = binary.BigEndian.Uint16(raw[28:30])
 	capLen := int(binary.LittleEndian.Uint16(raw[32:34]))
-	if capLen < 0 || capLen > tlsPayloadMax {
+	// capLen is derived from Uint16 and cast to int on a 64-bit system;
+	// it is always in [0, 65535]. Only the upper bound needs checking.
+	if capLen > tlsPayloadMax {
 		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
 	}
 	payload = make([]byte, capLen)

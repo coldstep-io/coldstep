@@ -3,6 +3,7 @@ package policy
 import (
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -34,6 +35,9 @@ type Policy struct {
 	ignored      []*net.IPNet        // merged default + user ignored IPv4 CIDRs (BuildPolicy only)
 }
 
+// validHostnameSuffix matches purely lowercase DNS label characters for wildcard suffix validation.
+var validHostnameSuffix = regexp.MustCompile(`^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$`)
+
 // Parse builds a policy from raw action/env strings (comma or ASCII whitespace).
 func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 	p := &Policy{
@@ -49,6 +53,9 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 			suf := strings.TrimPrefix(h, "*.")
 			if suf == "" || strings.Contains(suf, "*") {
 				continue
+			}
+			if !validHostnameSuffix.MatchString(suf) {
+				return nil, fmt.Errorf("allowed-hosts: wildcard suffix %q contains invalid hostname characters", suf)
 			}
 			p.wildSuffixes = append(p.wildSuffixes, suf)
 		} else {

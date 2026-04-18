@@ -42,6 +42,14 @@ struct deny_event {
 	__u8 dport[2];
 } __attribute__((packed));
 
+/*
+ * Verify the packed wire size that internal/agent/agent_linux.go (decodeDenyEvent)
+ * hard-codes as denyEventWireSize = 46. A field addition here without updating Go
+ * would cause silent silent data corruption on the Go decoder side.
+ * Layout: tgid(4)+tid(4)+comm(16)+protocol(1)+reason(1)+af(1)+_pad(1)+daddr(16)+dport(2) = 46.
+ */
+_Static_assert(sizeof(struct deny_event) == 46, "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
@@ -176,6 +184,7 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
+	__u8 protocol = protocol_from_sock_ctx(ctx);
 	__u8 addr4[4];
 
 	if (!enforcement_enabled())
@@ -186,6 +195,6 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 		return 1;
 
 	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
-	emit_deny_event_ipv4(COLDSTEP_PROTO_UDP, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }

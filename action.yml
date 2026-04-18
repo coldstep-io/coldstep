@@ -87,7 +87,7 @@ inputs:
       Default false. When true, fire short IPv4 UDP sendto and cleartext HTTP sendto probes after the agent starts
       so the digest and workspace JSONL commonly show udp/http rows on ubuntu-latest (opt-in extra egress).
     required: false
-    default: ''
+    default: 'false'
 runs:
   using: node24
   main: dist/main/index.js

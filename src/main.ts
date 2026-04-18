@@ -162,7 +162,7 @@ async function run(): Promise<void> {
       'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
       's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
       's.connect(addr)',
-      's.sendto(req, 0, addr)',
+      's.sendall(req)',
       's.close()',
       'PY',
       'fi',
