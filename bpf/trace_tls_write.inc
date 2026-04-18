@@ -48,8 +48,10 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			struct tls_sniff_event *ev =
 				bpf_ringbuf_reserve(&tls_events, sizeof(*ev), 0);
 
-			if (!ev)
+			if (!ev) {
+				note_tls_ringbuf_reserve_failed();
 				return;
+			}
 			ev->tgid = tgid;
 			ev->tid = (__u32)pt;
 			bpf_get_current_comm(&ev->comm, sizeof(ev->comm));

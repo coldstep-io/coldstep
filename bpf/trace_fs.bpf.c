@@ -53,6 +53,23 @@ struct {
 	__uint(max_entries, 1 << 22);
 } fs_events SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} fs_ringbuf_reserve_failures SEC(".maps");
+
+static __always_inline void note_fs_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&fs_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 static __always_inline int fs_enabled(void)
 {
 	__u32 k = 0;
@@ -69,8 +86,10 @@ static __always_inline void submit_fs_event(unsigned long path_ptr, __u8 op)
 	if (!path_ptr)
 		return;
 	ev = bpf_ringbuf_reserve(&fs_events, sizeof(*ev), 0);
-	if (!ev)
+	if (!ev) {
+		note_fs_ringbuf_reserve_failed();
 		return;
+	}
 
 	pt = bpf_get_current_pid_tgid();
 	ev->tgid = (__u32)(pt >> 32);

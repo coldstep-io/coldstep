@@ -15,8 +15,10 @@ static __always_inline int handle_tcp_obs_connect(__u32 fd32, unsigned long sock
 
 	struct connect_event *ce =
 		bpf_ringbuf_reserve(&connect_events, sizeof(*ce), 0);
-	if (!ce)
+	if (!ce) {
+		note_connect_ringbuf_reserve_failed();
 		return 0;
+	}
 	{
 		__u64 pt = bpf_get_current_pid_tgid();
 

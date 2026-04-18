@@ -46,19 +46,25 @@ type execEvent struct {
 }
 
 type runStats struct {
-	mu                           sync.Mutex
-	execN                        int
-	tcpN                         int
-	udpN                         int
-	httpN                        int
-	tlsN                         int
-	procForkN                    int
-	fsN                          int
-	connect4TupleUpdateFailuresN int
-	udpRingbufReserveFailuresN   int
-	dnsRingbufReserveFailuresN   int
-	policyCounts                 map[string]int
-	droppedCounts                map[string]int
+	mu                              sync.Mutex
+	execN                           int
+	tcpN                            int
+	udpN                            int
+	httpN                           int
+	tlsN                            int
+	procForkN                       int
+	fsN                             int
+	connect4TupleUpdateFailuresN    int
+	udpRingbufReserveFailuresN      int
+	dnsRingbufReserveFailuresN      int
+	connectRingbufReserveFailuresN  int
+	httpRingbufReserveFailuresN     int
+	tlsRingbufReserveFailuresN      int
+	execRingbufReserveFailuresN     int
+	forkRingbufReserveFailuresN     int
+	fsRingbufReserveFailuresN       int
+	policyCounts                    map[string]int
+	droppedCounts                   map[string]int
 }
 
 type forkSectionState struct {
@@ -121,7 +127,7 @@ func (b *fsRowBuffer) add(r report.FSDigestRow) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	b.rows = append(b.rows, r)
-	trimRing(&b.rows, b.max)
+	_ = trimRing(&b.rows, b.max) // overflow already accounted for via fs_cap counter in readFSRing.
 }
 
 func (b *fsRowBuffer) snapshot() []report.FSDigestRow {
@@ -148,7 +154,7 @@ func (b *forkEdgeBuffer) add(e proctree.Edge) {
 	defer b.mu.Unlock()
 	b.totalAdds++
 	b.edges = append(b.edges, e)
-	trimRing(&b.edges, b.max)
+	_ = trimRing(&b.edges, b.max) // overflow surfaced via forkEdgeBuffer.snapshot() truncation flag.
 }
 
 func (b *forkEdgeBuffer) snapshot() ([]proctree.Edge, bool) {
@@ -160,6 +166,8 @@ func (b *forkEdgeBuffer) snapshot() ([]proctree.Edge, bool) {
 type networkSectionState struct {
 	mu sync.Mutex
 
+	tcpReadErrors    int
+	tcpDecodeErrors  int
 	udpReadErrors    int
 	udpDecodeErrors  int
 	httpReadErrors   int
@@ -169,6 +177,8 @@ type networkSectionState struct {
 }
 
 type networkSectionSnapshot struct {
+	tcpReadErrors    int
+	tcpDecodeErrors  int
 	udpReadErrors    int
 	udpDecodeErrors  int
 	httpReadErrors   int
@@ -297,6 +307,18 @@ func newNetworkSectionState() *networkSectionState {
 	return &networkSectionState{}
 }
 
+func (s *networkSectionState) addTCPReaderError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpReadErrors++
+}
+
+func (s *networkSectionState) addTCPDecodeError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpDecodeErrors++
+}
+
 func (s *networkSectionState) addUDPReaderError() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -337,6 +359,8 @@ func (s *networkSectionState) snapshot() networkSectionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return networkSectionSnapshot{
+		tcpReadErrors:    s.tcpReadErrors,
+		tcpDecodeErrors:  s.tcpDecodeErrors,
 		udpReadErrors:    s.udpReadErrors,
 		udpDecodeErrors:  s.udpDecodeErrors,
 		httpReadErrors:   s.httpReadErrors,
@@ -464,6 +488,42 @@ func (s *runStats) dnsRingbufReserveFailures() int {
 	return s.dnsRingbufReserveFailuresN
 }
 
+func (s *runStats) setConnectRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.connectRingbufReserveFailuresN = n
+}
+
+func (s *runStats) setHTTPRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.httpRingbufReserveFailuresN = n
+}
+
+func (s *runStats) setTLSRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tlsRingbufReserveFailuresN = n
+}
+
+func (s *runStats) setExecRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.execRingbufReserveFailuresN = n
+}
+
+func (s *runStats) setForkRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.forkRingbufReserveFailuresN = n
+}
+
+func (s *runStats) setFSRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fsRingbufReserveFailuresN = n
+}
+
 func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) telemetry.Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -476,21 +536,27 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		dropped[k] = v
 	}
 	return telemetry.Summary{
-		Version:                     2,
-		SchemaVersion:               telemetry.SchemaVersion,
-		ExecEvents:                  s.execN,
-		TCPEvents:                   s.tcpN,
-		UDPEvents:                   s.udpN,
-		HTTPEvents:                  s.httpN,
-		TLSEvents:                   s.tlsN,
-		ProcForkEvents:              s.procForkN,
-		Connect4TupleUpdateFailures: s.connect4TupleUpdateFailuresN,
-		UDPRingbufReserveFailures:   s.udpRingbufReserveFailuresN,
-		DNSRingbufReserveFailures:   s.dnsRingbufReserveFailuresN,
-		DroppedCounts:               dropped,
-		PolicyCounts:                pc,
-		KernelRelease:               kernel,
-		BPF:                         bpf,
+		Version:                       2,
+		SchemaVersion:                 telemetry.SchemaVersion,
+		ExecEvents:                    s.execN,
+		TCPEvents:                     s.tcpN,
+		UDPEvents:                     s.udpN,
+		HTTPEvents:                    s.httpN,
+		TLSEvents:                     s.tlsN,
+		ProcForkEvents:                s.procForkN,
+		Connect4TupleUpdateFailures:   s.connect4TupleUpdateFailuresN,
+		UDPRingbufReserveFailures:     s.udpRingbufReserveFailuresN,
+		DNSRingbufReserveFailures:     s.dnsRingbufReserveFailuresN,
+		ConnectRingbufReserveFailures: s.connectRingbufReserveFailuresN,
+		HTTPRingbufReserveFailures:    s.httpRingbufReserveFailuresN,
+		TLSRingbufReserveFailures:     s.tlsRingbufReserveFailuresN,
+		ExecRingbufReserveFailures:    s.execRingbufReserveFailuresN,
+		ForkRingbufReserveFailures:    s.forkRingbufReserveFailuresN,
+		FSRingbufReserveFailures:      s.fsRingbufReserveFailuresN,
+		DroppedCounts:                 dropped,
+		PolicyCounts:                  pc,
+		KernelRelease:                 kernel,
+		BPF:                           bpf,
 	}
 }
 
@@ -525,48 +591,76 @@ func newRowBuffer(max int) *rowBuffer {
 	return &rowBuffer{max: max}
 }
 
-func trimRing[T any](s *[]T, max int) {
+// trimRing trims s to at most max entries (drops oldest); returns the number of dropped entries
+// so callers can record the drop in stats (e.g. runStats.addDropped("<kind>_ring_trim")).
+func trimRing[T any](s *[]T, max int) int {
 	if max <= 0 || len(*s) <= max {
-		return
+		return 0
 	}
 	droppedN := len(*s) - max
 	*s = (*s)[droppedN:]
 	slog.Debug("telemetry row buffer trimmed (ring full)", "dropped", droppedN, "retained", max)
+	return droppedN
 }
 
-func (b *rowBuffer) addExec(r report.ExecDigestRow) {
+func (b *rowBuffer) addExec(r report.ExecDigestRow, stats *runStats) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.exec = append(b.exec, r)
-	trimRing(&b.exec, b.max)
+	dropped := trimRing(&b.exec, b.max)
+	b.mu.Unlock()
+	if dropped > 0 && stats != nil {
+		for i := 0; i < dropped; i++ {
+			stats.addDropped("exec_ring_trim")
+		}
+	}
 }
 
-func (b *rowBuffer) addTCP(r report.TCPDigestRow) {
+func (b *rowBuffer) addTCP(r report.TCPDigestRow, stats *runStats) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.tcp = append(b.tcp, r)
-	trimRing(&b.tcp, b.max)
+	dropped := trimRing(&b.tcp, b.max)
+	b.mu.Unlock()
+	if dropped > 0 && stats != nil {
+		for i := 0; i < dropped; i++ {
+			stats.addDropped("tcp_ring_trim")
+		}
+	}
 }
 
-func (b *rowBuffer) addUDP(r report.UDPDigestRow) {
+func (b *rowBuffer) addUDP(r report.UDPDigestRow, stats *runStats) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.udp = append(b.udp, r)
-	trimRing(&b.udp, b.max)
+	dropped := trimRing(&b.udp, b.max)
+	b.mu.Unlock()
+	if dropped > 0 && stats != nil {
+		for i := 0; i < dropped; i++ {
+			stats.addDropped("udp_ring_trim")
+		}
+	}
 }
 
-func (b *rowBuffer) addHTTP(r report.HTTPDigestRow) {
+func (b *rowBuffer) addHTTP(r report.HTTPDigestRow, stats *runStats) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.http = append(b.http, r)
-	trimRing(&b.http, b.max)
+	dropped := trimRing(&b.http, b.max)
+	b.mu.Unlock()
+	if dropped > 0 && stats != nil {
+		for i := 0; i < dropped; i++ {
+			stats.addDropped("http_ring_trim")
+		}
+	}
 }
 
-func (b *rowBuffer) addTLS(r report.TLSDigestRow) {
+func (b *rowBuffer) addTLS(r report.TLSDigestRow, stats *runStats) {
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.tls = append(b.tls, r)
-	trimRing(&b.tls, b.max)
+	dropped := trimRing(&b.tls, b.max)
+	b.mu.Unlock()
+	if dropped > 0 && stats != nil {
+		for i := 0; i < dropped; i++ {
+			stats.addDropped("tls_ring_trim")
+		}
+	}
 }
 
 func (b *rowBuffer) snapshot() (exec []report.ExecDigestRow, tcp []report.TCPDigestRow, udp []report.UDPDigestRow, http []report.HTTPDigestRow, tls []report.TLSDigestRow) {
@@ -908,7 +1002,7 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		rows.addExec(report.ExecDigestRow{
 			TS: ts, PID: ev.TGID, ThreadID: ev.TID, Comm: comm,
 			Exe: report.TruncateExeForDigest(exe),
-		})
+		}, stats)
 
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
@@ -945,6 +1039,9 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			}
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			if forkState != nil {
+				forkState.addReadError()
 			}
 			slog.Warn("ringbuf read (fork)", "err", err)
 			continue
@@ -1085,7 +1182,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 }
 
 func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
-	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1095,12 +1192,18 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if sectionState != nil {
+				sectionState.addTCPReaderError()
+			}
 			slog.Warn("ringbuf read (tcp)", "err", err)
 			continue
 		}
 
 		tgid, tid, commb, daddr, port, decOK := decodeConnectEvent(record.RawSample)
 		if !decOK {
+			if sectionState != nil {
+				sectionState.addTCPDecodeError()
+			}
 			stats.addDropped("tcp_decode")
 			slog.Warn("decode tcp", "len", len(record.RawSample))
 			continue
@@ -1128,7 +1231,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			Remote: fmt.Sprintf("`%s:%d`", ip.String(), port),
 			Notes:  notes,
 			Policy: cl.Display(),
-		})
+		}, stats)
 
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
@@ -1199,7 +1302,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			SNI:    sni,
 			Remote: fmt.Sprintf("`%s:%d`", ip.String(), port),
 			Policy: cl.Display(),
-		})
+		}, stats)
 
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
@@ -1268,7 +1371,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			DgramLen: dgramLen,
 			FQDN:     fqdn,
 			Policy:   cl.Display(),
-		})
+		}, stats)
 
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
@@ -1338,7 +1441,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 			Method: method, Host: host, Path: sumPath,
 			Remote: fmt.Sprintf("`%s:%d`", ip.String(), port),
 			Policy: cl.Display(),
-		})
+		}, stats)
 
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
@@ -1498,6 +1601,78 @@ func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 	var k uint32
 	var v uint32
 	if err := objs.DnsRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.ConnectRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.HttpRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.TlsRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.ExecRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.ForkRingbufReserveFailures.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.FsRingbufReserveFailures.Lookup(&k, &v); err != nil {
 		return 0
 	}
 	return int(v)
@@ -1750,6 +1925,8 @@ func buildDigestInput(
 		TruncatedUDP:                   udpN > maxRows,
 		TruncatedHTTP:                  httpN > maxRows,
 		TruncatedTLS:                   tlsN > maxRows,
+		TCPDegradedHook:                hookDegraded(bpfSt, rawTPName),
+		TCPReaderErrors:                sectionState.tcpReadErrors + sectionState.tcpDecodeErrors,
 		UDPDegradedHook:                hookDegraded(bpfSt, rawTPName),
 		UDPReaderErrors:                sectionState.udpReadErrors + sectionState.udpDecodeErrors,
 		HTTPDegradedHook:               hookDegraded(bpfSt, rawTPName),
@@ -1928,6 +2105,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("load bpf objects: %w", err)
 	}
 	defer execObjs.Close()
+	defer func() { stats.setExecRingbufReserveFailures(readExecRingbufReserveFailureCount(&execObjs)) }()
 
 	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
 	if err != nil {
@@ -1980,6 +2158,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if syscallObjs != nil {
 				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
 				stats.setUDPRingbufReserveFailures(readUDPRingbufReserveFailureCount(syscallObjs))
+				stats.setConnectRingbufReserveFailures(readConnectRingbufReserveFailureCount(syscallObjs))
+				stats.setHTTPRingbufReserveFailures(readHTTPRingbufReserveFailureCount(syscallObjs))
+				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
 			}
 		}()
 		defer connRd.Close()
@@ -2052,6 +2233,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: true})
 					slog.Info("tracing sched_process_fork (process tree)")
 					defer func() {
+						if forkObjs != nil {
+							stats.setForkRingbufReserveFailures(readForkRingbufReserveFailureCount(forkObjs))
+						}
 						if forkRd != nil {
 							_ = forkRd.Close()
 						}
@@ -2117,6 +2301,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: fsOK, Detail: fsDetail})
 					slog.Info("tracing fs events (openat+create, unlink, rename, chmod)")
 					defer func() {
+						if fsObjs != nil {
+							stats.setFSRingbufReserveFailures(readFSRingbufReserveFailureCount(fsObjs))
+						}
 						if fsRd != nil {
 							_ = fsRd.Close()
 						}
@@ -2251,7 +2438,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readConnectRing(runCtx, cfg, connRd, dnsCache, pol, stats, rows, &seq, &jsonlMu)
+			errCh <- readConnectRing(runCtx, cfg, connRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState)
 		}()
 	}
 	if udpRd != nil {

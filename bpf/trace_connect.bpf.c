@@ -70,6 +70,27 @@ struct {
 } udp_ringbuf_reserve_failures SEC(".maps");
 
 struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} connect_ringbuf_reserve_failures SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} http_ringbuf_reserve_failures SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tls_ringbuf_reserve_failures SEC(".maps");
+
+struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
@@ -89,6 +110,36 @@ static __always_inline void note_udp_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&udp_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_connect_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&connect_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_http_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&http_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_tls_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&tls_ringbuf_reserve_failures, &k);
 
 	if (!v)
 		return;

@@ -123,6 +123,8 @@ type DigestInput struct {
 	ProcForkDegraded     bool
 	ProcForkReaderErrors int
 
+	TCPDegradedHook  bool
+	TCPReaderErrors  int
 	UDPDegradedHook  bool
 	UDPReaderErrors  int
 	HTTPDegradedHook bool
@@ -356,10 +358,14 @@ func BuildDetectMarkdown(in DigestInput) string {
 	writeTCP := func() {
 		b.WriteString("<details open>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
-		for _, r := range in.TCPRows {
-			b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
-				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-				sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy)))
+		if len(in.TCPRows) == 0 {
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(tcpEmptyReason(in))))
+		} else {
+			for _, r := range in.TCPRows {
+				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
+					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+					sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy)))
+			}
 		}
 		b.WriteString("\n</details>\n\n")
 	}
@@ -511,6 +517,16 @@ func tlsKPIVisible(in DigestInput) bool {
 
 func fsKPIVisible(in DigestInput) bool {
 	return in.FSGate
+}
+
+func tcpEmptyReason(in DigestInput) string {
+	if in.TCPDegradedHook {
+		return "degraded hook"
+	}
+	if in.TCPReaderErrors > 0 {
+		return fmt.Sprintf("reader errors (%d)", in.TCPReaderErrors)
+	}
+	return "no events"
 }
 
 func udpEmptyReason(in DigestInput) string {

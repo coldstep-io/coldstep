@@ -22,6 +22,23 @@ struct {
 	__uint(max_entries, 1 << 22);
 } fork_events SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} fork_ringbuf_reserve_failures SEC(".maps");
+
+static __always_inline void note_fork_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&fork_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 /*
  * Use raw_tp + task_struct CO-RE instead of tp + trace_event_raw_sched_process_fork.
  * GitHub-hosted azure kernels ship vmlinux BTF where the fork trace record omits
@@ -37,8 +54,10 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 	pid_t ppid, cpid;
 
 	ev = bpf_ringbuf_reserve(&fork_events, sizeof(*ev), 0);
-	if (!ev)
+	if (!ev) {
+		note_fork_ringbuf_reserve_failed();
 		return 0;
+	}
 
 	__builtin_memset(ev->parent_comm, 0, sizeof(ev->parent_comm));
 	__builtin_memset(ev->child_comm, 0, sizeof(ev->child_comm));
