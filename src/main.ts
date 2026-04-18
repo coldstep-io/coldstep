@@ -178,9 +178,10 @@ async function run(): Promise<void> {
   }
 
   if (failOnError) {
-    // Hosted runners sometimes spend >60s on apt/kernel churn before the agent starts; enforce
-    // mode also resolves allowlist domains sequentially (context timeout is enforced in Go).
-    const ok = await waitForAgentReady(agentStatus, 180_000, child);
+    // Hosted runners may spend minutes on apt/kernel churn before the agent starts; enforce mode
+    // resolves allowlist domains under a bounded compile context in Go, then loads several BPF
+    // collections — cumulative startup can exceed a short wall clock even when healthy.
+    const ok = await waitForAgentReady(agentStatus, 300_000, child);
     if (!ok) {
       core.setFailed(
         'coldstep agent did not become ready (BPF/load/DNS); see job logs and ensure ubuntu-latest.',

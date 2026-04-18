@@ -31154,7 +31154,7 @@ async function run() {
             'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
             's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
             's.connect(addr)',
-            's.sendto(req, 0, addr)',
+            's.sendall(req)',
             's.close()',
             'PY',
             'fi',
@@ -31167,9 +31167,10 @@ async function run() {
         core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
-        // Hosted runners sometimes spend >60s on apt/kernel churn before the agent starts; enforce
-        // mode also resolves allowlist domains sequentially (context timeout is enforced in Go).
-        const ok = await waitForAgentReady(agentStatus, 180_000, child);
+        // Hosted runners may spend minutes on apt/kernel churn before the agent starts; enforce mode
+        // resolves allowlist domains under a bounded compile context in Go, then loads several BPF
+        // collections — cumulative startup can exceed a short wall clock even when healthy.
+        const ok = await waitForAgentReady(agentStatus, 300_000, child);
         if (!ok) {
             core.setFailed('coldstep agent did not become ready (BPF/load/DNS); see job logs and ensure ubuntu-latest.');
             try {
