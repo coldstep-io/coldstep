@@ -41,4 +41,4 @@ No userland agent can promise **complete** observation of every kernel path on e
 
 ### Further reading
 
-Design spec: **`.github/design/2026-04-19-coldstep-gha-ebpf-mitigations-design.md`** in this repository.
+Optional extended design notes may live under **`.github/design/`** in a maintainer checkout; that tree is **not** part of the published repository. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.
