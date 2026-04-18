@@ -138,6 +138,8 @@ else
 fi
 if [[ "$DEEP_DEBUG_RUN_4" != "1" ]]; then
   LABEL_4="SKIP"
+elif [[ "$P0_FAIL" -ne 0 || "$FAIL_3A" -ne 0 ]]; then
+  LABEL_4="SKIP"
 elif [[ "$S4_ANY" -eq 0 ]]; then
   LABEL_4="OK"
 else
