@@ -23785,18 +23785,23 @@ async function maybeSlackWebhook(body) {
   }
 }
 async function post() {
-  const failOnError = inputBoolDefault("fail-on-error", false);
-  const reportJobSummary = inputBoolDefault("report-job-summary", true);
-  if (failOnError) {
-    const st = agentStatusPath();
-    let ok = false;
-    try {
-      if (fs2.existsSync(st)) {
-        const j = JSON.parse(fs2.readFileSync(st, "utf8"));
-        ok = j.ok === true;
-      }
-    } catch {
-      ok = false;
+    const failOnError = inputBoolDefault('fail-on-error', false);
+    const reportJobSummary = inputBoolDefault('report-job-summary', true);
+    if (failOnError && core.getState('coldstep_wait_ready_ok') !== 'true') {
+        const st = agentStatusPath();
+        let ok = false;
+        try {
+            if (fs.existsSync(st)) {
+                const j = JSON.parse(fs.readFileSync(st, 'utf8'));
+                ok = j.ok === true;
+            }
+        }
+        catch {
+            ok = false;
+        }
+        if (!ok) {
+            core.setFailed('coldstep agent did not report ready (operational fail-on-error)');
+        }
     }
     if (!ok) {
       setFailed("coldstep agent did not report ready (operational fail-on-error)");

@@ -1,5 +1,7 @@
 /*
- * cgroup egress enforcement (IPv4 connect + UDP sendmsg) for mode: enforce.
+ * cgroup egress enforcement for mode: enforce — IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`).
+ * IPv6 cgroup hooks (`connect6`, `sendmsg6`, …) are intentionally absent: Coldstep v1 scope is IPv4
+ * egress policy and GitHub-hosted validation matrices aligned with README / policy (IPv6 literals rejected).
  * Loaded as a separate BPF collection from syscall observability programs.
  */
 #include "vmlinux.h"
@@ -16,6 +18,10 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define IPPROTO_UDP 17
 #endif
 
+#ifndef AF_INET
+#define AF_INET 2
+#endif
+
 #define COLDSTEP_ENFORCE_KEY_MODE 0
 #define COLDSTEP_ENFORCE_MODE_DETECT 0
 #define COLDSTEP_ENFORCE_MODE_ENFORCE 1
@@ -25,16 +31,26 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
 
+/* Packed wire format for userspace (see internal/agent decodeDenyEvent). */
 struct deny_event {
 	__u32 tgid;
 	__u32 tid;
 	__u8 comm[16];
 	__u8 protocol;
 	__u8 reason;
-	__u8 _pad[2];
-	__u8 daddr[4];
+	__u8 af;
+	__u8 _pad;
+	__u8 daddr[16];
 	__u8 dport[2];
-};
+} __attribute__((packed));
+
+/*
+ * Verify the packed wire size that internal/agent/agent_linux.go (decodeDenyEvent)
+ * hard-codes as denyEventWireSize = 46. A field addition here without updating Go
+ * would cause silent data corruption on the Go decoder side.
+ * Layout: tgid(4)+tid(4)+comm(16)+protocol(1)+reason(1)+af(1)+_pad(1)+daddr(16)+dport(2) = 46.
+ */
+_Static_assert(sizeof(struct deny_event) == 46, "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -115,14 +131,11 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 	if (!v)
 		return;
-	{
-		__u32 n = *v + 1;
-
-		bpf_map_update_elem(&deny_reserve_failures, &k, &n, BPF_ANY);
-	}
+	/* Shared map value may be updated concurrently; use atomic increment. */
+	__sync_fetch_and_add(v, 1);
 }
 
-static __always_inline void emit_deny_event(__u8 protocol, __be32 daddr, __be16 dport, __u8 reason)
+static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)
 {
 	struct deny_event *de = bpf_ringbuf_reserve(&deny_events, sizeof(*de), 0);
 
@@ -139,19 +152,26 @@ static __always_inline void emit_deny_event(__u8 protocol, __be32 daddr, __be16 
 	bpf_get_current_comm(&de->comm, sizeof(de->comm));
 	de->protocol = protocol;
 	de->reason = reason;
-	de->_pad[0] = 0;
-	de->_pad[1] = 0;
-	__builtin_memcpy(de->daddr, &daddr, sizeof(de->daddr));
+	de->af = AF_INET;
+	de->_pad = 0;
+	__builtin_memset(de->daddr, 0, sizeof(de->daddr));
+	if (dst4)
+		__builtin_memcpy(de->daddr, dst4, 4);
 	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
 	bpf_ringbuf_submit(de, 0);
 }
 
+/*
+ * Successful policy outcome returns 1 (allow syscall); deny returns 0 — matches kernel examples for
+ * BPF_PROG_TYPE_CGROUP_SOCK_ADDR (docs.ebpf.io). Same convention for enforce_sendmsg4 below.
+ */
 SEC("cgroup/connect4")
 int enforce_connect4(struct bpf_sock_addr *ctx)
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
 	__u8 protocol = protocol_from_sock_ctx(ctx);
+	__u8 addr4[4];
 
 	if (!enforcement_enabled())
 		return 1;
@@ -160,8 +180,8 @@ int enforce_connect4(struct bpf_sock_addr *ctx)
 	if (dst_is_allowlisted(daddr))
 		return 1;
 
-	emit_deny_event(protocol, daddr, dport,
-			COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
+	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }
 
@@ -170,6 +190,8 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
+	__u8 protocol = protocol_from_sock_ctx(ctx);
+	__u8 addr4[4];
 
 	if (!enforcement_enabled())
 		return 1;
@@ -178,7 +200,7 @@ int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 	if (dst_is_allowlisted(daddr))
 		return 1;
 
-	emit_deny_event(COLDSTEP_PROTO_UDP, daddr, dport,
-			COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
+	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }

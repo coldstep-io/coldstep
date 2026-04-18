@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
   attestations: write
   artifact-metadata: write
@@ -94,6 +94,25 @@ jobs:
         with:
           subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
           sbom-path: '${{ github.workspace }}/sbom-js.cdx.json'
+
+      # One published binary per tag; demo workflows download this instead of compiling on every run.
+      - name: Upload Linux agent to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cp bin/coldstep coldstep-linux-amd64
+          chmod +x coldstep-linux-amd64
+          tag="${GITHUB_REF_NAME}"
+          if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
+            gh release upload "${tag}" coldstep-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber
+          else
+            gh release create "${tag}" coldstep-linux-amd64 \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${tag}" \
+              --notes "Linux amd64 eBPF agent (ubuntu-latest). Composite action and SBOMs: see repository and workflow artifacts."
+          fi
 
       - name: Upload attestable artifacts
         uses: actions/upload-artifact@v7

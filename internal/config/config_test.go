@@ -247,6 +247,19 @@ func TestParseFeatureGates_InvalidPairsIgnored(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnv_CgroupPath(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	cfg, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.CgroupAttachPath == "" {
+		t.Fatal("expected non-empty CgroupAttachPath")
+	}
+}
+
 func TestLoadFromEnv_FeatureGates(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "detect")

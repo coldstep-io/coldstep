@@ -5,6 +5,26 @@ import (
 	"strings"
 )
 
+// normalizeHostHeader returns the host part of an HTTP Host header value, without a port.
+// Bracketed IPv6 literals may include a port after the closing bracket (e.g. "[::1]:8080").
+func normalizeHostHeader(val string) string {
+	val = strings.TrimSpace(val)
+	if val == "" {
+		return "?"
+	}
+	if strings.HasPrefix(val, "[") {
+		end := strings.IndexByte(val, ']')
+		if end > 1 {
+			return val[1:end]
+		}
+		return "?"
+	}
+	if i := strings.IndexByte(val, ':'); i >= 0 {
+		return val[:i]
+	}
+	return val
+}
+
 // ParseHTTPRequestPrefix extracts method, host, and path from the first bytes of a cleartext HTTP/1.x request.
 // Tolerates partial buffers; returns ok=false if no recognizable request line.
 func ParseHTTPRequestPrefix(raw []byte) (method, host, path string, ok bool) {
@@ -47,10 +67,7 @@ func ParseHTTPRequestPrefix(raw []byte) (method, host, path string, ok bool) {
 		name := strings.TrimSpace(strings.ToLower(string(line[:colon])))
 		val := strings.TrimSpace(string(line[colon+1:]))
 		if name == "host" && val != "" {
-			host = val
-			if i := strings.IndexByte(host, ':'); i >= 0 {
-				host = host[:i]
-			}
+			host = normalizeHostHeader(val)
 			break
 		}
 	}

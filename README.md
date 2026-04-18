@@ -2,6 +2,8 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
+**Pin workflows to** **`coldstep-io/coldstep@v0.1.4`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
 **[Quick Start](QUICK_START.md)** · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
@@ -10,7 +12,7 @@
 
 ## Add it to a workflow
 
-**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.0`** (or a newer tag you publish), not **`@main`**.
+**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.4`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 env:
@@ -22,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.0
+      - uses: coldstep-io/coldstep@v0.1.4
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-Same-repo testing: `uses: ./` — see [`.github/workflows/coldstep-demo.yml`](.github/workflows/coldstep-demo.yml) (`workflow_dispatch`).
+**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.1.4`** (or a newer tag).
 
 ---
 
@@ -37,6 +39,7 @@ Same-repo testing: `uses: ./` — see [`.github/workflows/coldstep-demo.yml`](.g
 
 | Topic | Detail |
 | :---- | :----- |
+| **IPv6 scope** | **IPv6 egress enforcement and BPF cgroup programs for IPv6 (`connect6` / `sendmsg6`) are out of scope for v1.** Observability hooks in this repo are IPv4-focused for syscall and cgroup paths that Coldstep ships; GitHub-hosted IPv6 egress is informational only where workflows probe it. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
@@ -50,7 +53,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 
 | Workflow / area | Notable `uses:` |
 | :-------------- | :-------------- |
-| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version: 1.25.x`), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v7` |
+| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version: 1.24.x`), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v7` |
 | **Supply chain** | `actions/attest@v4` |
 | **Pages** | `actions/checkout@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v4`, `actions/deploy-pages@v5` |
 
@@ -61,7 +64,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). |
+| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Enforcement uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -71,7 +74,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | **`.coldstep-detect.md`** | Shutdown digest (KPI tables, collapsible sections). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
-The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default on). Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`.
+The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default on). Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
 ---
 
@@ -83,13 +86,13 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | :---- | :------ |
 | `mode` | `detect` or `enforce`. |
 | `allowed-domains` | Enforce-mode domain allowlist (required for enforce). |
-| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints (see `action.yml`). |
+| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
 | `report-job-summary` | Merge digest into the job Summary. |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
-| `smoke-test-egress` | Short UDP/HTTP probes in detect (auto by default) to improve digest coverage on hosted runners. |
+| `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
 
 ---
 
@@ -99,6 +102,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 - **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first **`write(2)`** after **`connect`** (best-effort).
 - **Shared runners**: attribution is **PID / `comm`**-class; not a perfect global process tree.
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
+- **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.
 
 ---
 
@@ -112,7 +116,7 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). There is no supported local workflow for compiling the agent, reproducing CI, or running the integration suite outside Actions.
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`** (or **`coldstep-demo.yml`** for composite demos) to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-enforce.yml`** (minimal `uses: ./` demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.

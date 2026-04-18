@@ -6,7 +6,13 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync"
+	"time"
 )
+
+// coldstepDomainLookupAttemptTimeout caps a single Resolver.LookupIP call so goroutines cannot
+// block wg.Wait() past the parent compile context (hosted runners / flaky resolvers).
+const coldstepDomainLookupAttemptTimeout = 25 * time.Second
 
 // LookupIPFunc resolves hostnames to IPs.
 type LookupIPFunc func(ctx context.Context, network, host string) ([]net.IP, error)
@@ -47,6 +53,13 @@ func (s IPv4Set) Len() int {
 	return len(s.items)
 }
 
+// ForEach calls fn for every key in the set.
+func (s IPv4Set) ForEach(fn func(k [4]byte)) {
+	for k := range s.items {
+		fn(k)
+	}
+}
+
 // CompileResult is the deterministic output from allowlist compilation.
 type CompileResult struct {
 	Domains           []string
@@ -55,6 +68,8 @@ type CompileResult struct {
 }
 
 // CompileDomainAllowlist normalizes and resolves domain allowlist entries.
+// Resolution is performed concurrently (one goroutine per domain) to avoid
+// O(n) sequential latency when enforce mode has a large allowlist.
 func CompileDomainAllowlist(ctx context.Context, domains []string, resolver LookupIPFunc, maxAttempts int) CompileResult {
 	if resolver == nil {
 		resolver = net.DefaultResolver.LookupIP
@@ -69,35 +84,54 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 		AllowedIPv4: IPv4Set{items: make(map[[4]byte]struct{})},
 	}
 
-	for _, domain := range normalized {
-		resolved := false
-		for attempt := 0; attempt < maxAttempts; attempt++ {
-			if ctx != nil && ctx.Err() != nil {
-				break
-			}
-			ips, err := resolver(ctx, "ip4", domain)
-			if err != nil {
-				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	type domainResult struct {
+		domain   string
+		ips      []net.IP
+		resolved bool
+	}
+
+	results := make([]domainResult, len(normalized))
+	var wg sync.WaitGroup
+	for i, domain := range normalized {
+		wg.Add(1)
+		go func(idx int, d string) {
+			defer wg.Done()
+			res := domainResult{domain: d}
+			for attempt := 0; attempt < maxAttempts; attempt++ {
+				if ctx != nil && ctx.Err() != nil {
 					break
 				}
-				continue
-			}
-			addedIPv4 := false
-			for _, ip := range ips {
-				ip4 := ip.To4()
-				if ip4 == nil {
-					continue
+				lookupCtx, cancel := context.WithTimeout(ctx, coldstepDomainLookupAttemptTimeout)
+				ips4, err4 := resolver(lookupCtx, "ip4", d)
+				cancel()
+				if err4 != nil && (errors.Is(err4, context.Canceled) || errors.Is(err4, context.DeadlineExceeded)) {
+					break
 				}
-				result.AllowedIPv4.Add(ip4)
-				addedIPv4 = true
+				if err4 == nil {
+					for _, ip := range ips4 {
+						if ip.To4() != nil {
+							res.ips = append(res.ips, ip)
+							res.resolved = true
+						}
+					}
+				}
+				if res.resolved {
+					break
+				}
 			}
-			if addedIPv4 {
-				resolved = true
-				break
+			results[idx] = res
+		}(i, domain)
+	}
+	wg.Wait()
+
+	// Merge results back into CompileResult (single-threaded; goroutines are done).
+	for _, res := range results {
+		if res.resolved {
+			for _, ip := range res.ips {
+				result.AllowedIPv4.Add(ip)
 			}
-		}
-		if !resolved {
-			result.UnresolvedDomains = append(result.UnresolvedDomains, domain)
+		} else {
+			result.UnresolvedDomains = append(result.UnresolvedDomains, res.domain)
 		}
 	}
 

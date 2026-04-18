@@ -16,8 +16,10 @@ func TestEventType(t *testing.T) {
 }
 
 func TestRedactPathForSummary(t *testing.T) {
-	if got := RedactPathForSummary("/x?token=secret"); got != "/x?…" {
-		t.Fatalf("got %q", got)
+	t.Parallel()
+	// Exhaustive URI behavior: TestSanitizeRequestURI and TestRedactPathForSummary_matchesSanitizeRequestURI.
+	if got := RedactPathForSummary("/x?token=secret"); got != "/x?token=REDACTED" {
+		t.Fatalf("RedactPathForSummary=%q", got)
 	}
 }
 

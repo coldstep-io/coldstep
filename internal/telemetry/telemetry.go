@@ -29,18 +29,22 @@ func AppendJSONL(path string, v any) error {
 
 // Summary is written once at agent shutdown.
 type Summary struct {
-	Version        int            `json:"version"`
-	SchemaVersion  int            `json:"schema_version"`
-	Finished       string         `json:"finished"`
-	KernelRelease  string         `json:"kernel_release,omitempty"`
-	ExecEvents     int            `json:"exec_events"`
-	TCPEvents      int            `json:"tcp_events"`
-	UDPEvents      int            `json:"udp_events"`
-	HTTPEvents     int            `json:"http_events"`
-	TLSEvents      int            `json:"tls_events,omitempty"`
-	ProcForkEvents int            `json:"proc_fork_events,omitempty"`
-	PolicyCounts   map[string]int `json:"policy_counts"`
-	BPF            []BPFStatus    `json:"bpf,omitempty"`
+	Version                     int            `json:"version"`
+	SchemaVersion               int            `json:"schema_version"`
+	Finished                    string         `json:"finished"`
+	KernelRelease               string         `json:"kernel_release,omitempty"`
+	ExecEvents                  int            `json:"exec_events"`
+	TCPEvents                   int            `json:"tcp_events"`
+	UDPEvents                   int            `json:"udp_events"`
+	HTTPEvents                  int            `json:"http_events"`
+	TLSEvents                   int            `json:"tls_events,omitempty"`
+	ProcForkEvents              int            `json:"proc_fork_events,omitempty"`
+	Connect4TupleUpdateFailures int            `json:"connect4_tuple_update_failures,omitempty"`
+	UDPRingbufReserveFailures   int            `json:"udp_ringbuf_reserve_failures,omitempty"`
+	DNSRingbufReserveFailures   int            `json:"dns_ringbuf_reserve_failures,omitempty"`
+	DroppedCounts               map[string]int `json:"dropped_counts,omitempty"`
+	PolicyCounts                map[string]int `json:"policy_counts"`
+	BPF                         []BPFStatus    `json:"bpf,omitempty"`
 }
 
 // WriteSummary writes telemetry summary JSON (overwrites).

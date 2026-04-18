@@ -153,7 +153,7 @@ async function post(): Promise<void> {
   const failOnError = inputBoolDefault('fail-on-error', false);
   const reportJobSummary = inputBoolDefault('report-job-summary', true);
 
-  if (failOnError) {
+  if (failOnError && core.getState('coldstep_wait_ready_ok') !== 'true') {
     const st = agentStatusPath();
     let ok = false;
     try {

@@ -24,6 +24,13 @@ func TestParse_Empty(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedIPv6LiteralRejected(t *testing.T) {
+	_, err := Parse("", "2001:db8::1")
+	if err == nil {
+		t.Fatal("expected error for IPv6 literal in allowed-ips")
+	}
+}
+
 func TestParse_AllowedIP(t *testing.T) {
 	p, err := Parse("", "1.1.1.1, 8.8.8.8")
 	if err != nil {
@@ -38,6 +45,41 @@ func TestParse_AllowedIP(t *testing.T) {
 	if g := p.Classify("", net.ParseIP("9.9.9.9")); g != ClassUnknown {
 		t.Fatalf("got %q want unknown", g)
 	}
+}
+
+func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
+	p, err := Parse("", "1.1.1.1, 8.8.8.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var s IPv4Set
+	p.MergeLiteralAllowedIPv4Into(&s)
+	if s.Len() != 2 {
+		t.Fatalf("expected 2 IPs in set, got %d", s.Len())
+	}
+	if !s.Contains(net.ParseIP("8.8.8.8")) {
+		t.Fatal("expected 8.8.8.8 in set")
+	}
+	var nilP *Policy
+	nilP.MergeLiteralAllowedIPv4Into(&s) // no panic
+}
+
+func TestPolicy_MergeLiteralAllowedIPv4Keys(t *testing.T) {
+	p, err := Parse("", "1.1.1.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	keys := make(map[[4]byte]struct{})
+	p.MergeLiteralAllowedIPv4Keys(keys)
+	want := net.ParseIP("1.1.1.1").To4()
+	var wk [4]byte
+	copy(wk[:], want)
+	if _, ok := keys[wk]; !ok {
+		t.Fatalf("expected 1.1.1.1 in keys, got %d entries", len(keys))
+	}
+	p.MergeLiteralAllowedIPv4Keys(nil) // no panic
+	var nilP *Policy
+	nilP.MergeLiteralAllowedIPv4Keys(keys) // no panic
 }
 
 func TestParse_InvalidIP(t *testing.T) {

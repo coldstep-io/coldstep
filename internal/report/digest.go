@@ -142,6 +142,11 @@ type DigestInput struct {
 	EnforcementDenyCount           int
 	EnforcementDenyReserveFailures int
 	EnforcementFirstDeny           *DenyDigestRow
+
+	Connect4TupleUpdateFailures int
+	UDPRingbufReserveFailures   int
+	DNSRingbufReserveFailures   int
+	DroppedCounts               map[string]int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -155,7 +160,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if strings.EqualFold(in.EnforcementMode, "enforce") {
 		b.WriteString("## Coldstep · enforce\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Enforce mode: cgroup-scoped IPv4 egress is allowlisted; denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
+		b.WriteString("<sub>Enforce mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
 	} else {
 		b.WriteString("## Coldstep · detect\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
@@ -168,6 +173,22 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
 	}
 	b.WriteString(fmt.Sprintf("| **tcp** | %d |\n", in.TCPTotal))
+	if in.Connect4TupleUpdateFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
+	}
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures))
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
+	}
+	droppedTotal := 0
+	for _, v := range in.DroppedCounts {
+		droppedTotal += v
+	}
+	if droppedTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **dropped events (decode/jsonl)** | %d |\n", droppedTotal))
+	}
 	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
 	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
 	if tlsKPIVisible(in) {
@@ -176,7 +197,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if fsKPIVisible(in) {
 		b.WriteString(fmt.Sprintf("| **fs_event** | %d |\n", in.FSTotal))
 	}
-	b.WriteString("<sub>UDP KPI counts IPv4 sendto egress. HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
+	b.WriteString("<sub>UDP KPI counts IPv4 sendto and sendmsg egress (first iovec length; destination from msg_name or connected socket cache). HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
 	if tlsKPIVisible(in) {
 		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first `write(2)` after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
 	}
@@ -185,6 +206,15 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if fsKPIVisible(in) {
 		b.WriteString(" **fs_event** KPI counts high-signal filesystem operations (create, unlink, rename, chmod) observed via `openat`/`unlinkat`/`renameat2`/`fchmodat` syscalls when `COLDSTEP_FEATURE_GATES=fs_events=1`.")
+	}
+	if in.Connect4TupleUpdateFailures > 0 {
+		b.WriteString(" **connect4** row: BPF could not insert some `(tgid,fd)→tuple` entries (hash pressure); TCP connect ringbuf events are unchanged, but TLS ClientHello correlation may degrade.")
+	}
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString(" **udp_events** reserve failures indicate ringbuf pressure; some UDP egress may be unobserved.")
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
 	}
 	b.WriteString("</sub>\n\n")
 
@@ -200,6 +230,32 @@ func BuildDetectMarkdown(in DigestInput) string {
 		}
 		var list []kv
 		for k, v := range in.PolicyCounts {
+			list = append(list, kv{k, v})
+		}
+		sort.Slice(list, func(i, j int) bool {
+			if list[i].v != list[j].v {
+				return list[i].v > list[j].v
+			}
+			return list[i].k < list[j].k
+		})
+		parts := make([]string, 0, len(list))
+		for _, e := range list {
+			parts = append(parts, fmt.Sprintf("`%s`=%d", sanitizeCell(e.k), e.v))
+		}
+		b.WriteString(strings.Join(parts, " · "))
+		b.WriteString("\n\n")
+	}
+	if droppedTotal > 0 {
+		b.WriteString("**Dropped event counters**: ")
+		type kv struct {
+			k string
+			v int
+		}
+		var list []kv
+		for k, v := range in.DroppedCounts {
+			if v <= 0 {
+				continue
+			}
 			list = append(list, kv{k, v})
 		}
 		sort.Slice(list, func(i, j int) bool {

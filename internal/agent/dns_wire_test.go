@@ -96,6 +96,31 @@ func TestReadDNSName_compression(t *testing.T) {
 	}
 }
 
+func TestReadDNSName_PointerLoopReturnsFalse(t *testing.T) {
+	packet := make([]byte, 32)
+	packet[12] = 0xC0
+	packet[13] = 0x0C // 14-bit pointer to offset 12 (self-loop)
+	name, _, ok := readDNSName(packet, 12)
+	if ok {
+		t.Fatalf("expected failure for pointer loop, got %q", name)
+	}
+}
+
+func TestReadDNSName_DeepPointerChainFailsBudget(t *testing.T) {
+	packet := make([]byte, 256)
+	for off := 12; off < 100; off += 2 {
+		packet[off] = 0xC0
+		packet[off+1] = byte(off + 2)
+	}
+	packet[100] = 0xC0
+	packet[101] = 102
+	packet[102] = 0
+	name, _, ok := readDNSName(packet, 12)
+	if ok {
+		t.Fatalf("expected failure for deep pointer chain, got %q", name)
+	}
+}
+
 func TestJoinDNSLabels(t *testing.T) {
 	if got := joinDNSLabels([]string{"a", "b"}); got != "a.b" {
 		t.Fatal(got)

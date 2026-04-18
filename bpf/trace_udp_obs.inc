@@ -1,4 +1,8 @@
-/* UDP sendto observability (IPv4 sendto → udp_events ringbuf). */
+/*
+ * IPv4 sendto/sendmsg-length observability → `udp_events` ringbuf.
+ * Despite the map name, payloads here include TCP segments sent via `sendto`/`sendmsg` paths
+ * (same helper); distinguish by protocol in userspace from JSONL / digest if needed.
+ */
 #ifndef TRACE_UDP_OBS_INC
 #define TRACE_UDP_OBS_INC
 
@@ -6,8 +10,10 @@ static __always_inline void handle_udp_obs_emit(__be16 sin_port, __be32 sin_addr
 {
 	struct udp_send_event *ue =
 		bpf_ringbuf_reserve(&udp_events, sizeof(*ue), 0);
-	if (!ue)
+	if (!ue) {
+		note_udp_ringbuf_reserve_failed();
 		return;
+	}
 	{
 		__u64 pt = bpf_get_current_pid_tgid();
 
