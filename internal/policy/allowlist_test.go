@@ -7,15 +7,19 @@ import (
 	"errors"
 	"net"
 	"reflect"
+	"sync"
 	"testing"
 )
 
 func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	ctx := context.Background()
+	var mu sync.Mutex
 	calls := map[string]int{}
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
 		key := network + "|" + host
+		mu.Lock()
 		calls[key]++
+		mu.Unlock()
 		switch host {
 		case "example.com":
 			if network == "ip4" {
@@ -47,20 +51,27 @@ func TestCompileDomainAllowlist_NormalizeAndDedupe(t *testing.T) {
 	if len(got.UnresolvedDomains) != 0 {
 		t.Fatalf("UnresolvedDomains: got %v want empty", got.UnresolvedDomains)
 	}
-	if calls["ip4|example.com"] != 1 {
-		t.Fatalf("resolver calls example.com: got %v", calls)
+	mu.Lock()
+	ex := calls["ip4|example.com"]
+	api := calls["ip4|api.example.com"]
+	mu.Unlock()
+	if ex != 1 {
+		t.Fatalf("resolver calls example.com: got %v", ex)
 	}
-	if calls["ip4|api.example.com"] != 1 {
-		t.Fatalf("resolver calls api.example.com: got %v", calls)
+	if api != 1 {
+		t.Fatalf("resolver calls api.example.com: got %v", api)
 	}
 }
 
 func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T) {
 	ctx := context.Background()
+	var mu sync.Mutex
 	calls := map[string]int{}
 	resolver := func(_ context.Context, network, host string) ([]net.IP, error) {
 		key := network + "|" + host
+		mu.Lock()
 		calls[key]++
+		mu.Unlock()
 		switch host {
 		case "ok.example.com":
 			if network == "ip4" {
@@ -93,14 +104,19 @@ func TestCompileDomainAllowlist_UnresolvedContractAndBoundedRetries(t *testing.T
 	if !reflect.DeepEqual(got.UnresolvedDomains, wantUnresolved) {
 		t.Fatalf("UnresolvedDomains: got %v want %v", got.UnresolvedDomains, wantUnresolved)
 	}
-	if calls["ip4|down.example.com"] != 2 {
-		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", calls["ip4|down.example.com"])
+	mu.Lock()
+	down := calls["ip4|down.example.com"]
+	okCalls := calls["ip4|ok.example.com"]
+	v6only := calls["ip4|ipv6-only.example.com"]
+	mu.Unlock()
+	if down != 2 {
+		t.Fatalf("calls for unresolved domain: got ip4=%d want 2", down)
 	}
-	if calls["ip4|ok.example.com"] != 1 {
-		t.Fatalf("calls for resolved domain ok: got %v", calls)
+	if okCalls != 1 {
+		t.Fatalf("calls for resolved domain ok: got %v", okCalls)
 	}
-	if calls["ip4|ipv6-only.example.com"] != 2 {
-		t.Fatalf("calls for ipv6-only domain: got %v", calls)
+	if v6only != 2 {
+		t.Fatalf("calls for ipv6-only domain: got %v", v6only)
 	}
 }
 
