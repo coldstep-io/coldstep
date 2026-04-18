@@ -284,10 +284,11 @@ jobs:
           current_run="${GITHUB_RUN_ID}"
           # pull_request uses GITHUB_REF_NAME like "21/merge"; use the head branch so gh finds prior runs.
           branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          # gh --workflow expects a file name (e.g. coldstep-ci-runner.yml), not the workflow display title.
-          workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
+          # This job lives in a reusable workflow; runs are indexed under the entry workflow (coldstep-ci.yml), not
+          # coldstep-ci-runner.yml — listing by the callee filename returns no rows and breaks baseline diff.
+          entry_workflow="coldstep-ci.yml"
           baseline_run="$(
-            gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \
+            gh run list --workflow "${entry_workflow}" --branch "${branch}" --status success --limit 30 --json databaseId \
               --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
           )"
           fallback_used="false"
@@ -297,7 +298,15 @@ jobs:
               gh run list --branch "${branch}" --status success --limit 30 --json databaseId \
                 --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
             )"
-            fallback_used="true"
+            fallback_used="any-workflow-on-branch"
+          fi
+          
+          if [[ -z "${baseline_run}" ]]; then
+            baseline_run="$(
+              gh run list --workflow "${entry_workflow}" --branch main --status success --limit 30 --json databaseId \
+                --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
+            )"
+            fallback_used="main-branch"
           fi
           
           if [[ -z "${baseline_run}" ]]; then
