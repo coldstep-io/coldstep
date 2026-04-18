@@ -10,7 +10,38 @@ import os
 import sys
 from pathlib import Path
 
+# warn / unknown (❔) reserved for future capability statuses; v1 capability_matrix only emits pass | fail.
 STATUS_PILL = {"pass": "🟢", "warn": "🟡", "fail": "🔴"}
+
+TOP_EVENTS_N = 10
+TOP_SANKEY_EDGES = 30
+TOP_DIFF_ROWS = 20
+
+
+def _md_cell(value: object) -> str:
+    """Escape a value for safe inclusion in a GFM table cell.
+
+    GFM uses `|` as the column separator; backslash-escape it. Newlines collapse
+    to a single space because tables can't span lines. Backslashes get doubled
+    so that an existing `\\|` in the source survives a round trip.
+    """
+    s = str(value)
+    s = s.replace("\\", "\\\\").replace("|", "\\|")
+    s = s.replace("\n", " ").replace("\r", " ")
+    return s
+
+
+def _csv_field(value: object) -> str:
+    """Mermaid sankey-beta uses CSV. Quote per RFC 4180 if the field contains , " \\n or leading/trailing whitespace."""
+    s = str(value)
+    if any(c in s for c in ',"\n\r') or s != s.strip():
+        return '"' + s.replace('"', '""') + '"'
+    return s
+
+
+def _xy_axis_label(value: object) -> str:
+    # xychart-beta uses double-quoted axis labels; embedded " would break the block.
+    return '"' + str(value).replace('"', "'") + '"'
 
 
 def _capability_matrix_md(model: dict) -> str:
@@ -22,19 +53,21 @@ def _capability_matrix_md(model: dict) -> str:
     ]
     for row in model["capability_matrix"]:
         pill = STATUS_PILL.get(row["status"], "❔")
-        lines.append(f"| {row['label']} | {pill} | `type:{row['id']}` × {row['evidence_count']} |")
+        label = _md_cell(row["label"])
+        evidence = f"`type:{_md_cell(row['id'])}` × {row['evidence_count']}"
+        lines.append(f"| {label} | {pill} | {evidence} |")
     lines += ["", "_Legend: 🟢 pass, 🟡 investigate, 🔴 fail_", ""]
     return "\n".join(lines)
 
 
 def _events_xychart_md(model: dict) -> str:
-    rows = model["events_by_type"][:10]
+    rows = model["events_by_type"][:TOP_EVENTS_N]
     if not rows:
         return ""
     types = [r["type"] for r in rows]
     counts = [r["count"] for r in rows]
     bars = ", ".join(str(c) for c in counts)
-    xs = ", ".join(f'"{t}"' for t in types)
+    xs = ", ".join(_xy_axis_label(t) for t in types)
     return (
         "### Events by type (current run)\n\n"
         "```mermaid\n"
@@ -48,10 +81,13 @@ def _events_xychart_md(model: dict) -> str:
 
 
 def _egress_sankey_md(model: dict) -> str:
-    edges = model["egress_sankey"][:30]
+    edges = model["egress_sankey"][:TOP_SANKEY_EDGES]
     if not edges:
         return ""
-    body = "\n".join(f'  {e["source"]},{e["target"]},{e["value"]}' for e in edges)
+    body = "\n".join(
+        f'  {_csv_field(e["source"])},{_csv_field(e["target"])},{e["value"]}'
+        for e in edges
+    )
     return (
         "### Egress flow (host → policy)\n\n"
         "```mermaid\n"
@@ -66,12 +102,14 @@ def _diff_md(model: dict) -> str:
     if diff.get("status") != "ok":
         return f"### Previous Run Diff\n\n_Diff unavailable: {diff.get('reason', 'unknown')}._\n"
     lines = ["### Previous Run Diff", ""]
+    # Note: count_label is only used for the new/gone single-count tables;
+    # the changed table uses a fixed 3-column layout below.
     for title, key, count_label in (
         ("New traffic (in current, not in baseline)", "traffic_new", "Current"),
         ("Missing traffic (in baseline, not in current)", "traffic_gone", "Baseline"),
-        ("Changed multiplicity", "traffic_changed", "Δ"),
+        ("Changed multiplicity", "traffic_changed", ""),
     ):
-        rows = diff.get(key, [])[:20]
+        rows = diff.get(key, [])[:TOP_DIFF_ROWS]
         lines += [f"#### {title}", ""]
         if not rows:
             lines += ["_None._", ""]
@@ -79,11 +117,13 @@ def _diff_md(model: dict) -> str:
         if key == "traffic_changed":
             lines += ["| Baseline | Current | Fingerprint |", "|---:|---:|---|"]
             for r in rows:
-                lines.append(f"| {r['baseline']} | {r['current']} | `{r['fingerprint']}` |")
+                fp = _md_cell(r['fingerprint'])
+                lines.append(f"| {r['baseline']} | {r['current']} | `{fp}` |")
         else:
             lines += [f"| {count_label} count | Fingerprint |", "|---:|---|"]
             for r in rows:
-                lines.append(f"| {r['count']} | `{r['fingerprint']}` |")
+                fp = _md_cell(r['fingerprint'])
+                lines.append(f"| {r['count']} | `{fp}` |")
         lines.append("")
     return "\n".join(lines)
 
@@ -98,6 +138,7 @@ def write_summary(model: dict, summary_path: str) -> None:
     body = "\n".join(p for p in parts if p)
     if not body.endswith("\n"):
         body += "\n"
+    # Append: $GITHUB_STEP_SUMMARY may already contain output from earlier steps in the same job.
     with open(summary_path, "a", encoding="utf-8") as f:
         f.write(body)
 

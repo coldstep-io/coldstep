@@ -1,6 +1,4 @@
 import importlib.util
-import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,10 +8,18 @@ PKG_DIR = Path(__file__).with_name("coldstep_detect_report")
 BUILD = PKG_DIR / "build_report_model.py"
 RENDER = PKG_DIR / "render_step_summary.py"
 
-_BSPEC = importlib.util.spec_from_file_location("crd_build", BUILD)
-_BMOD = importlib.util.module_from_spec(_BSPEC); _BSPEC.loader.exec_module(_BMOD)
-_RSPEC = importlib.util.spec_from_file_location("crd_render_summary", RENDER)
-_RMOD = importlib.util.module_from_spec(_RSPEC); _RSPEC.loader.exec_module(_RMOD)
+
+def _load(name: str, path: Path):
+    spec = importlib.util.spec_from_file_location(name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load {name} from {path}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_BMOD = _load("crd_build", BUILD)
+_RMOD = _load("crd_render_summary", RENDER)
 
 
 class StepSummaryRendererTests(unittest.TestCase):
@@ -53,6 +59,23 @@ class StepSummaryRendererTests(unittest.TestCase):
     def test_summary_size_well_under_one_mib(self):
         out = self._render()
         self.assertLess(len(out.encode("utf-8")), 256 * 1024)
+
+    def test_diff_unavailable_renders_explanatory_message(self):
+        model = _BMOD.build(
+            current_jsonl=str(PKG_DIR / "fixtures" / "coldstep-events.sample.jsonl"),
+            baseline_jsonl=None,
+        )
+        with tempfile.TemporaryDirectory() as td:
+            summary = Path(td) / "summary.md"
+            _RMOD.write_summary(model=model, summary_path=str(summary))
+            out = summary.read_text(encoding="utf-8")
+        self.assertIn("_Diff unavailable: no_baseline_provided._", out)
+
+    def test_md_cell_escapes_pipe_and_newline(self):
+        # _md_cell is the hardening helper for GFM table cells.
+        self.assertEqual(_RMOD._md_cell("a|b"), r"a\|b")
+        self.assertEqual(_RMOD._md_cell("a\nb"), "a b")
+        self.assertEqual(_RMOD._md_cell("a\\b"), r"a\\b")
 
 
 if __name__ == "__main__":
