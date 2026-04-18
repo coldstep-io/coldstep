@@ -1866,9 +1866,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var enforceConnectLnk link.Link
 	var enforceSendmsgLnk link.Link
 
-	// Enforce mode: cgroup attach before traceexec/traceconnect. sched_process_exec and
-	// raw_tp/sys_enter BPF loads can each take minutes on hosted runners; GitHub Actions
-	// fail-on-error polls .coldstep-ready.json with a bounded timeout.
+	// Enforce mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
+	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
+	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
 	if cfg.Mode == config.ModeEnforce {
 		enforceObjs := new(traceenforce.TraceenforceObjects)
 		if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
@@ -1915,10 +1915,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("attach enforce_sendmsg4: %w", err)
 		}
 		defer enforceSendmsgLnk.Close()
-
-		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-			return fmt.Errorf("agent ready status: %w", err)
-		}
 	}
 
 	var execObjs traceexec.TraceexecObjects
@@ -1967,6 +1963,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
+		if cfg.Mode == config.ModeEnforce {
+			if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+				return fmt.Errorf("agent ready status: %w", err)
+			}
+		}
 		defer syscallLnk.Close()
 		defer syscallObjs.Close()
 		defer func() {
@@ -1981,7 +1982,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer tlsRd.Close()
 	}
 
-	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after cgroup attach.
+	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after syscall attach succeeds.
 	if cfg.Mode != config.ModeEnforce {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
