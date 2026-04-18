@@ -76,22 +76,21 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul,
 						   unsigned long si_ul, unsigned long dx_ul)
 {
-	if (id == (long)COLDSTEP_NR_CLOSE) {
-		__u32 fd32 = (__u32)di_ul;
-		{
-			__u64 pt = bpf_get_current_pid_tgid();
-			__u32 tgid = (__u32)(pt >> 32);
-			__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+	if (id == (long)COLDSTEP_NR_WRITE) {
+		try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
+		return 0;
+	}
 
-			bpf_map_delete_elem(&connect4_by_tgid_fd, &mkey);
+	if (id == (long)COLDSTEP_NR_WRITEV) {
+		struct coldstep_iovec iov0 = {};
+		if (dx_ul > 0 && si_ul) {
+			if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)si_ul) == 0) {
+				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, coldstep_syscall_len_u32(iov0.iov_len));
+			}
 		}
 		return 0;
 	}
 
-	if (id != (long)COLDSTEP_NR_WRITE)
-		return 0;
-
-	try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
 	return 0;
 }
 

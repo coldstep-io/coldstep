@@ -172,17 +172,16 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return handle_udp_obs_sendmsg((__u32)di_ul, msg_hdr_ptr);
 	}
 
-	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_CLOSE) {
+	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_WRITEV) {
 		unsigned long di_ul = 0, si_ul = 0, dx_ul = 0;
 
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
 			return 0;
-		if (id == (long)COLDSTEP_NR_WRITE) {
-			if (ns_read_syscall_arg(regs, 1, &si_ul))
-				return 0;
-			if (ns_read_syscall_arg(regs, 2, &dx_ul))
-				return 0;
-		}
+		if (ns_read_syscall_arg(regs, 1, &si_ul))
+			return 0;
+		if (ns_read_syscall_arg(regs, 2, &dx_ul))
+			return 0;
+
 		return handle_tls_obs_sys_enter(id, di_ul, si_ul, dx_ul);
 	}
 

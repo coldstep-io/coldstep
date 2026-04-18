@@ -705,7 +705,7 @@ func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
 		return nil, false
 	}
 	n := binary.LittleEndian.Uint32(raw[0:4])
-	if n > 512 || int(n)+4 > len(raw) {
+	if n > 4096 || int(n)+4 > len(raw) {
 		return nil, false
 	}
 	return raw[4 : 4+int(n)], true

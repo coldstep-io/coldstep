@@ -9,10 +9,6 @@
  *   offsetof(msg_iov)       = 16
  *   offsetof(msg_iovlen)    = 24  (size_t)
  */
-struct coldstep_iovec {
-	unsigned long iov_base;
-	unsigned long iov_len;
-};
 
 /*
  * LP64 glibc msghdr: msg_name @0, msg_namelen @8, msg_iov @16, msg_iovlen @24 — read one 32-byte

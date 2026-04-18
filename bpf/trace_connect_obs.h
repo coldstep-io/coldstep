@@ -24,6 +24,7 @@
 #define COLDSTEP_NR_WRITE 64
 #define COLDSTEP_NR_CLOSE 57
 #define COLDSTEP_NR_RECVFROM 207
+#define COLDSTEP_NR_WRITEV 66
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
 #define COLDSTEP_NR_SENDTO 44
@@ -31,6 +32,7 @@
 #define COLDSTEP_NR_WRITE 1
 #define COLDSTEP_NR_CLOSE 3
 #define COLDSTEP_NR_RECVFROM 45
+#define COLDSTEP_NR_WRITEV 20
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif
@@ -141,6 +143,11 @@ static __always_inline __u32 coldstep_probe_user_sz_tls(__u32 len_in)
 		s = TLS_PAYLOAD_MAX;
 	return s;
 }
+
+struct coldstep_iovec {
+	unsigned long iov_base;
+	unsigned long iov_len;
+};
 
 /* Last IPv4 connect tuple observed for (tgid, fd); used to attribute TLS ClientHello writes. */
 struct connect4_tuple {
