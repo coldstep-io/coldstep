@@ -63,6 +63,8 @@ type runStats struct {
 	execRingbufReserveFailuresN     int
 	forkRingbufReserveFailuresN     int
 	fsRingbufReserveFailuresN       int
+	udpSendmsgMultiIovecObservedN   int
+	tlsWritevMultiIovecObservedN    int
 	policyCounts                    map[string]int
 	droppedCounts                   map[string]int
 }
@@ -542,6 +544,30 @@ func (s *runStats) setFSRingbufReserveFailures(n int) {
 	s.fsRingbufReserveFailuresN = n
 }
 
+func (s *runStats) setUDPSendmsgMultiIovecObserved(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.udpSendmsgMultiIovecObservedN = n
+}
+
+func (s *runStats) udpSendmsgMultiIovecObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.udpSendmsgMultiIovecObservedN
+}
+
+func (s *runStats) setTLSWritevMultiIovecObserved(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tlsWritevMultiIovecObservedN = n
+}
+
+func (s *runStats) tlsWritevMultiIovecObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tlsWritevMultiIovecObservedN
+}
+
 func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) telemetry.Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -571,6 +597,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		ExecRingbufReserveFailures:    s.execRingbufReserveFailuresN,
 		ForkRingbufReserveFailures:    s.forkRingbufReserveFailuresN,
 		FSRingbufReserveFailures:      s.fsRingbufReserveFailuresN,
+		UDPSendmsgMultiIovecObserved:  s.udpSendmsgMultiIovecObservedN,
+		TLSWritevMultiIovecObserved:   s.tlsWritevMultiIovecObservedN,
 		DroppedCounts:                 dropped,
 		PolicyCounts:                  pc,
 		KernelRelease:                 kernel,
@@ -1659,6 +1687,30 @@ func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) i
 	return int(v)
 }
 
+func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.UdpSendmsgMultiIovecObserved.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.TlsWritevMultiIovecObserved.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
@@ -1958,6 +2010,8 @@ func buildDigestInput(
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
 		UDPRingbufReserveFailures:      stats.udpRingbufReserveFailures(),
 		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),
+		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
+		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
 		DroppedCounts:                  stats.snapshotDroppedCounts(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
@@ -2178,6 +2232,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setConnectRingbufReserveFailures(readConnectRingbufReserveFailureCount(syscallObjs))
 				stats.setHTTPRingbufReserveFailures(readHTTPRingbufReserveFailureCount(syscallObjs))
 				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
+				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
+				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
 			}
 		}()
 		defer connRd.Close()

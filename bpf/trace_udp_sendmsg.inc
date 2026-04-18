@@ -40,6 +40,13 @@ static __always_inline int coldstep_udp_len_from_msghdr(unsigned long msg_hdr_pt
 		*out_len = 0;
 		return 0;
 	}
+	/*
+	 * Multi-iovec visibility: surface scatter/gather sendmsg calls so
+	 * operators see the rate of payload-fragmentation we don't observe past
+	 * iov[0]. Counter wired to udpSendmsgMultiIovecObservedN in agent_linux.go.
+	 */
+	if (msg_iovlen > 1)
+		note_udp_sendmsg_multi_iovec();
 	if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)msg_iov))
 		return -1;
 	if (iov0.iov_len > 0x00100000)

@@ -89,6 +89,14 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 	if (id == (long)COLDSTEP_NR_WRITEV) {
 		struct coldstep_iovec iov0 = {};
 		if (dx_ul > 0 && si_ul) {
+			/*
+			 * Multi-iovec visibility: writev's `vlen` arg (dx_ul) > 1
+			 * means scatter/gather payload that we will only observe
+			 * for iov[0]. Counter wired to tlsWritevMultiIovecObservedN
+			 * in agent_linux.go.
+			 */
+			if (dx_ul > 1)
+				note_tls_writev_multi_iovec();
 			if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)si_ul) == 0) {
 				/*
 				 * iov_len comes from untrusted userspace memory. Cap it to

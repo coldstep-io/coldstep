@@ -148,7 +148,13 @@ type DigestInput struct {
 	Connect4TupleUpdateFailures int
 	UDPRingbufReserveFailures   int
 	DNSRingbufReserveFailures   int
-	DroppedCounts               map[string]int
+	// Multi-iovec visibility (PR-D). Counts BPF observations of scatter/gather
+	// syscalls that we only capture iov[0] for; non-zero indicates payload past
+	// the first iovec is invisible to the JSONL/digest. Operators can use this
+	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
+	UDPSendmsgMultiIovecObserved int
+	TLSWritevMultiIovecObserved  int
+	DroppedCounts                map[string]int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -184,6 +190,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
 	}
+	if in.UDPSendmsgMultiIovecObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
+	}
+	if in.TLSWritevMultiIovecObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
+	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
 		droppedTotal += v
@@ -217,6 +229,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
+	}
+	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
+		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
 	}
 	b.WriteString("</sub>\n\n")
 

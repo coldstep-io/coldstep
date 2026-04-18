@@ -101,6 +101,32 @@ struct {
 	__type(value, __u32);
 } tls_ringbuf_reserve_failures SEC(".maps");
 
+/*
+ * Multi-iovec visibility counters (PR-D, Theme D of the 2026-04-18 review).
+ *
+ * sendmsg(2) takes a struct msghdr whose msg_iov is a vector of iovecs;
+ * writev(2) similarly takes an iovec vector. The BPF observation code in
+ * trace_udp_sendmsg.inc / trace_tls_write.inc only reads iov[0] for the
+ * verifier-friendly bounded path. When user code uses a multi-buffer
+ * scatter/gather call (msg_iovlen > 1 / vlen > 1), iov[1..n] payload is
+ * silently dropped from the JSONL/digest. These counters surface the
+ * frequency of that scenario so operators can decide whether to invest in
+ * full multi-iovec capture (would require unrolled bounded loops in BPF).
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} udp_sendmsg_multi_iovec_observed SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tls_writev_multi_iovec_observed SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
@@ -151,6 +177,26 @@ static __always_inline void note_tls_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&tls_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_udp_sendmsg_multi_iovec(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&udp_sendmsg_multi_iovec_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_tls_writev_multi_iovec(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&tls_writev_multi_iovec_observed, &k);
 
 	if (!v)
 		return;
