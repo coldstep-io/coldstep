@@ -386,6 +386,18 @@ jobs:
         with:
           go-version: '1.24.x'
 
+      # Cache skips clang+bpf rebuild when sources unchanged — composite uses release-path so startup
+      # stays fast under fail-on-error (BPF verifier remains on first load inside the agent).
+      - uses: actions/cache@v4
+        id: coldstep-bin-cache
+        with:
+          path: bin/coldstep
+          key: coldstep-prevent-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh') }}
+
+      - name: Build Linux agent (runs on cache miss only)
+        if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+
       - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |
           set -euo pipefail
@@ -412,6 +424,7 @@ jobs:
         with:
           mode: enforce
           fail-on-error: 'true'
+          release-path: bin/coldstep
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           allowed-ips: 1.1.1.1

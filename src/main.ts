@@ -3,6 +3,18 @@ import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
+function tailUtf8File(filePath: string, maxChars: number): string {
+  try {
+    const raw = fs.readFileSync(filePath, 'utf8');
+    if (raw.length <= maxChars) {
+      return raw;
+    }
+    return raw.slice(-maxChars);
+  } catch {
+    return '';
+  }
+}
+
 function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   const v = core.getInput(name);
   if (v === '') {
@@ -92,6 +104,10 @@ async function run(): Promise<void> {
   if (fs.existsSync(agentStatus)) {
     fs.unlinkSync(agentStatus);
   }
+  const stderrLog = path.join(baseDir, '.coldstep-agent.stderr.log');
+  if (failOnError && fs.existsSync(stderrLog)) {
+    fs.unlinkSync(stderrLog);
+  }
 
   if (releasePath) {
     const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
@@ -127,17 +143,24 @@ async function run(): Promise<void> {
     childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
   }
 
+  let stderrStream: fs.WriteStream | undefined;
+  let stdio: 'ignore' | ['ignore', 'ignore', fs.WriteStream] = 'ignore';
+  if (failOnError) {
+    stderrStream = fs.createWriteStream(stderrLog, { flags: 'w' });
+    stdio = ['ignore', 'ignore', stderrStream];
+  }
   const child = spawn('sudo', ['-E', binPath, 'run'], {
     cwd: actionPath,
     env: childEnv,
     detached: true,
-    stdio: 'ignore',
+    stdio,
   });
   child.on('error', (err) => {
     core.error(`coldstep: failed to spawn agent (${err.message})`);
   });
   if (child.pid === undefined) {
     // `spawn` can fail asynchronously (e.g. missing sudo); avoid writing `undefined` into the pid file.
+    stderrStream?.end();
     core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
     return;
   }
@@ -185,8 +208,22 @@ async function run(): Promise<void> {
     core.info(
       `fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file)`,
     );
+    core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
     const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child);
+    stderrStream?.end();
+    await new Promise<void>((resolve) => {
+      if (stderrStream) {
+        stderrStream.on('close', resolve);
+        setTimeout(resolve, 500);
+      } else {
+        resolve();
+      }
+    });
     if (!ok) {
+      const tail = tailUtf8File(stderrLog, 14_000);
+      if (tail.trim() !== '') {
+        core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
+      }
       core.setFailed(
         'coldstep agent did not become ready in time (BPF verifier/load/DNS); ensure ubuntu-latest and see COLDSTEP_BPF_VERBOSE_VERIFY in README for diagnostics.',
       );
