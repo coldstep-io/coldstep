@@ -1,4 +1,5 @@
 # PR / main / workflow_dispatch CI (v1): reusable runner workflow runs unit+integration on ubuntu-latest /
+# Expensive checks (govulncheck, go test -shuffle, optional full-module race): coldstep-ci-nightly.yml (cron + manual).
 # ubuntu-22.04 (x64) and ubuntu-24.04-arm / ubuntu-22.04-arm (arm64); detect/enforce remain ubuntu-latest x64.
 
 name: coldstep-ci
