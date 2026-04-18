@@ -26,6 +26,7 @@ AGENTS.md
 
 # Agent runtime artifacts in workspace (detect digest); do not commit
 .coldstep-detect.md
+.coldstep-agent.stderr.log
 scripts/__pycache__/
 /docs/
 

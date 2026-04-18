@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"runtime/debug"
 	"slices"
 	"strings"
@@ -254,17 +255,13 @@ func (s *enforcementState) noteDeny(row report.DenyDigestRow) {
 	}
 }
 
-func (s *enforcementState) denyCountValue() int {
+func (s *enforcementState) denyCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.denyCountN
 }
 
-func (s *enforcementState) denyCount() int {
-	return s.denyCountValue()
-}
-
-func (s *enforcementState) firstDenyRow() *report.DenyDigestRow {
+func (s *enforcementState) firstDeny() *report.DenyDigestRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.firstDenyRowV == nil {
@@ -272,10 +269,6 @@ func (s *enforcementState) firstDenyRow() *report.DenyDigestRow {
 	}
 	cp := *s.firstDenyRowV
 	return &cp
-}
-
-func (s *enforcementState) firstDeny() *report.DenyDigestRow {
-	return s.firstDenyRow()
 }
 
 func (s *enforcementState) snapshot() enforcementSnapshot {
@@ -536,7 +529,9 @@ func trimRing[T any](s *[]T, max int) {
 	if max <= 0 || len(*s) <= max {
 		return
 	}
-	*s = (*s)[len(*s)-max:]
+	droppedN := len(*s) - max
+	*s = (*s)[droppedN:]
+	slog.Debug("telemetry row buffer trimmed (ring full)", "dropped", droppedN, "retained", max)
 }
 
 func (b *rowBuffer) addExec(r report.ExecDigestRow) {
@@ -598,12 +593,24 @@ func writeAgentStatus(path string, ok bool) error {
 	if path == "" {
 		return nil
 	}
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+	}
 	payload := map[string]any{"ok": ok, "version": 1}
 	b, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	// GitHub Actions polls this path as the runner user while the agent runs under sudo; 0o600
+	// root-owned files are unreadable (EACCES). Payload is non-secret (ok + version only).
+	if err := os.WriteFile(path, b, 0o644); err != nil {
+		return err
+	}
+	slog.Info("agent ready status written", "component", "ready", "path", path, "ok", ok)
+	return nil
 }
 
 func agentVersionString() string {
@@ -668,7 +675,9 @@ func decodeHTTPSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4
 	copy(daddr[:], raw[24:28])
 	dport = binary.BigEndian.Uint16(raw[28:30])
 	capLen := int(binary.LittleEndian.Uint16(raw[32:34]))
-	if capLen < 0 || capLen > 192 {
+	// capLen is derived from Uint16 and cast to int on a 64-bit system;
+	// it is always in [0, 65535]. Only the upper bound needs checking.
+	if capLen > 192 {
 		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
 	}
 	payload = make([]byte, capLen)
@@ -691,7 +700,9 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	copy(daddr[:], raw[24:28])
 	dport = binary.BigEndian.Uint16(raw[28:30])
 	capLen := int(binary.LittleEndian.Uint16(raw[32:34]))
-	if capLen < 0 || capLen > tlsPayloadMax {
+	// capLen is derived from Uint16 and cast to int on a 64-bit system;
+	// it is always in [0, 65535]. Only the upper bound needs checking.
+	if capLen > tlsPayloadMax {
 		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
 	}
 	payload = make([]byte, capLen)
@@ -705,7 +716,7 @@ func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
 		return nil, false
 	}
 	n := binary.LittleEndian.Uint32(raw[0:4])
-	if n > 512 || int(n)+4 > len(raw) {
+	if n > 4096 || int(n)+4 > len(raw) {
 		return nil, false
 	}
 	return raw[4 : 4+int(n)], true
@@ -765,11 +776,18 @@ func denyDigestRowFromEvent(ev telemetry.DenyEvent) report.DenyDigestRow {
 // tlsAgentCfgFailed is set when the map update fails (SNI path stays off in BPF) so callers can mark the hook degraded.
 func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {
 	objs = new(traceconnect.TraceconnectObjects)
-	traceLoadOpts := &ebpf.CollectionOptions{
-		Programs: ebpf.ProgramOptions{
-			LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
-			LogSizeStart: 512 * 1024,
-		},
+	// Default: fast verifier path (nil opts). Branch + instruction verifier logging makes
+	// LoadTraceconnectObjects disproportionately slow on hosted runners and can exceed the
+	// composite action's waitForAgentReady window (see src/main.ts). Opt in via env for debugging:
+	//   COLDSTEP_BPF_VERBOSE_VERIFY=1
+	var traceLoadOpts *ebpf.CollectionOptions
+	if strings.TrimSpace(os.Getenv("COLDSTEP_BPF_VERBOSE_VERIFY")) != "" {
+		traceLoadOpts = &ebpf.CollectionOptions{
+			Programs: ebpf.ProgramOptions{
+				LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
+				LogSizeStart: 512 * 1024,
+			},
+		}
 	}
 	if err = traceconnect.LoadTraceconnectObjects(objs, traceLoadOpts); err != nil {
 		return nil, nil, nil, nil, nil, nil, false, err
@@ -1582,10 +1600,11 @@ func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, 
 	return newEnforceDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, cancelRun context.CancelFunc) error {
-	// First deny triggers a short drain window (more JSONL rows), then we cancel the run
-	// context and return a single "enforce deny" error so Run exits non-zero while BPF
-	// teardown still happens via defers. Other ringbuf readers exit on ctx cancel + map close.
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) error {
+	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
+	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
+	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
+	// would kill the agent before later job steps (nmap/curl) run. Exit only on ctx cancel / closed ring.
 	for {
 		rd.SetDeadline(time.Time{})
 		record, err := rd.Read()
@@ -1600,12 +1619,9 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			continue
 		}
 
-		firstDeny, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state)
-		if err != nil {
-			if cancelRun != nil {
-				cancelRun()
-			}
-			return err
+		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state); err != nil {
+			slog.Warn("deny ring sample skipped", "err", err)
+			continue
 		}
 
 		drainUntil := time.Now().Add(enforceDenyDrainDuration)
@@ -1622,29 +1638,18 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 				}
 				if ctx.Err() != nil {
 					rd.SetDeadline(time.Time{})
-					if cancelRun != nil {
-						cancelRun()
-					}
-					return newEnforceDenyError(firstDeny)
+					return ctx.Err()
 				}
 				rd.SetDeadline(time.Time{})
 				slog.Warn("ringbuf read (deny drain)", "err", err2)
 				continue
 			}
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state); err3 != nil {
-				rd.SetDeadline(time.Time{})
-				if cancelRun != nil {
-					cancelRun()
-				}
-				return err3
+				slog.Warn("deny ring drain sample skipped", "err", err3)
 			}
 			n++
 		}
 		rd.SetDeadline(time.Time{})
-		if cancelRun != nil {
-			cancelRun()
-		}
-		return newEnforceDenyError(firstDeny)
 	}
 }
 
@@ -1860,6 +1865,64 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	dnsCache := NewDNSCache()
 
+	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
+	var denyRd *ringbuf.Reader
+	var syscallObjs *traceconnect.TraceconnectObjects
+	var syscallLnk link.Link
+	var enforceConnectLnk link.Link
+	var enforceSendmsgLnk link.Link
+
+	// Enforce mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
+	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
+	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
+	if cfg.Mode == config.ModeEnforce {
+		enforceObjs := new(traceenforce.TraceenforceObjects)
+		if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
+			return fmt.Errorf("load enforce bpf objects: %w", err)
+		}
+		defer func() {
+			enforceState.setDenyReserveFailures(readDenyReserveFailureCount(enforceObjs))
+			_ = enforceObjs.Close()
+		}()
+
+		allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol)
+		if loadErr != nil {
+			return loadErr
+		}
+		enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize)
+		var err error
+		denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
+		if err != nil {
+			return fmt.Errorf("ringbuf reader deny: %w", err)
+		}
+		defer denyRd.Close()
+
+		cgPath := cfg.CgroupAttachPath
+		if cgPath == "" {
+			cgPath = "/sys/fs/cgroup"
+		}
+
+		enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupInet4Connect,
+			Program: enforceObjs.EnforceConnect4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_connect4: %w", err)
+		}
+		defer enforceConnectLnk.Close()
+
+		enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupUDP4Sendmsg,
+			Program: enforceObjs.EnforceSendmsg4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_sendmsg4: %w", err)
+		}
+		defer enforceSendmsgLnk.Close()
+	}
+
 	var execObjs traceexec.TraceexecObjects
 	if err := traceexec.LoadTraceexecObjects(&execObjs, nil); err != nil {
 		return fmt.Errorf("load bpf objects: %w", err)
@@ -1887,16 +1950,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}()
 
-	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
-	var denyRd *ringbuf.Reader
-	var syscallObjs *traceconnect.TraceconnectObjects
-	var syscallLnk link.Link
-	var enforceConnectLnk link.Link
-	var enforceSendmsgLnk link.Link
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
 		if cfg.Mode == config.ModeEnforce {
+			// Keep the status file for the composite post step; main may have already saved
+			// saveState. Record operational failure explicitly instead of deleting the path.
+			_ = writeAgentStatus(cfg.AgentStatusPath, false)
 			return fmt.Errorf("enforce mode requires syscall trace attach: %w", err)
 		}
 	} else {
@@ -1909,6 +1969,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
+		if cfg.Mode == config.ModeEnforce {
+			if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+				return fmt.Errorf("agent ready status: %w", err)
+			}
+		}
 		defer syscallLnk.Close()
 		defer syscallObjs.Close()
 		defer func() {
@@ -1921,52 +1986,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer udpRd.Close()
 		defer httpRd.Close()
 		defer tlsRd.Close()
+	}
 
-		if cfg.Mode == config.ModeEnforce {
-			enforceObjs := new(traceenforce.TraceenforceObjects)
-			if err := traceenforce.LoadTraceenforceObjects(enforceObjs, nil); err != nil {
-				return fmt.Errorf("load enforce bpf objects: %w", err)
-			}
-			defer func() {
-				enforceState.setDenyReserveFailures(readDenyReserveFailureCount(enforceObjs))
-				_ = enforceObjs.Close()
-			}()
-
-			allowlistSize, loadErr := loadEnforceMaps(enforceObjs, enforceCompiled, pol)
-			if loadErr != nil {
-				return loadErr
-			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize)
-			denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
-			if err != nil {
-				return fmt.Errorf("ringbuf reader deny: %w", err)
-			}
-			defer denyRd.Close()
-
-			cgPath := cfg.CgroupAttachPath
-			if cgPath == "" {
-				cgPath = "/sys/fs/cgroup"
-			}
-
-			enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupInet4Connect,
-				Program: enforceObjs.EnforceConnect4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_connect4: %w", err)
-			}
-			defer enforceConnectLnk.Close()
-
-			enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupUDP4Sendmsg,
-				Program: enforceObjs.EnforceSendmsg4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_sendmsg4: %w", err)
-			}
-			defer enforceSendmsgLnk.Close()
+	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after syscall attach succeeds.
+	if cfg.Mode != config.ModeEnforce {
+		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+			return fmt.Errorf("agent ready status: %w", err)
 		}
 	}
 
@@ -2105,10 +2130,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 				}
 			}
 		}
-	}
-
-	if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-		slog.Warn("agent status", "err", err)
 	}
 
 	if cfg.EventsLogPath != "" {
@@ -2258,7 +2279,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, runCancel)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState)
 		}()
 	}
 	if dnsRd != nil {

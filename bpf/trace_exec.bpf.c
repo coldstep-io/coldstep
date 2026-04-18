@@ -45,7 +45,13 @@ int handle_sched_process_exec(void *ctx)
 	loc = e->__data_loc_filename;
 	off = loc & 0xFFFF;
 	len = (loc >> 16) & 0xFFFF;
-	if (len > 0 && off < 4096) {
+	/*
+	 * __data_loc packs the string as (length<<16 | offset) relative to the
+	 * start of the trace record. Guard both: off must be non-zero (offset 0
+	 * is the fixed record header, never the dynamic string section) and
+	 * reasonably small (trace records are page-bounded).
+	 */
+	if (len > 0 && off > 0 && off < 4096) {
 		src = (void *)((__u64)e + off); /* __data_loc: offset from trace record start */
 		if (len >= EXE_PATH_MAX)
 			len = EXE_PATH_MAX - 1;

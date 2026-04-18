@@ -5,6 +5,7 @@ package agent
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -687,5 +688,50 @@ func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
 	}
 	if len(in.FSRows) != 1 || in.FSRows[0].Path != "/tmp/x" {
 		t.Fatalf("FSRows unexpected: %+v", in.FSRows)
+	}
+}
+
+// Regression: composite action polls .coldstep-ready.json as the runner user while coldstep runs
+// under sudo — root-only 0600 caused EACCES; payload is intentionally world-readable.
+func TestWriteAgentStatus_WorldReadableAndJSON(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, ".coldstep-ready.json")
+	if err := writeAgentStatus(p, true); err != nil {
+		t.Fatal(err)
+	}
+	fi, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	perm := fi.Mode().Perm()
+	if perm&0o004 == 0 {
+		t.Fatalf("status file must be readable by other (GitHub Actions runner); mode=%#o", perm)
+	}
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		OK      bool `json:"ok"`
+		Version int  `json:"version"`
+	}
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("json: %v body=%q", err, string(raw))
+	}
+	if !m.OK || m.Version != 1 {
+		t.Fatalf("unexpected payload: %+v", m)
+	}
+	if err := writeAgentStatus(p, false); err != nil {
+		t.Fatal(err)
+	}
+	raw2, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(raw2, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m.OK {
+		t.Fatal("expected ok false")
 	}
 }

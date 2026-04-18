@@ -1,8 +1,8 @@
-/* TLS ClientHello sniff on IPv4 TCP (write(2) or sendto(2) with NULL dest), correlated with prior connect(2). */
+/* TLS ClientHello sniff on IPv4 TCP (write(2), writev(2), or sendto(2) with NULL dest), correlated with prior connect(2). */
 #ifndef TRACE_TLS_WRITE_INC
 #define TRACE_TLS_WRITE_INC
 
-/* Shared by __NR_write and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
+/* Shared by __NR_write, __NR_writev, and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
 static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	{
@@ -33,11 +33,14 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			/* Constant read size — variable peeksz trips strict verifiers on some runners. */
 			if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 				return;
-			if (peek[0] != 0x16)
+			if (peek[0] != 0x16)   /* ContentType: Handshake */
 				return;
-			if (peek[1] != 0x03)
+			if (peek[1] != 0x03)   /* LegacyRecordVersion major byte */
 				return;
-			if (peek[5] != 0x01)
+			/* Minor byte: 0x00–0x04 covers SSLv3 through TLS 1.3 legacy values. */
+			if (peek[2] > 0x04)
+				return;
+			if (peek[5] != 0x01)   /* HandshakeType: ClientHello */
 				return;
 		}
 
@@ -76,22 +79,31 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul,
 						   unsigned long si_ul, unsigned long dx_ul)
 {
-	if (id == (long)COLDSTEP_NR_CLOSE) {
-		__u32 fd32 = (__u32)di_ul;
-		{
-			__u64 pt = bpf_get_current_pid_tgid();
-			__u32 tgid = (__u32)(pt >> 32);
-			__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+	if (id == (long)COLDSTEP_NR_WRITE) {
+		try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
+		return 0;
+	}
 
-			bpf_map_delete_elem(&connect4_by_tgid_fd, &mkey);
+	if (id == (long)COLDSTEP_NR_WRITEV) {
+		struct coldstep_iovec iov0 = {};
+		if (dx_ul > 0 && si_ul) {
+			if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)si_ul) == 0) {
+				/*
+				 * iov_len comes from untrusted userspace memory. Cap it to
+				 * TLS_PAYLOAD_MAX before the sniff call as defence-in-depth;
+				 * coldstep_probe_user_sz_tls() would also clamp, but an
+				 * explicit pre-cap keeps the verifier scalar range tight and
+				 * makes the intent self-documenting.
+				 */
+				__u32 iov_len = coldstep_syscall_len_u32(iov0.iov_len);
+				if (iov_len > TLS_PAYLOAD_MAX)
+					iov_len = TLS_PAYLOAD_MAX;
+				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, iov_len);
+			}
 		}
 		return 0;
 	}
 
-	if (id != (long)COLDSTEP_NR_WRITE)
-		return 0;
-
-	try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
 	return 0;
 }
 

@@ -3,20 +3,15 @@
 #define TRACE_UDP_SENDMSG_INC
 
 /*
- * glibc/Linux LP64 userspace layout (verified for x86_64 + aarch64):
- *   offsetof(msg_name)    = 0
- *   offsetof(msg_namelen)   = 8   (socklen_t 4 + padding before msg_iov)
- *   offsetof(msg_iov)       = 16
- *   offsetof(msg_iovlen)    = 24  (size_t)
- */
-struct coldstep_iovec {
-	unsigned long iov_base;
-	unsigned long iov_len;
-};
-
-/*
- * LP64 glibc msghdr: msg_name @0, msg_namelen @8, msg_iov @16, msg_iovlen @24 — read one 32-byte
- * slab from userspace (strict verifiers reject follow-up bpf_probe_read_user at ptr+16/+24).
+ * LP64 glibc msghdr layout (x86_64 + aarch64, verified):
+ *   msg_name    @ 0  (void *, 8 bytes)
+ *   msg_namelen @ 8  (socklen_t 4 bytes + 4-byte pad)
+ *   msg_iov     @ 16 (struct iovec *, 8 bytes)
+ *   msg_iovlen  @ 24 (size_t, 8 bytes)
+ *
+ * Read as a single 32-byte slab so the verifier sees one bounded probe rather
+ * than multiple ptr+offset reads (strict 6.x kernels reject chained probes).
+ * struct coldstep_iovec layout is documented in trace_connect_obs.h.
  */
 static __always_inline int coldstep_read_msghdr_head32(unsigned long msg_hdr_ptr, __u8 *out32)
 {

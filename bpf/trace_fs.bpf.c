@@ -21,6 +21,7 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #error "coldstep trace_fs: unsupported BPF arch (need bpf_target_x86/arm64)"
 #endif
 
+/* O_CREAT = 0100 octal = 0x40: consistent on x86_64 and aarch64 (guarded by #else #error above). */
 #define O_CREAT 0x40
 
 #define FS_PATH_MAX 256

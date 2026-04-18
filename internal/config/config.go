@@ -144,7 +144,7 @@ func LoadFromEnv() (Config, error) {
 
 func envBoolTrue(key string) bool {
 	v := strings.TrimSpace(os.Getenv(key))
-	return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes")
+	return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes") || strings.EqualFold(v, "on")
 }
 
 // Policy returns the parsed allow-list policy (never nil; may be disabled).

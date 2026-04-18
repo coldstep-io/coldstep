@@ -31009,6 +31009,30 @@ const core = __importStar(__nccwpck_require__(7484));
 const child_process_1 = __nccwpck_require__(5317);
 const fs = __importStar(__nccwpck_require__(9896));
 const path = __importStar(__nccwpck_require__(6928));
+function tailUtf8File(filePath, maxChars) {
+    try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        if (raw.length <= maxChars) {
+            return raw;
+        }
+        return raw.slice(-maxChars);
+    }
+    catch {
+        return '';
+    }
+}
+function headUtf8File(filePath, maxChars) {
+    try {
+        const raw = fs.readFileSync(filePath, 'utf8');
+        if (raw.length <= maxChars) {
+            return raw;
+        }
+        return raw.slice(0, maxChars);
+    }
+    catch {
+        return '';
+    }
+}
 function inputBoolDefault(name, defaultVal) {
     const v = core.getInput(name);
     if (v === '') {
@@ -31016,7 +31040,19 @@ function inputBoolDefault(name, defaultVal) {
     }
     return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
-async function waitForAgentReady(statusPath, timeoutMs, child) {
+function pidLooksAlive(pid) {
+    if (pid === undefined || pid <= 0) {
+        return undefined;
+    }
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
     let exitedEarly = false;
     let exitCode = null;
     let exitSignal = null;
@@ -31028,34 +31064,103 @@ async function waitForAgentReady(statusPath, timeoutMs, child) {
     if (child) {
         child.on('exit', onExit);
     }
+    /** Clock start when JSON.parse repeatedly fails on a non-empty file (atomic write grace window). */
+    let malformedSince = null;
+    const malformedBudgetMs = 45_000;
     try {
-        const deadline = Date.now() + timeoutMs;
+        const waitStart = Date.now();
+        const deadline = waitStart + timeoutMs;
+        let lastProgressLog = waitStart;
         while (Date.now() < deadline) {
-            if (exitedEarly) {
-                core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
-                return false;
-            }
-            try {
-                if (fs.existsSync(statusPath)) {
-                    const raw = fs.readFileSync(statusPath, 'utf8');
-                    const j = JSON.parse(raw);
-                    if (j.ok === true) {
-                        return true;
+            // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
+            // kernel deny event immediately; fail-fast deny handling used to exit the process while the
+            // status file still contained ok:true, and checking exitedEarly first made us miss it.
+            if (fs.existsSync(statusPath)) {
+                const raw = fs.readFileSync(statusPath, 'utf8').trim();
+                let parsed;
+                try {
+                    parsed = JSON.parse(raw);
+                }
+                catch {
+                    malformedSince ??= Date.now();
+                    if (Date.now() - malformedSince >= malformedBudgetMs) {
+                        return 'malformed_status';
                     }
+                    /* keep polling — likely mid-write */
+                }
+                if (parsed !== undefined) {
+                    malformedSince = null;
+                    if (parsed.ok === true) {
+                        return 'ready';
+                    }
+                    if (parsed.ok === false) {
+                        return 'explicit_not_ready';
+                    }
+                    if (parsed.ok !== undefined && parsed.ok !== null) {
+                        core.error(`coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`);
+                        return 'explicit_not_ready';
+                    }
+                    /* ok missing — likely incomplete write; keep polling */
                 }
             }
-            catch {
-                /* retry */
+            else {
+                malformedSince = null;
+            }
+            if (exitedEarly) {
+                core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
+                return 'child_exit';
+            }
+            const progressEvery = opts?.progressEveryMs ?? 0;
+            if (progressEvery > 0) {
+                const now = Date.now();
+                if (now - lastProgressLog >= progressEvery) {
+                    lastProgressLog = now;
+                    const elapsedSec = Math.round((now - waitStart) / 1000);
+                    const budgetSec = Math.round(timeoutMs / 1000);
+                    const hasFile = fs.existsSync(statusPath);
+                    let okHint = '';
+                    try {
+                        if (hasFile) {
+                            const j = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+                            okHint =
+                                typeof j.ok === 'boolean'
+                                    ? `parsed ok=${j.ok}`
+                                    : `parsed ok field=${JSON.stringify(j.ok)}`;
+                        }
+                    }
+                    catch {
+                        okHint = 'parse failed (truncated JSON?)';
+                    }
+                    const alive = pidLooksAlive(child?.pid);
+                    core.info(`fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? 'present' : 'missing'}${hasFile ? ` — ${okHint}` : ''}; sudo child pid=${child?.pid ?? 'none'} ${alive === undefined ? '' : alive ? '(alive)' : '(not running)'}`);
+                }
             }
             await new Promise((r) => setTimeout(r, 150));
         }
-        return false;
+        return 'timeout';
     }
     finally {
         if (child) {
             child.off('exit', onExit);
         }
     }
+}
+function parseReadyTimeoutMs() {
+    const raw = core.getInput('ready-timeout-seconds').trim();
+    const fallback = 25 * 60;
+    if (raw === '') {
+        return fallback * 1000;
+    }
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n)) {
+        core.warning(`ready-timeout-seconds invalid (${raw}); using ${fallback}s`);
+        return fallback * 1000;
+    }
+    const clamped = Math.min(Math.max(n, 60), 45 * 60);
+    if (clamped !== n) {
+        core.warning(`ready-timeout-seconds clamped from ${n} to ${clamped}s (bounds 60–${45 * 60})`);
+    }
+    return clamped * 1000;
 }
 async function run() {
     if (process.platform !== 'linux') {
@@ -31086,6 +31191,10 @@ async function run() {
     fs.writeFileSync(detectLog, '', 'utf8');
     if (fs.existsSync(agentStatus)) {
         fs.unlinkSync(agentStatus);
+    }
+    const stderrLog = path.join(baseDir, '.coldstep-agent.stderr.log');
+    if (failOnError && fs.existsSync(stderrLog)) {
+        fs.unlinkSync(stderrLog);
     }
     if (releasePath) {
         const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
@@ -31120,12 +31229,28 @@ async function run() {
     if (smokeTestEgress) {
         childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
     }
+    // Use numeric fds (not WriteStream): with detached:true the stream may still have fd=null and
+    // spawn rejects stdio (see Node child_process validation).
+    let stderrFd;
+    let stdio = 'ignore';
+    if (failOnError) {
+        stderrFd = fs.openSync(stderrLog, 'w', 0o600);
+        stdio = ['ignore', 'ignore', stderrFd];
+    }
     const child = (0, child_process_1.spawn)('sudo', ['-E', binPath, 'run'], {
         cwd: actionPath,
         env: childEnv,
         detached: true,
-        stdio: 'ignore',
+        stdio,
     });
+    if (stderrFd !== undefined) {
+        try {
+            fs.closeSync(stderrFd);
+        }
+        catch {
+            /* ignore */
+        }
+    }
     child.on('error', (err) => {
         core.error(`coldstep: failed to spawn agent (${err.message})`);
     });
@@ -31154,7 +31279,7 @@ async function run() {
             'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
             's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
             's.connect(addr)',
-            's.sendto(req, 0, addr)',
+            's.sendall(req)',
             's.close()',
             'PY',
             'fi',
@@ -31167,17 +31292,49 @@ async function run() {
         core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
-        // Hosted runners sometimes spend >60s on apt/kernel churn before the agent starts; enforce
-        // mode also resolves allowlist domains sequentially (context timeout is enforced in Go).
-        const ok = await waitForAgentReady(agentStatus, 180_000, child);
-        if (!ok) {
-            core.setFailed('coldstep agent did not become ready (BPF/load/DNS); see job logs and ensure ubuntu-latest.');
+        // Hosted runners: allowlist DNS (bounded), then BPF loads. Enforce mode writes ready only after
+        // traceenforce + cgroup attach; verifier can be slow. If the status file exists with ok:false,
+        // fail immediately (do not burn runner minutes until max wait).
+        const readyBudgetMs = parseReadyTimeoutMs();
+        core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file); adjust ready-timeout-seconds input if needed`);
+        core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
+        const outcome = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
+            progressEveryMs: 45_000,
+        });
+        if (outcome !== 'ready') {
+            if (fs.existsSync(agentStatus)) {
+                const head = headUtf8File(agentStatus, 220);
+                if (head.trim() !== '') {
+                    core.error(`coldstep-ready snapshot (${agentStatus}, first 220 chars):\n${head}${head.length >= 220 ? '…' : ''}`);
+                }
+            }
+            const tail = tailUtf8File(stderrLog, 14_000);
+            if (tail.trim() !== '') {
+                core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
+            }
+            if (outcome === 'explicit_not_ready') {
+                core.setFailed('coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape — enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README.');
+            }
+            else if (outcome === 'malformed_status') {
+                core.setFailed(`${agentStatus} exists but is not valid JSON for ~45s (partial write or corruption). Check disk/workspace path and agent logs.`);
+            }
+            else if (outcome === 'child_exit') {
+                core.setFailed('coldstep agent exited before reporting ready (see stderr tail above if present).');
+            }
+            else {
+                core.setFailed(`coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`);
+            }
             try {
                 process.kill(child.pid, 'SIGTERM');
             }
             catch {
                 /* ignore */
             }
+        }
+        else {
+            // Persist for post: the agent may clear/update `.coldstep-ready.json` after this step returns
+            // if a later BPF attach fails (see agent_linux syscall-trace enforcement).
+            core.saveState('coldstep_wait_ready_ok', 'true');
         }
     }
 }

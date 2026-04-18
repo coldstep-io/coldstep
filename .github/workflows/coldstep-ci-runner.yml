@@ -375,7 +375,8 @@ jobs:
 
   prevent-mode:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 
@@ -385,6 +386,18 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.24.x'
+
+      # Cache skips clang+bpf rebuild when sources unchanged — composite uses release-path so startup
+      # stays fast under fail-on-error (BPF verifier remains on first load inside the agent).
+      - uses: actions/cache@v4
+        id: coldstep-bin-cache
+        with:
+          path: bin/coldstep
+          key: coldstep-prevent-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh') }}
+
+      - name: Build Linux agent (runs on cache miss only)
+        if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |
@@ -412,6 +425,7 @@ jobs:
         with:
           mode: enforce
           fail-on-error: 'true'
+          release-path: bin/coldstep
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           allowed-ips: 1.1.1.1
@@ -448,19 +462,6 @@ jobs:
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
             echo "expected direct IP connect to be blocked under enforce allowlist"
             exit 1
-          fi
-
-      - name: Optional IPv6 egress probe (informational, non-blocking)
-        run: |
-          set -euo pipefail
-          if [[ ! -r /proc/net/if_inet6 ]]; then
-            echo "coldstep-ci: skip IPv6 probe (no /proc/net/if_inet6)"
-            exit 0
-          fi
-          if curl -6 --max-time 4 -fsS https://example.com/ >/dev/null 2>&1; then
-            echo "coldstep-ci: IPv6 HTTPS probe to example.com succeeded"
-          else
-            echo "coldstep-ci: IPv6 HTTPS probe skipped or failed (non-blocking)"
           fi
 
       - name: Stop agent (flush digest to workspace)
