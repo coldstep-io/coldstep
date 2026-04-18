@@ -32,7 +32,10 @@ scripts/__pycache__/
 # Local deep-debug pass output (scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
-# Design documents belong in docs/ (tracked). Ignore stray copies under .github only.
+# Design/plans/specs live under docs/ locally — never committed (agents: do not git add docs/).
+/docs/
+
+# Ignore stray copies under .github only.
 /.github/design/
 
 # Markdown / Obsidian vault — entire tree local only; nothing under knowledge/ is committed (see AGENTS.md).
