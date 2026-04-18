@@ -464,19 +464,6 @@ jobs:
             exit 1
           fi
 
-      - name: Optional IPv6 egress probe (informational, non-blocking)
-        run: |
-          set -euo pipefail
-          if [[ ! -r /proc/net/if_inet6 ]]; then
-            echo "coldstep-ci: skip IPv6 probe (no /proc/net/if_inet6)"
-            exit 0
-          fi
-          if curl -6 --max-time 4 -fsS https://example.com/ >/dev/null 2>&1; then
-            echo "coldstep-ci: IPv6 HTTPS probe to example.com succeeded"
-          else
-            echo "coldstep-ci: IPv6 HTTPS probe skipped or failed (non-blocking)"
-          fi
-
       - name: Stop agent (flush digest to workspace)
         run: |
           set -euo pipefail

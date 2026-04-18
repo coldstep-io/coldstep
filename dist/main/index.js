@@ -31052,6 +31052,9 @@ async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
     if (child) {
         child.on('exit', onExit);
     }
+    /** Clock start when JSON.parse repeatedly fails on a non-empty file (atomic write grace window). */
+    let malformedSince = null;
+    const malformedBudgetMs = 45_000;
     try {
         const waitStart = Date.now();
         const deadline = waitStart + timeoutMs;
@@ -31060,21 +31063,40 @@ async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
             // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
             // kernel deny event immediately; fail-fast deny handling used to exit the process while the
             // status file still contained ok:true, and checking exitedEarly first made us miss it.
-            try {
-                if (fs.existsSync(statusPath)) {
-                    const raw = fs.readFileSync(statusPath, 'utf8');
-                    const j = JSON.parse(raw);
-                    if (j.ok === true) {
-                        return true;
+            if (fs.existsSync(statusPath)) {
+                const raw = fs.readFileSync(statusPath, 'utf8').trim();
+                let parsed;
+                try {
+                    parsed = JSON.parse(raw);
+                }
+                catch {
+                    malformedSince ??= Date.now();
+                    if (Date.now() - malformedSince >= malformedBudgetMs) {
+                        return 'malformed_status';
                     }
+                    /* keep polling — likely mid-write */
+                }
+                if (parsed !== undefined) {
+                    malformedSince = null;
+                    if (parsed.ok === true) {
+                        return 'ready';
+                    }
+                    if (parsed.ok === false) {
+                        return 'explicit_not_ready';
+                    }
+                    if (parsed.ok !== undefined && parsed.ok !== null) {
+                        core.error(`coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`);
+                        return 'explicit_not_ready';
+                    }
+                    /* ok missing — likely incomplete write; keep polling */
                 }
             }
-            catch {
-                /* retry */
+            else {
+                malformedSince = null;
             }
             if (exitedEarly) {
                 core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
-                return false;
+                return 'child_exit';
             }
             const progressEvery = opts?.progressEveryMs ?? 0;
             if (progressEvery > 0) {
@@ -31084,19 +31106,49 @@ async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
                     const elapsedSec = Math.round((now - waitStart) / 1000);
                     const budgetSec = Math.round(timeoutMs / 1000);
                     const hasFile = fs.existsSync(statusPath);
+                    let okHint = '';
+                    try {
+                        if (hasFile) {
+                            const j = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
+                            okHint =
+                                typeof j.ok === 'boolean'
+                                    ? `parsed ok=${j.ok}`
+                                    : `parsed ok field=${JSON.stringify(j.ok)}`;
+                        }
+                    }
+                    catch {
+                        okHint = 'parse failed (truncated JSON?)';
+                    }
                     const alive = pidLooksAlive(child?.pid);
-                    core.info(`fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? 'present' : 'missing'}; sudo child pid=${child?.pid ?? 'none'} ${alive === undefined ? '' : alive ? '(alive)' : '(not running)'}`);
+                    core.info(`fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? 'present' : 'missing'}${hasFile ? ` — ${okHint}` : ''}; sudo child pid=${child?.pid ?? 'none'} ${alive === undefined ? '' : alive ? '(alive)' : '(not running)'}`);
                 }
             }
             await new Promise((r) => setTimeout(r, 150));
         }
-        return false;
+        return 'timeout';
     }
     finally {
         if (child) {
             child.off('exit', onExit);
         }
     }
+}
+function parseReadyTimeoutMs() {
+    const raw = core.getInput('ready-timeout-seconds').trim();
+    const fallback = 25 * 60;
+    if (raw === '') {
+        return fallback * 1000;
+    }
+    const n = Number.parseInt(raw, 10);
+    if (!Number.isFinite(n)) {
+        core.warning(`ready-timeout-seconds invalid (${raw}); using ${fallback}s`);
+        return fallback * 1000;
+    }
+    const clamped = Math.min(Math.max(n, 60), 45 * 60);
+    if (clamped !== n) {
+        core.warning(`ready-timeout-seconds clamped from ${n} to ${clamped}s (bounds 60–${45 * 60})`);
+    }
+    return clamped * 1000;
 }
 async function run() {
     if (process.platform !== 'linux') {
@@ -31228,21 +31280,32 @@ async function run() {
         core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
     }
     if (failOnError) {
-        // Hosted runners: apt/kernel setup, allowlist DNS (bounded in Go), then BPF collection loads.
-        // Enforce mode emits ready only after traceenforce BPF loads + cgroup attach; kernel verifier
-        // time can exceed 15 minutes on ubuntu-latest under load — keep below typical job timeouts (45m).
-        const readyBudgetMs = 25 * 60 * 1000;
-        core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file)`);
+        // Hosted runners: allowlist DNS (bounded), then BPF loads. Enforce mode writes ready only after
+        // traceenforce + cgroup attach; verifier can be slow. If the status file exists with ok:false,
+        // fail immediately (do not burn runner minutes until max wait).
+        const readyBudgetMs = parseReadyTimeoutMs();
+        core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file); adjust ready-timeout-seconds input if needed`);
         core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
-        const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
+        const outcome = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
             progressEveryMs: 45_000,
         });
-        if (!ok) {
+        if (outcome !== 'ready') {
             const tail = tailUtf8File(stderrLog, 14_000);
             if (tail.trim() !== '') {
                 core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
             }
-            core.setFailed(`coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach); ensure ubuntu-latest, raise workflow timeout if needed, and see COLDSTEP_BPF_VERBOSE_VERIFY in README for diagnostics.`);
+            if (outcome === 'explicit_not_ready') {
+                core.setFailed('coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape — enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README.');
+            }
+            else if (outcome === 'malformed_status') {
+                core.setFailed(`${agentStatus} exists but is not valid JSON for ~45s (partial write or corruption). Check disk/workspace path and agent logs.`);
+            }
+            else if (outcome === 'child_exit') {
+                core.setFailed('coldstep agent exited before reporting ready (see stderr tail above if present).');
+            }
+            else {
+                core.setFailed(`coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`);
+            }
             try {
                 process.kill(child.pid, 'SIGTERM');
             }

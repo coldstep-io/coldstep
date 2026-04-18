@@ -52,6 +52,13 @@ inputs:
       programs. Does not fail on egress policy violations (v1).
     required: false
     default: 'false'
+  ready-timeout-seconds:
+    description: >-
+      Only when fail-on-error is true: maximum seconds to wait for .coldstep-ready.json with ok:true (default 1500).
+      Values are clamped between 60 and 2700. If the agent writes ok:false or an invalid payload, the step fails
+      immediately without waiting this long (saves runner minutes).
+    required: false
+    default: ''
   log-level:
     description: Agent log level written to stderr (debug, info, warn, error).
     required: false
