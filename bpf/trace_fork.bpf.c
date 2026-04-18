@@ -14,6 +14,11 @@ struct fork_event {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	/*
+	 * 1<<22 = 4 MiB. fork_event is 52 bytes so this holds ~80,000 events —
+	 * far more than any CI pipeline produces. Intentionally smaller than the
+	 * 1<<24 (16 MiB) used by network ringbufs whose payloads are much larger.
+	 */
 	__uint(max_entries, 1 << 22);
 } fork_events SEC(".maps");
 

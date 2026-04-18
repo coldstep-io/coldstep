@@ -128,9 +128,16 @@ static __always_inline __u32 coldstep_probe_user_sz_http(__u32 len_in)
 {
 	__u32 s = len_in;
 
+	/*
+	 * Double-clamp + mask pattern matching coldstep_probe_user_sz_tls:
+	 * first clamp caps the value, mask gives the verifier a power-of-2 range
+	 * proof, second clamp enforces the exact ceiling after the mask.
+	 */
 	if (s > HTTP_PAYLOAD_MAX)
 		s = HTTP_PAYLOAD_MAX;
-	s &= 0xffu;
+	s &= 0xffu; /* 255: smallest 2^n-1 >= HTTP_PAYLOAD_MAX(192); verifier range proof */
+	if (s > HTTP_PAYLOAD_MAX)
+		s = HTTP_PAYLOAD_MAX;
 	return s;
 }
 
@@ -242,7 +249,7 @@ static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr,
 	/* Constant size 4 for strict verifiers (see read_ipv4_sockaddr). */
 	if (bpf_probe_read_user(p, 4, (void *)buf_ptr))
 		return 0;
-	/* GET / POST / HEAD / PUT — space or T for POST */
+	/* GET / POST / HEAD / PUT / DELETE / PATCH / OPTIONS / CONNECT */
 	if (p[0] == 'G' && p[1] == 'E' && p[2] == 'T' && p[3] == ' ')
 		return 1;
 	if (p[0] == 'P' && p[1] == 'O' && p[2] == 'S' && p[3] == 'T')
@@ -250,6 +257,14 @@ static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr,
 	if (p[0] == 'H' && p[1] == 'E' && p[2] == 'A' && p[3] == 'D')
 		return 1;
 	if (p[0] == 'P' && p[1] == 'U' && p[2] == 'T' && p[3] == ' ')
+		return 1;
+	if (p[0] == 'D' && p[1] == 'E' && p[2] == 'L' && p[3] == 'E')
+		return 1;
+	if (p[0] == 'P' && p[1] == 'A' && p[2] == 'T' && p[3] == 'C')
+		return 1;
+	if (p[0] == 'O' && p[1] == 'P' && p[2] == 'T' && p[3] == 'I')
+		return 1;
+	if (p[0] == 'C' && p[1] == 'O' && p[2] == 'N' && p[3] == 'N')
 		return 1;
 	return 0;
 }

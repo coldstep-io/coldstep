@@ -33,7 +33,13 @@ struct dns_sniff_event {
 };
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	/*
+	 * LRU map so entries from processes that exit between sys_enter and
+	 * sys_exit (killed, signalled) are automatically evicted. A plain
+	 * BPF_MAP_TYPE_HASH would fill up on runner process churn, causing
+	 * bpf_map_update_elem to fail and silently miss DNS responses.
+	 */
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 16384);
 	__type(key, __u64);
 	__type(value, struct recvfrom_pending);
@@ -56,10 +62,27 @@ struct {
 	__type(value, __u32);
 } dns_ringbuf_reserve_failures SEC(".maps");
 
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} dns_recvfrom_buf_update_failures SEC(".maps");
+
 static __always_inline void note_dns_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&dns_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_dns_recvfrom_buf_update_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&dns_recvfrom_buf_update_failures, &k);
 
 	if (!v)
 		return;
@@ -96,7 +119,8 @@ int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 		val.max_len = (__u32)max_len_u;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
-	bpf_map_update_elem(&recvfrom_buf, &pid_tgid, &val, BPF_ANY);
+	if (bpf_map_update_elem(&recvfrom_buf, &pid_tgid, &val, BPF_ANY))
+		note_dns_recvfrom_buf_update_failed();
 	return 0;
 }
 

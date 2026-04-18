@@ -2,8 +2,8 @@
  * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64):
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4-only UDP via sendto(2) and sendmsg(2) (not complete for all UDP egress paths)
- *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/sendto
- *   - close(2) clears (tgid,fd) map entries
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/sendto
+ *   - LRU map eviction handles stale (tgid,fd) entries (close(2) cleanup removed)
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
  * (structural layout similar to separate tcp/udp/http probe sources).
@@ -119,21 +119,26 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	if (id == (long)COLDSTEP_NR_SENDTO) {
-		unsigned long buf_ptr, len_ul, addr_ul, di_ul = 0;
+		unsigned long di_ul = 0, buf_ptr = 0, len_ul = 0, addr_ul = 0;
 		__u32 len;
 		__be16 sin_port;
 		__be32 sin_addr;
 
+		/* Read args in syscall order: fd(0), buf(1), len(2), [skip flags(3)], addr(4). */
+		if (ns_read_syscall_arg(regs, 0, &di_ul))
+			return 0;
 		if (ns_read_syscall_arg(regs, 1, &buf_ptr))
 			return 0;
 		if (ns_read_syscall_arg(regs, 2, &len_ul))
-			return 0;
-		if (ns_read_syscall_arg(regs, 0, &di_ul))
 			return 0;
 		if (ns_read_syscall_arg(regs, 4, &addr_ul))
 			return 0;
 
 		if (!addr_ul) {
+			/*
+			 * NULL destination pointer — connected socket; look up dst
+			 * from the prior connect(2) (tgid,fd) correlation map.
+			 */
 			__u64 pt = bpf_get_current_pid_tgid();
 			__u32 tgid = (__u32)(pt >> 32);
 			__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)di_ul;
@@ -158,7 +163,14 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		    http_prefix_looks_like_request(buf_ptr, len))
 			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 
-		try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
+		/*
+		 * TLS ClientHello sniff only makes sense on connected TCP sockets
+		 * (addr_ul == NULL path). Skipping for explicit-dest sendto avoids
+		 * a wasted connect4_by_tgid_fd lookup on every UDP sendto.
+		 */
+		if (!addr_ul)
+			try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
+
 		return 0;
 	}
 

@@ -33,11 +33,14 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 			/* Constant read size — variable peeksz trips strict verifiers on some runners. */
 			if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 				return;
-			if (peek[0] != 0x16)
+			if (peek[0] != 0x16)   /* ContentType: Handshake */
 				return;
-			if (peek[1] != 0x03)
+			if (peek[1] != 0x03)   /* LegacyRecordVersion major byte */
 				return;
-			if (peek[5] != 0x01)
+			/* Minor byte: 0x00–0x04 covers SSLv3 through TLS 1.3 legacy values. */
+			if (peek[2] > 0x04)
+				return;
+			if (peek[5] != 0x01)   /* HandshakeType: ClientHello */
 				return;
 		}
 
