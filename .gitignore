@@ -28,17 +28,16 @@ AGENTS.md
 .coldstep-detect.md
 .coldstep-agent.stderr.log
 scripts/__pycache__/
-/docs/
 
 # Local deep-debug pass output (scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
-# Agent/design specs (local only; do not publish)
-/.github/design/
-
-# Markdown / Obsidian vault — entire tree local only; nothing under knowledge/ is committed (see AGENTS.md).
-# Keep knowledge/README.md and knowledge/Index.md in your working tree; do not delete them; do not git add -f.
+# Local-only trees — never staged, never committed (do not `git add` docs/ or knowledge/, never `git add -f`).
+/docs/
 /knowledge/
+
+# Ignore stray copies under .github only.
+/.github/design/
 
 # Knowledge vault tooling used to live here; keep ignored so it is never committed by mistake.
 /scripts/knowledge_records_backfill.py

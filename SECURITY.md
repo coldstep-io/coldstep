@@ -41,4 +41,4 @@ No userland agent can promise **complete** observation of every kernel path on e
 
 ### Further reading
 
-Optional extended design notes may live under **`.github/design/`** in a maintainer checkout; that tree is **not** part of the published repository. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.
+Maintain optional extended design material under **`docs/design/`** in your clone; that tree is **gitignored** and **not** published from Git. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.

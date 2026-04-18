@@ -3998,11 +3998,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto;
+    var crypto2;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto2.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -4275,7 +4275,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto === void 0) {
+      if (crypto2 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4290,7 +4290,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto2.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5354,8 +5354,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto = require("node:crypto");
-      random = (max) => crypto.randomInt(0, max);
+      const crypto2 = require("node:crypto");
+      random = (max) => crypto2.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -5455,49 +5455,58 @@ Content-Type: ${value.type || "application/octet-stream"}\r
             }
           }
         };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
-Object.defineProperty(exports, "__esModule", ({ value: true }));
-const core = __importStar(__nccwpck_require__(7484));
-const child_process_1 = __nccwpck_require__(5317);
-const fs = __importStar(__nccwpck_require__(9896));
-const path = __importStar(__nccwpck_require__(6928));
-function tailUtf8File(filePath, maxChars) {
-    try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        if (raw.length <= maxChars) {
-            return raw;
+        type = `multipart/form-data; boundary=${boundary}`;
+      } else if (isBlobLike(object)) {
+        source = object;
+        length = object.size;
+        if (object.type) {
+          type = object.type;
         }
-        return raw.slice(-maxChars);
-    }
-    catch {
-        return '';
-    }
-}
-function headUtf8File(filePath, maxChars) {
-    try {
-        const raw = fs.readFileSync(filePath, 'utf8');
-        if (raw.length <= maxChars) {
-            return raw;
+      } else if (typeof object[Symbol.asyncIterator] === "function") {
+        if (keepalive) {
+          throw new TypeError("keepalive");
         }
-        return raw.slice(0, maxChars);
-    }
-    catch {
-        return '';
-    }
-}
-function inputBoolDefault(name, defaultVal) {
-    const v = core.getInput(name);
-    if (v === '') {
-        return defaultVal;
+        if (util.isDisturbed(object) || object.locked) {
+          throw new TypeError(
+            "Response body object should not be disturbed or locked"
+          );
+        }
+        stream = object instanceof ReadableStream ? object : ReadableStreamFrom(object);
+      }
+      if (typeof source === "string" || util.isBuffer(source)) {
+        length = Buffer.byteLength(source);
+      }
+      if (action != null) {
+        let iterator;
+        stream = new ReadableStream({
+          async start() {
+            iterator = action(object)[Symbol.asyncIterator]();
+          },
+          async pull(controller) {
+            const { value, done } = await iterator.next();
+            if (done) {
+              queueMicrotask(() => {
+                controller.close();
+                controller.byobRequest?.respond(0);
+              });
+            } else {
+              if (!isErrored(stream)) {
+                const buffer = new Uint8Array(value);
+                if (buffer.byteLength) {
+                  controller.enqueue(buffer);
+                }
+              }
+            }
+            return controller.desiredSize > 0;
+          },
+          async cancel(reason) {
+            await iterator.return();
+          },
+          type: "bytes"
+        });
+      }
+      const body = { stream, source, length };
+      return [body, type];
     }
     function safelyExtractBody(object, keepalive = false) {
       if (object instanceof ReadableStream) {
@@ -16754,13 +16763,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto;
+    var crypto2;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
     } catch {
-      crypto = {
+      crypto2 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -16773,7 +16782,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto2.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -16845,9 +16854,9 @@ var require_connection = __commonJS({
     var { Headers: Headers2, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto;
+    var crypto2;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -16867,7 +16876,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers2(options.headers));
         request.headersList = headersList;
       }
-      const keyValue = crypto.randomBytes(16).toString("base64");
+      const keyValue = crypto2.randomBytes(16).toString("base64");
       request.headersList.append("sec-websocket-key", keyValue);
       request.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -16897,7 +16906,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto2.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -18586,127 +18595,634 @@ function toCommandValue(input) {
   }
   return JSON.stringify(input);
 }
+function toCommandProperties(annotationProperties) {
+  if (!Object.keys(annotationProperties).length) {
+    return {};
+  }
+  return {
+    title: annotationProperties.title,
+    file: annotationProperties.file,
+    line: annotationProperties.startLine,
+    endLine: annotationProperties.endLine,
+    col: annotationProperties.startColumn,
+    endColumn: annotationProperties.endColumn
+  };
+}
+
+// node_modules/@actions/core/lib/command.js
+function issueCommand(command, properties, message) {
+  const cmd = new Command(command, properties, message);
+  process.stdout.write(cmd.toString() + os.EOL);
+}
+var CMD_STRING = "::";
+var Command = class {
+  constructor(command, properties, message) {
+    if (!command) {
+      command = "missing.command";
+    }
+    this.command = command;
+    this.properties = properties;
+    this.message = message;
+  }
+  toString() {
+    let cmdStr = CMD_STRING + this.command;
+    if (this.properties && Object.keys(this.properties).length > 0) {
+      cmdStr += " ";
+      let first = true;
+      for (const key in this.properties) {
+        if (this.properties.hasOwnProperty(key)) {
+          const val = this.properties[key];
+          if (val) {
+            if (first) {
+              first = false;
+            } else {
+              cmdStr += ",";
+            }
+            cmdStr += `${key}=${escapeProperty(val)}`;
+          }
+        }
+      }
+    }
+    cmdStr += `${CMD_STRING}${escapeData(this.message)}`;
+    return cmdStr;
+  }
+};
+function escapeData(s) {
+  return toCommandValue(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A");
+}
+function escapeProperty(s) {
+  return toCommandValue(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/:/g, "%3A").replace(/,/g, "%2C");
+}
+
+// node_modules/@actions/core/lib/file-command.js
+var crypto = __toESM(require("crypto"), 1);
+var fs = __toESM(require("fs"), 1);
+var os2 = __toESM(require("os"), 1);
+function issueFileCommand(command, message) {
+  const filePath = process.env[`GITHUB_${command}`];
+  if (!filePath) {
+    throw new Error(`Unable to find environment variable for file command ${command}`);
+  }
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Missing file at path: ${filePath}`);
+  }
+  fs.appendFileSync(filePath, `${toCommandValue(message)}${os2.EOL}`, {
+    encoding: "utf8"
+  });
+}
+function prepareKeyValueMessage(key, value) {
+  const delimiter = `ghadelimiter_${crypto.randomUUID()}`;
+  const convertedValue = toCommandValue(value);
+  if (key.includes(delimiter)) {
+    throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
+  }
+  if (convertedValue.includes(delimiter)) {
+    throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
+  }
+  return `${key}<<${delimiter}${os2.EOL}${convertedValue}${os2.EOL}${delimiter}`;
+}
+
+// node_modules/@actions/core/lib/core.js
+var os4 = __toESM(require("os"), 1);
+
+// node_modules/@actions/http-client/lib/index.js
+var tunnel = __toESM(require_tunnel2(), 1);
+var import_undici = __toESM(require_undici(), 1);
+var HttpCodes;
+(function(HttpCodes2) {
+  HttpCodes2[HttpCodes2["OK"] = 200] = "OK";
+  HttpCodes2[HttpCodes2["MultipleChoices"] = 300] = "MultipleChoices";
+  HttpCodes2[HttpCodes2["MovedPermanently"] = 301] = "MovedPermanently";
+  HttpCodes2[HttpCodes2["ResourceMoved"] = 302] = "ResourceMoved";
+  HttpCodes2[HttpCodes2["SeeOther"] = 303] = "SeeOther";
+  HttpCodes2[HttpCodes2["NotModified"] = 304] = "NotModified";
+  HttpCodes2[HttpCodes2["UseProxy"] = 305] = "UseProxy";
+  HttpCodes2[HttpCodes2["SwitchProxy"] = 306] = "SwitchProxy";
+  HttpCodes2[HttpCodes2["TemporaryRedirect"] = 307] = "TemporaryRedirect";
+  HttpCodes2[HttpCodes2["PermanentRedirect"] = 308] = "PermanentRedirect";
+  HttpCodes2[HttpCodes2["BadRequest"] = 400] = "BadRequest";
+  HttpCodes2[HttpCodes2["Unauthorized"] = 401] = "Unauthorized";
+  HttpCodes2[HttpCodes2["PaymentRequired"] = 402] = "PaymentRequired";
+  HttpCodes2[HttpCodes2["Forbidden"] = 403] = "Forbidden";
+  HttpCodes2[HttpCodes2["NotFound"] = 404] = "NotFound";
+  HttpCodes2[HttpCodes2["MethodNotAllowed"] = 405] = "MethodNotAllowed";
+  HttpCodes2[HttpCodes2["NotAcceptable"] = 406] = "NotAcceptable";
+  HttpCodes2[HttpCodes2["ProxyAuthenticationRequired"] = 407] = "ProxyAuthenticationRequired";
+  HttpCodes2[HttpCodes2["RequestTimeout"] = 408] = "RequestTimeout";
+  HttpCodes2[HttpCodes2["Conflict"] = 409] = "Conflict";
+  HttpCodes2[HttpCodes2["Gone"] = 410] = "Gone";
+  HttpCodes2[HttpCodes2["TooManyRequests"] = 429] = "TooManyRequests";
+  HttpCodes2[HttpCodes2["InternalServerError"] = 500] = "InternalServerError";
+  HttpCodes2[HttpCodes2["NotImplemented"] = 501] = "NotImplemented";
+  HttpCodes2[HttpCodes2["BadGateway"] = 502] = "BadGateway";
+  HttpCodes2[HttpCodes2["ServiceUnavailable"] = 503] = "ServiceUnavailable";
+  HttpCodes2[HttpCodes2["GatewayTimeout"] = 504] = "GatewayTimeout";
+})(HttpCodes || (HttpCodes = {}));
+var Headers;
+(function(Headers2) {
+  Headers2["Accept"] = "accept";
+  Headers2["ContentType"] = "content-type";
+})(Headers || (Headers = {}));
+var MediaTypes;
+(function(MediaTypes2) {
+  MediaTypes2["ApplicationJson"] = "application/json";
+})(MediaTypes || (MediaTypes = {}));
+var HttpRedirectCodes = [
+  HttpCodes.MovedPermanently,
+  HttpCodes.ResourceMoved,
+  HttpCodes.SeeOther,
+  HttpCodes.TemporaryRedirect,
+  HttpCodes.PermanentRedirect
+];
+var HttpResponseRetryCodes = [
+  HttpCodes.BadGateway,
+  HttpCodes.ServiceUnavailable,
+  HttpCodes.GatewayTimeout
+];
+
+// node_modules/@actions/core/lib/summary.js
+var import_os = require("os");
+var import_fs = require("fs");
+var __awaiter = function(thisArg, _arguments, P, generator) {
+  function adopt(value) {
+    return value instanceof P ? value : new P(function(resolve) {
+      resolve(value);
+    });
+  }
+  return new (P || (P = Promise))(function(resolve, reject) {
+    function fulfilled(value) {
+      try {
+        step(generator.next(value));
+      } catch (e) {
+        reject(e);
+      }
+    }
+    function rejected(value) {
+      try {
+        step(generator["throw"](value));
+      } catch (e) {
+        reject(e);
+      }
+    }
+    function step(result) {
+      result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+    }
+    step((generator = generator.apply(thisArg, _arguments || [])).next());
+  });
+};
+var { access, appendFile, writeFile } = import_fs.promises;
+var SUMMARY_ENV_VAR = "GITHUB_STEP_SUMMARY";
+var Summary = class {
+  constructor() {
+    this._buffer = "";
+  }
+  /**
+   * Finds the summary file path from the environment, rejects if env var is not found or file does not exist
+   * Also checks r/w permissions.
+   *
+   * @returns step summary file path
+   */
+  filePath() {
+    return __awaiter(this, void 0, void 0, function* () {
+      if (this._filePath) {
+        return this._filePath;
+      }
+      const pathFromEnv = process.env[SUMMARY_ENV_VAR];
+      if (!pathFromEnv) {
+        throw new Error(`Unable to find environment variable for $${SUMMARY_ENV_VAR}. Check if your runtime environment supports job summaries.`);
+      }
+      try {
+        yield access(pathFromEnv, import_fs.constants.R_OK | import_fs.constants.W_OK);
+      } catch (_a) {
+        throw new Error(`Unable to access summary file: '${pathFromEnv}'. Check if the file has correct read/write permissions.`);
+      }
+      this._filePath = pathFromEnv;
+      return this._filePath;
+    });
+  }
+  /**
+   * Wraps content in an HTML tag, adding any HTML attributes
+   *
+   * @param {string} tag HTML tag to wrap
+   * @param {string | null} content content within the tag
+   * @param {[attribute: string]: string} attrs key-value list of HTML attributes to add
+   *
+   * @returns {string} content wrapped in HTML element
+   */
+  wrap(tag, content, attrs = {}) {
+    const htmlAttrs = Object.entries(attrs).map(([key, value]) => ` ${key}="${value}"`).join("");
+    if (!content) {
+      return `<${tag}${htmlAttrs}>`;
+    }
+    return `<${tag}${htmlAttrs}>${content}</${tag}>`;
+  }
+  /**
+   * Writes text in the buffer to the summary buffer file and empties buffer. Will append by default.
+   *
+   * @param {SummaryWriteOptions} [options] (optional) options for write operation
+   *
+   * @returns {Promise<Summary>} summary instance
+   */
+  write(options) {
+    return __awaiter(this, void 0, void 0, function* () {
+      const overwrite = !!(options === null || options === void 0 ? void 0 : options.overwrite);
+      const filePath = yield this.filePath();
+      const writeFunc = overwrite ? writeFile : appendFile;
+      yield writeFunc(filePath, this._buffer, { encoding: "utf8" });
+      return this.emptyBuffer();
+    });
+  }
+  /**
+   * Clears the summary buffer and wipes the summary file
+   *
+   * @returns {Summary} summary instance
+   */
+  clear() {
+    return __awaiter(this, void 0, void 0, function* () {
+      return this.emptyBuffer().write({ overwrite: true });
+    });
+  }
+  /**
+   * Returns the current summary buffer as a string
+   *
+   * @returns {string} string of summary buffer
+   */
+  stringify() {
+    return this._buffer;
+  }
+  /**
+   * If the summary buffer is empty
+   *
+   * @returns {boolen} true if the buffer is empty
+   */
+  isEmptyBuffer() {
+    return this._buffer.length === 0;
+  }
+  /**
+   * Resets the summary buffer without writing to summary file
+   *
+   * @returns {Summary} summary instance
+   */
+  emptyBuffer() {
+    this._buffer = "";
+    return this;
+  }
+  /**
+   * Adds raw text to the summary buffer
+   *
+   * @param {string} text content to add
+   * @param {boolean} [addEOL=false] (optional) append an EOL to the raw text (default: false)
+   *
+   * @returns {Summary} summary instance
+   */
+  addRaw(text, addEOL = false) {
+    this._buffer += text;
+    return addEOL ? this.addEOL() : this;
+  }
+  /**
+   * Adds the operating system-specific end-of-line marker to the buffer
+   *
+   * @returns {Summary} summary instance
+   */
+  addEOL() {
+    return this.addRaw(import_os.EOL);
+  }
+  /**
+   * Adds an HTML codeblock to the summary buffer
+   *
+   * @param {string} code content to render within fenced code block
+   * @param {string} lang (optional) language to syntax highlight code
+   *
+   * @returns {Summary} summary instance
+   */
+  addCodeBlock(code, lang) {
+    const attrs = Object.assign({}, lang && { lang });
+    const element = this.wrap("pre", this.wrap("code", code), attrs);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML list to the summary buffer
+   *
+   * @param {string[]} items list of items to render
+   * @param {boolean} [ordered=false] (optional) if the rendered list should be ordered or not (default: false)
+   *
+   * @returns {Summary} summary instance
+   */
+  addList(items, ordered = false) {
+    const tag = ordered ? "ol" : "ul";
+    const listItems = items.map((item) => this.wrap("li", item)).join("");
+    const element = this.wrap(tag, listItems);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML table to the summary buffer
+   *
+   * @param {SummaryTableCell[]} rows table rows
+   *
+   * @returns {Summary} summary instance
+   */
+  addTable(rows) {
+    const tableBody = rows.map((row) => {
+      const cells = row.map((cell) => {
+        if (typeof cell === "string") {
+          return this.wrap("td", cell);
+        }
+        const { header, data, colspan, rowspan } = cell;
+        const tag = header ? "th" : "td";
+        const attrs = Object.assign(Object.assign({}, colspan && { colspan }), rowspan && { rowspan });
+        return this.wrap(tag, data, attrs);
+      }).join("");
+      return this.wrap("tr", cells);
+    }).join("");
+    const element = this.wrap("table", tableBody);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds a collapsable HTML details element to the summary buffer
+   *
+   * @param {string} label text for the closed state
+   * @param {string} content collapsable content
+   *
+   * @returns {Summary} summary instance
+   */
+  addDetails(label, content) {
+    const element = this.wrap("details", this.wrap("summary", label) + content);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML image tag to the summary buffer
+   *
+   * @param {string} src path to the image you to embed
+   * @param {string} alt text description of the image
+   * @param {SummaryImageOptions} options (optional) addition image attributes
+   *
+   * @returns {Summary} summary instance
+   */
+  addImage(src, alt, options) {
+    const { width, height } = options || {};
+    const attrs = Object.assign(Object.assign({}, width && { width }), height && { height });
+    const element = this.wrap("img", null, Object.assign({ src, alt }, attrs));
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML section heading element
+   *
+   * @param {string} text heading text
+   * @param {number | string} [level=1] (optional) the heading level, default: 1
+   *
+   * @returns {Summary} summary instance
+   */
+  addHeading(text, level) {
+    const tag = `h${level}`;
+    const allowedTag = ["h1", "h2", "h3", "h4", "h5", "h6"].includes(tag) ? tag : "h1";
+    const element = this.wrap(allowedTag, text);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML thematic break (<hr>) to the summary buffer
+   *
+   * @returns {Summary} summary instance
+   */
+  addSeparator() {
+    const element = this.wrap("hr", null);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML line break (<br>) to the summary buffer
+   *
+   * @returns {Summary} summary instance
+   */
+  addBreak() {
+    const element = this.wrap("br", null);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML blockquote to the summary buffer
+   *
+   * @param {string} text quote text
+   * @param {string} cite (optional) citation url
+   *
+   * @returns {Summary} summary instance
+   */
+  addQuote(text, cite) {
+    const attrs = Object.assign({}, cite && { cite });
+    const element = this.wrap("blockquote", text, attrs);
+    return this.addRaw(element).addEOL();
+  }
+  /**
+   * Adds an HTML anchor tag to the summary buffer
+   *
+   * @param {string} text link text/content
+   * @param {string} href hyperlink
+   *
+   * @returns {Summary} summary instance
+   */
+  addLink(text, href) {
+    const element = this.wrap("a", text, { href });
+    return this.addRaw(element).addEOL();
+  }
+};
+var _summary = new Summary();
+
+// node_modules/@actions/core/lib/platform.js
+var import_os2 = __toESM(require("os"), 1);
+
+// node_modules/@actions/io/lib/io-util.js
+var fs2 = __toESM(require("fs"), 1);
+var { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs2.promises;
+var IS_WINDOWS = process.platform === "win32";
+var READONLY = fs2.constants.O_RDONLY;
+
+// node_modules/@actions/exec/lib/toolrunner.js
+var IS_WINDOWS2 = process.platform === "win32";
+
+// node_modules/@actions/core/lib/platform.js
+var platform = import_os2.default.platform();
+var arch = import_os2.default.arch();
+
+// node_modules/@actions/core/lib/core.js
+var ExitCode;
+(function(ExitCode2) {
+  ExitCode2[ExitCode2["Success"] = 0] = "Success";
+  ExitCode2[ExitCode2["Failure"] = 1] = "Failure";
+})(ExitCode || (ExitCode = {}));
+function getInput(name, options) {
+  const val = process.env[`INPUT_${name.replace(/ /g, "_").toUpperCase()}`] || "";
+  if (options && options.required && !val) {
+    throw new Error(`Input required and not supplied: ${name}`);
+  }
+  if (options && options.trimWhitespace === false) {
+    return val;
+  }
+  return val.trim();
+}
+function setFailed(message) {
+  process.exitCode = ExitCode.Failure;
+  error(message);
+}
+function error(message, properties = {}) {
+  issueCommand("error", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+}
+function warning(message, properties = {}) {
+  issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
+}
+function info(message) {
+  process.stdout.write(message + os4.EOL);
+}
+function saveState(name, value) {
+  const filePath = process.env["GITHUB_STATE"] || "";
+  if (filePath) {
+    return issueFileCommand("STATE", prepareKeyValueMessage(name, value));
+  }
+  issueCommand("save-state", { name }, toCommandValue(value));
+}
+
+// src/main.ts
+var import_child_process = require("child_process");
+var fs3 = __toESM(require("fs"));
+var path = __toESM(require("path"));
+function tailUtf8File(filePath, maxChars) {
+  try {
+    const raw = fs3.readFileSync(filePath, "utf8");
+    if (raw.length <= maxChars) {
+      return raw;
+    }
+    return raw.slice(-maxChars);
+  } catch {
+    return "";
+  }
+}
+function headUtf8File(filePath, maxChars) {
+  try {
+    const raw = fs3.readFileSync(filePath, "utf8");
+    if (raw.length <= maxChars) {
+      return raw;
+    }
+    return raw.slice(0, maxChars);
+  } catch {
+    return "";
+  }
+}
+function inputBoolDefault(name, defaultVal) {
+  const v = getInput(name);
+  if (v === "") {
+    return defaultVal;
+  }
+  return ["true", "1", "yes", "on"].includes(v.toLowerCase());
+}
 function pidLooksAlive(pid) {
-    if (pid === undefined || pid <= 0) {
-        return undefined;
-    }
-    try {
-        process.kill(pid, 0);
-        return true;
-    }
-    catch {
-        return false;
-    }
+  if (pid === void 0 || pid <= 0) {
+    return void 0;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
 async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
-    let exitedEarly = false;
-    let exitCode = null;
-    let exitSignal = null;
-    const onExit = (code, signal) => {
-        exitedEarly = true;
-        exitCode = code;
-        exitSignal = signal;
-    };
+  let exitedEarly = false;
+  let exitCode = null;
+  let exitSignal = null;
+  const onExit = (code, signal) => {
+    exitedEarly = true;
+    exitCode = code;
+    exitSignal = signal;
+  };
+  if (child) {
+    child.on("exit", onExit);
+  }
+  let malformedSince = null;
+  const malformedBudgetMs = 45e3;
+  try {
+    const waitStart = Date.now();
+    const deadline = waitStart + timeoutMs;
+    let lastProgressLog = waitStart;
+    while (Date.now() < deadline) {
+      if (fs3.existsSync(statusPath)) {
+        const raw = fs3.readFileSync(statusPath, "utf8").trim();
+        let parsed;
+        try {
+          parsed = JSON.parse(raw);
+        } catch {
+          malformedSince ??= Date.now();
+          if (Date.now() - malformedSince >= malformedBudgetMs) {
+            return "malformed_status";
+          }
+        }
+        if (parsed !== void 0) {
+          malformedSince = null;
+          if (parsed.ok === true) {
+            return "ready";
+          }
+          if (parsed.ok === false) {
+            return "explicit_not_ready";
+          }
+          if (parsed.ok !== void 0 && parsed.ok !== null) {
+            error(
+              `coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`
+            );
+            return "explicit_not_ready";
+          }
+        }
+      } else {
+        malformedSince = null;
+      }
+      if (exitedEarly) {
+        error(
+          `coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? "none"})`
+        );
+        return "child_exit";
+      }
+      const progressEvery = opts?.progressEveryMs ?? 0;
+      if (progressEvery > 0) {
+        const now = Date.now();
+        if (now - lastProgressLog >= progressEvery) {
+          lastProgressLog = now;
+          const elapsedSec = Math.round((now - waitStart) / 1e3);
+          const budgetSec = Math.round(timeoutMs / 1e3);
+          const hasFile = fs3.existsSync(statusPath);
+          let okHint = "";
+          try {
+            if (hasFile) {
+              const j = JSON.parse(fs3.readFileSync(statusPath, "utf8"));
+              okHint = typeof j.ok === "boolean" ? `parsed ok=${j.ok}` : `parsed ok field=${JSON.stringify(j.ok)}`;
+            }
+          } catch {
+            okHint = "parse failed (truncated JSON?)";
+          }
+          const alive = pidLooksAlive(child?.pid);
+          info(
+            `fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? "present" : "missing"}${hasFile ? ` \u2014 ${okHint}` : ""}; sudo child pid=${child?.pid ?? "none"} ${alive === void 0 ? "" : alive ? "(alive)" : "(not running)"}`
+          );
+        }
+      }
+      await new Promise((r) => setTimeout(r, 150));
+    }
+    return "timeout";
+  } finally {
     if (child) {
-        child.on('exit', onExit);
+      child.off("exit", onExit);
     }
-    /** Clock start when JSON.parse repeatedly fails on a non-empty file (atomic write grace window). */
-    let malformedSince = null;
-    const malformedBudgetMs = 45_000;
-    try {
-        const waitStart = Date.now();
-        const deadline = waitStart + timeoutMs;
-        let lastProgressLog = waitStart;
-        while (Date.now() < deadline) {
-            // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
-            // kernel deny event immediately; fail-fast deny handling used to exit the process while the
-            // status file still contained ok:true, and checking exitedEarly first made us miss it.
-            if (fs.existsSync(statusPath)) {
-                const raw = fs.readFileSync(statusPath, 'utf8').trim();
-                let parsed;
-                try {
-                    parsed = JSON.parse(raw);
-                }
-                catch {
-                    malformedSince ??= Date.now();
-                    if (Date.now() - malformedSince >= malformedBudgetMs) {
-                        return 'malformed_status';
-                    }
-                    /* keep polling — likely mid-write */
-                }
-                if (parsed !== undefined) {
-                    malformedSince = null;
-                    if (parsed.ok === true) {
-                        return 'ready';
-                    }
-                    if (parsed.ok === false) {
-                        return 'explicit_not_ready';
-                    }
-                    if (parsed.ok !== undefined && parsed.ok !== null) {
-                        core.error(`coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`);
-                        return 'explicit_not_ready';
-                    }
-                    /* ok missing — likely incomplete write; keep polling */
-                }
-            }
-            else {
-                malformedSince = null;
-            }
-            if (exitedEarly) {
-                core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
-                return 'child_exit';
-            }
-            const progressEvery = opts?.progressEveryMs ?? 0;
-            if (progressEvery > 0) {
-                const now = Date.now();
-                if (now - lastProgressLog >= progressEvery) {
-                    lastProgressLog = now;
-                    const elapsedSec = Math.round((now - waitStart) / 1000);
-                    const budgetSec = Math.round(timeoutMs / 1000);
-                    const hasFile = fs.existsSync(statusPath);
-                    let okHint = '';
-                    try {
-                        if (hasFile) {
-                            const j = JSON.parse(fs.readFileSync(statusPath, 'utf8'));
-                            okHint =
-                                typeof j.ok === 'boolean'
-                                    ? `parsed ok=${j.ok}`
-                                    : `parsed ok field=${JSON.stringify(j.ok)}`;
-                        }
-                    }
-                    catch {
-                        okHint = 'parse failed (truncated JSON?)';
-                    }
-                    const alive = pidLooksAlive(child?.pid);
-                    core.info(`fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? 'present' : 'missing'}${hasFile ? ` — ${okHint}` : ''}; sudo child pid=${child?.pid ?? 'none'} ${alive === undefined ? '' : alive ? '(alive)' : '(not running)'}`);
-                }
-            }
-            await new Promise((r) => setTimeout(r, 150));
-        }
-        return 'timeout';
-    }
-    finally {
-        if (child) {
-            child.off('exit', onExit);
-        }
-    }
+  }
 }
 function parseReadyTimeoutMs() {
-    const raw = core.getInput('ready-timeout-seconds').trim();
-    const fallback = 25 * 60;
-    if (raw === '') {
-        return fallback * 1000;
-    }
-    const n = Number.parseInt(raw, 10);
-    if (!Number.isFinite(n)) {
-        core.warning(`ready-timeout-seconds invalid (${raw}); using ${fallback}s`);
-        return fallback * 1000;
-    }
-    const clamped = Math.min(Math.max(n, 60), 45 * 60);
-    if (clamped !== n) {
-        core.warning(`ready-timeout-seconds clamped from ${n} to ${clamped}s (bounds 60–${45 * 60})`);
-    }
-    return clamped * 1000;
+  const raw = getInput("ready-timeout-seconds").trim();
+  const fallback = 25 * 60;
+  if (raw === "") {
+    return fallback * 1e3;
+  }
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n)) {
+    warning(`ready-timeout-seconds invalid (${raw}); using ${fallback}s`);
+    return fallback * 1e3;
+  }
+  const clamped = Math.min(Math.max(n, 60), 45 * 60);
+  if (clamped !== n) {
+    warning(`ready-timeout-seconds clamped from ${n} to ${clamped}s (bounds 60\u2013${45 * 60})`);
+  }
+  return clamped * 1e3;
 }
 async function run() {
   if (process.platform !== "linux") {
@@ -18724,7 +19240,7 @@ async function run() {
   const failOnError = inputBoolDefault("fail-on-error", false);
   const logLevel = getInput("log-level") || "info";
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
-  const smokeTestEgress = smokeTestEgressDecision(mode);
+  const smokeTestEgress = inputBoolDefault("smoke-test-egress", false);
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path.join(baseDir, ".coldstep-detect.md");
@@ -18733,186 +19249,153 @@ async function run() {
   const script = path.join(actionPath, "scripts", "build-agent-linux.sh");
   const agentStatus = path.join(baseDir, ".coldstep-ready.json");
   const eventsLog = path.join(baseDir, ".coldstep-events.jsonl");
-  fs2.mkdirSync(path.join(actionPath, "bin"), { recursive: true });
-  fs2.writeFileSync(detectLog, "", "utf8");
-  if (fs2.existsSync(agentStatus)) {
-    fs2.unlinkSync(agentStatus);
+  fs3.mkdirSync(path.join(actionPath, "bin"), { recursive: true });
+  fs3.writeFileSync(detectLog, "", "utf8");
+  if (fs3.existsSync(agentStatus)) {
+    fs3.unlinkSync(agentStatus);
+  }
+  const stderrLog = path.join(baseDir, ".coldstep-agent.stderr.log");
+  if (failOnError && fs3.existsSync(stderrLog)) {
+    fs3.unlinkSync(stderrLog);
   }
   if (releasePath) {
     const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
-    if (!fs2.existsSync(src)) {
+    if (!fs3.existsSync(src)) {
       setFailed(`release-path not found: ${src}`);
       return;
     }
-    const allowedHosts = core.getInput('allowed-hosts') || '';
-    const allowedIPs = core.getInput('allowed-ips') || '';
-    const ignoredIpNets = core.getInput('ignored-ip-nets') || '';
-    const noDefaultIgnoredNets = inputBoolDefault('no-default-ignored-nets', false);
-    const allowedDomains = core.getInput('allowed-domains') || '';
-    const featureGates = core.getInput('feature-gates') || '';
-    const releasePath = core.getInput('release-path').trim();
-    const mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
-    const failOnError = inputBoolDefault('fail-on-error', false);
-    const logLevel = core.getInput('log-level') || 'info';
-    const reportJobSummary = inputBoolDefault('report-job-summary', true);
-    const smokeTestEgress = inputBoolDefault('smoke-test-egress', false);
-    const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-    const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
-    const detectLog = path.join(baseDir, '.coldstep-detect.md');
-    const pidFile = path.join(actionPath, '.coldstep.pid');
-    const binPath = path.join(actionPath, 'bin', 'coldstep');
-    const script = path.join(actionPath, 'scripts', 'build-agent-linux.sh');
-    const agentStatus = path.join(baseDir, '.coldstep-ready.json');
-    const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
-    fs.mkdirSync(path.join(actionPath, 'bin'), { recursive: true });
-    fs.writeFileSync(detectLog, '', 'utf8');
-    if (fs.existsSync(agentStatus)) {
-        fs.unlinkSync(agentStatus);
+    fs3.copyFileSync(src, binPath);
+    fs3.chmodSync(binPath, 493);
+    info(`coldstep: using release-path binary ${src}`);
+  } else {
+    (0, import_child_process.execFileSync)("bash", [script, actionPath], { stdio: "inherit" });
+  }
+  const childEnv = {
+    ...process.env,
+    // Pin workspace for the sudo child so Go defaults (digest/JSONL paths) match the
+    // paths this action uses under GITHUB_WORKSPACE (sudo env filtering can drop vars).
+    GITHUB_WORKSPACE: baseDir,
+    COLDSTEP_DETECT_LOG: detectLog,
+    COLDSTEP_ALLOWED_HOSTS: allowedHosts,
+    COLDSTEP_ALLOWED_IPS: allowedIPs,
+    COLDSTEP_IGNORED_IP_NETS: ignoredIpNets,
+    COLDSTEP_NO_DEFAULT_IGNORED_NETS: noDefaultIgnoredNets ? "true" : "false",
+    COLDSTEP_ALLOWED_DOMAINS: allowedDomains,
+    COLDSTEP_FEATURE_GATES: featureGates,
+    CI_GUARD_MODE: mode,
+    COLDSTEP_LOG_LEVEL: logLevel,
+    COLDSTEP_AGENT_STATUS: agentStatus,
+    COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? "true" : "false"
+  };
+  if (smokeTestEgress) {
+    childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
+  }
+  let stderrFd;
+  let stdio = "ignore";
+  if (failOnError) {
+    stderrFd = fs3.openSync(stderrLog, "w", 384);
+    stdio = ["ignore", "ignore", stderrFd];
+  }
+  const child = (0, import_child_process.spawn)("sudo", ["-E", binPath, "run"], {
+    cwd: actionPath,
+    env: childEnv,
+    detached: true,
+    stdio
+  });
+  if (stderrFd !== void 0) {
+    try {
+      fs3.closeSync(stderrFd);
+    } catch {
     }
-    const stderrLog = path.join(baseDir, '.coldstep-agent.stderr.log');
-    if (failOnError && fs.existsSync(stderrLog)) {
-        fs.unlinkSync(stderrLog);
-    }
-    if (releasePath) {
-        const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
-        if (!fs.existsSync(src)) {
-            core.setFailed(`release-path not found: ${src}`);
-            return;
-        }
-        fs.copyFileSync(src, binPath);
-        fs.chmodSync(binPath, 0o755);
-        core.info(`coldstep: using release-path binary ${src}`);
-    }
-    else {
-        (0, child_process_1.execFileSync)('bash', [script, actionPath], { stdio: 'inherit' });
-    }
-    const childEnv = {
-        ...process.env,
-        // Pin workspace for the sudo child so Go defaults (digest/JSONL paths) match the
-        // paths this action uses under GITHUB_WORKSPACE (sudo env filtering can drop vars).
-        GITHUB_WORKSPACE: baseDir,
-        COLDSTEP_DETECT_LOG: detectLog,
-        COLDSTEP_ALLOWED_HOSTS: allowedHosts,
-        COLDSTEP_ALLOWED_IPS: allowedIPs,
-        COLDSTEP_IGNORED_IP_NETS: ignoredIpNets,
-        COLDSTEP_NO_DEFAULT_IGNORED_NETS: noDefaultIgnoredNets ? 'true' : 'false',
-        COLDSTEP_ALLOWED_DOMAINS: allowedDomains,
-        COLDSTEP_FEATURE_GATES: featureGates,
-        CI_GUARD_MODE: mode,
-        COLDSTEP_LOG_LEVEL: logLevel,
-        COLDSTEP_AGENT_STATUS: agentStatus,
-        COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? 'true' : 'false',
-    };
-    if (smokeTestEgress) {
-        childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
-    }
-    // Use numeric fds (not WriteStream): with detached:true the stream may still have fd=null and
-    // spawn rejects stdio (see Node child_process validation).
-    let stderrFd;
-    let stdio = 'ignore';
-    if (failOnError) {
-        stderrFd = fs.openSync(stderrLog, 'w', 0o600);
-        stdio = ['ignore', 'ignore', stderrFd];
-    }
-    const child = (0, child_process_1.spawn)('sudo', ['-E', binPath, 'run'], {
-        cwd: actionPath,
-        env: childEnv,
-        detached: true,
-        stdio,
+  }
+  child.on("error", (err) => {
+    error(`coldstep: failed to spawn agent (${err.message})`);
+  });
+  if (child.pid === void 0) {
+    setFailed("coldstep: failed to spawn agent (no pid \u2014 check sudo and that the binary exists)");
+    return;
+  }
+  child.unref();
+  fs3.writeFileSync(pidFile, String(child.pid), "utf8");
+  info(`coldstep started pid=${child.pid} mode=${mode}`);
+  if (smokeTestEgress) {
+    const probeScript = [
+      "set +e",
+      "sleep 1",
+      "if command -v python3 >/dev/null 2>&1; then",
+      "  python3 <<'UDPY'",
+      "import socket",
+      "s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)",
+      's.sendto(b"x", ("1.1.1.1", 53))',
+      "s.close()",
+      "UDPY",
+      "  python3 <<'PY'",
+      "import socket",
+      'addr = ("example.com", 80)',
+      'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
+      "s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)",
+      "s.connect(addr)",
+      "s.sendall(req)",
+      "s.close()",
+      "PY",
+      "fi"
+    ].join("\n");
+    const probe = (0, import_child_process.spawn)("bash", ["-c", probeScript], {
+      detached: true,
+      stdio: "ignore"
     });
-    if (stderrFd !== undefined) {
-        try {
-            fs.closeSync(stderrFd);
-        }
-        catch {
-            /* ignore */
-        }
-    }
-    child.on('error', (err) => {
-        core.error(`coldstep: failed to spawn agent (${err.message})`);
+    probe.unref();
+    info(
+      "smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)"
+    );
+  }
+  if (failOnError) {
+    const readyBudgetMs = parseReadyTimeoutMs();
+    info(
+      `fail-on-error: waiting up to ${readyBudgetMs / 1e3}s for ${agentStatus} (agent BPF load + cgroup attach before ready file); adjust ready-timeout-seconds input if needed`
+    );
+    info(`fail-on-error: agent stderr logged to ${stderrLog}`);
+    const outcome = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
+      progressEveryMs: 45e3
     });
-    if (child.pid === undefined) {
-        // `spawn` can fail asynchronously (e.g. missing sudo); avoid writing `undefined` into the pid file.
-        core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
-        return;
-    }
-    child.unref();
-    fs.writeFileSync(pidFile, String(child.pid), 'utf8');
-    core.info(`coldstep started pid=${child.pid} mode=${mode}`);
-    if (smokeTestEgress) {
-        const probeScript = [
-            'set +e',
-            'sleep 1',
-            'if command -v python3 >/dev/null 2>&1; then',
-            '  python3 <<\'UDPY\'',
-            'import socket',
-            's = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)',
-            's.sendto(b"x", ("1.1.1.1", 53))',
-            's.close()',
-            'UDPY',
-            '  python3 <<\'PY\'',
-            'import socket',
-            'addr = ("example.com", 80)',
-            'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
-            's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
-            's.connect(addr)',
-            's.sendall(req)',
-            's.close()',
-            'PY',
-            'fi',
-        ].join('\n');
-        const probe = (0, child_process_1.spawn)('bash', ['-c', probeScript], {
-            detached: true,
-            stdio: 'ignore',
-        });
-        probe.unref();
-        core.info('smoke-test-egress: background UDP :53 + HTTP :80 probes started (opt-in; smoke-test-egress defaults to false)');
-    }
-    if (failOnError) {
-        // Hosted runners: allowlist DNS (bounded), then BPF loads. Enforce mode writes ready only after
-        // traceenforce + cgroup attach; verifier can be slow. If the status file exists with ok:false,
-        // fail immediately (do not burn runner minutes until max wait).
-        const readyBudgetMs = parseReadyTimeoutMs();
-        core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file); adjust ready-timeout-seconds input if needed`);
-        core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
-        const outcome = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
-            progressEveryMs: 45_000,
-        });
-        if (outcome !== 'ready') {
-            if (fs.existsSync(agentStatus)) {
-                const head = headUtf8File(agentStatus, 220);
-                if (head.trim() !== '') {
-                    core.error(`coldstep-ready snapshot (${agentStatus}, first 220 chars):\n${head}${head.length >= 220 ? '…' : ''}`);
-                }
-            }
-            const tail = tailUtf8File(stderrLog, 14_000);
-            if (tail.trim() !== '') {
-                core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
-            }
-            if (outcome === 'explicit_not_ready') {
-                core.setFailed('coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape — enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README.');
-            }
-            else if (outcome === 'malformed_status') {
-                core.setFailed(`${agentStatus} exists but is not valid JSON for ~45s (partial write or corruption). Check disk/workspace path and agent logs.`);
-            }
-            else if (outcome === 'child_exit') {
-                core.setFailed('coldstep agent exited before reporting ready (see stderr tail above if present).');
-            }
-            else {
-                core.setFailed(`coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`);
-            }
-            try {
-                process.kill(child.pid, 'SIGTERM');
-            }
-            catch {
-                /* ignore */
-            }
+    if (outcome !== "ready") {
+      if (fs3.existsSync(agentStatus)) {
+        const head = headUtf8File(agentStatus, 220);
+        if (head.trim() !== "") {
+          error(
+            `coldstep-ready snapshot (${agentStatus}, first 220 chars):
+${head}${head.length >= 220 ? "\u2026" : ""}`
+          );
         }
-        else {
-            // Persist for post: the agent may clear/update `.coldstep-ready.json` after this step returns
-            // if a later BPF attach fails (see agent_linux syscall-trace enforcement).
-            core.saveState('coldstep_wait_ready_ok', 'true');
-        }
+      }
+      const tail = tailUtf8File(stderrLog, 14e3);
+      if (tail.trim() !== "") {
+        error(`coldstep agent stderr (tail, ${stderrLog}):
+${tail}`);
+      }
+      if (outcome === "explicit_not_ready") {
+        setFailed(
+          "coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape \u2014 enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README."
+        );
+      } else if (outcome === "malformed_status") {
+        setFailed(
+          `${agentStatus} exists but is not valid JSON for ~45s (partial write or corruption). Check disk/workspace path and agent logs.`
+        );
+      } else if (outcome === "child_exit") {
+        setFailed(
+          "coldstep agent exited before reporting ready (see stderr tail above if present)."
+        );
+      } else {
+        setFailed(
+          `coldstep agent did not become ready in time (${readyBudgetMs / 1e3}s \u2014 BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`
+        );
+      }
+      try {
+        process.kill(child.pid, "SIGTERM");
+      } catch {
+      }
+    } else {
+      saveState("coldstep_wait_ready_ok", "true");
     }
   }
 }
