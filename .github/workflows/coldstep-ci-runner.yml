@@ -375,7 +375,8 @@ jobs:
 
   prevent-mode:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
 

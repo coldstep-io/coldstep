@@ -31028,7 +31028,19 @@ function inputBoolDefault(name, defaultVal) {
     }
     return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
-async function waitForAgentReady(statusPath, timeoutMs, child) {
+function pidLooksAlive(pid) {
+    if (pid === undefined || pid <= 0) {
+        return undefined;
+    }
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch {
+        return false;
+    }
+}
+async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
     let exitedEarly = false;
     let exitCode = null;
     let exitSignal = null;
@@ -31041,7 +31053,9 @@ async function waitForAgentReady(statusPath, timeoutMs, child) {
         child.on('exit', onExit);
     }
     try {
-        const deadline = Date.now() + timeoutMs;
+        const waitStart = Date.now();
+        const deadline = waitStart + timeoutMs;
+        let lastProgressLog = waitStart;
         while (Date.now() < deadline) {
             // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
             // kernel deny event immediately; fail-fast deny handling used to exit the process while the
@@ -31061,6 +31075,18 @@ async function waitForAgentReady(statusPath, timeoutMs, child) {
             if (exitedEarly) {
                 core.error(`coldstep agent exited before reporting ready (code=${exitCode}, signal=${exitSignal ?? 'none'})`);
                 return false;
+            }
+            const progressEvery = opts?.progressEveryMs ?? 0;
+            if (progressEvery > 0) {
+                const now = Date.now();
+                if (now - lastProgressLog >= progressEvery) {
+                    lastProgressLog = now;
+                    const elapsedSec = Math.round((now - waitStart) / 1000);
+                    const budgetSec = Math.round(timeoutMs / 1000);
+                    const hasFile = fs.existsSync(statusPath);
+                    const alive = pidLooksAlive(child?.pid);
+                    core.info(`fail-on-error: still waiting for ready (${elapsedSec}s / ${budgetSec}s): status file ${hasFile ? 'present' : 'missing'}; sudo child pid=${child?.pid ?? 'none'} ${alive === undefined ? '' : alive ? '(alive)' : '(not running)'}`);
+                }
             }
             await new Promise((r) => setTimeout(r, 150));
         }
@@ -31203,18 +31229,20 @@ async function run() {
     }
     if (failOnError) {
         // Hosted runners: apt/kernel setup, allowlist DNS (bounded in Go), then BPF collection loads.
-        // traceenforce/traceconnect verifier time alone can exceed several minutes on ubuntu-latest;
-        // use a generous wall clock so healthy runs are not mistaken for failures.
-        const readyBudgetMs = 900_000;
+        // Enforce mode emits ready only after traceenforce BPF loads + cgroup attach; kernel verifier
+        // time can exceed 15 minutes on ubuntu-latest under load — keep below typical job timeouts (45m).
+        const readyBudgetMs = 25 * 60 * 1000;
         core.info(`fail-on-error: waiting up to ${readyBudgetMs / 1000}s for ${agentStatus} (agent BPF load + cgroup attach before ready file)`);
         core.info(`fail-on-error: agent stderr logged to ${stderrLog}`);
-        const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child);
+        const ok = await waitForAgentReady(agentStatus, readyBudgetMs, child, {
+            progressEveryMs: 45_000,
+        });
         if (!ok) {
             const tail = tailUtf8File(stderrLog, 14_000);
             if (tail.trim() !== '') {
                 core.error(`coldstep agent stderr (tail, ${stderrLog}):\n${tail}`);
             }
-            core.setFailed('coldstep agent did not become ready in time (BPF verifier/load/DNS); ensure ubuntu-latest and see COLDSTEP_BPF_VERBOSE_VERIFY in README for diagnostics.');
+            core.setFailed(`coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach); ensure ubuntu-latest, raise workflow timeout if needed, and see COLDSTEP_BPF_VERBOSE_VERIFY in README for diagnostics.`);
             try {
                 process.kill(child.pid, 'SIGTERM');
             }

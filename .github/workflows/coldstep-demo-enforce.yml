@@ -21,7 +21,7 @@ env:
 jobs:
   demo:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       actions: read
       contents: read
