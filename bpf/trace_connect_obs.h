@@ -183,6 +183,12 @@ struct tls_sniff_event {
 	__u16 capture_len;
 	__u8 payload[TLS_PAYLOAD_MAX];
 };
+/*
+ * Layout: header(34) + payload[256]; alignment-of-4 trailing pad → sizeof = 292.
+ * Go decoder caps capture_len at 256 and never touches the trailing pad.
+ */
+_Static_assert(sizeof(struct tls_sniff_event) == 292,
+	       "tls_sniff_event wire size must match tlsSniffEventWireSize=292 in agent_linux.go");
 
 struct connect_event {
 	__u32 tgid;
@@ -191,15 +197,34 @@ struct connect_event {
 	__u8 daddr[4];
 	__u8 dport[2];
 };
+/*
+ * Implicit struct alignment is 4 bytes (largest member __u32). The
+ * 30-byte field layout is padded by clang to 32 bytes; the Go decoder
+ * (decodeConnectEvent) reads the first 30 bytes and ignores the trailing
+ * 2 bytes. connectEventWireSize in agent_linux.go must mirror this.
+ */
+_Static_assert(sizeof(struct connect_event) == 32,
+	       "connect_event wire size must match connectEventWireSize=32 in agent_linux.go");
 
+/*
+ * `_pad[2]` is required to make the 4-byte alignment of `datagram_len`
+ * explicit. Without it, clang inserts implicit padding between dport[2]
+ * (offset 28) and datagram_len at offset 32; that left the Go decoder
+ * (decodeUDPSendEvent) reading dgramLen from offset 30 which yielded
+ * garbage. The explicit pad here forces the layout the Go side now
+ * decodes (offset 32) and is locked by the _Static_assert below.
+ */
 struct udp_send_event {
 	__u32 tgid;
 	__u32 tid;
 	__u8 comm[16];
 	__u8 daddr[4];
 	__u8 dport[2];
+	__u8 _pad[2];
 	__u32 datagram_len;
 };
+_Static_assert(sizeof(struct udp_send_event) == 36,
+	       "udp_send_event wire size must match udpSendEventWireSize=36 in agent_linux.go");
 
 struct http_sniff_event {
 	__u32 tgid;
@@ -211,6 +236,13 @@ struct http_sniff_event {
 	__u16 capture_len;
 	__u8 payload[HTTP_PAYLOAD_MAX];
 };
+/*
+ * Layout: header(34) + payload[192]; struct alignment of 4 forces a 2-byte
+ * trailing pad → sizeof = 228. The Go decoder caps capture_len at 192 and
+ * never touches the trailing pad.
+ */
+_Static_assert(sizeof(struct http_sniff_event) == 228,
+	       "http_sniff_event wire size must match httpSniffEventWireSize=228 in agent_linux.go");
 
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)

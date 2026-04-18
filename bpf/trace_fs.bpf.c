@@ -40,6 +40,8 @@ struct fs_event {
 	__u8 path[FS_PATH_MAX];
 	__u8 _pad[3]; /* explicit 4-byte alignment; matches Go fsEventWire layout */
 };
+_Static_assert(sizeof(struct fs_event) == 284,
+	       "fs_event wire size must match fsEventWireSize=284 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);

@@ -14,6 +14,8 @@ struct exec_event {
 	__u8 comm[16];
 	__u8 exe_path[EXE_PATH_MAX];
 };
+_Static_assert(sizeof(struct exec_event) == 280,
+	       "exec_event wire size must match execEventWireSize=280 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);

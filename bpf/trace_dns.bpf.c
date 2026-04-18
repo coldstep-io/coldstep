@@ -31,6 +31,8 @@ struct dns_sniff_event {
 	__u32 len;
 	__u8 data[DNS_SNIFF_MAX];
 };
+_Static_assert(sizeof(struct dns_sniff_event) == 4 + DNS_SNIFF_MAX,
+	       "dns_sniff_event wire size must match dnsSniffEventWireSize in agent_linux.go");
 
 struct {
 	/*

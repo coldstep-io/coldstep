@@ -11,6 +11,8 @@ struct fork_event {
 	__u8 parent_comm[16];
 	__u8 child_comm[16];
 };
+_Static_assert(sizeof(struct fork_event) == 40,
+	       "fork_event wire size must match forkEventWireSize=40 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);

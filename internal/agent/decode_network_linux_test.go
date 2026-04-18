@@ -9,13 +9,14 @@ import (
 )
 
 func TestDecodeUDPSendEvent(t *testing.T) {
-	raw := make([]byte, 34)
+	raw := make([]byte, udpSendEventWireSize)
 	binary.LittleEndian.PutUint32(raw[0:4], 100)
 	binary.LittleEndian.PutUint32(raw[4:8], 101)
 	copy(raw[8:24], []byte("myproc\x00"))
 	raw[24], raw[25], raw[26], raw[27] = 8, 8, 8, 8
 	binary.BigEndian.PutUint16(raw[28:30], 53)
-	binary.LittleEndian.PutUint32(raw[30:34], 512)
+	// dgramLen lives at offset 32 (after the explicit __u8 _pad[2]); see PR-B.
+	binary.LittleEndian.PutUint32(raw[32:36], 512)
 
 	tgid, tid, comm, daddr, dport, dlen, ok := decodeUDPSendEvent(raw)
 	if !ok {
@@ -34,14 +35,14 @@ func TestDecodeUDPSendEvent(t *testing.T) {
 }
 
 func TestDecodeUDPSendEvent_tooShort(t *testing.T) {
-	_, _, _, _, _, _, ok := decodeUDPSendEvent(make([]byte, 33))
+	_, _, _, _, _, _, ok := decodeUDPSendEvent(make([]byte, udpSendEventWireSize-1))
 	if ok {
 		t.Fatal("expected false")
 	}
 }
 
 func TestDecodeHTTPSniffEvent(t *testing.T) {
-	raw := make([]byte, 226)
+	raw := make([]byte, httpSniffEventWireSize)
 	binary.LittleEndian.PutUint32(raw[0:4], 200)
 	binary.LittleEndian.PutUint32(raw[4:8], 201)
 	copy(raw[8:24], []byte("curl\x00"))
@@ -49,7 +50,7 @@ func TestDecodeHTTPSniffEvent(t *testing.T) {
 	binary.BigEndian.PutUint16(raw[28:30], 80)
 	payload := []byte("GET / HTTP/1.1\r\nHost: ex\r\n")
 	binary.LittleEndian.PutUint16(raw[32:34], uint16(len(payload)))
-	copy(raw[34:], payload)
+	copy(raw[httpSniffEventHeaderSize:], payload)
 
 	tgid, tid, comm, daddr, dport, pay, ok := decodeHTTPSniffEvent(raw)
 	if !ok {
@@ -68,25 +69,23 @@ func TestDecodeHTTPSniffEvent(t *testing.T) {
 }
 
 func TestDecodeHTTPSniffEvent_captureLenTooLarge(t *testing.T) {
-	raw := make([]byte, 226)
-	binary.LittleEndian.PutUint16(raw[32:34], 193)
+	raw := make([]byte, httpSniffEventWireSize)
+	binary.LittleEndian.PutUint16(raw[32:34], httpPayloadMax+1)
 	_, _, _, _, _, _, ok := decodeHTTPSniffEvent(raw)
 	if ok {
-		t.Fatal("expected false for capLen > 192")
+		t.Fatal("expected false for capLen > httpPayloadMax")
 	}
 }
 
 func TestDecodeHTTPSniffEvent_tooShort(t *testing.T) {
-	_, _, _, _, _, _, ok := decodeHTTPSniffEvent(make([]byte, 100))
+	_, _, _, _, _, _, ok := decodeHTTPSniffEvent(make([]byte, httpSniffEventWireSize-1))
 	if ok {
 		t.Fatal("expected false")
 	}
 }
 
 func TestDecodeTLSSniffEvent_captureLenAtMax(t *testing.T) {
-	const header = 4 + 4 + 16 + 4 + 2 + 2 + 2
-	const expect = header + tlsPayloadMax
-	raw := make([]byte, expect)
+	raw := make([]byte, tlsSniffEventWireSize)
 	binary.LittleEndian.PutUint32(raw[0:4], 300)
 	binary.LittleEndian.PutUint32(raw[4:8], 301)
 	copy(raw[8:24], []byte("tlscli\x00"))
@@ -95,7 +94,7 @@ func TestDecodeTLSSniffEvent_captureLenAtMax(t *testing.T) {
 	// Syscall may pass len > tlsPayloadMax; BPF caps capture_len to tlsPayloadMax.
 	binary.LittleEndian.PutUint16(raw[32:34], tlsPayloadMax)
 	for i := 0; i < tlsPayloadMax; i++ {
-		raw[34+i] = byte(i)
+		raw[tlsSniffEventHeaderSize+i] = byte(i)
 	}
 
 	_, _, _, _, _, pay, ok := decodeTLSSniffEvent(raw)
@@ -108,8 +107,7 @@ func TestDecodeTLSSniffEvent_captureLenAtMax(t *testing.T) {
 }
 
 func TestDecodeTLSSniffEvent_captureLenTooLarge(t *testing.T) {
-	const header = 4 + 4 + 16 + 4 + 2 + 2 + 2
-	raw := make([]byte, header+tlsPayloadMax)
+	raw := make([]byte, tlsSniffEventWireSize)
 	binary.LittleEndian.PutUint16(raw[32:34], tlsPayloadMax+1)
 	_, _, _, _, _, _, ok := decodeTLSSniffEvent(raw)
 	if ok {
