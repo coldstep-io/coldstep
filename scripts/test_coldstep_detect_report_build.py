@@ -52,6 +52,49 @@ class BuildReportModelTests(unittest.TestCase):
         self.assertEqual(model["diff"]["status"], "unavailable")
         self.assertEqual(model["diff"]["reason"], "no_baseline_provided")
 
+    def test_timeline_emits_utc_buckets_with_z_suffix(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        timeline = model["timeline"]
+        self.assertGreater(len(timeline), 0)
+        for row in timeline:
+            self.assertTrue(row["bucket"].endswith("Z"), f"non-UTC bucket: {row['bucket']!r}")
+            self.assertGreaterEqual(row["count"], 1)
+
+    def test_load_jsonl_skips_garbage_lines_silently(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "mixed.jsonl"
+            p.write_text(
+                '{"type":"tcp","ts":"2026-04-18T17:00:00Z","dst":"1.1.1.1","dport":443,"policy":"allow"}\n'
+                'this is not json\n'
+                '\n'
+                '{"type":"udp","ts":"2026-04-18T17:00:01Z","dst":"8.8.8.8","dport":53,"policy":"allow"}\n',
+                encoding="utf-8",
+            )
+            model = MOD.build(current_jsonl=str(p), baseline_jsonl=None)
+            counts = {row["type"]: row["count"] for row in model["events_by_type"]}
+            self.assertEqual(counts.get("tcp"), 1)
+            self.assertEqual(counts.get("udp"), 1)
+
+    def test_run_run_id_falls_back_to_env_when_no_meta_event(self):
+        import os, tempfile
+        with tempfile.TemporaryDirectory() as td:
+            p = Path(td) / "no-meta.jsonl"
+            p.write_text(
+                '{"type":"exec","ts":"2026-04-18T17:00:00Z","exe":"/bin/true","comm":"true","pid":1}\n',
+                encoding="utf-8",
+            )
+            old = os.environ.get("GITHUB_RUN_ID")
+            os.environ["GITHUB_RUN_ID"] = "env-run-id-42"
+            try:
+                model = MOD.build(current_jsonl=str(p), baseline_jsonl=None)
+            finally:
+                if old is None:
+                    os.environ.pop("GITHUB_RUN_ID", None)
+                else:
+                    os.environ["GITHUB_RUN_ID"] = old
+            self.assertEqual(model["run"]["run_id"], "env-run-id-42")
+
 
 if __name__ == "__main__":
     unittest.main()

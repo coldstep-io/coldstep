@@ -7,11 +7,13 @@ from __future__ import annotations
 
 import collections
 import datetime as dt
+import functools
 import importlib.util
 import json
 import os
+import sys
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Optional
 
 SCHEMA_VERSION = 1
 
@@ -25,12 +27,20 @@ REQUIRED_CAPABILITIES = (
     ("fs_event", "Filesystem events"),
 )
 
-# Reuse the existing diff script's fingerprinting so both surfaces agree.
-_DIFF_SCRIPT = Path(__file__).resolve().parent.parent / "ci_coldstep_jsonl_traffic_diff.py"
-_DIFF_SPEC = importlib.util.spec_from_file_location("coldstep_diff_internal", _DIFF_SCRIPT)
-_DIFF_MOD = importlib.util.module_from_spec(_DIFF_SPEC)
-assert _DIFF_SPEC and _DIFF_SPEC.loader
-_DIFF_SPEC.loader.exec_module(_DIFF_MOD)
+EGRESS_TYPES = ("tcp", "udp", "http", "tls")
+
+
+@functools.lru_cache(maxsize=1)
+def _load_diff_module():
+    # Lazy-load so a breakage in the sibling diff script does not blow up at import time;
+    # the helper is only needed when a baseline is supplied to _diff().
+    diff_script = Path(__file__).resolve().parent.parent / "ci_coldstep_jsonl_traffic_diff.py"
+    spec = importlib.util.spec_from_file_location("coldstep_diff_internal", diff_script)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"could not load diff helper module from {diff_script}")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def _load_jsonl(path: str) -> list[dict]:
@@ -87,7 +97,7 @@ def _timeline(events: list[dict], bucket_seconds: int = 1) -> list[dict]:
 def _egress_sankey(events: list[dict]) -> list[dict]:
     edges: dict[tuple[str, str], int] = collections.defaultdict(int)
     for ev in events:
-        if ev.get("type") not in ("tcp", "udp", "http", "tls"):
+        if ev.get("type") not in EGRESS_TYPES:
             continue
         host = (
             ev.get("fqdn")
@@ -96,7 +106,9 @@ def _egress_sankey(events: list[dict]) -> list[dict]:
             or ev.get("dst")
             or "unknown"
         )
-        policy = ev.get("policy") or "unknown"
+        # Preserve empty-string policy verbatim (matches traffic_fingerprint upstream so
+        # the sankey and diff sections never disagree on the same event).
+        policy = ev.get("policy", "")
         edges[(str(host), str(policy))] += 1
     return [{"source": s, "target": t, "value": v} for (s, t), v in sorted(edges.items())]
 
@@ -105,9 +117,10 @@ def _diff(current: list[dict], baseline: Optional[list[dict]]) -> dict:
     if baseline is None:
         return {"status": "unavailable", "reason": "no_baseline_provided",
                 "traffic_new": [], "traffic_gone": [], "traffic_changed": []}
-    cur_tr, _, _ = _DIFF_MOD.count_fps(current)
-    base_tr, _, _ = _DIFF_MOD.count_fps(baseline)
-    new, gone, chg = _DIFF_MOD.multiset_diff(base_tr, cur_tr)
+    diff_mod = _load_diff_module()
+    cur_tr, _, _ = diff_mod.count_fps(current)
+    base_tr, _, _ = diff_mod.count_fps(baseline)
+    new, gone, chg = diff_mod.multiset_diff(base_tr, cur_tr)
     return {
         "status": "ok",
         "traffic_new": [{"count": c, "fingerprint": k} for c, k in new],
@@ -116,15 +129,22 @@ def _diff(current: list[dict], baseline: Optional[list[dict]]) -> dict:
     }
 
 
-def build(current_jsonl: str, baseline_jsonl: Optional[str]) -> dict:
+def build(
+    current_jsonl: str,
+    baseline_jsonl: Optional[str],
+    *,
+    now: Optional[dt.datetime] = None,
+) -> dict:
+    when = now if now is not None else dt.datetime.now(tz=dt.timezone.utc)
     current = _load_jsonl(current_jsonl)
     baseline = _load_jsonl(baseline_jsonl) if baseline_jsonl else None
     meta = next((ev for ev in current if ev.get("type") == "meta"), {})
     return {
         "schema_version": SCHEMA_VERSION,
-        "generated_at": dt.datetime.now(tz=dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "generated_at": when.isoformat().replace("+00:00", "Z"),
         "run": {
             "run_id": meta.get("run_id") or os.environ.get("GITHUB_RUN_ID", ""),
+            # GITHUB_WORKFLOW_REF format is "{owner}/{repo}/.github/workflows/{file}@{ref}"
             "workflow_file": os.environ.get("GITHUB_WORKFLOW_REF", "").split("@")[0].rsplit("/", 1)[-1],
             "branch": os.environ.get("GITHUB_HEAD_REF") or os.environ.get("GITHUB_REF_NAME", ""),
             "runner_label": os.environ.get("NS_RUNNER_LABEL", ""),
@@ -142,8 +162,15 @@ def main() -> int:
     base = os.environ.get("COLDSTEP_REPORT_BASELINE_JSONL", "") or None
     out = os.environ.get("COLDSTEP_REPORT_MODEL_OUT", "")
     if not cur or not out:
+        missing = [
+            name for name, val in
+            (("COLDSTEP_REPORT_CURRENT_JSONL", cur), ("COLDSTEP_REPORT_MODEL_OUT", out))
+            if not val
+        ]
+        print(f"build_report_model: missing required env vars: {', '.join(missing)}", file=sys.stderr)
         return 1
     model = build(current_jsonl=cur, baseline_jsonl=base)
+    Path(out).parent.mkdir(parents=True, exist_ok=True)
     Path(out).write_text(json.dumps(model, indent=2, sort_keys=False), encoding="utf-8")
     return 0
 
