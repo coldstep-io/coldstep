@@ -3,19 +3,19 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "ncc build src/main.ts -o dist/main --source-map && ncc build src/post.ts -o dist/post --source-map"
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/main/index.js && esbuild src/post.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/post/index.js"
   },
   "dependencies": {
-    "@actions/core": "^1.11.1",
-    "@actions/github": "^6.0.1"
+    "@actions/core": "^3.0.0",
+    "@actions/github": "^9.1.0"
   },
   "overrides": {
     "undici": "^6.23.1"
   },
   "devDependencies": {
-    "@types/node": "^24.0.0",
-    "@vercel/ncc": "^0.38.3",
-    "typescript": "^5.7.2"
+    "@types/node": "^25.6.0",
+    "esbuild": "^0.25.0",
+    "typescript": "^6.0.2"
   },
   "engines": {
     "node": ">=24"
