@@ -84,6 +84,11 @@ func TestSanitizeRequestURI(t *testing.T) {
 			"/x?k=" + redactedCredential,
 		},
 		{
+			"slack_bot_token_in_query",
+			"/x?k=xoxb-" + strings.Repeat("1", 16) + "-" + strings.Repeat("a", 12),
+			"/x?k=" + redactedCredential,
+		},
+		{
 			"ghs_pat",
 			"/x?t=ghs_" + strings.Repeat("b", 20),
 			"/x?t=" + redactedCredential,

@@ -32,6 +32,7 @@ var (
 	openAIProjKeyRE = regexp.MustCompile(`\bsk-proj-[A-Za-z0-9_-]{20,}\b`)
 	googleAPIKeyRE  = regexp.MustCompile(`\bAIza[0-9A-Za-z_-]{35}\b`)
 	sendGridKeyRE   = regexp.MustCompile(`\bSG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{30,}\b`)
+	slackTokenRE    = regexp.MustCompile(`\bxox[abopr]-[A-Za-z0-9-]{10,}\b`)
 )
 
 func normQueryKey(k string) string {
@@ -56,6 +57,7 @@ func redactCredentialPatterns(s string) string {
 	s = openAIProjKeyRE.ReplaceAllString(s, redactedCredential)
 	s = googleAPIKeyRE.ReplaceAllString(s, redactedCredential)
 	s = sendGridKeyRE.ReplaceAllString(s, redactedCredential)
+	s = slackTokenRE.ReplaceAllString(s, redactedCredential)
 	return s
 }
 
