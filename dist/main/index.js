@@ -31180,6 +31180,11 @@ async function run() {
                 /* ignore */
             }
         }
+        else {
+            // Persist for post: the agent may clear/update `.coldstep-ready.json` after this step returns
+            // if a later BPF attach fails (see agent_linux syscall-trace enforcement).
+            core.saveState('coldstep_wait_ready_ok', 'true');
+        }
     }
 }
 run().catch((e) => {

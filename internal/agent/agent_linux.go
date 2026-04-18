@@ -1965,9 +1965,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
 		if cfg.Mode == config.ModeEnforce {
-			if p := strings.TrimSpace(cfg.AgentStatusPath); p != "" {
-				_ = os.Remove(p)
-			}
+			// Keep the status file for the composite post step; main may have already saved
+			// saveState. Record operational failure explicitly instead of deleting the path.
+			_ = writeAgentStatus(cfg.AgentStatusPath, false)
 			return fmt.Errorf("enforce mode requires syscall trace attach: %w", err)
 		}
 	} else {
