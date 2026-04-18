@@ -12,11 +12,21 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define FS_NR_UNLINKAT  35
 #define FS_NR_RENAMEAT2 276
 #define FS_NR_FCHMODAT  53
+/*
+ * arm64 has no legacy NR_open: glibc on aarch64 always rewrites open(2)
+ * to openat(AT_FDCWD, ...) — closing F-K12-04 on arm64 is a no-op.
+ * We define FS_NR_OPEN to a sentinel that can never match a real syscall ID
+ * so the dispatch branch below compiles uniformly across both arches without
+ * an additional per-arch #if at the call site.
+ */
+#define FS_NR_OPEN -1
 #elif defined(bpf_target_x86)
 #define FS_NR_OPENAT    257
 #define FS_NR_UNLINKAT  263
 #define FS_NR_RENAMEAT2 316
 #define FS_NR_FCHMODAT  268
+/* PR-E (Theme C): legacy open(2) — present on x86_64; signature: open(path, flags, mode). */
+#define FS_NR_OPEN 2
 #else
 #error "coldstep trace_fs: unsupported BPF arch (need bpf_target_x86/arm64)"
 #endif
@@ -131,6 +141,23 @@ int handle_fs_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (!(arg2 & O_CREAT))
 			return 0;
 		submit_fs_event(arg1, FS_OP_CREATE);
+	} else if (id == FS_NR_OPEN) {
+		/*
+		 * PR-E: legacy open(2) — signature open(path, flags, mode).
+		 * On arm64 FS_NR_OPEN is sentinel -1 (no real syscall) so this
+		 * branch is dead code there but kept uniform for source-shape parity.
+		 * On x86_64 it catches Python/Ruby/old C code that calls glibc
+		 * `open()` directly without going through openat(AT_FDCWD, ...).
+		 */
+		unsigned long arg0, arg1;
+
+		if (ns_read_syscall_arg(regs, 0, &arg0))
+			return 0;
+		if (ns_read_syscall_arg(regs, 1, &arg1))
+			return 0;
+		if (!(arg1 & O_CREAT))
+			return 0;
+		submit_fs_event(arg0, FS_OP_CREATE);
 	} else if (id == FS_NR_UNLINKAT) {
 		unsigned long arg1;
 

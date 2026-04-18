@@ -26,6 +26,14 @@
 #define COLDSTEP_NR_CLOSE 57
 #define COLDSTEP_NR_RECVFROM 207
 #define COLDSTEP_NR_WRITEV 66
+/* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
+#define COLDSTEP_NR_SENDMMSG 269
+#define COLDSTEP_NR_PWRITE64 68
+#define COLDSTEP_NR_PWRITEV 70
+#define COLDSTEP_NR_PWRITEV2 287
+#define COLDSTEP_NR_SENDFILE 71
+#define COLDSTEP_NR_SPLICE 76
+/* aarch64 has no legacy NR_OPEN: only openat/openat2 (handled in trace_fs.bpf.c). */
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
 #define COLDSTEP_NR_SENDTO 44
@@ -35,6 +43,13 @@
 #define COLDSTEP_NR_CLOSE 3
 #define COLDSTEP_NR_RECVFROM 45
 #define COLDSTEP_NR_WRITEV 20
+/* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
+#define COLDSTEP_NR_SENDMMSG 307
+#define COLDSTEP_NR_PWRITE64 18
+#define COLDSTEP_NR_PWRITEV 296
+#define COLDSTEP_NR_PWRITEV2 328
+#define COLDSTEP_NR_SENDFILE 40
+#define COLDSTEP_NR_SPLICE 275
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif

@@ -127,6 +127,27 @@ struct {
 	__type(value, __u32);
 } tls_writev_multi_iovec_observed SEC(".maps");
 
+/*
+ * PR-E (Theme C of the 2026-04-18 review): aggregate visibility counter for
+ * IPv4 egress / file-descriptor write syscalls that Coldstep does NOT
+ * currently sniff for HTTP/TLS payload. Real workloads (multi-message
+ * sendmmsg(2), pwrite(2)/pwritev(2)/pwritev2(2) onto a TCP socket,
+ * sendfile(2)/sendfile64(2) zero-copy push from a file fd to a socket fd,
+ * splice(2) pipe→socket) all bypass the existing sendto/sendmsg/write/writev
+ * arms. Without a counter, those syscalls are silently invisible. This single
+ * counter increments once per such syscall observed (any process) so users
+ * can decide whether the gap matters for their workload before requesting
+ * full per-syscall sniff arms (which would require iov-vector reads + extra
+ * verifier complexity for sendmmsg, and pipe→socket fd correlation for
+ * sendfile/splice). Single map keeps the BPF program small and verifier-fast.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} unobserved_egress_syscalls_observed SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
@@ -197,6 +218,16 @@ static __always_inline void note_tls_writev_multi_iovec(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&tls_writev_multi_iovec_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_unobserved_egress_syscall(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&unobserved_egress_syscalls_observed, &k);
 
 	if (!v)
 		return;
@@ -305,6 +336,22 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 
 		return handle_tls_obs_sys_enter(id, di_ul, si_ul, dx_ul);
+	}
+
+	/*
+	 * PR-E: visibility-only counter for IPv4 egress / fd-write syscalls
+	 * that have no full-emission arm above. We only bump a single global
+	 * counter (no per-syscall breakdown, no payload sniff) so the verifier
+	 * sees this as a constant-cost branch. See unobserved_egress_syscalls_observed.
+	 */
+	if (id == (long)COLDSTEP_NR_SENDMMSG ||
+	    id == (long)COLDSTEP_NR_PWRITE64 ||
+	    id == (long)COLDSTEP_NR_PWRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITEV2 ||
+	    id == (long)COLDSTEP_NR_SENDFILE ||
+	    id == (long)COLDSTEP_NR_SPLICE) {
+		note_unobserved_egress_syscall();
+		return 0;
 	}
 
 	return 0;

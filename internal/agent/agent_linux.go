@@ -65,6 +65,8 @@ type runStats struct {
 	fsRingbufReserveFailuresN       int
 	udpSendmsgMultiIovecObservedN   int
 	tlsWritevMultiIovecObservedN    int
+	unobservedEgressSyscallsN       int
+	tcpDNSResponsesObservedN        int
 	policyCounts                    map[string]int
 	droppedCounts                   map[string]int
 }
@@ -568,6 +570,30 @@ func (s *runStats) tlsWritevMultiIovecObserved() int {
 	return s.tlsWritevMultiIovecObservedN
 }
 
+func (s *runStats) setUnobservedEgressSyscalls(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.unobservedEgressSyscallsN = n
+}
+
+func (s *runStats) unobservedEgressSyscalls() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.unobservedEgressSyscallsN
+}
+
+func (s *runStats) setTCPDNSResponsesObserved(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpDNSResponsesObservedN = n
+}
+
+func (s *runStats) tcpDNSResponsesObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tcpDNSResponsesObservedN
+}
+
 func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) telemetry.Summary {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -599,6 +625,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		FSRingbufReserveFailures:      s.fsRingbufReserveFailuresN,
 		UDPSendmsgMultiIovecObserved:  s.udpSendmsgMultiIovecObservedN,
 		TLSWritevMultiIovecObserved:   s.tlsWritevMultiIovecObservedN,
+		UnobservedEgressSyscalls:      s.unobservedEgressSyscallsN,
+		TCPDNSResponsesObserved:       s.tcpDNSResponsesObservedN,
 		DroppedCounts:                 dropped,
 		PolicyCounts:                  pc,
 		KernelRelease:                 kernel,
@@ -1711,6 +1739,30 @@ func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects
 	return int(v)
 }
 
+func readUnobservedEgressSyscallsCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.UnobservedEgressSyscallsObserved.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
+func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
+	if objs == nil {
+		return 0
+	}
+	var k uint32
+	var v uint32
+	if err := objs.TcpDnsResponsesObserved.Lookup(&k, &v); err != nil {
+		return 0
+	}
+	return int(v)
+}
+
 func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
@@ -2073,6 +2125,8 @@ func buildDigestInput(
 		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
+		UnobservedEgressSyscalls:       stats.unobservedEgressSyscalls(),
+		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
 		DroppedCounts:                  stats.snapshotDroppedCounts(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
@@ -2295,6 +2349,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
 				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
 				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
+				stats.setUnobservedEgressSyscalls(readUnobservedEgressSyscallsCount(syscallObjs))
 			}
 		}()
 		defer connRd.Close()
@@ -2326,6 +2381,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer func() {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
+				stats.setTCPDNSResponsesObserved(readTCPDNSResponsesObservedCount(dnsObjs))
 			}
 		}()
 		defer dnsRd.Close()

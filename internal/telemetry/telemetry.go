@@ -50,6 +50,8 @@ type Summary struct {
 	FSRingbufReserveFailures      int            `json:"fs_ringbuf_reserve_failures,omitempty"`
 	UDPSendmsgMultiIovecObserved  int            `json:"udp_sendmsg_multi_iovec_observed,omitempty"`
 	TLSWritevMultiIovecObserved   int            `json:"tls_writev_multi_iovec_observed,omitempty"`
+	UnobservedEgressSyscalls      int            `json:"unobserved_egress_syscalls_observed,omitempty"`
+	TCPDNSResponsesObserved       int            `json:"tcp_dns_responses_observed,omitempty"`
 	DroppedCounts                 map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                  map[string]int `json:"policy_counts"`
 	BPF                           []BPFStatus    `json:"bpf,omitempty"`

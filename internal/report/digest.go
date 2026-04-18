@@ -154,7 +154,17 @@ type DigestInput struct {
 	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
 	UDPSendmsgMultiIovecObserved int
 	TLSWritevMultiIovecObserved  int
-	DroppedCounts                map[string]int
+	// UnobservedEgressSyscalls counts IPv4-egress / fd-write syscalls (sendmmsg,
+	// pwrite64, pwritev, pwritev2, sendfile, sendfile64, splice) observed in
+	// the BPF dispatch arm but not fully sniffed for HTTP/TLS payload (PR-E).
+	// Non-zero indicates Coldstep's observability has a real-workload gap.
+	UnobservedEgressSyscalls int
+	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
+	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
+	// PR-E did not ship. The symbol exists so userspace surfaces the gap
+	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
+	TCPDNSResponsesObserved int
+	DroppedCounts           map[string]int
 }
 
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
@@ -196,6 +206,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
 	}
+	if in.UnobservedEgressSyscalls > 0 {
+		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+	}
+	if in.TCPDNSResponsesObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
+	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
 		droppedTotal += v
@@ -232,6 +248,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
+	}
+	if in.UnobservedEgressSyscalls > 0 {
+		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer (BPF connect/policy enforcement still applied to the underlying TCP/UDP socket).")
 	}
 	b.WriteString("</sub>\n\n")
 
