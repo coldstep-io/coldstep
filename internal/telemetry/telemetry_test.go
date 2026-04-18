@@ -5,6 +5,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -60,5 +61,30 @@ func TestWriteSummary(t *testing.T) {
 	}
 	if len(b) < 20 {
 		t.Fatalf("short file: %s", string(b))
+	}
+}
+
+func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "telemetry.json")
+	s := Summary{
+		Version: 2, SchemaVersion: SchemaVersion,
+		ExecEvents: 1, TCPEvents: 1, UDPEvents: 1, HTTPEvents: 1,
+		UDPRingbufReserveFailures: 7,
+		DNSRingbufReserveFailures: 3,
+		PolicyCounts:              map[string]int{"monitor": 1},
+	}
+	if err := WriteSummary(p, s); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"udp_ringbuf_reserve_failures": 7`)) {
+		t.Fatalf("missing udp reserve count: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"dns_ringbuf_reserve_failures": 3`)) {
+		t.Fatalf("missing dns reserve count: %s", b)
 	}
 }
