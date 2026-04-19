@@ -50,5 +50,35 @@ class ResolveWikilinkTests(unittest.TestCase):
         self.assertIsNone(WL.resolve("elsewhere/x", self.vault))
 
 
+class ClosestMatchTests(unittest.TestCase):
+
+    def setUp(self):
+        self.vault = Path(tempfile.mkdtemp())
+        for sub in ("records", "raw", "wiki", "reports"):
+            (self.vault / sub).mkdir()
+        (self.vault / "wiki" / "ietf-rfcs.md").write_text("x", encoding="utf-8")
+        (self.vault / "wiki" / "ietf-tls.md").write_text("x", encoding="utf-8")
+        (self.vault / "wiki" / "coldstep-scope-ipv4-v1.md").write_text("x", encoding="utf-8")
+
+    def test_returns_close_matches_for_typo(self):
+        suggestions = WL.closest_wikilink_match("wiki/iet-rfcs", self.vault, n=3)
+        self.assertIn("wiki/ietf-rfcs", suggestions)
+
+    def test_returns_empty_list_when_no_remotely_close_match(self):
+        suggestions = WL.closest_wikilink_match("wiki/totally-unrelated-topic", self.vault, n=3)
+        self.assertEqual(suggestions, [])
+
+    def test_caps_at_n_results(self):
+        suggestions = WL.closest_wikilink_match("wiki/ietf", self.vault, n=1)
+        self.assertEqual(len(suggestions), 1)
+
+    def test_searches_only_the_target_bucket(self):
+        # If user typed "wiki/foo" we suggest other wiki/* notes, not records/* or raw/*.
+        (self.vault / "records" / "wiki-lookalike-1.md").write_text("x", encoding="utf-8")
+        suggestions = WL.closest_wikilink_match("wiki/lookalike", self.vault, n=5)
+        for s in suggestions:
+            self.assertTrue(s.startswith("wiki/"), f"unexpected bucket in suggestion: {s}")
+
+
 if __name__ == "__main__":
     unittest.main()

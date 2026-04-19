@@ -5,6 +5,7 @@ closest_wikilink_match("wiki/fo", vault_root, n=3) -> ["wiki/foo", "wiki/food"]
 """
 from __future__ import annotations
 
+import difflib
 import re
 from pathlib import Path
 
@@ -35,3 +36,25 @@ def resolve(target: str, vault_root: Path) -> Path | None:
         rel = f"{rel}.md"
     candidate = Path(vault_root) / rel
     return candidate if candidate.is_file() else None
+
+
+def closest_wikilink_match(target: str, vault_root: Path, n: int = 3) -> list[str]:
+    """Suggest up to n closest wikilink targets in the same bucket.
+
+    Returns canonical "<bucket>/<slug>" strings (no .md extension, no brackets).
+    Returns an empty list when there is no remotely-close match.
+    """
+    rel = _normalize(target)
+    if "/" not in rel:
+        return []
+    bucket, slug = rel.split("/", 1)
+    if bucket not in _KNOWN_BUCKETS:
+        return []
+    if slug.endswith(".md"):
+        slug = slug[:-3]
+    bucket_dir = Path(vault_root) / bucket
+    if not bucket_dir.is_dir():
+        return []
+    candidates = [p.stem for p in bucket_dir.glob("*.md")]
+    matches = difflib.get_close_matches(slug, candidates, n=n, cutoff=0.5)
+    return [f"{bucket}/{m}" for m in matches]
