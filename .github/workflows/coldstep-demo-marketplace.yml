@@ -24,7 +24,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: coldstep-io/coldstep@v0.1.6
+      - uses: coldstep-io/coldstep@v0.1.7
         with:
           mode: detect
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
