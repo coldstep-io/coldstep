@@ -28,6 +28,9 @@ scripts/docker-mcp-reconnect.ps1
 /specs/
 AGENTS.md
 
+# Maintainer-only release checklist (local notes; mirror in knowledge vault if shared)
+/RELEASE_PROCESS.md
+
 # Agent runtime artifacts in workspace (detect digest); do not commit
 .coldstep-detect.md
 .coldstep-agent.stderr.log
