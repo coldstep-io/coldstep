@@ -8,6 +8,51 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+func TestBuildDetectMarkdown_TriageRibbon_Detect(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		TCPTotal:          1,
+		DroppedCounts:     map[string]int{"decode": 2},
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{"### Triage", "**Mode**", "`detect`", "**JSONL decode drops**", "**2**"} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_TriageRibbon_EnforceDeny(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		EnforcementMode:      "enforce",
+		EnforcementDenyCount: 3,
+		BPF:                  []telemetry.BPFStatus{{Name: "connect", OK: true}},
+		MaxRowsPerSection:    50,
+	})
+	if !strings.Contains(md, "**deny events:** 3") {
+		t.Fatalf("missing deny triage:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_HotEgressDestinations(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		TCPRows: []TCPDigestRow{{
+			TS: "t", PID: 1, Comm: "curl", Remote: "`10.0.0.1:443`", Policy: "monitor",
+		}},
+		HTTPRows: []HTTPDigestRow{{
+			TS: "t", PID: 1, Comm: "curl", Method: "GET", Host: "registry.npmjs.org",
+			Path: "/", Remote: "`104.16.0.0:443`", Policy: "monitor",
+		}},
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{"### Hot egress destinations", "registry.npmjs.org", "10.0.0.1:443", "tcp", "http"} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_PolicyRollupIncludesIgnored(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},

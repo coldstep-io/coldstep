@@ -13,6 +13,9 @@ import (
 // DefaultMaxRowsPerSection caps each collapsible table in the Job Summary digest.
 const DefaultMaxRowsPerSection = 120
 
+// maxHotEgressEntities caps the ranked "where did traffic go" triage table.
+const maxHotEgressEntities = 15
+
 const summarySoftByteBudget = 950_000
 
 // ExecDigestRow is one exec line in the markdown digest.
@@ -167,6 +170,180 @@ type DigestInput struct {
 	DroppedCounts           map[string]int
 }
 
+// hotEgressAgg aggregates digest rows by destination for the triage table.
+type hotEgressAgg struct {
+	key   string
+	count int
+	kinds map[string]struct{}
+}
+
+func normalizeDigestKey(s string) string {
+	s = strings.TrimSpace(s)
+	s = strings.Trim(s, "`")
+	return strings.TrimSpace(s)
+}
+
+func appendHotRow(m map[string]*hotEgressAgg, key, kind string) {
+	k := normalizeDigestKey(key)
+	if k == "" {
+		return
+	}
+	e, ok := m[k]
+	if !ok {
+		e = &hotEgressAgg{key: k, kinds: make(map[string]struct{})}
+		m[k] = e
+	}
+	e.count++
+	e.kinds[kind] = struct{}{}
+}
+
+func buildHotEgressList(in DigestInput) []hotEgressAgg {
+	m := make(map[string]*hotEgressAgg)
+	for _, r := range in.TCPRows {
+		appendHotRow(m, r.Remote, "tcp")
+	}
+	for _, r := range in.UDPRows {
+		if fq := normalizeDigestKey(r.FQDN); fq != "" {
+			appendHotRow(m, fq, "udp")
+		} else {
+			appendHotRow(m, r.Remote, "udp")
+		}
+	}
+	for _, r := range in.HTTPRows {
+		if h := normalizeDigestKey(r.Host); h != "" {
+			appendHotRow(m, h, "http")
+		} else {
+			appendHotRow(m, r.Remote, "http")
+		}
+	}
+	for _, r := range in.TLSRows {
+		if sni := normalizeDigestKey(r.SNI); sni != "" {
+			appendHotRow(m, sni, "tls")
+		} else {
+			appendHotRow(m, r.Remote, "tls")
+		}
+	}
+	out := make([]hotEgressAgg, 0, len(m))
+	for _, v := range m {
+		out = append(out, *v)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].count != out[j].count {
+			return out[i].count > out[j].count
+		}
+		return out[i].key < out[j].key
+	})
+	if len(out) > maxHotEgressEntities {
+		out = out[:maxHotEgressEntities]
+	}
+	return out
+}
+
+func hotKindTags(kinds map[string]struct{}) string {
+	order := []string{"tcp", "udp", "http", "tls"}
+	var tags []string
+	for _, o := range order {
+		if _, ok := kinds[o]; ok {
+			tags = append(tags, o)
+		}
+	}
+	return strings.Join(tags, ", ")
+}
+
+func writeTriageRibbon(b *strings.Builder, in DigestInput) {
+	b.WriteString("### Triage\n\n")
+	b.WriteString("| Question | Answer |\n|:--|:--|\n")
+
+	mode := "detect"
+	if strings.EqualFold(in.EnforcementMode, "enforce") {
+		mode = "enforce"
+	}
+	b.WriteString(fmt.Sprintf("| **Mode** | `%s`", sanitizeCell(mode)))
+	if strings.EqualFold(in.EnforcementMode, "enforce") {
+		b.WriteString(fmt.Sprintf(" — **deny events:** %d", in.EnforcementDenyCount))
+		if in.EnforcementDenyReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf(" (**+%d** deny reserve failures)", in.EnforcementDenyReserveFailures))
+		}
+	}
+	b.WriteString(" |\n")
+
+	bpfOK := true
+	var badBPF []string
+	for _, row := range in.BPF {
+		if !row.OK {
+			bpfOK = false
+			badBPF = append(badBPF, row.Name)
+		}
+	}
+	if len(in.BPF) == 0 {
+		b.WriteString("| **BPF hooks** | *(no status rows)* |\n")
+	} else if bpfOK {
+		b.WriteString("| **BPF hooks** | **OK** — all reported probes loaded |\n")
+	} else {
+		sort.Strings(badBPF)
+		b.WriteString(fmt.Sprintf("| **BPF hooks** | **Review** — degraded: %s |\n", sanitizeCell(strings.Join(badBPF, ", "))))
+	}
+
+	droppedTotal := 0
+	for _, v := range in.DroppedCounts {
+		droppedTotal += v
+	}
+	if droppedTotal == 0 {
+		b.WriteString("| **JSONL decode drops** | **None** |\n")
+	} else {
+		b.WriteString(fmt.Sprintf("| **JSONL decode drops** | **%d** total — see rollups below |\n", droppedTotal))
+	}
+
+	var gapParts []string
+	if in.Connect4TupleUpdateFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("connect4 map failures=%d", in.Connect4TupleUpdateFailures))
+	}
+	if in.UDPRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("udp ringbuf reserve=%d", in.UDPRingbufReserveFailures))
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("dns ringbuf reserve=%d", in.DNSRingbufReserveFailures))
+	}
+	if in.UDPSendmsgMultiIovecObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("udp multi-iovec=%d", in.UDPSendmsgMultiIovecObserved))
+	}
+	if in.TLSWritevMultiIovecObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("tls writev multi-iovec=%d", in.TLSWritevMultiIovecObserved))
+	}
+	if in.UnobservedEgressSyscalls > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
+	}
+	if len(gapParts) == 0 {
+		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
+	} else {
+		b.WriteString(fmt.Sprintf("| **Capture gaps** | **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
+	}
+
+	b.WriteString("\n")
+	b.WriteString("<sub>Triage is for fast decisions; row-level detail stays in collapsible sections below and in JSONL.</sub>\n\n")
+}
+
+func writeHotEgressTable(b *strings.Builder, in DigestInput) {
+	hot := buildHotEgressList(in)
+	if len(hot) == 0 {
+		return
+	}
+	b.WriteString("### Hot egress destinations\n\n")
+	b.WriteString("Ranked by **event rows in this digest window** (not global uniqueness across the full JSONL). ")
+	b.WriteString("Prefer **Host** / **SNI** / **FQDN** columns when present.\n\n")
+	b.WriteString("| Rank | Entity | Rows | Channels |\n")
+	b.WriteString("|--:|:-|--:|:-|\n")
+	for i, e := range hot {
+		tags := hotKindTags(e.kinds)
+		if tags == "" {
+			tags = "—"
+		}
+		b.WriteString(fmt.Sprintf("| %d | %s | %d | %s |\n",
+			i+1, sanitizeCell(e.key), e.count, sanitizeCell(tags)))
+	}
+	b.WriteString("\n")
+}
+
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
 func BuildDetectMarkdown(in DigestInput) string {
 	max := in.MaxRowsPerSection
@@ -184,6 +361,8 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
 		b.WriteString("<sub>Detect-only: observe, do not block. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
 	}
+	writeTriageRibbon(&b, in)
+	writeHotEgressTable(&b, in)
 	b.WriteString("### KPI\n\n")
 	b.WriteString("| Signal | Count |\n|:--|--:|\n")
 	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
@@ -366,7 +545,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 
 	writeExec := func() {
-		b.WriteString("<details open>\n<summary><strong>Exec (recent)</strong></summary>\n\n")
+		b.WriteString("<details>\n<summary><strong>Exec (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID (TGID) | TID | Comm | Executable (BPF-capped) |\n|:--|--:|--:|:-|:-|\n")
 		for _, r := range in.ExecRows {
 			b.WriteString(fmt.Sprintf("| %s | `%d` | `%d` | `%s` | `%s` |\n",
@@ -390,7 +569,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("\n</details>\n\n")
 	}
 	writeTCP := func() {
-		b.WriteString("<details open>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
+		b.WriteString("<details>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
 		if len(in.TCPRows) == 0 {
 			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(tcpEmptyReason(in))))

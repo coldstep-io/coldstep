@@ -37,6 +37,9 @@ class StepSummaryRendererTests(unittest.TestCase):
 
     def test_summary_contains_capability_matrix_with_pills(self):
         out = self._render()
+        self.assertIn("### Detect report · triage", out)
+        self.assertIn("| **Baseline diff** | **OK**", out)
+        self.assertIn("| **OTX threat intel** |", out)
         self.assertIn("### Detect Capability Matrix", out)
         self.assertIn("🟢", out)
         self.assertIn("Exec tracing", out)
