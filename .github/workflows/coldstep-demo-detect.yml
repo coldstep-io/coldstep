@@ -153,19 +153,14 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
 
-      # Tier-1 step-summary pipeline (markdown + Mermaid). The HTML artifact (Tier-2)
-      # is emitted later, after the diff step so the model carries diff buckets too.
-      # See scripts/coldstep_detect_report/README.md for the data-flow overview.
+      # Tier-1 step-summary pipeline (markdown + Mermaid): render runs AFTER the optional
+      # previous-run diff step so build_report_model can ingest baseline JSONL first; see
+      # README data-flow. HTML artifact follows rDNS/OTX on the same model file.
       - name: Build report model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
         run: python3 scripts/coldstep_detect_report/build_report_model.py
-
-      - name: Render step summary (markdown + mermaid)
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/render_step_summary.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -278,6 +273,11 @@ jobs:
           COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
             python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
+
+      - name: Render step summary (markdown + mermaid)
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 scripts/coldstep_detect_report/render_step_summary.py
 
       # rDNS enrichment runs first (no API key needed) so OTX renderers and the
       # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
