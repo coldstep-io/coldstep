@@ -122,7 +122,7 @@ jobs:
             sleep 2
           fi
 
-      - name: Verify detect capabilities and write visual summary
+      - name: Verify detect capabilities
         run: |
           set -euo pipefail
           f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
@@ -152,22 +152,20 @@ jobs:
           grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
-          {
-            echo "### Detect Capability Matrix (GitHub-hosted ubuntu-latest)"
-            echo ""
-            echo "| Capability | Status | Evidence |"
-            echo "|---|---|---|"
-            echo "| Exec tracing | 🟢 | \\`type:exec\\` present |"
-            echo "| TCP connect telemetry | 🟢 | \\`type:tcp\\` present (nmap/curl) |"
-            echo "| UDP sendto telemetry | 🟢 | \\`type:udp\\` present (:53 probe) |"
-            echo "| HTTP cleartext telemetry | 🟢 | \\`type:http\\` present |"
-            echo "| TLS ClientHello/SNI hint | 🟢 | \\`type:tls\\` with \\`tls_sni=1\\` |"
-            echo "| Process tree (fork) | 🟢 | \\`type:proc_fork\\` present |"
-            echo "| Filesystem events | 🟢 | \\`type:fs_event\\` with required create (+ best-effort unlink/rename/chmod) |"
-            echo "| Minimal demo | 🟢 | \\`coldstep-demo-detect.yml\\` — see \\`coldstep-demo.yml\\` for enforce matrix |"
-            echo ""
-            echo "_Legend: 🟢 pass, 🟡 investigate, 🔴 fail_"
-          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Tier-1 step-summary pipeline (markdown + Mermaid). The HTML artifact (Tier-2)
+      # is emitted later, after the diff step so the model carries diff buckets too.
+      # See scripts/coldstep_detect_report/README.md for the data-flow overview.
+      - name: Build report model
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 scripts/coldstep_detect_report/build_report_model.py
+
+      - name: Render step summary (markdown + mermaid)
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 scripts/coldstep_detect_report/render_step_summary.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -271,6 +269,48 @@ jobs:
           if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
+
+          # Re-build the report model now that the baseline JSONL is on disk, so the
+          # downstream HTML artifact carries the diff section too. Without this, the
+          # earlier "Build report model" step ran without baseline_jsonl and emitted
+          # diff.status="unavailable".
+          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
+          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
+          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
+            python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
+
+      - name: Render self-contained HTML report
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-detect-report.html
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_html_report.py
+          else
+            echo "::warning::report model missing, skipping HTML render"
+          fi
+
+      - name: Upload HTML report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coldstep-detect-report-html-${{ env.NS_RUNNER_LABEL }}
+          path: ${{ github.workspace }}/coldstep-detect-report.html
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
+      - name: Link to HTML report from step summary
+        if: always()
+        run: |
+          set -euo pipefail
+          {
+            echo ""
+            echo "---"
+            echo "📎 **Rich HTML report:** download the \`coldstep-detect-report-html-${NS_RUNNER_LABEL}\` artifact from this run and open \`coldstep-detect-report.html\` in a browser. (GitHub does not preview HTML artifacts inline.)"
+          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Persist detect JSONL baseline artifact
         if: always()
