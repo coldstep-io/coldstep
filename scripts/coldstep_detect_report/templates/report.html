@@ -32,6 +32,18 @@
       <h2>Previous-run diff</h2>
       <div data-mount="diff"></div>
     </section>
+
+    <!-- OTX threat-intel verdicts. The mount is hidden until the embedded JS
+         confirms model.otx is present and not skipped. See render_otx_summary.py
+         for the matching Tier-1 GFM rendering. -->
+    <section id="otx" data-section="otx" hidden>
+      <details open>
+        <summary><h2 style="display:inline">Threat-intel verdicts (AlienVault OTX)</h2></summary>
+        <div data-mount="otx-status" class="coldstep-otx-status"></div>
+        <div data-mount="otx-chart" class="coldstep-otx-chart"></div>
+        <ul data-mount="otx-list" class="coldstep-otx-list"></ul>
+      </details>
+    </section>
   </main>
 
   <!--
@@ -186,6 +198,67 @@
         p.className = "empty";
         p.textContent = `Diff unavailable: ${d.reason || "unknown"}`;
         mount.appendChild(p);
+      }
+    }
+
+    // 5. OTX threat-intel section. Indicator + evidence text comes from the
+    //    third-party OTX API, so we use textContent / createElement everywhere
+    //    to keep the XSS attack surface zero (no innerHTML for OTX data).
+    {
+      const otx = model.otx;
+      const section = document.getElementById("otx");
+      if (!otx) {
+        // Leave the section hidden when OTX wasn't run for this build.
+      } else {
+        section.removeAttribute("hidden");
+        const status = $('[data-mount="otx-status"]');
+        const list = $('[data-mount="otx-list"]');
+        const chart = $('[data-mount="otx-chart"]');
+        if (otx.skipped) {
+          status.textContent = "OTX enrichment skipped: " + (otx.skipped_reason || "unknown");
+        } else {
+          const partial = otx.partial_results ? " (partial — wall budget exhausted)" : "";
+          status.textContent =
+            "Queried " + (otx.api_calls || 0) + " indicator(s) in " +
+            (otx.wall_ms || 0) + " ms" + partial;
+          const order = { malicious: 0, unidentified: 1, clean: 2, "rate-limited": 3 };
+          const rows = (otx.indicators || []).slice().sort((a, b) =>
+            (order[a.verdict] ?? 99) - (order[b.verdict] ?? 99));
+          for (const r of rows) {
+            const li = document.createElement("li");
+            li.className = "coldstep-verdict-" + (r.verdict || "unidentified");
+            const indicator = document.createElement("code");
+            indicator.textContent = r.indicator || "";
+            li.appendChild(indicator);
+            li.appendChild(document.createTextNode(
+              " — " + (r.verdict || "?") +
+              (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "")
+            ));
+            list.appendChild(li);
+          }
+          if (window.Plot) {
+            const summary = otx.summary || {};
+            const counts = ["malicious", "unidentified", "clean"]
+              .map(v => ({ verdict: v, count: summary[v] || 0 }))
+              .filter(d => d.count > 0);
+            if (counts.length) {
+              chart.appendChild(Plot.plot({
+                marginLeft: 80,
+                x: { label: null },
+                y: { label: "Count" },
+                color: {
+                  domain: ["malicious", "unidentified", "clean"],
+                  range: ["#c41e3a", "#888888", "#2e7d32"],
+                  legend: true,
+                },
+                marks: [
+                  Plot.barY(counts, { x: "verdict", y: "count", fill: "verdict" }),
+                  Plot.ruleY([0]),
+                ],
+              }));
+            }
+          }
+        }
       }
     }
   </script>

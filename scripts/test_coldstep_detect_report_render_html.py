@@ -68,6 +68,36 @@ class HtmlReportRendererTests(unittest.TestCase):
             html = out.read_text(encoding="utf-8")
         self.assertNotIn("</script><script>alert(1)</script>", html)
 
+    def test_template_has_otx_section_anchor(self):
+        # The renderer just substitutes MODEL_JSON into a fixed template, so the
+        # template must contain the OTX section markup that the embedded JS reads.
+        html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        self.assertIn('data-section="otx"', html)
+        self.assertIn("Threat-intel verdicts", html)
+
+    def test_styles_have_verdict_pill_classes(self):
+        css = (PKG_DIR / "templates" / "styles.css").read_text(encoding="utf-8")
+        for cls in (".coldstep-verdict-malicious", ".coldstep-verdict-clean",
+                    ".coldstep-verdict-unidentified", ".coldstep-verdict-rate-limited"):
+            self.assertIn(cls, css, f"missing CSS class {cls}")
+
+    def test_renders_otx_data_into_html(self):
+        model = dict(self.model)
+        model["otx"] = {"skipped": False, "skipped_reason": None,
+                        "queried_at": "z", "wall_ms": 100, "wall_budget_ms": 30000,
+                        "partial_results": False, "api_calls": 1, "rate_limited": 0,
+                        "indicators": [{"indicator": "evil.example.com",
+                                        "type": "hostname", "verdict": "malicious",
+                                        "pulse_count": 1, "evidence": []}],
+                        "summary": {"malicious": 1, "clean": 0,
+                                    "unidentified": 0, "total": 1}}
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "report.html"
+            _RMOD.write_html(model=model, html_out=str(out))
+            html = out.read_text(encoding="utf-8")
+        self.assertIn("evil.example.com", html)
+        self.assertIn('"malicious"', html)
+
 
 if __name__ == "__main__":
     unittest.main()
