@@ -97,6 +97,7 @@ jobs:
           sbom-path: '${{ github.workspace }}/sbom-js.cdx.json'
 
       # One published binary per tag; demo workflows download this instead of compiling on every run.
+      # GitHub can mark a release as immutable — uploads (even --clobber) then return HTTP 422; warn and succeed so attest/SBOM still publish.
       - name: Upload Linux agent to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -107,7 +108,16 @@ jobs:
           chmod +x coldstep-linux-amd64
           tag="${GITHUB_REF_NAME}"
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
-            gh release upload "${tag}" coldstep-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber
+            rc=0
+            out="$(gh release upload "${tag}" coldstep-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber 2>&1)" || rc=$?
+            if [[ "$rc" -ne 0 ]]; then
+              if echo "$out" | grep -qiE 'immutable release|Cannot upload assets'; then
+                echo "::warning title=Skipped release binary upload::Release ${tag} rejects asset uploads (often immutable releases). Upload coldstep-linux-amd64 from workflow artifacts or temporarily disable release immutability."
+                exit 0
+              fi
+              echo "$out" >&2
+              exit "$rc"
+            fi
           else
             gh release create "${tag}" coldstep-linux-amd64 \
               --repo "${GITHUB_REPOSITORY}" \
