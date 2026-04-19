@@ -64,12 +64,23 @@ def _gather_indicators(model: dict) -> list[tuple[str, str]]:
     return sorted(seen.items(), key=lambda kv: (kv[1] != "IPv4", kv[0]))
 
 
+def _wf_data(s: object) -> str:
+    """Encode user-derived strings for GitHub Actions workflow commands.
+
+    Workflow commands are line-oriented; an OTX pulse name containing a literal
+    newline could inject a second `::error::` annotation downstream. Encode `%`,
+    `\\r`, `\\n` per
+    https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+    """
+    return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
 def _emit_warning(stderr, indicator: str, evidence: list[dict]) -> None:
-    titles = ", ".join(e.get("pulse_name") or e.get("pulse_id") or "?" for e in evidence[:2])
-    families = sorted({fam for e in evidence for fam in (e.get("malware_families") or []) if fam})
+    titles = ", ".join(_wf_data(e.get("pulse_name") or e.get("pulse_id") or "?") for e in evidence[:2])
+    families = sorted({_wf_data(fam) for e in evidence for fam in (e.get("malware_families") or []) if fam})
     fam_part = f" families={','.join(families)}" if families else ""
     msg = (
-        f"::warning title=OTX malicious indicator::{indicator} matched "
+        f"::warning title=OTX malicious indicator::{_wf_data(indicator)} matched "
         f"{len(evidence)} pulse(s){fam_part} ({titles})"
     )
     print(msg, file=stderr)
@@ -194,20 +205,34 @@ def run(
 
 
 def main() -> int:
-    model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
-    if not model_path:
-        print("enrich: missing required env var COLDSTEP_REPORT_MODEL_IN", file=sys.stderr)
-        return 0  # never fail the detect job
-    api_key = os.environ.get("OTX_API_KEY", "")
-    wall = int(os.environ.get("COLDSTEP_OTX_WALL_BUDGET_MS", "30000"))
-    return run(
-        model_path=model_path,
-        api_key=api_key,
-        client_factory=lambda k: OTXClient(api_key=k),
-        stderr=sys.stderr,
-        now_monotonic=time.monotonic,
-        wall_budget_ms=wall,
-    )
+    # Final safety net for the always-exit-0 contract: anything that escapes the
+    # body (corrupt model JSON, FS errors during read/write, OS-level surprises)
+    # surfaces as a workflow `::warning::` and we still exit 0. The detect job
+    # never fails on a third-party / I/O issue.
+    try:
+        model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
+        if not model_path:
+            print("enrich: missing required env var COLDSTEP_REPORT_MODEL_IN", file=sys.stderr)
+            return 0
+        api_key = os.environ.get("OTX_API_KEY", "")
+        try:
+            wall = int(os.environ.get("COLDSTEP_OTX_WALL_BUDGET_MS", "30000"))
+        except ValueError:
+            wall = 30000
+        return run(
+            model_path=model_path,
+            api_key=api_key,
+            client_factory=lambda k: OTXClient(api_key=k),
+            stderr=sys.stderr,
+            now_monotonic=time.monotonic,
+            wall_budget_ms=wall,
+        )
+    except Exception as e:
+        print(
+            f"::warning title=OTX enrichment crashed::{_wf_data(type(e).__name__)}: {_wf_data(e)}",
+            file=sys.stderr,
+        )
+        return 0
 
 
 if __name__ == "__main__":

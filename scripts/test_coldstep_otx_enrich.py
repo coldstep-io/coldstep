@@ -206,6 +206,73 @@ class EnrichOrchestratorTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_warning_encodes_pulse_name_workflow_command_chars(self):
+        # GitHub Actions workflow commands are line-oriented: an OTX pulse name
+        # containing newlines or '%' could inject a second '::error::' command
+        # downstream. Encode per
+        # https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+        evil = {
+            "pulse_info": {
+                "count": 1,
+                "pulses": [{
+                    "id": "p1",
+                    "name": "naughty\n::error::pwned",
+                    "modified": "2026-04-18T00:00:00",
+                    "malware_families": [{"display_name": "100% bad"}],
+                }],
+            },
+        }
+        fake = _FakeClient({"evil.example.com": evil})
+        path = self._write_model(_v2_model_with_indicators())
+        try:
+            stderr = io.StringIO()
+            enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
+                       stderr=stderr, now_monotonic=lambda: 0.0, wall_budget_ms=30000)
+            out = stderr.getvalue()
+            self.assertIn("%0A", out)
+            self.assertNotIn("\n::error::pwned", out)
+            self.assertIn("100%25 bad", out)
+        finally:
+            os.unlink(path)
+
+    def test_main_returns_zero_on_corrupt_model_json(self):
+        # The orchestrator's docstring promises "Always returns 0" - that has to
+        # cover load failures too, not just per-indicator client failures.
+        tmp = tempfile.NamedTemporaryFile("wb", suffix=".json", delete=False)
+        tmp.write(b"{not valid json")
+        tmp.close()
+        old_env = {k: os.environ.get(k) for k in
+                   ("COLDSTEP_REPORT_MODEL_IN", "OTX_API_KEY", "COLDSTEP_OTX_WALL_BUDGET_MS")}
+        try:
+            os.environ["COLDSTEP_REPORT_MODEL_IN"] = tmp.name
+            os.environ["OTX_API_KEY"] = ""
+            os.environ.pop("COLDSTEP_OTX_WALL_BUDGET_MS", None)
+            self.assertEqual(enrich.main(), 0)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            os.unlink(tmp.name)
+
+    def test_main_returns_zero_on_unparseable_budget_env_var(self):
+        path = self._write_model(_v2_model_with_indicators())
+        old_env = {k: os.environ.get(k) for k in
+                   ("COLDSTEP_REPORT_MODEL_IN", "OTX_API_KEY", "COLDSTEP_OTX_WALL_BUDGET_MS")}
+        try:
+            os.environ["COLDSTEP_REPORT_MODEL_IN"] = path
+            os.environ["OTX_API_KEY"] = ""
+            os.environ["COLDSTEP_OTX_WALL_BUDGET_MS"] = "not-a-number"
+            self.assertEqual(enrich.main(), 0)
+        finally:
+            for k, v in old_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+            os.unlink(path)
+
     def test_no_indicators_in_model_skips_cleanly(self):
         model = _v2_model_with_indicators()
         model["egress_sankey"] = []

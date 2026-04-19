@@ -120,7 +120,7 @@ The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended t
 python -m unittest discover -s scripts -p "test_*.py"
 ```
 
-81 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
+87 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
 
 ## Why two tiers?
 
