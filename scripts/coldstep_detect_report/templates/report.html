@@ -25,7 +25,16 @@
 
     <section id="egress">
       <h2>Egress flow (host &rarr; policy)</h2>
+      <!-- Single chart, used when OTX hasn't run for this build. -->
       <div data-mount="egress"></div>
+      <!-- Verdict-pivot pair, populated only when model.otx is present. The
+           inline JS unhides this when it sees a non-skipped OTX block. -->
+      <div data-mount="egress-verdict-pivot" hidden>
+        <h3>Host &rarr; verdict</h3>
+        <div data-mount="egress-host-verdict"></div>
+        <h3>Verdict &rarr; policy</h3>
+        <div data-mount="egress-verdict-policy"></div>
+      </div>
     </section>
 
     <section id="diff">
@@ -127,24 +136,106 @@
       );
     }
 
-    // 3. Egress: Plot ships no sankey mark in 0.6, so render host -> policy
-    //    as a stacked bar grouped by source, coloured by target.
-    if (window.Plot) {
-      $('[data-mount="egress"]').appendChild(
-        Plot.plot({
+    // 3. Egress flow. Plot ships no sankey mark in 0.6, so we render the
+    //    flow as stacked bars. When OTX has produced verdicts we pivot into
+    //    two charts (host -> verdict, verdict -> policy) so the reader can
+    //    see why "unverified" used to swallow everything. Otherwise we fall
+    //    back to the classic single host -> policy chart.
+    //
+    //    Host labels read from model.dns_lookups so 8.8.8.8 displays as
+    //    "8.8.8.8 (dns.google)" - the join key is the raw source IP.
+    {
+      const VERDICT_DOMAIN = ["malicious", "unidentified", "clean", "unverified", "rate-limited"];
+      const VERDICT_RANGE  = ["#c41e3a", "#888888",      "#2e7d32", "#9aa0a6",    "#f9a825"];
+      const VERDICT_PRIORITY = { malicious: 0, "rate-limited": 1, unidentified: 2, clean: 3 };
+      const dnsLookups = model.dns_lookups || {};
+      const labelHost = (h) => (dnsLookups[h] ? `${h} (${dnsLookups[h]})` : h);
+
+      // Build indicator -> verdict map, mirroring _verdict_lookup() in the
+      // Tier-1 GFM renderer. Empty when OTX is absent or skipped.
+      const verdictLookup = {};
+      const otx = model.otx;
+      if (otx && !otx.skipped) {
+        for (const r of (otx.indicators || [])) {
+          if (r && r.indicator && r.verdict) verdictLookup[r.indicator] = r.verdict;
+        }
+      }
+      const otxActive = Object.keys(verdictLookup).length > 0;
+
+      // Pick the worst-severity verdict among an edge's indicators, falling
+      // back to a synthetic "unverified" bucket when none are in the lookup.
+      // Mirrors render_step_summary._entry_verdict + _UNVERIFIED constant.
+      const edgeVerdict = (e) => {
+        const inds = e.indicators || [];
+        let best = null, bestPri = 99;
+        for (const ind of inds) {
+          const v = verdictLookup[ind];
+          if (!v) continue;
+          const p = VERDICT_PRIORITY[v] ?? 99;
+          if (p < bestPri) { bestPri = p; best = v; }
+        }
+        return best || "unverified";
+      };
+
+      if (window.Plot && otxActive) {
+        // Pivot pair: host -> verdict (top), verdict -> policy (bottom).
+        $('[data-mount="egress-verdict-pivot"]').removeAttribute("hidden");
+        $('[data-mount="egress"]').setAttribute("hidden", "");
+        const hostVerdictRows = (model.egress_sankey || []).map(e => ({
+          host: labelHost(e.source),
+          verdict: edgeVerdict(e),
+          value: e.value,
+        }));
+        // Aggregate verdict -> policy: same edge contributes once with its
+        // worst verdict; collapse into (verdict, target) -> sum(value).
+        const vpAgg = new Map();
+        for (const e of (model.egress_sankey || [])) {
+          const key = edgeVerdict(e) + "\u0000" + e.target;
+          vpAgg.set(key, (vpAgg.get(key) || 0) + e.value);
+        }
+        const verdictPolicyRows = Array.from(vpAgg, ([k, v]) => {
+          const sep = k.indexOf("\u0000");
+          return { verdict: k.slice(0, sep), policy: k.slice(sep + 1), value: v };
+        });
+        $('[data-mount="egress-host-verdict"]').appendChild(Plot.plot({
+          marginLeft: 180,
+          x: { label: "Events" },
+          color: { domain: VERDICT_DOMAIN, range: VERDICT_RANGE, legend: true },
+          marks: [
+            Plot.barX(hostVerdictRows, {
+              y: "host", x: "value", fill: "verdict",
+              sort: { y: "x", reverse: true },
+            }),
+          ],
+        }));
+        $('[data-mount="egress-verdict-policy"]').appendChild(Plot.plot({
           marginLeft: 140,
           x: { label: "Events" },
           color: { legend: true },
           marks: [
-            Plot.barX(model.egress_sankey, {
-              y: "source",
-              x: "value",
-              fill: "target",
+            Plot.barX(verdictPolicyRows, {
+              y: "verdict", x: "value", fill: "policy",
+              sort: { y: VERDICT_DOMAIN },
+            }),
+          ],
+        }));
+      } else if (window.Plot) {
+        // Classic single chart - same as before, plus host-label rDNS join.
+        const rows = (model.egress_sankey || []).map(e => ({
+          host: labelHost(e.source), value: e.value, target: e.target,
+        }));
+        $('[data-mount="egress"]').appendChild(Plot.plot({
+          marginLeft: 140,
+          x: { label: "Events" },
+          color: { legend: true },
+          marks: [
+            Plot.barX(rows, {
+              y: "host", x: "value", fill: "target",
               sort: { y: "x", reverse: true },
             }),
           ],
-        })
-      );
+        }));
+      }
     }
 
     // 4. Diff: small tables, one per bucket.

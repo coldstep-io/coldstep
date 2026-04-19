@@ -89,16 +89,55 @@ def _events_xychart_md(model: dict) -> str:
     )
 
 
+def _host_label(host: str, dns_lookups: dict) -> str:
+    """Decorate a host node with its rDNS hostname when known.
+
+    `8.8.8.8` -> `8.8.8.8 (dns.google)`. Hosts that aren't IPs (or that have
+    no PTR) come back unchanged - the renderer doesn't need to know the type,
+    it just looks up the literal string in the rDNS map. Quoting for CSV is
+    handled at emission time by `_csv_field`.
+    """
+    if not host:
+        return host
+    name = (dns_lookups or {}).get(host)
+    return f"{host} ({name})" if name else host
+
+
+# Synthetic verdict bucket for indicators OTX hasn't seen (partial budget,
+# IPv6, unsupported type, allowlist-but-no-OTX-row, or no indicators on the
+# edge at all). Keeps the 3-column visualization mass-balanced.
+_UNVERIFIED = "unverified"
+
+
 def _egress_sankey_md(model: dict) -> str:
     edges = model["egress_sankey"][:TOP_SANKEY_EDGES]
     if not edges:
         return ""
-    body = "\n".join(
-        f'  {_csv_field(e["source"])},{_csv_field(e["target"])},{e["value"]}'
-        for e in edges
-    )
+    dns_lookups = model.get("dns_lookups") or {}
+    verdict_lookup = _verdict_lookup(model)
+    # 3-column pivot only when OTX produced verdicts; otherwise keep the
+    # classic 2-column sankey so a no-OTX run isn't weirdly wider.
+    if verdict_lookup:
+        title = "### Egress flow (host → verdict → policy)\n\n"
+        rows: list[str] = []
+        for e in edges:
+            src_field = _csv_field(_host_label(e["source"], dns_lookups))
+            tgt_field = _csv_field(e["target"])
+            value = e["value"]
+            verdict = (_entry_verdict(e, verdict_lookup) or _UNVERIFIED)
+            v_field = _csv_field(verdict)
+            rows.append(f"  {src_field},{v_field},{value}")
+            rows.append(f"  {v_field},{tgt_field},{value}")
+        body = "\n".join(rows)
+    else:
+        title = "### Egress flow (host → policy)\n\n"
+        body = "\n".join(
+            f'  {_csv_field(_host_label(e["source"], dns_lookups))},'
+            f'{_csv_field(e["target"])},{e["value"]}'
+            for e in edges
+        )
     return (
-        "### Egress flow (host → policy)\n\n"
+        f"{title}"
         "```mermaid\n"
         "sankey-beta\n"
         f"{body}\n"

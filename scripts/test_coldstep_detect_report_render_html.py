@@ -116,6 +116,24 @@ class HtmlReportRendererTests(unittest.TestCase):
         self.assertIn('"8.8.8.8": "dns.google"', html)
         self.assertIn("dns_lookups", html)
 
+    def test_egress_section_template_carries_verdict_pivot_mounts(self):
+        # The renderer is a substitute-and-write; verifying the template alone
+        # is enough to know the HTML will route through the verdict pivot when
+        # the JS sees model.otx + non-empty model.egress_sankey at run time.
+        html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        self.assertIn('data-mount="egress-host-verdict"', html)
+        self.assertIn('data-mount="egress-verdict-policy"', html)
+        self.assertIn("verdict", html.lower())
+
+    def test_egress_template_js_reads_dns_lookups_for_host_label(self):
+        # The host-label join must happen in the template, not in Python -
+        # render_html_report.py is just a placeholder substitution. Searching
+        # for "dns_lookups" in the template's JS confirms the join is wired.
+        html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        # The OTX block already references dns_lookups; the egress block
+        # must reference it too. Counting >= 2 occurrences keeps both honest.
+        self.assertGreaterEqual(html.count("dns_lookups"), 2)
+
     def test_renders_otx_data_into_html(self):
         model = dict(self.model)
         model["otx"] = {"skipped": False, "skipped_reason": None,
