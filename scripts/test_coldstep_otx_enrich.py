@@ -90,12 +90,23 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertFalse(data["otx"]["skipped"])
-            self.assertEqual(data["otx"]["summary"],
-                             {"malicious": 1, "clean": 1, "unidentified": 1, "total": 3})
+            self.assertEqual(
+                data["otx"]["summary"],
+                {
+                    "malicious": 1,
+                    "clean": 1,
+                    "unidentified": 1,
+                    "total": 3,
+                    "by_confidence": {"high": 1, "medium": 0, "low": 0, "null": 2},
+                },
+            )
             inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
             self.assertEqual(inds["evil.example.com"]["verdict"], "malicious")
+            self.assertEqual(inds["evil.example.com"]["confidence"], "high")
             self.assertEqual(inds["8.8.8.8"]["verdict"], "clean")
+            self.assertIsNone(inds["8.8.8.8"]["confidence"])
             self.assertEqual(inds["1.2.3.4"]["verdict"], "unidentified")
+            self.assertIsNone(inds["1.2.3.4"]["confidence"])
         finally:
             os.unlink(path)
 
@@ -297,6 +308,11 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(inds["127.0.0.1"]["reason"], "loopback")
             self.assertNotIn(("IPv4", "127.0.0.1"), fake.calls)
             self.assertEqual(data["otx"]["allowlisted"], 1)
+            self.assertEqual(
+                data["otx"]["allowlist_buckets"],
+                {"loopback": 1, "rfc1918": 0, "link-local": 0},
+            )
+            self.assertEqual(data["otx"]["filter_drops"], 0)
         finally:
             os.unlink(path)
 
@@ -316,8 +332,15 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(fake.calls, [])
             self.assertEqual(data["otx"]["api_calls"], 0)
             self.assertEqual(data["otx"]["allowlisted"], 2)
+            self.assertEqual(
+                data["otx"]["allowlist_buckets"],
+                {"loopback": 2, "rfc1918": 0, "link-local": 0},
+            )
             self.assertEqual(data["otx"]["summary"]["clean"], 2)
             self.assertEqual(data["otx"]["summary"]["total"], 2)
+            self.assertEqual(
+                data["otx"]["summary"]["by_confidence"]["null"], 2,
+            )
         finally:
             os.unlink(path)
 

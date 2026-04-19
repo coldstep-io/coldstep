@@ -10,7 +10,9 @@ Constraints:
 - Missing/empty OTX_API_KEY -> skipped: true, exit code 0.
 - 403 from OTX -> skipped: true, exit code 0 (the secret is wrong but we don't
   fail the detect job over a third-party auth issue).
-- Each malicious indicator -> a `::warning::` workflow command on stderr.
+- Each malicious indicator may emit a workflow annotation on stderr: `::warning::`
+  when confidence is high, `::notice::` when medium; low-confidence malicious
+  hits are silent (no annotation).
 - Verdict precedence for sort and join: malicious > unidentified > clean.
 
 Env vars when run as a script:
@@ -32,6 +34,7 @@ from typing import Callable, Iterable
 
 from scripts.coldstep_otx.allowlist import is_allowlisted
 from scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
+from scripts.coldstep_otx.confidence import tier
 from scripts.coldstep_otx.verdict import classify
 
 VERDICT_ORDER = {"malicious": 0, "unidentified": 1, "clean": 2}
@@ -78,12 +81,16 @@ def _wf_data(s: object) -> str:
     return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def _emit_warning(stderr, indicator: str, evidence: list[dict]) -> None:
+def _emit_annotation(stderr, indicator: str, evidence: list[dict], *, confidence: str) -> None:
+    """Emit ::warning:: for high, ::notice:: for medium; silent for low."""
+    if confidence == "low":
+        return
     titles = ", ".join(_wf_data(e.get("pulse_name") or e.get("pulse_id") or "?") for e in evidence[:2])
     families = sorted({_wf_data(fam) for e in evidence for fam in (e.get("malware_families") or []) if fam})
     fam_part = f" families={','.join(families)}" if families else ""
+    level = "warning" if confidence == "high" else "notice"
     msg = (
-        f"::warning title=OTX malicious indicator::{_wf_data(indicator)} matched "
+        f"::{level} title=OTX {_wf_data(confidence)} confidence malicious::{_wf_data(indicator)} matched "
         f"{len(evidence)} pulse(s){fam_part} ({titles})"
     )
     print(msg, file=stderr)
@@ -100,8 +107,16 @@ def _set_skipped(model: dict, reason: str, *, queried_at: str) -> None:
         "api_calls": 0,
         "rate_limited": 0,
         "allowlisted": 0,
+        "allowlist_buckets": {"loopback": 0, "rfc1918": 0, "link-local": 0},
+        "filter_drops": 0,
         "indicators": [],
-        "summary": {"malicious": 0, "clean": 0, "unidentified": 0, "total": 0},
+        "summary": {
+            "malicious": 0,
+            "clean": 0,
+            "unidentified": 0,
+            "total": 0,
+            "by_confidence": {"high": 0, "medium": 0, "low": 0, "null": 0},
+        },
     }
 
 
@@ -117,6 +132,8 @@ def run(
     """Execute one enrichment pass. Always returns 0 (never fails the detect job)."""
     model = json.loads(Path(model_path).read_text(encoding="utf-8"))
     queried_at = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
+    _dns = model.get("dns_lookups")
+    dns_lookups: dict[str, str] = _dns if isinstance(_dns, dict) else {}
 
     if not api_key:
         _set_skipped(model, "no api key", queried_at=queried_at)
@@ -142,6 +159,11 @@ def run(
     api_calls = 0
     rate_limited = 0
     allowlisted = 0
+    allowlist_buckets: dict[str, int] = {
+        "loopback": 0,
+        "rfc1918": 0,
+        "link-local": 0,
+    }
     partial = False
     for indicator, ind_type in pairs:
         # Allowlist runs first so loopback/RFC-reserved space never hits the
@@ -149,12 +171,15 @@ def run(
         # never silently drop an observed action.
         reason = is_allowlisted(indicator)
         if reason is not None:
+            allowlist_buckets[reason] = allowlist_buckets.get(reason, 0) + 1
             indicators_out.append({
                 "indicator": indicator,
                 "type": ind_type,
                 "verdict": "clean",
                 "source": "allowlist",
                 "reason": reason,
+                "confidence": None,
+                "confidence_reasons": [],
             })
             allowlisted += 1
             continue
@@ -170,12 +195,24 @@ def run(
             return 0
         except RateLimited:
             rate_limited += 1
-            indicators_out.append({"indicator": indicator, "type": ind_type,
-                                   "verdict": "unidentified", "note": "rate-limited"})
+            indicators_out.append({
+                "indicator": indicator,
+                "type": ind_type,
+                "verdict": "unidentified",
+                "note": "rate-limited",
+                "confidence": None,
+                "confidence_reasons": [],
+            })
             continue
         except OTXError as e:
-            indicators_out.append({"indicator": indicator, "type": ind_type,
-                                   "verdict": "unidentified", "note": f"otx error: {e}"})
+            indicators_out.append({
+                "indicator": indicator,
+                "type": ind_type,
+                "verdict": "unidentified",
+                "note": f"otx error: {e}",
+                "confidence": None,
+                "confidence_reasons": [],
+            })
             continue
         except Exception as e:
             # Final safety net: any non-OTXError escaping the client (a regression
@@ -183,21 +220,34 @@ def run(
             # must NOT crash the detect job. Tag the indicator and move on.
             # Regressed in CI run 24618444911 where a TimeoutError escaped a
             # buggy client and killed the step.
-            indicators_out.append({"indicator": indicator, "type": ind_type,
-                                   "verdict": "unidentified",
-                                   "note": f"unexpected error: {type(e).__name__}: {e}"})
+            indicators_out.append({
+                "indicator": indicator,
+                "type": ind_type,
+                "verdict": "unidentified",
+                "note": f"unexpected error: {type(e).__name__}: {e}",
+                "confidence": None,
+                "confidence_reasons": [],
+            })
             continue
         verdict, evidence = classify(general)
         row: dict = {"indicator": indicator, "type": ind_type, "verdict": verdict}
         if verdict == "malicious":
+            conf, conf_reasons = tier(general, hostname=dns_lookups.get(indicator))
+            row["confidence"] = conf
+            row["confidence_reasons"] = conf_reasons
             row["pulse_count"] = (general or {}).get("pulse_info", {}).get("count", len(evidence))
             row["evidence"] = evidence
-            _emit_warning(stderr, indicator, evidence)
+            _emit_annotation(stderr, indicator, evidence, confidence=conf)
         elif verdict == "clean":
+            row["confidence"] = None
+            row["confidence_reasons"] = []
             validation = (general or {}).get("validation") or []
             row["validation"] = [
                 (v.get("name") if isinstance(v, dict) else str(v)) for v in validation
             ]
+        else:
+            row["confidence"] = None
+            row["confidence_reasons"] = []
         indicators_out.append(row)
 
     indicators_out.sort(key=lambda r: (VERDICT_ORDER.get(r["verdict"], 99), r["indicator"]))
@@ -205,6 +255,11 @@ def run(
     for row in indicators_out:
         summary[row["verdict"]] = summary.get(row["verdict"], 0) + 1
     summary["total"] = sum(summary.values())
+    by_confidence = {"high": 0, "medium": 0, "low": 0, "null": 0}
+    for row in indicators_out:
+        ck = row.get("confidence") or "null"
+        by_confidence[ck] = by_confidence.get(ck, 0) + 1
+    summary["by_confidence"] = by_confidence
 
     wall_ms = int((now_monotonic() - start) * 1000)
     model["otx"] = {
@@ -217,6 +272,8 @@ def run(
         "api_calls": api_calls,
         "rate_limited": rate_limited,
         "allowlisted": allowlisted,
+        "allowlist_buckets": allowlist_buckets,
+        "filter_drops": 0,
         "indicators": indicators_out,
         "summary": summary,
     }
