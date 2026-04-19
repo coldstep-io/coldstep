@@ -68,6 +68,89 @@ def _filtered_pulses(otx_general: Optional[dict]) -> list[dict]:
     return out
 
 
+_Z = dt.timezone.utc
+STALE_PULSE_DAYS = 365
+
+
+def _parse_iso(s: str) -> Optional[dt.datetime]:
+    """Parse OTX pulse `modified` timestamps; assume UTC if no tz."""
+    if not s:
+        return None
+    try:
+        clean = str(s).strip().rstrip("Z")
+        if "." in clean:
+            head, frac = clean.split(".", 1)
+            clean = head + "." + (frac + "000000")[:6]
+            parsed = dt.datetime.fromisoformat(clean)
+        else:
+            parsed = dt.datetime.fromisoformat(clean)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=_Z)
+        return parsed
+    except (ValueError, TypeError):
+        return None
+
+
+def _newest_modified(pulses: list[dict]) -> Optional[dt.datetime]:
+    dates = [_parse_iso(str(p.get("modified", "") or "")) for p in pulses]
+    dates = [d for d in dates if d is not None]
+    return max(dates) if dates else None
+
+
+def tier(
+    otx_general: Optional[dict],
+    *,
+    asn: Optional[dict] = None,
+    hostname: Optional[str] = None,
+    now: Optional[dt.datetime] = None,
+) -> tuple[str, list[str]]:
+    """Compute confidence tier + stacked demotion reasons. Never raises."""
+    reasons: list[str] = []
+    pulses = _filtered_pulses(otx_general)
+    conf = "high"
+
+    # PR1 rules: OTX-internal signals only
+    if len(pulses) < 2:
+        conf = _demote(conf)
+        reasons.append(f"single pulse hit (count={len(pulses)})")
+    if pulses and (
+        not any(p.get("malware_families") for p in pulses)
+        and not any(p.get("attack_ids") for p in pulses)
+    ):
+        conf = _demote(conf)
+        reasons.append("no malware_families or attack_ids on any pulse")
+
+    newest = _newest_modified(pulses)
+    if newest is not None:
+        now_dt = now or dt.datetime.now(_Z)
+        if newest.tzinfo is None:
+            newest = newest.replace(tzinfo=_Z)
+        age_days = (now_dt - newest).days
+        if age_days > STALE_PULSE_DAYS:
+            conf = _demote(conf)
+            reasons.append(f"newest pulse stale ({age_days}d)")
+
+    if pulses and all(
+        GENERIC_LIST_NAME_RE.search(p.get("name", "") or "") for p in pulses
+    ):
+        conf = "low"
+        reasons.append(
+            "all pulses are generic-list exports (T-Pot/feed/dump)",
+        )
+
+    # PR2 / PR3 hooks (PLACEHOLDER no-ops until populated)
+    asn_id = asn.get("asn") if isinstance(asn, dict) else None
+    if asn_id is not None and asn_id in KNOWN_CLOUD_ASNS:
+        conf = _demote(conf)
+        label = KNOWN_CLOUD_ASNS.get(asn_id, "?")
+        reasons.append(f"shared cloud infra ({label}, AS{asn_id})")
+    if hostname and CLOUD_DNS_RE.search(hostname.lower()):
+        conf = _demote(conf)
+        reasons.append(f"hostname matches CDN pattern ({hostname})")
+
+    return conf, reasons
+
+
 def _demote(t: str) -> str:
     """high → medium → low → low (floor). Never raises."""
     return {"high": "medium", "medium": "low", "low": "low"}[t]
