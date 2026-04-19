@@ -39,6 +39,10 @@ scripts/__pycache__/
 # Local-only trees — never staged, never committed (do not `git add` docs/ or knowledge/, never `git add -f`).
 /docs/
 /knowledge/
+# Local-only orchestrator package: tooling that operates on the gitignored knowledge/ vault.
+# Lives next to scripts/ but is not part of the shipped product surface.
+/scripts/orchestrator/
+/scripts/test_orchestrator_*.py
 
 # Ignore stray copies under .github only.
 /.github/design/
