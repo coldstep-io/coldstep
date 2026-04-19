@@ -59,11 +59,14 @@ def _section(model: dict) -> str:
     queried_at = otx.get("queried_at") or "?"
     wall_ms = otx.get("wall_ms") or 0
     api_calls = otx.get("api_calls") or 0
+    allowlisted = otx.get("allowlisted") or 0
     partial = otx.get("partial_results")
     status = (
         f"_Queried {api_calls} indicator(s) at {_md_cell(queried_at)} "
         f"in {wall_ms} ms"
     )
+    if allowlisted:
+        status += f", {allowlisted} from allowlist (skipped OTX)"
     if partial:
         status += " (partial — wall budget exhausted)"
     status += "._"
@@ -100,10 +103,17 @@ def _section(model: dict) -> str:
             glyph = VERDICT_GLYPH.get(verdict, "?")
             pulses = r.get("pulse_count")
             pulses_cell = "" if pulses is None else str(pulses)
+            verdict_cell = f"{glyph} {_md_cell(verdict)}"
+            # Distinguish "clean by OTX validation" from "clean because we never
+            # asked OTX (allowlist hit)" - the JSON island carries `source`
+            # but the GFM table is the always-visible audit surface.
+            if r.get("source") == "allowlist":
+                reason = r.get("reason") or "?"
+                verdict_cell += f" (allowlist: {_md_cell(reason)})"
             ev = _md_cell(_evidence_summary(r))
             lines.append(
                 f"| `{_md_cell(r.get('indicator',''))}` | {_md_cell(r.get('type',''))} "
-                f"| {glyph} {_md_cell(verdict)} | {pulses_cell} | {ev} |"
+                f"| {verdict_cell} | {pulses_cell} | {ev} |"
             )
         lines.append("")
     return "\n".join(lines) + "\n"

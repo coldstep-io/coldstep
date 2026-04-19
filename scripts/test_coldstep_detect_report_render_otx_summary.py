@@ -85,6 +85,49 @@ class RenderOtxSummaryTests(unittest.TestCase):
         out = self._capture(_model_with_otx(otx))
         self.assertIn("naughty \\| injection", out)
 
+    def test_allowlisted_count_and_source_surface_in_summary(self):
+        # Allowlisted indicators (loopback etc.) must be visible in both the
+        # status line ("3 from allowlist") and on each row's verdict cell so a
+        # reader can tell "clean by OTX validation" apart from "clean because
+        # we never asked OTX". Non-zero allowlisted count without OTX hits
+        # MUST still render the section (auditable trail).
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "2026-04-18T17:00:00Z", "wall_ms": 0, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 0, "rate_limited": 0,
+               "allowlisted": 2,
+               "indicators": [
+                   {"indicator": "127.0.0.1", "type": "IPv4", "verdict": "clean",
+                    "source": "allowlist", "reason": "loopback"},
+                   {"indicator": "127.99.0.7", "type": "IPv4", "verdict": "clean",
+                    "source": "allowlist", "reason": "loopback"},
+               ],
+               "summary": {"malicious": 0, "clean": 2, "unidentified": 0, "total": 2}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("Threat-intel verdicts", out)
+        self.assertIn("2 from allowlist", out)
+        self.assertIn("127.0.0.1", out)
+        self.assertIn("allowlist: loopback", out)
+
+    def test_allowlist_and_otx_rows_distinguishable(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 50, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "allowlisted": 1,
+               "indicators": [
+                   {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean",
+                    "source": "otx", "validation": ["Listed on Alexa"]},
+                   {"indicator": "127.0.0.1", "type": "IPv4", "verdict": "clean",
+                    "source": "allowlist", "reason": "loopback"},
+               ],
+               "summary": {"malicious": 0, "clean": 2, "unidentified": 0, "total": 2}}
+        out = self._capture(_model_with_otx(otx))
+        # 8.8.8.8 is OTX-clean, no "(allowlist: ...)" suffix.
+        line_8888 = [ln for ln in out.splitlines() if "8.8.8.8" in ln][0]
+        self.assertNotIn("allowlist", line_8888)
+        # 127.0.0.1 is allowlist-clean.
+        line_local = [ln for ln in out.splitlines() if "127.0.0.1" in ln][0]
+        self.assertIn("allowlist: loopback", line_local)
+
     def test_partial_results_rendered_in_status_line(self):
         otx = {"skipped": False, "skipped_reason": None,
                "queried_at": "z", "wall_ms": 30000, "wall_budget_ms": 30000,

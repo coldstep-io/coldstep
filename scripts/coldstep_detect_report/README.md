@@ -112,6 +112,8 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 
 **Failure modes are observational, not fatal.** Every error path (missing key, 403 invalid key, transport error, exhausted budget) returns exit 0. The CI step also pins `continue-on-error: true` for belt-and-braces. Malicious indicators surface as GitHub `::warning::` annotations on the run — they never fail the job.
 
+**Allowlist (OTX bypass, not OTX skip).** RFC-reserved address space (loopback `127.0.0.0/8` in v1) is matched against `scripts/coldstep_otx/allowlist.py` *before* the OTX call. Allowlisted indicators are still recorded in `model.otx.indicators[]` with `verdict: "clean"`, `source: "allowlist"`, `reason: "loopback"` so the action is auditable, but they consume zero API calls and zero wall-clock budget. The Tier-1 GFM verdict cell shows `🟩 clean (allowlist: loopback)` so a reader can tell the two flavours of "clean" apart. Adding RFC1918 / link-local is a one-tuple edit in `allowlist.py` — no schema or renderer change needed.
+
 The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + indicator table) appended by `render_otx_summary.py`. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart and verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}` in `styles.css`).
 
 ## Tests
@@ -120,7 +122,7 @@ The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended t
 python -m unittest discover -s scripts -p "test_*.py"
 ```
 
-87 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
+97 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
 
 ## Why two tiers?
 

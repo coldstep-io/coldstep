@@ -273,6 +273,54 @@ class EnrichOrchestratorTests(unittest.TestCase):
                     os.environ[k] = v
             os.unlink(path)
 
+    def test_loopback_indicator_skips_otx_and_is_logged_as_clean(self):
+        # 127.0.0.0/8 is loopback by RFC 5735. Sending it to OTX would burn an
+        # API call for a guaranteed-404 - and worse, an OTX-returned
+        # "unidentified" verdict would make a benign local probe look suspect
+        # in the report. Allowlist short-circuits the call but the indicator
+        # MUST still appear in indicators[] (auditable).
+        model = _v2_model_with_indicators()
+        model["egress_sankey"].append(
+            {"source": "127.0.0.1", "target": "allow", "value": 1, "indicators": ["127.0.0.1"]}
+        )
+        evil = _fix("general-malicious.json")
+        fake = _FakeClient({"evil.example.com": evil})  # 8.8.8.8 + 1.2.3.4 + 127.0.0.1 not in table
+        path = self._write_model(model)
+        try:
+            enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
+                       stderr=io.StringIO(), now_monotonic=lambda: 0.0, wall_budget_ms=30000)
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
+            self.assertIn("127.0.0.1", inds)
+            self.assertEqual(inds["127.0.0.1"]["verdict"], "clean")
+            self.assertEqual(inds["127.0.0.1"]["source"], "allowlist")
+            self.assertEqual(inds["127.0.0.1"]["reason"], "loopback")
+            self.assertNotIn(("IPv4", "127.0.0.1"), fake.calls)
+            self.assertEqual(data["otx"]["allowlisted"], 1)
+        finally:
+            os.unlink(path)
+
+    def test_loopback_indicator_does_not_consume_api_calls(self):
+        model = _v2_model_with_indicators()
+        model["egress_sankey"] = [
+            {"source": "127.0.0.1", "target": "allow", "value": 1, "indicators": ["127.0.0.1"]},
+            {"source": "127.99.0.7", "target": "allow", "value": 1, "indicators": ["127.99.0.7"]},
+        ]
+        model["diff"] = {"status": "ok", "traffic_new": [], "traffic_gone": [], "traffic_changed": []}
+        fake = _FakeClient({})
+        path = self._write_model(model)
+        try:
+            enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
+                       stderr=io.StringIO(), now_monotonic=lambda: 0.0, wall_budget_ms=30000)
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertEqual(fake.calls, [])
+            self.assertEqual(data["otx"]["api_calls"], 0)
+            self.assertEqual(data["otx"]["allowlisted"], 2)
+            self.assertEqual(data["otx"]["summary"]["clean"], 2)
+            self.assertEqual(data["otx"]["summary"]["total"], 2)
+        finally:
+            os.unlink(path)
+
     def test_no_indicators_in_model_skips_cleanly(self):
         model = _v2_model_with_indicators()
         model["egress_sankey"] = []

@@ -28,6 +28,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable
 
+from scripts.coldstep_otx.allowlist import is_allowlisted
 from scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
 from scripts.coldstep_otx.verdict import classify
 
@@ -96,6 +97,7 @@ def _set_skipped(model: dict, reason: str, *, queried_at: str) -> None:
         "partial_results": False,
         "api_calls": 0,
         "rate_limited": 0,
+        "allowlisted": 0,
         "indicators": [],
         "summary": {"malicious": 0, "clean": 0, "unidentified": 0, "total": 0},
     }
@@ -137,8 +139,23 @@ def run(
     indicators_out: list[dict] = []
     api_calls = 0
     rate_limited = 0
+    allowlisted = 0
     partial = False
     for indicator, ind_type in pairs:
+        # Allowlist runs first so loopback/RFC-reserved space never hits the
+        # network or the wall-clock budget. Indicator is still recorded - we
+        # never silently drop an observed action.
+        reason = is_allowlisted(indicator)
+        if reason is not None:
+            indicators_out.append({
+                "indicator": indicator,
+                "type": ind_type,
+                "verdict": "clean",
+                "source": "allowlist",
+                "reason": reason,
+            })
+            allowlisted += 1
+            continue
         if (now_monotonic() - start) >= budget_s:
             partial = True
             break
@@ -197,6 +214,7 @@ def run(
         "partial_results": partial,
         "api_calls": api_calls,
         "rate_limited": rate_limited,
+        "allowlisted": allowlisted,
         "indicators": indicators_out,
         "summary": summary,
     }
