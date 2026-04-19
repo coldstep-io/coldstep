@@ -41,6 +41,33 @@ KNOWN_CLOUD_ASNS: dict[int, str] = {}
 CLOUD_DNS_RE = re.compile(r"$^")  # matches nothing
 
 
+def _filtered_pulses(otx_general: Optional[dict]) -> list[dict]:
+    """Apply PULSE_HARD_DROP_RE + is_subscribing filter with graceful degrade.
+
+    Never raises on malformed input — defensively returns an empty list.
+    """
+    if not isinstance(otx_general, dict):
+        return []
+    pulses = ((otx_general.get("pulse_info") or {}).get("pulses") or [])
+    # Pre-compute the graceful-degrade signal BEFORE filtering, over the
+    # post-hard-drop population, so a single troll pulse with is_subscribing
+    # True doesn't force the filter to stay on for a legit all-False payload.
+    post_hard = [p for p in pulses
+                 if isinstance(p, dict)
+                 and not PULSE_HARD_DROP_RE.search(p.get("name", "") or "")]
+    any_has_field = any("is_subscribing" in p for p in post_hard)
+    all_unsubscribed = any_has_field and all(
+        not p.get("is_subscribing") for p in post_hard
+    )
+    apply_sub_filter = any_has_field and not all_unsubscribed
+    out: list[dict] = []
+    for p in post_hard:
+        if apply_sub_filter and not p.get("is_subscribing"):
+            continue
+        out.append(p)
+    return out
+
+
 def _demote(t: str) -> str:
     """high → medium → low → low (floor). Never raises."""
     return {"high": "medium", "medium": "low", "low": "low"}[t]
