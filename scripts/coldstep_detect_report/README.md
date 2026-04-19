@@ -2,6 +2,13 @@
 
 Two-tier report driven by a single `report-model.json` (schema **v2.1** — string `schema_version`, OTX `confidence` tiers on malicious indicators, filter audit fields). Built for the `coldstep-demo-detect.yml` workflow.
 
+## `coldstep-demo-detect.yml` pipeline order
+
+1. `build_report_model.py` — current JSONL only (`diff` may be `unavailable` until baseline exists).
+2. **Previous-run diff** — downloads baseline artifact, appends markdown to `GITHUB_STEP_SUMMARY`, then **rebuilds** `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
+3. `render_step_summary.py` — Tier-1 matrix/charts/`diff` GFM (must run after step 2 when baseline is present).
+4. `enrich_rdns.py` → `enrich.py` (OTX) → `render_otx_summary.py` → `render_html_report.py` — same model path, in-place enrichment.
+
 | Surface | What renders it | Where you see it | Owner |
 |---|---|---|---|
 | **Tier 1** — `$GITHUB_STEP_SUMMARY` (Markdown + Mermaid) | `render_step_summary.py` | Workflow run page, automatically | Engineering / agent |
