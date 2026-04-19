@@ -179,9 +179,6 @@ jobs:
             fi
             exit 0
           }
-          echo "### Previous Run Diff" >> "${summary}"
-          echo "" >> "${summary}"
-          echo "- Feature flag: enabled (\`COLDSTEP_DIFF_PREV_RUN=1\`)" >> "${summary}"
 
           if [[ ! -f "${current_file}" ]]; then
             fail_diff_unavailable "current JSONL missing"
@@ -209,8 +206,7 @@ jobs:
             fail_diff_unavailable "no prior successful run found"
           fi
 
-          echo "- ${marker_prefix}.baseline_run_id=${baseline_run}" >> "${summary}"
-          echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
+          echo "::notice::coldstep-prev-diff baseline_run=${baseline_run} fallback_used=${fallback_used}"
 
           rm -rf prev-state
           mkdir -p prev-state
@@ -224,42 +220,11 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          if ! jq -r '.type // "unknown"' "${baseline_file}" | sort | uniq -c > prev_counts.raw; then
-            fail_diff_unavailable "baseline JSONL parse failed"
-          fi
-          if ! jq -r '.type // "unknown"' "${current_file}" | sort | uniq -c > curr_counts.raw; then
-            fail_diff_unavailable "current JSONL parse failed"
-          fi
-
-          declare -A prev_counts curr_counts all_types
-          while read -r n t; do
-            [[ -z "${t}" ]] && continue
-            prev_counts["${t}"]="${n}"
-            all_types["${t}"]=1
-          done < prev_counts.raw
-          while read -r n t; do
-            [[ -z "${t}" ]] && continue
-            curr_counts["${t}"]="${n}"
-            all_types["${t}"]=1
-          done < curr_counts.raw
-
-          echo "" >> "${summary}"
-          echo "#### Event volume by \`type\` (includes meta/exec noise)" >> "${summary}"
-          echo "" >> "${summary}"
-          echo "| Type | Baseline | Current | Delta |" >> "${summary}"
-          echo "|---|---:|---:|---:|" >> "${summary}"
-          while read -r t; do
-            [[ -z "${t}" ]] && continue
-            prev="${prev_counts[${t}]:-0}"
-            curr="${curr_counts[${t}]:-0}"
-            delta=$((curr - prev))
-            printf '| `%s` | %s | %s | %+d |\n' "${t}" "${prev}" "${curr}" "${delta}" >> "${summary}"
-          done < <(printf '%s\n' "${!all_types[@]}" | sort)
-
           export NS_SUMMARY="${summary}"
           export NS_BASELINE="${baseline_file}"
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
+          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
           if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi

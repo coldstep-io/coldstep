@@ -5,7 +5,7 @@ Two-tier report driven by a single `report-model.json` (schema **v2.1** — stri
 ## `coldstep-demo-detect.yml` pipeline order
 
 1. `build_report_model.py` — current JSONL only (`diff` may be `unavailable` until baseline exists).
-2. **Previous-run diff** — downloads baseline artifact, appends markdown to `GITHUB_STEP_SUMMARY`, then **rebuilds** `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
+2. **Previous-run diff** — downloads baseline artifact, runs `ci_coldstep_jsonl_traffic_diff.py` with **`COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal`** (compact counts + markers only; no fingerprint tables in the job summary), then **rebuilds** `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
 3. `enrich_rdns.py` → `scripts.coldstep_otx.enrich` — in-place enrichment on `.coldstep-report-model.json` (PTR + AlienVault OTX).
 4. `render_step_summary.py` — Tier-1 **BLUF only** (capabilities headline, baseline-diff headline, OTX headline, artifact pointer). Runs **after** enrich so OTX lines reflect the enriched model.
 5. `render_html_report.py` — Tier-2 self-contained HTML (`coldstep-detect-report.html`).
