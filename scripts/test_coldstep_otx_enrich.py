@@ -337,5 +337,56 @@ class EnrichOrchestratorTests(unittest.TestCase):
             os.unlink(path)
 
 
+class EnrichSanitizationParityTests(unittest.TestCase):
+    """F-P2-01: enrich.py must accept paths under the same trusted-root set as
+    scripts/coldstep_detect_report/build_report_model.py — workspace, runner
+    temp, system temp, and (when no workspace) cwd. AGENTS.md canonical helper.
+    """
+
+    def _write_model(self, dir_path: Path) -> Path:
+        p = dir_path / "report-model.json"
+        p.write_text(json.dumps({"schema_version": 2}), encoding="utf-8")
+        return p
+
+    def test_accepts_path_under_runner_temp(self):
+        with tempfile.TemporaryDirectory() as runner_temp:
+            old_runner = os.environ.pop("RUNNER_TEMP", None)
+            old_workspace = os.environ.pop("GITHUB_WORKSPACE", None)
+            os.environ["RUNNER_TEMP"] = runner_temp
+            try:
+                model_path = self._write_model(Path(runner_temp))
+                resolved = enrich._safe_workspace_path(
+                    str(model_path), var_name="COLDSTEP_REPORT_MODEL_IN"
+                )
+                self.assertEqual(os.path.realpath(str(model_path)), resolved)
+            finally:
+                if old_runner is not None:
+                    os.environ["RUNNER_TEMP"] = old_runner
+                else:
+                    os.environ.pop("RUNNER_TEMP", None)
+                if old_workspace is not None:
+                    os.environ["GITHUB_WORKSPACE"] = old_workspace
+
+    def test_accepts_path_under_system_tempdir(self):
+        with tempfile.TemporaryDirectory() as td:
+            old_workspace = os.environ.pop("GITHUB_WORKSPACE", None)
+            old_runner = os.environ.pop("RUNNER_TEMP", None)
+            try:
+                model_path = self._write_model(Path(td))
+                resolved = enrich._safe_workspace_path(
+                    str(model_path), var_name="COLDSTEP_REPORT_MODEL_IN"
+                )
+                self.assertEqual(os.path.realpath(str(model_path)), resolved)
+            finally:
+                if old_workspace is not None:
+                    os.environ["GITHUB_WORKSPACE"] = old_workspace
+                if old_runner is not None:
+                    os.environ["RUNNER_TEMP"] = old_runner
+
+    def test_rejects_disallowed_chars(self):
+        with self.assertRaises(ValueError):
+            enrich._safe_workspace_path("/etc/passwd; rm -rf /", var_name="TEST")
+
+
 if __name__ == "__main__":
     unittest.main()

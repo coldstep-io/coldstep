@@ -9,6 +9,7 @@ loaded with `{{ }}` placeholders. This module only does:
 """
 from __future__ import annotations
 
+import html
 import json
 import os
 import re
@@ -66,15 +67,17 @@ def write_html(model: dict, html_out: str) -> None:
     # Three-pass placeholder substitution. Order matters: STYLES is substituted
     # before MODEL_JSON so a CSS file containing the literal "{{ MODEL_JSON }}"
     # cannot inject into the JSON island. MODEL_JSON is substituted before
-    # GENERATED_AT for the same reason. Today's templates and JSON contract
-    # don't produce these literals, but the comment pins the invariant.
-    html = (
+    # GENERATED_AT for the same reason. GENERATED_AT is HTML-escaped because it
+    # is the only slot whose value comes from a JSON field that an attacker who
+    # can flip the model on disk could shape (F-P1-01).
+    generated_at = html.escape(str(model.get("generated_at", "")), quote=True)
+    out = (
         template
         .replace("{{ STYLES }}", styles)
         .replace("{{ MODEL_JSON }}", payload)
-        .replace("{{ GENERATED_AT }}", str(model.get("generated_at", "")))
+        .replace("{{ GENERATED_AT }}", generated_at)
     )
-    Path(html_out).write_text(html, encoding="utf-8")
+    Path(html_out).write_text(out, encoding="utf-8")
 
 
 def main() -> int:

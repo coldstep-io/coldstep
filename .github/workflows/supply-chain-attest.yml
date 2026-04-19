@@ -20,6 +20,7 @@ concurrency:
 
 jobs:
   attest:
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

@@ -19,6 +19,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -67,23 +68,44 @@ def run(
     return 0
 
 
-_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+\.json$")
+def _wf_data(s: object) -> str:
+    """Encode user-derived strings for GitHub Actions workflow commands.
+
+    Workflow commands are line-oriented; a surprise path containing a literal
+    newline could inject a second `::warning::` annotation downstream. Encode
+    `%`, `\\r`, `\\n` per
+    https://docs.github.com/en/actions/using-workflows/workflow-commands-for-github-actions
+    """
+    return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def _safe_model_path(raw: str) -> str:
-    # Mirrors scripts/coldstep_otx/enrich.py: COLDSTEP_REPORT_MODEL_IN is
-    # untrusted from Snyk Code's point of view (python/PT, CWE-23). Defence
-    # is two-stage so a poisoned env var cannot reach the read/write sinks
-    # in run(): a regex allowlist for the literal characters, then
-    # realpath()+commonpath() containment under GITHUB_WORKSPACE (or cwd
-    # outside CI). Anything else is refused at the boundary.
+# Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
+# untrusted. main() canonicalises every env-var path through this helper
+# before it reaches a Path()/open() sink. Inlined per file because Snyk's
+# taint analysis only recognises sanitisers that live in the same module
+# as the sink. Mirrors scripts/coldstep_detect_report/build_report_model.py
+# so the trusted-root set stays identical (AGENTS.md canonical helper).
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
+
+
+def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
     if not _SAFE_PATH_RE.match(raw):
-        raise ValueError("disallowed characters in model path")
-    root = os.path.realpath(os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
+        raise ValueError(f"{var_name} contains disallowed characters")
+    roots: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        roots.append(os.path.realpath(runner_temp))
+    roots.append(os.path.realpath(tempfile.gettempdir()))
+    if not workspace:
+        roots.append(os.path.realpath(os.getcwd()))
     resolved = os.path.realpath(raw)
-    if os.path.commonpath([resolved, root]) != root:
-        raise ValueError(f"{resolved!r} is not under {root!r}")
-    return resolved
+    for root in roots:
+        if os.path.commonpath([resolved, root]) == root:
+            return resolved
+    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
 
 
 def main() -> int:
@@ -96,10 +118,12 @@ def main() -> int:
                   file=sys.stderr)
             return 0
         try:
-            model_path = _safe_model_path(raw_model_path)
+            model_path = _safe_workspace_path(
+                raw_model_path, var_name="COLDSTEP_REPORT_MODEL_IN"
+            )
         except ValueError as e:
             print(
-                f"enrich_rdns: refusing COLDSTEP_REPORT_MODEL_IN outside workspace: {e}",
+                f"::warning title=rDNS enrichment refused untrusted path::{_wf_data(e)}",
                 file=sys.stderr,
             )
             return 0

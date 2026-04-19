@@ -134,6 +134,22 @@ class HtmlReportRendererTests(unittest.TestCase):
         # must reference it too. Counting >= 2 occurrences keeps both honest.
         self.assertGreaterEqual(html.count("dns_lookups"), 2)
 
+    def test_generated_at_is_html_escaped(self):
+        # F-P1-01: a tampered or hand-crafted report-model.json must not be able
+        # to break out of <time>...</time> via the GENERATED_AT slot. The
+        # renderer must HTML-escape the value before substitution.
+        evil = dict(self.model)
+        evil["generated_at"] = '</time><script>alert("xss")</script><time>'
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "evil-genat.html"
+            _RMOD.write_html(model=evil, html_out=str(out))
+            html = out.read_text(encoding="utf-8")
+        self.assertNotIn("<script>alert(\"xss\")</script>", html)
+        self.assertIn(
+            "&lt;/time&gt;&lt;script&gt;alert(&quot;xss&quot;)&lt;/script&gt;&lt;time&gt;",
+            html,
+        )
+
     def test_renders_otx_data_into_html(self):
         model = dict(self.model)
         model["otx"] = {"skipped": False, "skipped_reason": None,
