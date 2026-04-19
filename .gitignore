@@ -11,6 +11,10 @@ internal/bpf/**/*.o
 internal/bpf/**/*_bpfel.go
 internal/bpf/**/*_bpfeb.go
 scripts/__pycache__/
+# Catch nested pycache too (e.g. scripts/coldstep_dns/__pycache__/, scripts/coldstep_otx/__pycache__/).
+scripts/**/__pycache__/
+**/__pycache__/
+*.pyc
 
 # Local Docker MCP Toolkit reconnect helper (copy from scripts/docker-mcp-reconnect.ps1.example)
 scripts/docker-mcp-reconnect.ps1
