@@ -23,6 +23,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import os
+import re
 import sys
 import time
 from pathlib import Path
@@ -222,15 +223,43 @@ def run(
     return 0
 
 
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+\.json$")
+
+
+def _safe_model_path(raw: str) -> str:
+    # COLDSTEP_REPORT_MODEL_IN is supplied by the workflow, but Snyk Code
+    # (python/PT, CWE-23) treats env input as untrusted - and rightly so: a
+    # bad value would let an attacker who can flip the env force this script
+    # to overwrite an arbitrary JSON file on the runner. Defence is two-stage:
+    #   1. Regex allowlist rejects shell metachars, NULs, newlines, ...
+    #   2. realpath()+commonpath() containment pins the resolved file inside
+    #      GITHUB_WORKSPACE (or cwd outside CI), so `..` traversal is fatal.
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError("disallowed characters in model path")
+    root = os.path.realpath(os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
+    resolved = os.path.realpath(raw)
+    if os.path.commonpath([resolved, root]) != root:
+        raise ValueError(f"{resolved!r} is not under {root!r}")
+    return resolved
+
+
 def main() -> int:
     # Final safety net for the always-exit-0 contract: anything that escapes the
     # body (corrupt model JSON, FS errors during read/write, OS-level surprises)
     # surfaces as a workflow `::warning::` and we still exit 0. The detect job
     # never fails on a third-party / I/O issue.
     try:
-        model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
-        if not model_path:
+        raw_model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
+        if not raw_model_path:
             print("enrich: missing required env var COLDSTEP_REPORT_MODEL_IN", file=sys.stderr)
+            return 0
+        try:
+            model_path = _safe_model_path(raw_model_path)
+        except ValueError as e:
+            print(
+                f"enrich: refusing COLDSTEP_REPORT_MODEL_IN outside workspace: {_wf_data(e)}",
+                file=sys.stderr,
+            )
             return 0
         api_key = os.environ.get("OTX_API_KEY", "")
         try:
