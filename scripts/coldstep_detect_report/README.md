@@ -1,6 +1,6 @@
-# Coldstep detect-mode report (v1)
+# Coldstep detect-mode report (v2)
 
-Two-tier report driven by a single `report-model.json` (schema v1). Built for the `coldstep-demo-detect.yml` workflow.
+Two-tier report driven by a single `report-model.json` (schema v2 — adds the `otx` block and per-entry `indicators`). Built for the `coldstep-demo-detect.yml` workflow.
 
 | Surface | What renders it | Where you see it | Owner |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Two-tier report driven by a single `report-model.json` (schema v1). Built for th
 
 | Key | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` | Currently `1`. Bump this any time the shape below changes incompatibly. |
+| `schema_version` | `int` | Currently `2`. Bump this any time the shape below changes incompatibly. |
 | `generated_at` | ISO-8601 UTC string with `Z` suffix | Emitted by the builder, not by the renderer. Deterministic when `build()` is called with `now=...` (used in tests). |
 | `run.run_id` | string | From the JSONL `meta` event if present, else `$GITHUB_RUN_ID`. |
 | `run.workflow_file` | string | Parsed from `$GITHUB_WORKFLOW_REF` (the `{repo}/.github/workflows/{file}@{ref}` format). |
@@ -24,8 +24,9 @@ Two-tier report driven by a single `report-model.json` (schema v1). Built for th
 | `capability_matrix` | `[{id, label, status, evidence_count}]` | One row per `REQUIRED_CAPABILITIES` constant. `status` is `"pass"` / `"warn"` / `"fail"`. |
 | `events_by_type` | `[{type, count}]` sorted descending by `count` | Excludes the `meta` envelope event so it doesn't pollute charts. |
 | `timeline` | `[{bucket, type, count}]` | `bucket` is a 1-second UTC bin, ISO-8601 with `Z` suffix. |
-| `egress_sankey` | `[{source, target, value}]` | `source` is host, `target` is policy decision. Empty-string policy maps to `""` (matches the upstream traffic fingerprinter). |
-| `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). |
+| `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the OTX-eligible indicator list (IPv4/FQDN) for the edge — added in schema v2 for cross-joining with the `otx` block. |
+| `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). Each entry in the three buckets carries `indicators: list[str]` (schema v2). |
+| `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
 
 ### Required capabilities (anchor the matrix)
 
@@ -99,14 +100,27 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 - Server side: `_safe_json()` in `render_html_report.py` defangs `</` so an attacker who controls a JSON string value cannot terminate the data island.
 - Client side: every field consumed by the `innerHTML` template-literal builders today comes from `REQUIRED_CAPABILITIES` (Python constants) or numeric counts. Before piping a *user-supplied string* (a CLI label from a contributor's PR, an arbitrary error message, etc.) through one of those builders, switch the relevant assignment to `textContent =` or pass it through an `escapeHtml()` helper.
 
+## OTX threat-intel enrichment (schema v2)
+
+`scripts/coldstep_otx/enrich.py` runs **between** the diff-step model rebuild and the HTML render. It reads the model in place, dedupes IPv4/FQDN indicators from `egress_sankey[].indicators` and `diff.traffic_*[].indicators`, looks up each one against AlienVault OTX's `general` endpoint, classifies the response into `malicious` / `clean` / `unidentified`, and writes the enriched model back to disk.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `OTX_API_KEY` | _(none)_ | Repo secret. Missing or empty → `model.otx = {"skipped": "no_api_key"}`, exit 0. |
+| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Path to the JSON model. The script reads and overwrites this file in place. |
+| `COLDSTEP_OTX_WALL_BUDGET_MS` | `30000` | Hard wall-clock cap. When exhausted the script records `partial_results: true` and returns the indicators it had time for. |
+
+**Failure modes are observational, not fatal.** Every error path (missing key, 403 invalid key, transport error, exhausted budget) returns exit 0. The CI step also pins `continue-on-error: true` for belt-and-braces. Malicious indicators surface as GitHub `::warning::` annotations on the run — they never fail the job.
+
+The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + indicator table) appended by `render_otx_summary.py`. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart and verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}` in `styles.css`).
+
 ## Tests
 
 ```powershell
-cd scripts
-python -m unittest test_coldstep_detect_report_build test_coldstep_detect_report_render_summary test_coldstep_detect_report_render_html -v
+python -m unittest discover -s scripts -p "test_*.py"
 ```
 
-21 tests cover: schema invariants and fixture diffing (`build`), capability pills + `xychart-beta` + `sankey-beta` + GFM-cell escaping (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging (`render_html`).
+81 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
 
 ## Why two tiers?
 
