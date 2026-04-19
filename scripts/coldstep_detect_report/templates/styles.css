@@ -94,6 +94,11 @@ code {
   margin: 4px 6px 4px 0;
   display: inline-block;
 }
+.coldstep-otx-rdns {
+  color: var(--muted);
+  font-size: .85em;
+  margin-left: 2px;
+}
 .coldstep-otx-status {
   color: var(--muted);
   font-size: .9rem;

@@ -93,11 +93,22 @@ def _section(model: dict) -> str:
         key=lambda r: (VERDICT_PRIORITY.get(r.get("verdict", ""), 99),
                        r.get("indicator", "")),
     )[:TOP_INDICATOR_ROWS]
+    dns_lookups = model.get("dns_lookups") or {}
+    # Only widen the table with a Hostname column when at least one indicator
+    # in the table actually has a reverse-DNS entry; otherwise the column is
+    # noise.
+    show_hostname = any(dns_lookups.get(r.get("indicator", "")) for r in indicators)
     if indicators:
-        lines += [
-            "| Indicator | Type | Verdict | Pulses | Top evidence |",
-            "|---|---|---|---:|---|",
-        ]
+        if show_hostname:
+            lines += [
+                "| Indicator | Hostname | Type | Verdict | Pulses | Top evidence |",
+                "|---|---|---|---|---:|---|",
+            ]
+        else:
+            lines += [
+                "| Indicator | Type | Verdict | Pulses | Top evidence |",
+                "|---|---|---|---:|---|",
+            ]
         for r in indicators:
             verdict = r.get("verdict", "")
             glyph = VERDICT_GLYPH.get(verdict, "?")
@@ -111,10 +122,18 @@ def _section(model: dict) -> str:
                 reason = r.get("reason") or "?"
                 verdict_cell += f" (allowlist: {_md_cell(reason)})"
             ev = _md_cell(_evidence_summary(r))
-            lines.append(
-                f"| `{_md_cell(r.get('indicator',''))}` | {_md_cell(r.get('type',''))} "
-                f"| {verdict_cell} | {pulses_cell} | {ev} |"
-            )
+            indicator = r.get("indicator", "")
+            if show_hostname:
+                hostname = dns_lookups.get(indicator) or ""
+                lines.append(
+                    f"| `{_md_cell(indicator)}` | {_md_cell(hostname)} "
+                    f"| {_md_cell(r.get('type',''))} | {verdict_cell} | {pulses_cell} | {ev} |"
+                )
+            else:
+                lines.append(
+                    f"| `{_md_cell(indicator)}` | {_md_cell(r.get('type',''))} "
+                    f"| {verdict_cell} | {pulses_cell} | {ev} |"
+                )
         lines.append("")
     return "\n".join(lines) + "\n"
 

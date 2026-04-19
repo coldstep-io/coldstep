@@ -279,11 +279,27 @@ jobs:
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
             python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
 
-      # Enrichment runs AFTER the diff step's model rebuild (which adds the diff
-      # buckets) and BEFORE the HTML render so the artifact ships with OTX data.
-      # continue-on-error is belt-and-braces: enrich.py also exits 0 on every
-      # failure mode (no key / 403 / transport / budget) so the detect job never
-      # fails on a third-party outage.
+      # rDNS enrichment runs first (no API key needed) so OTX renderers and the
+      # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
+      # continue-on-error + always-exit-0 mirror the OTX step contract.
+      - name: Enrich report model with reverse DNS
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_RDNS_WALL_BUDGET_MS: '5000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_dns.enrich_rdns
+          else
+            echo "::warning::report model missing, skipping rDNS enrichment"
+          fi
+
+      # OTX enrichment runs AFTER the diff step's model rebuild (which adds the
+      # diff buckets) and AFTER rDNS so OTX-table rows can carry hostnames.
+      # Both `continue-on-error` and the script's own always-exit-0 contract
+      # keep the detect job green on third-party failures.
       - name: Enrich report model with OTX threat-intel
         if: always()
         env:

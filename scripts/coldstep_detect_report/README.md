@@ -27,6 +27,7 @@ Two-tier report driven by a single `report-model.json` (schema v2 — adds the `
 | `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the OTX-eligible indicator list (IPv4/FQDN) for the edge — added in schema v2 for cross-joining with the `otx` block. |
 | `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). Each entry in the three buckets carries `indicators: list[str]` (schema v2). |
 | `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
+| `dns_lookups` | `{ip: hostname}` map, optional | Populated by `scripts/coldstep_dns/enrich_rdns.py`. Best-effort PTR resolution for every IPv4 indicator on the model (hostnames are skipped — they already are names). Missing entry = no PTR / timed out / not asked. Schema-additive: renderers that don't know about it ignore the key, renderers that do know join on the IP to display "8.8.8.8 (dns.google)". |
 
 ### Required capabilities (anchor the matrix)
 
@@ -116,13 +117,24 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 
 The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + indicator table) appended by `render_otx_summary.py`. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart and verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}` in `styles.css`).
 
+## Reverse-DNS enrichment (rDNS)
+
+`scripts/coldstep_dns/enrich_rdns.py` runs **before** OTX enrichment so that the OTX renderers (and a future 3-column Sankey) can label IPv4 indicators with their PTR hostname (e.g. `8.8.8.8 (dns.google)`). Stdlib only — no API key, no third-party dep, no per-indicator HTTP request. Best-effort: missing PTR / OS-level timeout / unexpected exception silently omits the entry; never fails the job.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Same model file as OTX. Read + overwrite in place. |
+| `COLDSTEP_RDNS_WALL_BUDGET_MS` | `5000` | Whole-batch wall budget. Per-call timeout is fixed at 1 s. Worker pool is 10. |
+
+The enricher writes `model.dns_lookups` (an `{ip: hostname}` map, optional). Any renderer that wants to display friendly names joins on indicator IP. The Tier-1 OTX summary table widens to add a "Hostname" column when at least one indicator in the table has a lookup; the Tier-2 HTML OTX list appends `(hostname)` after the indicator code. Quality caveat: PTR is great for owned ranges (`dns.google`, `one.one.one.one`) but generic for cloud IPs (`*.1e100.net` for Google frontends, `*.amazonaws.com`). A passive-DNS fallback via OTX's `/passive_dns` endpoint is a tracked v2 follow-up.
+
 ## Tests
 
 ```powershell
 python -m unittest discover -s scripts -p "test_*.py"
 ```
 
-97 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the new OTX verdict column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor and pill classes (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, and the new `traffic_indicators()` helper.
+115 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the OTX verdict column + the rDNS hostname column (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor + pill classes + `dns_lookups` round-trip (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, the `traffic_indicators()` helper, the `coldstep_dns.rdns` batch resolver (wall budget + per-call timeout + dedupe + IPv4 filtering + trailing-dot normalisation), and the `coldstep_dns.enrich_rdns` orchestrator (always-exit-0 + idempotent overwrite).
 
 ## Why two tiers?
 

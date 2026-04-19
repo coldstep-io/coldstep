@@ -128,6 +128,39 @@ class RenderOtxSummaryTests(unittest.TestCase):
         line_local = [ln for ln in out.splitlines() if "127.0.0.1" in ln][0]
         self.assertIn("allowlist: loopback", line_local)
 
+    def test_hostname_column_appears_when_dns_lookups_present(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 50, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean",
+                    "validation": ["Listed on Alexa"]},
+                   {"indicator": "evil.example.com", "type": "hostname", "verdict": "malicious",
+                    "pulse_count": 3,
+                    "evidence": [{"pulse_name": "Lazarus", "tags": [], "malware_families": []}]},
+               ],
+               "summary": {"malicious": 1, "clean": 1, "unidentified": 0, "total": 2}}
+        model = {"schema_version": 2, "otx": otx,
+                 "dns_lookups": {"8.8.8.8": "dns.google"}}
+        out = self._capture(model)
+        self.assertIn("Hostname", out)
+        self.assertIn("dns.google", out)
+        # Hostname-typed indicator's row should not duplicate the indicator into
+        # the Hostname column - that cell stays empty.
+        line_evil = [ln for ln in out.splitlines() if "evil.example.com" in ln][0]
+        self.assertNotIn("evil.example.com (evil.example.com)", line_evil)
+
+    def test_no_hostname_column_when_no_lookups(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 50, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean"},
+               ],
+               "summary": {"malicious": 0, "clean": 1, "unidentified": 0, "total": 1}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertNotIn("| Hostname |", out)
+
     def test_partial_results_rendered_in_status_line(self):
         otx = {"skipped": False, "skipped_reason": None,
                "queried_at": "z", "wall_ms": 30000, "wall_budget_ms": 30000,

@@ -224,12 +224,23 @@
           const order = { malicious: 0, unidentified: 1, clean: 2, "rate-limited": 3 };
           const rows = (otx.indicators || []).slice().sort((a, b) =>
             (order[a.verdict] ?? 99) - (order[b.verdict] ?? 99));
+          // Hostname (rDNS) annotations come from model.dns_lookups, populated
+          // by scripts/coldstep_dns/enrich_rdns.py during the workflow. Stays
+          // safe under untrusted inputs because we only read into textContent.
+          const dnsLookups = model.dns_lookups || {};
           for (const r of rows) {
             const li = document.createElement("li");
             li.className = "coldstep-verdict-" + (r.verdict || "unidentified");
             const indicator = document.createElement("code");
             indicator.textContent = r.indicator || "";
             li.appendChild(indicator);
+            const hostname = dnsLookups[r.indicator];
+            if (hostname) {
+              const host = document.createElement("span");
+              host.className = "coldstep-otx-rdns";
+              host.textContent = " (" + hostname + ")";
+              li.appendChild(host);
+            }
             li.appendChild(document.createTextNode(
               " — " + (r.verdict || "?") +
               (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "")
