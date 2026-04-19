@@ -38,7 +38,7 @@ KNOWN_CLOUD_ASNS: dict[int, str] = {}
 
 # PR3 (schema v2.3) compiles this. Empty regex pattern in PR1 (matches
 # nothing) so tier() can reference it without ImportError.
-CLOUD_DNS_RE = re.compile(r"$^")  # matches nothing
+CLOUD_DNS_RE = re.compile(r"(?!)")  # matches nothing (PR3 replaces with real cloud-PTR patterns)
 
 
 def _filtered_pulses_with_audit(

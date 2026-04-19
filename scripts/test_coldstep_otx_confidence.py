@@ -5,9 +5,6 @@ import unittest
 from scripts.coldstep_otx.confidence import (
     PULSE_HARD_DROP_RE,
     GENERIC_LIST_NAME_RE,
-    KNOWN_CLOUD_ASNS,
-    CLOUD_DNS_RE,
-    _demote,
     _filtered_pulses,
     tier,
 )
