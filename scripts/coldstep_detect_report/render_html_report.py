@@ -34,6 +34,11 @@ def write_html(model: dict, html_out: str) -> None:
     template = (TEMPLATE_DIR / "report.html").read_text(encoding="utf-8")
     styles = (TEMPLATE_DIR / "styles.css").read_text(encoding="utf-8")
     payload = _safe_json(model)
+    # Three-pass placeholder substitution. Order matters: STYLES is substituted
+    # before MODEL_JSON so a CSS file containing the literal "{{ MODEL_JSON }}"
+    # cannot inject into the JSON island. MODEL_JSON is substituted before
+    # GENERATED_AT for the same reason. Today's templates and JSON contract
+    # don't produce these literals, but the comment pins the invariant.
     html = (
         template
         .replace("{{ STYLES }}", styles)

@@ -45,12 +45,10 @@
     Vendor scripts loaded with Subresource Integrity. The sha384-PLACEHOLDER_*
     literals are replaced by Task 7 with the real hashes of the published bundle.
   -->
-  <script type="module"
-          src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"
+  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"
           integrity="sha384-PLACEHOLDER_D3"
           crossorigin="anonymous"></script>
-  <script type="module"
-          src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/dist/plot.umd.min.js"
+  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/dist/plot.umd.min.js"
           integrity="sha384-PLACEHOLDER_PLOT"
           crossorigin="anonymous"></script>
 
@@ -59,6 +57,11 @@
     const $ = (sel) => document.querySelector(sel);
 
     // 1. Capability matrix as a small table.
+    /* WARNING: these template literals write to innerHTML. Every field below
+       currently comes from constants in build_report_model.REQUIRED_CAPABILITIES
+       or controlled JSON keys produced by build_report_model.py. Before adding
+       any user-derived field (CLI label, observed traffic string, error text),
+       switch to textContent or an escapeHtml() helper. */
     {
       const rows = model.capability_matrix
         .map(r => `<tr>
