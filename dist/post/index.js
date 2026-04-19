@@ -23717,7 +23717,7 @@ function sanitizeDigestForMarkdown(body) {
   const stripped = body.replace(/^\uFEFF/, "");
   const normalized = stripped.replace(/\r\n?/g, "\n");
   const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u2026(truncated)" : line);
-  const escaped = cappedLines.map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "`".repeat(m.length).replace(/`/g, "\\`")));
+  const escaped = cappedLines.map((line) => line.replace(/\\/g, "\\\\")).map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "\\`".repeat(m.length))).map((line) => line.replace(/~{3,}/g, (m) => "\\~".repeat(m.length)));
   return escaped.join("\n");
 }
 function readDetectDigest() {
