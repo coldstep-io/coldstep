@@ -125,7 +125,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
         path = self._write_model(_v2_model_with_indicators())
         old_v = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS")
         try:
-            os.environ.pop("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", None)
+            os.environ["COLDSTEP_OTX_VERBOSE_ANNOTATIONS"] = "0"
             stderr = io.StringIO()
             enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
                        stderr=stderr, now_monotonic=lambda: 0.0, wall_budget_ms=30000)
@@ -144,9 +144,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
         # 8.8.8.8 not in table -> get_general returns None (404 sentinel) -> unidentified.
         fake = _FakeClient({"evil.example.com": evil, "1.2.3.4": unidentified})
         path = self._write_model(_v2_model_with_indicators())
-        old_v = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS")
         try:
-            os.environ["COLDSTEP_OTX_VERBOSE_ANNOTATIONS"] = "1"
             stderr = io.StringIO()
             enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
                        stderr=stderr, now_monotonic=lambda: 0.0, wall_budget_ms=30000)
@@ -157,10 +155,6 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertIn("Low", out)
             self.assertNotIn("8.8.8.8", out)
         finally:
-            if old_v is None:
-                os.environ.pop("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", None)
-            else:
-                os.environ["COLDSTEP_OTX_VERBOSE_ANNOTATIONS"] = old_v
             os.unlink(path)
 
     def test_partial_results_when_budget_exhausted(self):
@@ -271,9 +265,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
         }
         fake = _FakeClient({"evil.example.com": evil})
         path = self._write_model(_v2_model_with_indicators())
-        old_v = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS")
         try:
-            os.environ["COLDSTEP_OTX_VERBOSE_ANNOTATIONS"] = "1"
             stderr = io.StringIO()
             enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
                        stderr=stderr, now_monotonic=lambda: 0.0, wall_budget_ms=30000)
@@ -282,10 +274,6 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertNotIn("\n::error::pwned", out)
             self.assertIn("100%25 bad", out)
         finally:
-            if old_v is None:
-                os.environ.pop("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", None)
-            else:
-                os.environ["COLDSTEP_OTX_VERBOSE_ANNOTATIONS"] = old_v
             os.unlink(path)
 
     def test_main_returns_zero_on_corrupt_model_json(self):

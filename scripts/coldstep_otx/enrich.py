@@ -10,16 +10,17 @@ Constraints:
 - Missing/empty OTX_API_KEY -> skipped: true, exit code 0.
 - 403 from OTX -> skipped: true, exit code 0 (the secret is wrong but we don't
   fail the detect job over a third-party auth issue).
-- Per-indicator `::warning::` / `::notice::` lines on stderr are **off** by default
-  (set `COLDSTEP_OTX_VERBOSE_ANNOTATIONS=1` to opt in). Full OTX rows live in
-  Tier-2 HTML. Low-confidence malicious is always silent.
+- Each malicious indicator may emit a workflow annotation on stderr: `::warning::`
+  when confidence is high, `::notice::` when medium (default **on**). Set
+  `COLDSTEP_OTX_VERBOSE_ANNOTATIONS=0` to suppress per-indicator lines; Tier-2 HTML
+  still holds full rows. Low-confidence malicious is always silent (no annotation).
 - Verdict precedence for sort and join: malicious > unidentified > clean.
 
 Env vars when run as a script:
 - COLDSTEP_REPORT_MODEL_IN     (required) - path to the v2 model to enrich in place
 - OTX_API_KEY                  (optional) - if empty, the step is skipped cleanly
 - COLDSTEP_OTX_WALL_BUDGET_MS  (optional, default 30000)
-- COLDSTEP_OTX_VERBOSE_ANNOTATIONS  (optional, default 0) - per-indicator stderr annotations
+- COLDSTEP_OTX_VERBOSE_ANNOTATIONS  (optional, default on) — set ``0``/``false`` to suppress per-indicator stderr annotations
 """
 from __future__ import annotations
 
@@ -84,12 +85,13 @@ def _wf_data(s: object) -> str:
 
 
 def _otx_stderr_annotations_enabled() -> bool:
-    """Per-indicator workflow annotations are noisy; Tier-2 HTML holds full detail.
+    """GitHub Actions stderr workflow commands (`::warning::` / `::notice::`) per malicious hit.
 
-    Opt in with ``COLDSTEP_OTX_VERBOSE_ANNOTATIONS=1`` (local debugging).
+    Default **enabled**. Set ``COLDSTEP_OTX_VERBOSE_ANNOTATIONS`` to ``0``, ``false``,
+    ``no``, or ``off`` to suppress (quieter CI / large indicator sets).
     """
-    raw = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", "0").strip().lower()
-    return raw in ("1", "true", "yes", "on")
+    raw = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", "1").strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 def _emit_annotation(
