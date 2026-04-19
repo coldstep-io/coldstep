@@ -52,5 +52,39 @@ class FindByTagTests(unittest.TestCase):
         self.assertEqual(results, ["b.md"])
 
 
+class FindByWikilinkTargetTests(unittest.TestCase):
+
+    def setUp(self):
+        self.vault = Path(tempfile.mkdtemp())
+        for sub in ("records", "raw", "wiki", "reports"):
+            (self.vault / sub).mkdir()
+
+    def _file(self, rel: str, body: str) -> Path:
+        path = self.vault / rel
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_finds_files_that_link_to_a_target(self):
+        a = self._file("wiki/a.md", "see [[wiki/ietf-rfcs]]\n")
+        b = self._file("wiki/b.md", "also [[wiki/ietf-rfcs|the RFCs hub]]\n")
+        c = self._file("wiki/c.md", "no link here\n")
+        del c
+        results = sorted(Q.find_by_wikilink_target("wiki/ietf-rfcs", self.vault))
+        self.assertEqual(results, sorted([a, b]))
+
+    def test_handles_alias_pipe_in_link(self):
+        a = self._file("wiki/a.md", "[[wiki/ietf-rfcs|RFCs]]\n")
+        results = Q.find_by_wikilink_target("wiki/ietf-rfcs", self.vault)
+        self.assertEqual(results, [a])
+
+    def test_does_not_match_substring_of_a_longer_target(self):
+        self._file("wiki/a.md", "[[wiki/ietf-rfcs-extended]]\n")
+        self.assertEqual(Q.find_by_wikilink_target("wiki/ietf-rfcs", self.vault), [])
+
+    def test_returns_empty_when_no_links(self):
+        self._file("wiki/a.md", "no links\n")
+        self.assertEqual(Q.find_by_wikilink_target("wiki/x", self.vault), [])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -35,3 +35,20 @@ def find_by_tag(tag: str, vault_root: Path) -> list[Path]:
         if inline_re.search(body):
             hits.append(path)
     return hits
+
+
+def find_by_wikilink_target(target: str, vault_root: Path) -> list[Path]:
+    """Return all files whose body contains a wikilink pointing at `target`.
+
+    Matches `[[<target>]]` and `[[<target>|alias]]` exactly. Does NOT match
+    `[[<target>-suffix]]` or `[[<other>/<target>]]`.
+    """
+    pattern = re.compile(
+        r"\[\[" + re.escape(target) + r"(?:\|[^\]]+)?\]\]"
+    )
+    hits: list[Path] = []
+    for path in _walk_md(vault_root):
+        body = path.read_text(encoding="utf-8")
+        if pattern.search(body):
+            hits.append(path)
+    return hits
