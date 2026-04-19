@@ -8,8 +8,38 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import tempfile
 from pathlib import Path
+
+# Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
+# untrusted. main() canonicalises every env-var path through this helper
+# before it reaches a Path()/open() sink. Inlined per file because Snyk's
+# taint analysis only recognises sanitisers that live in the same module
+# as the sink.
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
+
+
+def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError(f"{var_name} contains disallowed characters")
+    roots: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        roots.append(os.path.realpath(runner_temp))
+    roots.append(os.path.realpath(tempfile.gettempdir()))
+    if not workspace:
+        roots.append(os.path.realpath(os.getcwd()))
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        if os.path.commonpath([resolved, root]) == root:
+            return resolved
+    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
+
 
 VERDICT_GLYPH = {
     "malicious": "🟥",
@@ -147,14 +177,20 @@ def write_otx_summary(model: dict, summary_path: str) -> None:
 
 
 def main() -> int:
-    model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
-    summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
-    if not model_path or not summary_path:
-        missing = [n for n, v in (("COLDSTEP_REPORT_MODEL_IN", model_path),
-                                  ("GITHUB_STEP_SUMMARY", summary_path)) if not v]
+    raw_model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
+    raw_summary_path = os.environ.get("GITHUB_STEP_SUMMARY", "")
+    if not raw_model_path or not raw_summary_path:
+        missing = [n for n, v in (("COLDSTEP_REPORT_MODEL_IN", raw_model_path),
+                                  ("GITHUB_STEP_SUMMARY", raw_summary_path)) if not v]
         print(f"render_otx_summary: missing required env vars: {', '.join(missing)}",
               file=sys.stderr)
         return 0  # never fail the detect job
+    try:
+        model_path = _safe_workspace_path(raw_model_path, var_name="COLDSTEP_REPORT_MODEL_IN")
+        summary_path = _safe_workspace_path(raw_summary_path, var_name="GITHUB_STEP_SUMMARY")
+    except ValueError as e:
+        print(f"render_otx_summary: refusing untrusted path: {e}", file=sys.stderr)
+        return 0
     if not Path(model_path).exists():
         print(f"render_otx_summary: model file missing: {model_path}", file=sys.stderr)
         return 0

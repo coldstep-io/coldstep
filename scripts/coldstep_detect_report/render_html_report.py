@@ -11,10 +11,39 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
+import tempfile
 from pathlib import Path
 
 TEMPLATE_DIR = Path(__file__).resolve().parent / "templates"
+
+# Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
+# untrusted, so the entry-point main() canonicalises every env-var path
+# through this helper before it reaches a Path()/open() sink. Inlined per
+# file because Snyk's taint analysis only recognises sanitisers that live
+# in the same module as the sink.
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
+
+
+def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError(f"{var_name} contains disallowed characters")
+    roots: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        roots.append(os.path.realpath(runner_temp))
+    roots.append(os.path.realpath(tempfile.gettempdir()))
+    if not workspace:
+        roots.append(os.path.realpath(os.getcwd()))
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        if os.path.commonpath([resolved, root]) == root:
+            return resolved
+    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
 
 
 def _safe_json(obj) -> str:
@@ -49,15 +78,21 @@ def write_html(model: dict, html_out: str) -> None:
 
 
 def main() -> int:
-    model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
-    out_path = os.environ.get("COLDSTEP_REPORT_HTML_OUT", "")
-    if not model_path or not out_path:
+    raw_model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
+    raw_out_path = os.environ.get("COLDSTEP_REPORT_HTML_OUT", "")
+    if not raw_model_path or not raw_out_path:
         missing = [
             name for name, val in
-            (("COLDSTEP_REPORT_MODEL_IN", model_path), ("COLDSTEP_REPORT_HTML_OUT", out_path))
+            (("COLDSTEP_REPORT_MODEL_IN", raw_model_path), ("COLDSTEP_REPORT_HTML_OUT", raw_out_path))
             if not val
         ]
         print(f"render_html_report: missing required env vars: {', '.join(missing)}", file=sys.stderr)
+        return 1
+    try:
+        model_path = _safe_workspace_path(raw_model_path, var_name="COLDSTEP_REPORT_MODEL_IN")
+        out_path = _safe_workspace_path(raw_out_path, var_name="COLDSTEP_REPORT_HTML_OUT")
+    except ValueError as e:
+        print(f"render_html_report: refusing untrusted path: {e}", file=sys.stderr)
         return 1
     model = json.loads(Path(model_path).read_text(encoding="utf-8"))
     write_html(model=model, html_out=out_path)
