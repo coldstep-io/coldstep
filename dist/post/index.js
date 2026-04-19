@@ -23710,6 +23710,16 @@ function parseAgentPidFromFile(contents) {
   }
   return n;
 }
+function sanitizeDigestForMarkdown(body) {
+  if (body === "") {
+    return body;
+  }
+  const stripped = body.replace(/^\uFEFF/, "");
+  const normalized = stripped.replace(/\r\n?/g, "\n");
+  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u2026(truncated)" : line);
+  const escaped = cappedLines.map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "`".repeat(m.length).replace(/`/g, "\\`")));
+  return escaped.join("\n");
+}
 function readDetectDigest() {
   const logPath = detectLogPath();
   if (!fs2.existsSync(logPath)) {
@@ -23732,7 +23742,7 @@ function flushDetectLogToJobSummary(body) {
     }
     return;
   }
-  const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + body + (body.endsWith("\n") ? "" : "\n");
+  const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   fs2.appendFileSync(summaryPath, block, "utf8");
   fs2.unlinkSync(logPath);
 }
@@ -23755,7 +23765,8 @@ async function maybePostPRSummary(body) {
     return;
   }
   const max = 65e3;
-  const snippet = body.length > max ? body.slice(0, max) + "\n\n_(truncated)_\n" : body;
+  const safe = sanitizeDigestForMarkdown(body);
+  const snippet = safe.length > max ? safe.slice(0, max) + "\n\n_(truncated)_\n" : safe;
   const octokit = getOctokit(token);
   await octokit.rest.issues.createComment({
     owner: ctx.repo.owner,
