@@ -279,6 +279,38 @@ jobs:
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
             python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
 
+      # Enrichment runs AFTER the diff step's model rebuild (which adds the diff
+      # buckets) and BEFORE the HTML render so the artifact ships with OTX data.
+      # continue-on-error is belt-and-braces: enrich.py also exits 0 on every
+      # failure mode (no key / 403 / transport / budget) so the detect job never
+      # fails on a third-party outage.
+      - name: Enrich report model with OTX threat-intel
+        if: always()
+        env:
+          OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_OTX_WALL_BUDGET_MS: '30000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_otx.enrich
+          else
+            echo "::warning::report model missing, skipping OTX enrichment"
+          fi
+
+      - name: Render OTX section to step summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_otx_summary.py
+          else
+            echo "::warning::report model missing, skipping OTX summary render"
+          fi
+
       - name: Render self-contained HTML report
         if: always()
         env:
