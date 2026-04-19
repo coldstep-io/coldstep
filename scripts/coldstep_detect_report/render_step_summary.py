@@ -82,6 +82,62 @@ def _xy_axis_label(value: object) -> str:
     return '"' + str(value).replace('"', "'") + '"'
 
 
+def _triage_ribbon_md(model: dict) -> str:
+    """Compact decision strip before charts — baseline / OTX / volume."""
+    lines = [
+        "### Detect report · triage",
+        "",
+        "| Question | Answer |",
+        "|---|---|",
+    ]
+    diff = model.get("diff") or {}
+    if diff.get("status") == "ok":
+        new_n = len(diff.get("traffic_new") or [])
+        gone_n = len(diff.get("traffic_gone") or [])
+        ch_n = len(diff.get("traffic_changed") or [])
+        lines.append(
+            f"| **Baseline diff** | **OK** — new={new_n}, gone={gone_n}, changed={ch_n} |"
+        )
+    else:
+        reason = _md_cell(str(diff.get("reason", "unknown")))
+        lines.append(f"| **Baseline diff** | **Unavailable** — {reason} |")
+
+    evs = model.get("events_by_type") or []
+    total_ev = sum(e.get("count", 0) for e in evs)
+    top = evs[0] if evs else None
+    if top is not None:
+        lines.append(
+            "| **Event mix** | "
+            f"**{total_ev}** events — top type `{_md_cell(top['type'])}` ({top['count']}) |"
+        )
+    else:
+        lines.append("| **Event mix** | _No typed events_ |")
+
+    otx = model.get("otx")
+    if not otx:
+        lines.append("| **OTX threat intel** | *(not in model — run enrich step)* |")
+    elif otx.get("skipped"):
+        sr = _md_cell(str(otx.get("skipped_reason") or "unknown"))
+        lines.append(f"| **OTX threat intel** | **Skipped** — {sr} |")
+    else:
+        indicators = otx.get("indicators") or []
+        malicious = sum(1 for r in indicators if r.get("verdict") == "malicious")
+        n_ind = len(indicators)
+        if malicious > 0:
+            lines.append(
+                f"| **OTX threat intel** | **Review** — **{malicious}** malicious / {n_ind} indicators |"
+            )
+        else:
+            lines.append(
+                f"| **OTX threat intel** | **OK** — 0 malicious ({n_ind} indicators) |"
+            )
+
+    lines.append("")
+    lines.append("_Expand sections below for charts, sankey, and diff tables._")
+    lines.append("")
+    return "\n".join(lines)
+
+
 def _capability_matrix_md(model: dict) -> str:
     lines = [
         "### Detect Capability Matrix (GitHub-hosted ubuntu-latest)",
@@ -255,6 +311,7 @@ def _diff_md(model: dict) -> str:
 
 def write_summary(model: dict, summary_path: str) -> None:
     parts = [
+        _triage_ribbon_md(model),
         _capability_matrix_md(model),
         _events_xychart_md(model),
         _egress_sankey_md(model),
