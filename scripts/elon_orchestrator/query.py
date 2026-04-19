@@ -52,3 +52,36 @@ def find_by_wikilink_target(target: str, vault_root: Path) -> list[Path]:
         if pattern.search(body):
             hits.append(path)
     return hits
+
+
+_LINK_RE = re.compile(r"\[\[(records|raw)/([^\]|]+?)(?:\|[^\]]+)?\]\]")
+
+
+def find_records_for_wiki(hub_path: Path, vault_root: Path) -> list[Path]:
+    """Walk one hop from a wiki hub: collect every records/* file linked from
+    the hub, including those reached via a raw/* stub (the Karpathy
+    indirection). Does not chase records-to-records links.
+    """
+    hub_path = Path(hub_path)
+    body = hub_path.read_text(encoding="utf-8")
+    record_paths: list[Path] = []
+    raw_paths: list[Path] = []
+    for bucket, slug in _LINK_RE.findall(body):
+        slug = slug.removesuffix(".md")
+        candidate = Path(vault_root) / bucket / f"{slug}.md"
+        if not candidate.is_file():
+            continue
+        if bucket == "records":
+            record_paths.append(candidate)
+        else:
+            raw_paths.append(candidate)
+    for raw in raw_paths:
+        raw_body = raw.read_text(encoding="utf-8")
+        for bucket, slug in _LINK_RE.findall(raw_body):
+            if bucket != "records":
+                continue
+            slug = slug.removesuffix(".md")
+            candidate = Path(vault_root) / "records" / f"{slug}.md"
+            if candidate.is_file() and candidate not in record_paths:
+                record_paths.append(candidate)
+    return record_paths

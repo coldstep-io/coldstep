@@ -86,5 +86,47 @@ class FindByWikilinkTargetTests(unittest.TestCase):
         self.assertEqual(Q.find_by_wikilink_target("wiki/x", self.vault), [])
 
 
+class FindRecordsForWikiTests(unittest.TestCase):
+
+    def setUp(self):
+        self.vault = Path(tempfile.mkdtemp())
+        for sub in ("records", "raw", "wiki", "reports"):
+            (self.vault / sub).mkdir()
+
+    def _file(self, rel: str, body: str) -> Path:
+        path = self.vault / rel
+        path.write_text(body, encoding="utf-8")
+        return path
+
+    def test_finds_records_referenced_directly_by_wiki_hub(self):
+        hub = self._file("wiki/ietf-rfcs.md",
+                         "RFCs:\n- [[records/2026-04-19-rfc-791-ipv4]]\n- [[records/2026-04-19-rfc-768-udp]]\n")
+        rec1 = self._file("records/2026-04-19-rfc-791-ipv4.md", "x")
+        rec2 = self._file("records/2026-04-19-rfc-768-udp.md", "x")
+        results = sorted(Q.find_records_for_wiki(hub, self.vault))
+        self.assertEqual(results, sorted([rec1, rec2]))
+
+    def test_finds_records_via_raw_stub_one_hop(self):
+        # wiki -> raw -> records: still one hop because raw stubs are the
+        # intentional indirection layer in the Karpathy method.
+        hub = self._file("wiki/ietf-rfcs.md", "[[raw/2026-04-19-rfc-791-ipv4]]\n")
+        self._file("raw/2026-04-19-rfc-791-ipv4.md", "[[records/2026-04-19-rfc-791-ipv4]]\n")
+        rec = self._file("records/2026-04-19-rfc-791-ipv4.md", "x")
+        results = Q.find_records_for_wiki(hub, self.vault)
+        self.assertIn(rec, results)
+
+    def test_does_not_walk_two_hops_through_a_record(self):
+        hub = self._file("wiki/a.md", "[[records/r1]]\n")
+        self._file("records/r1.md", "[[records/r2]]\n")
+        self._file("records/r2.md", "x")
+        results = [p.name for p in Q.find_records_for_wiki(hub, self.vault)]
+        self.assertIn("r1.md", results)
+        self.assertNotIn("r2.md", results)
+
+    def test_returns_empty_when_hub_has_no_record_links(self):
+        hub = self._file("wiki/a.md", "no record links here, just prose\n")
+        self.assertEqual(Q.find_records_for_wiki(hub, self.vault), [])
+
+
 if __name__ == "__main__":
     unittest.main()
