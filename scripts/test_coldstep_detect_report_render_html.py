@@ -51,7 +51,7 @@ class HtmlReportRendererTests(unittest.TestCase):
         )
         self.assertIsNotNone(m, "missing inline JSON island")
         embedded = json.loads(m.group(1))
-        self.assertEqual(embedded["schema_version"], 1)
+        self.assertEqual(embedded["schema_version"], 2)
 
     def test_html_loads_observable_plot_with_sri(self):
         html = self._render()

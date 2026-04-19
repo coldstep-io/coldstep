@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 REQUIRED_CAPABILITIES = (
     ("exec", "Exec tracing"),
@@ -97,7 +97,9 @@ def _timeline(events: list[dict], bucket_seconds: int = 1) -> list[dict]:
 
 
 def _egress_sankey(events: list[dict]) -> list[dict]:
+    diff_mod = _load_diff_module()
     edges: dict[tuple[str, str], int] = collections.defaultdict(int)
+    edge_indicators: dict[tuple[str, str], set[str]] = collections.defaultdict(set)
     for ev in events:
         if ev.get("type") not in EGRESS_TYPES:
             continue
@@ -111,8 +113,14 @@ def _egress_sankey(events: list[dict]) -> list[dict]:
         # Preserve empty-string policy verbatim (matches traffic_fingerprint upstream so
         # the sankey and diff sections never disagree on the same event).
         policy = ev.get("policy", "")
-        edges[(str(host), str(policy))] += 1
-    return [{"source": s, "target": t, "value": v} for (s, t), v in sorted(edges.items())]
+        key = (str(host), str(policy))
+        edges[key] += 1
+        for ind in diff_mod.traffic_indicators(ev):
+            edge_indicators[key].add(ind)
+    return [
+        {"source": s, "target": t, "value": v, "indicators": sorted(edge_indicators[(s, t)])}
+        for (s, t), v in sorted(edges.items())
+    ]
 
 
 def _diff(current: list[dict], baseline: Optional[list[dict]]) -> dict:
@@ -122,12 +130,34 @@ def _diff(current: list[dict], baseline: Optional[list[dict]]) -> dict:
     diff_mod = _load_diff_module()
     cur_tr, _, _ = diff_mod.count_fps(current)
     base_tr, _, _ = diff_mod.count_fps(baseline)
+
+    # Build fingerprint -> set[indicator] from the union of current + baseline
+    # events so OTX enrichment (downstream) can join verdicts back per row
+    # without re-parsing the » -separated fingerprint string.
+    fp_indicators: dict[str, set[str]] = collections.defaultdict(set)
+    for ev in current + baseline:
+        fp = diff_mod.traffic_fingerprint(ev)
+        if fp is None:
+            continue
+        for ind in diff_mod.traffic_indicators(ev):
+            fp_indicators[fp].add(ind)
+
     new, gone, chg = diff_mod.multiset_diff(base_tr, cur_tr)
     return {
         "status": "ok",
-        "traffic_new": [{"count": c, "fingerprint": k} for c, k in new],
-        "traffic_gone": [{"count": c, "fingerprint": k} for c, k in gone],
-        "traffic_changed": [{"baseline": a, "current": b, "fingerprint": k} for a, b, k in chg],
+        "traffic_new": [
+            {"count": c, "fingerprint": k, "indicators": sorted(fp_indicators[k])}
+            for c, k in new
+        ],
+        "traffic_gone": [
+            {"count": c, "fingerprint": k, "indicators": sorted(fp_indicators[k])}
+            for c, k in gone
+        ],
+        "traffic_changed": [
+            {"baseline": a, "current": b, "fingerprint": k,
+             "indicators": sorted(fp_indicators[k])}
+            for a, b, k in chg
+        ],
     }
 
 
@@ -156,6 +186,7 @@ def build(
         "timeline": _timeline(current),
         "egress_sankey": _egress_sankey(current),
         "diff": _diff(current, baseline),
+        "otx": None,
     }
 
 

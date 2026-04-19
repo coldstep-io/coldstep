@@ -20,9 +20,34 @@ class BuildReportModelTests(unittest.TestCase):
     def test_model_has_required_top_level_keys(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
         for k in ("schema_version", "generated_at", "run", "capability_matrix",
-                  "events_by_type", "timeline", "egress_sankey", "diff"):
+                  "events_by_type", "timeline", "egress_sankey", "diff", "otx"):
             self.assertIn(k, model, f"missing key: {k}")
-        self.assertEqual(model["schema_version"], 1)
+        self.assertEqual(model["schema_version"], 2)
+
+    def test_otx_slot_is_None_by_default(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        self.assertIsNone(model["otx"])
+
+    def test_diff_entries_carry_indicators(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        for bucket in ("traffic_new", "traffic_gone", "traffic_changed"):
+            for entry in model["diff"][bucket]:
+                self.assertIn("indicators", entry, f"{bucket} entry missing indicators: {entry}")
+                self.assertIsInstance(entry["indicators"], list)
+
+    def test_egress_sankey_edges_carry_indicators(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        for edge in model["egress_sankey"]:
+            self.assertIn("indicators", edge)
+            self.assertIsInstance(edge["indicators"], list)
+
+    def test_diff_traffic_gone_for_theclouddj_has_indicator(self):
+        model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        gone_with_clouddj = [e for e in model["diff"]["traffic_gone"]
+                             if "theclouddj.com" in e["fingerprint"]]
+        self.assertTrue(gone_with_clouddj, "expected at least one theclouddj.com entry in traffic_gone")
+        for e in gone_with_clouddj:
+            self.assertIn("theclouddj.com", e["indicators"])
 
     def test_capability_matrix_marks_each_required_capability_pass(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
