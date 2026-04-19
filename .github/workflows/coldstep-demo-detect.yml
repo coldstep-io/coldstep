@@ -1,7 +1,7 @@
 # Simplified detect-mode demo (observe-only) with previous-run JSONL diff (`COLDSTEP_DIFF_PREV_RUN`).
 # One real probe per detect capability (same probes as `coldstep-demo.yml` detect-mode). For the full integration
 # workflow including enforce, see `.github/workflows/coldstep-demo.yml`.
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.5`
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.6`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
 # (published by `supply-chain-attest.yml` on version tags). The action uses `release-path` and does not compile.
@@ -18,7 +18,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.5
+  COLDSTEP_AGENT_VERSION: v0.1.6
 
 jobs:
   demo:
