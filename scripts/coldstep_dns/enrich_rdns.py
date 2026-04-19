@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from pathlib import Path
 from typing import Iterable, Optional
@@ -66,14 +67,41 @@ def run(
     return 0
 
 
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+\.json$")
+
+
+def _safe_model_path(raw: str) -> str:
+    # Mirrors scripts/coldstep_otx/enrich.py: COLDSTEP_REPORT_MODEL_IN is
+    # untrusted from Snyk Code's point of view (python/PT, CWE-23). Defence
+    # is two-stage so a poisoned env var cannot reach the read/write sinks
+    # in run(): a regex allowlist for the literal characters, then
+    # realpath()+commonpath() containment under GITHUB_WORKSPACE (or cwd
+    # outside CI). Anything else is refused at the boundary.
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError("disallowed characters in model path")
+    root = os.path.realpath(os.environ.get("GITHUB_WORKSPACE") or os.getcwd())
+    resolved = os.path.realpath(raw)
+    if os.path.commonpath([resolved, root]) != root:
+        raise ValueError(f"{resolved!r} is not under {root!r}")
+    return resolved
+
+
 def main() -> int:
     # Mirrors enrich.py's catch-all: every load/parse/write/runtime surprise
     # surfaces as a workflow warning and we still exit 0.
     try:
-        model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
-        if not model_path:
+        raw_model_path = os.environ.get("COLDSTEP_REPORT_MODEL_IN", "")
+        if not raw_model_path:
             print("enrich_rdns: missing required env var COLDSTEP_REPORT_MODEL_IN",
                   file=sys.stderr)
+            return 0
+        try:
+            model_path = _safe_model_path(raw_model_path)
+        except ValueError as e:
+            print(
+                f"enrich_rdns: refusing COLDSTEP_REPORT_MODEL_IN outside workspace: {e}",
+                file=sys.stderr,
+            )
             return 0
         try:
             wall_ms = int(os.environ.get("COLDSTEP_RDNS_WALL_BUDGET_MS", "5000"))
