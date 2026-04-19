@@ -25,6 +25,12 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   COLDSTEP_AGENT_VERSION: v0.1.4
 
+# Default to least-privilege; the detect-mode job overrides with
+# `permissions: { actions: read, contents: read }` when previous-run baseline
+# diff is enabled (mirrors `coldstep-demo-detect.yml`).
+permissions:
+  contents: read
+
 jobs:
   detect-mode:
     runs-on: ubuntu-latest

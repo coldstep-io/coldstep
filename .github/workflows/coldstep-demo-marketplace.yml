@@ -12,6 +12,11 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Minimal consumer workflow — no artifact download, no API writes, just
+# checkout + run the published composite + print the result.
+permissions:
+  contents: read
+
 jobs:
   detect:
     runs-on: ubuntu-latest
