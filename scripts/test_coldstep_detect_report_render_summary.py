@@ -77,6 +77,38 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertEqual(_RMOD._md_cell("a\nb"), "a b")
         self.assertEqual(_RMOD._md_cell("a\\b"), r"a\\b")
 
+    def test_diff_table_gets_verdict_column_when_otx_present(self):
+        model = dict(self.model)
+        model["otx"] = {
+            "skipped": False, "skipped_reason": None,
+            "queried_at": "2026-04-18T17:00:00Z", "wall_ms": 100, "wall_budget_ms": 30000,
+            "partial_results": False, "api_calls": 1, "rate_limited": 0,
+            "indicators": [
+                {"indicator": "theclouddj.com", "type": "hostname", "verdict": "malicious",
+                 "pulse_count": 1, "evidence": []},
+            ],
+            "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1},
+        }
+        body = _RMOD._diff_md(model)
+        self.assertIn("Verdict", body)
+        self.assertIn("🟥", body)
+
+    def test_diff_table_unchanged_when_otx_None(self):
+        model = dict(self.model)
+        model["otx"] = None
+        body = _RMOD._diff_md(model)
+        self.assertNotIn("Verdict", body)
+
+    def test_diff_table_unchanged_when_otx_skipped(self):
+        model = dict(self.model)
+        model["otx"] = {"skipped": True, "skipped_reason": "no api key",
+                        "queried_at": "z", "wall_ms": 0, "wall_budget_ms": 30000,
+                        "partial_results": False, "api_calls": 0, "rate_limited": 0,
+                        "indicators": [],
+                        "summary": {"malicious": 0, "clean": 0, "unidentified": 0, "total": 0}}
+        body = _RMOD._diff_md(model)
+        self.assertNotIn("Verdict", body)
+
 
 if __name__ == "__main__":
     unittest.main()
