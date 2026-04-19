@@ -55,6 +55,7 @@ class RenderOtxSummaryTests(unittest.TestCase):
                "indicators": [
                    {"indicator": "evil.example.com", "type": "hostname", "verdict": "malicious",
                     "pulse_count": 7,
+                    "pulse_severity": "Medium",
                     "evidence": [{"pulse_name": "Lazarus", "tags": ["apt"],
                                   "malware_families": ["AppleJeus"]}]},
                    {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean",
@@ -67,6 +68,8 @@ class RenderOtxSummaryTests(unittest.TestCase):
         self.assertIn("```mermaid", out)
         self.assertIn("pie", out)
         self.assertIn("evil.example.com", out)
+        self.assertIn("| Severity |", out)
+        self.assertIn("Medium", out)
         self.assertIn("Lazarus", out)
         self.assertIn("AppleJeus", out)
         # Malicious row appears before clean row.

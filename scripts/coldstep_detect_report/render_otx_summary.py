@@ -13,6 +13,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from scripts.coldstep_otx.pulse_severity import severity_rank
+
 # Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
 # untrusted. main() canonicalises every env-var path through this helper
 # before it reaches a Path()/open() sink. Inlined per file because Snyk's
@@ -158,6 +160,13 @@ def _section(model: dict) -> str:
 
     def _append_malicious_tier_table(tier_key: str, tier_rows: list[dict]) -> None:
         nonlocal lines
+        tier_rows = sorted(
+            tier_rows,
+            key=lambda r: (
+                severity_rank(str(r.get("pulse_severity") or "Informational")),
+                str(r.get("indicator", "")),
+            ),
+        )
         label = TIER_LABEL[tier_key]
         open_attr = " open" if tier_key == "high" else ""
         lines.append(f"<details{open_attr}>")
@@ -165,29 +174,30 @@ def _section(model: dict) -> str:
         lines.append("")
         if show_hostname:
             lines += [
-                "| Indicator | Hostname | Type | Pulses | Why |",
-                "|---|---|---|---:|---|",
+                "| Indicator | Hostname | Type | Pulses | Severity | Why |",
+                "|---|---|---|---:|---|---|",
             ]
         else:
             lines += [
-                "| Indicator | Type | Pulses | Why |",
-                "|---|---|---:|---|",
+                "| Indicator | Type | Pulses | Severity | Why |",
+                "|---|---|---:|---|---|",
             ]
         for r in tier_rows:
             indicator = r.get("indicator", "")
             pulses = r.get("pulse_count")
             pulses_cell = "" if pulses is None else str(pulses)
+            sev = _md_cell(str(r.get("pulse_severity") or ""))
             why = _why_cell(r)
             if show_hostname:
                 hostname = dns_lookups.get(indicator) or ""
                 lines.append(
                     f"| `{_md_cell(indicator)}` | {_md_cell(hostname)} "
-                    f"| {_md_cell(r.get('type', ''))} | {pulses_cell} | {why} |"
+                    f"| {_md_cell(r.get('type', ''))} | {pulses_cell} | {sev} | {why} |"
                 )
             else:
                 lines.append(
                     f"| `{_md_cell(indicator)}` | {_md_cell(r.get('type', ''))} "
-                    f"| {pulses_cell} | {why} |"
+                    f"| {pulses_cell} | {sev} | {why} |"
                 )
         lines.append("</details>")
         lines.append("")
