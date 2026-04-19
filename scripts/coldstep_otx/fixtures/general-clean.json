@@ -1,0 +1,12 @@
+{
+  "indicator": "8.8.8.8",
+  "type": "IPv4",
+  "validation": [
+    {"source": "akamai", "name": "Whitelisted hostname"},
+    {"source": "alexa", "name": "Listed on Alexa top 1M"}
+  ],
+  "pulse_info": {
+    "count": 0,
+    "pulses": []
+  }
+}

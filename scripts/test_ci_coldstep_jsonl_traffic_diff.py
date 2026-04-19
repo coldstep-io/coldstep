@@ -209,5 +209,35 @@ class DiffScriptTests(unittest.TestCase):
             self.assertIn("phantom_xyz", text)
 
 
+class TrafficIndicatorsTests(unittest.TestCase):
+    def test_tls_event_with_dst_and_sni(self):
+        ev = {"type": "tls", "dst": "93.184.216.34", "dport": 443, "sni": "example.com", "policy": "allow"}
+        self.assertEqual(set(MOD.traffic_indicators(ev)), {"93.184.216.34", "example.com"})
+
+    def test_http_event_with_dst_and_host(self):
+        ev = {"type": "http", "dst": "1.1.1.1", "dport": 80, "host": "example.com", "method": "GET"}
+        self.assertEqual(set(MOD.traffic_indicators(ev)), {"1.1.1.1", "example.com"})
+
+    def test_tcp_event_with_dst_and_fqdn(self):
+        ev = {"type": "tcp", "dst": "8.8.8.8", "dport": 53, "fqdn": "dns.google"}
+        self.assertEqual(set(MOD.traffic_indicators(ev)), {"8.8.8.8", "dns.google"})
+
+    def test_udp_event_dst_only_when_no_fqdn(self):
+        ev = {"type": "udp", "dst": "8.8.8.8", "dport": 53}
+        self.assertEqual(MOD.traffic_indicators(ev), ["8.8.8.8"])
+
+    def test_filters_zero_address(self):
+        ev = {"type": "tcp", "dst": "0.0.0.0", "dport": 0, "fqdn": ""}
+        self.assertEqual(MOD.traffic_indicators(ev), [])
+
+    def test_filters_empty_strings(self):
+        ev = {"type": "tls", "dst": "", "dport": 443, "sni": ""}
+        self.assertEqual(MOD.traffic_indicators(ev), [])
+
+    def test_returns_empty_for_non_traffic_event(self):
+        ev = {"type": "exec", "exe": "/bin/true"}
+        self.assertEqual(MOD.traffic_indicators(ev), [])
+
+
 if __name__ == "__main__":
     unittest.main()

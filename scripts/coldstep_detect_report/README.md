@@ -1,6 +1,6 @@
-# Coldstep detect-mode report (v1)
+# Coldstep detect-mode report (v2)
 
-Two-tier report driven by a single `report-model.json` (schema v1). Built for the `coldstep-demo-detect.yml` workflow.
+Two-tier report driven by a single `report-model.json` (schema v2 — adds the `otx` block and per-entry `indicators`). Built for the `coldstep-demo-detect.yml` workflow.
 
 | Surface | What renders it | Where you see it | Owner |
 |---|---|---|---|
@@ -15,7 +15,7 @@ Two-tier report driven by a single `report-model.json` (schema v1). Built for th
 
 | Key | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` | Currently `1`. Bump this any time the shape below changes incompatibly. |
+| `schema_version` | `int` | Currently `2`. Bump this any time the shape below changes incompatibly. |
 | `generated_at` | ISO-8601 UTC string with `Z` suffix | Emitted by the builder, not by the renderer. Deterministic when `build()` is called with `now=...` (used in tests). |
 | `run.run_id` | string | From the JSONL `meta` event if present, else `$GITHUB_RUN_ID`. |
 | `run.workflow_file` | string | Parsed from `$GITHUB_WORKFLOW_REF` (the `{repo}/.github/workflows/{file}@{ref}` format). |
@@ -24,8 +24,10 @@ Two-tier report driven by a single `report-model.json` (schema v1). Built for th
 | `capability_matrix` | `[{id, label, status, evidence_count}]` | One row per `REQUIRED_CAPABILITIES` constant. `status` is `"pass"` / `"warn"` / `"fail"`. |
 | `events_by_type` | `[{type, count}]` sorted descending by `count` | Excludes the `meta` envelope event so it doesn't pollute charts. |
 | `timeline` | `[{bucket, type, count}]` | `bucket` is a 1-second UTC bin, ISO-8601 with `Z` suffix. |
-| `egress_sankey` | `[{source, target, value}]` | `source` is host, `target` is policy decision. Empty-string policy maps to `""` (matches the upstream traffic fingerprinter). |
-| `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). |
+| `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the OTX-eligible indicator list (IPv4/FQDN) for the edge — added in schema v2 for cross-joining with the `otx` block. |
+| `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). Each entry in the three buckets carries `indicators: list[str]` (schema v2). |
+| `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
+| `dns_lookups` | `{ip: hostname}` map, optional | Populated by `scripts/coldstep_dns/enrich_rdns.py`. Best-effort PTR resolution for every IPv4 indicator on the model (hostnames are skipped — they already are names). Missing entry = no PTR / timed out / not asked. Schema-additive: renderers that don't know about it ignore the key, renderers that do know join on the IP to display "8.8.8.8 (dns.google)". |
 
 ### Required capabilities (anchor the matrix)
 
@@ -99,14 +101,42 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 - Server side: `_safe_json()` in `render_html_report.py` defangs `</` so an attacker who controls a JSON string value cannot terminate the data island.
 - Client side: every field consumed by the `innerHTML` template-literal builders today comes from `REQUIRED_CAPABILITIES` (Python constants) or numeric counts. Before piping a *user-supplied string* (a CLI label from a contributor's PR, an arbitrary error message, etc.) through one of those builders, switch the relevant assignment to `textContent =` or pass it through an `escapeHtml()` helper.
 
+## OTX threat-intel enrichment (schema v2)
+
+`scripts/coldstep_otx/enrich.py` runs **between** the diff-step model rebuild and the HTML render. It reads the model in place, dedupes IPv4/FQDN indicators from `egress_sankey[].indicators` and `diff.traffic_*[].indicators`, looks up each one against AlienVault OTX's `general` endpoint, classifies the response into `malicious` / `clean` / `unidentified`, and writes the enriched model back to disk.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `OTX_API_KEY` | _(none)_ | Repo secret. Missing or empty → `model.otx = {"skipped": "no_api_key"}`, exit 0. |
+| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Path to the JSON model. The script reads and overwrites this file in place. |
+| `COLDSTEP_OTX_WALL_BUDGET_MS` | `30000` | Hard wall-clock cap. When exhausted the script records `partial_results: true` and returns the indicators it had time for. |
+
+**Failure modes are observational, not fatal.** Every error path (missing key, 403 invalid key, transport error, exhausted budget) returns exit 0. The CI step also pins `continue-on-error: true` for belt-and-braces. Malicious indicators surface as GitHub `::warning::` annotations on the run — they never fail the job.
+
+**Allowlist (OTX bypass, not OTX skip).** RFC-reserved address space (loopback `127.0.0.0/8` in v1) is matched against `scripts/coldstep_otx/allowlist.py` *before* the OTX call. Allowlisted indicators are still recorded in `model.otx.indicators[]` with `verdict: "clean"`, `source: "allowlist"`, `reason: "loopback"` so the action is auditable, but they consume zero API calls and zero wall-clock budget. The Tier-1 GFM verdict cell shows `🟩 clean (allowlist: loopback)` so a reader can tell the two flavours of "clean" apart. Adding RFC1918 / link-local is a one-tuple edit in `allowlist.py` — no schema or renderer change needed.
+
+The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + indicator table) appended by `render_otx_summary.py`. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart and verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}` in `styles.css`).
+
+**Egress-flow verdict pivot.** When OTX has produced verdicts the egress flow becomes 3-column instead of 2: `host → verdict → policy`. Tier-1 emits a Mermaid `sankey-beta` with two sub-edges per host (host → verdict, verdict → policy); Tier-2 splits the existing single stacked-bar into a pair (host → verdict on top, verdict → policy below). Edges whose indicators OTX never saw (partial budget, IPv6, allowlist-but-no-OTX-row) route through a synthetic `unverified` bucket so the visualization stays mass-balanced. Host labels also pick up the rDNS hostname from `model.dns_lookups` when present, so `8.8.8.8` displays as `8.8.8.8 (dns.google)`. Both renderers fall back to the classic 2-column flow when OTX is absent or skipped.
+
+## Reverse-DNS enrichment (rDNS)
+
+`scripts/coldstep_dns/enrich_rdns.py` runs **before** OTX enrichment so that the OTX renderers (and a future 3-column Sankey) can label IPv4 indicators with their PTR hostname (e.g. `8.8.8.8 (dns.google)`). Stdlib only — no API key, no third-party dep, no per-indicator HTTP request. Best-effort: missing PTR / OS-level timeout / unexpected exception silently omits the entry; never fails the job.
+
+| Env var | Default | Notes |
+|---|---|---|
+| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Same model file as OTX. Read + overwrite in place. |
+| `COLDSTEP_RDNS_WALL_BUDGET_MS` | `5000` | Whole-batch wall budget. Per-call timeout is fixed at 1 s. Worker pool is 10. |
+
+The enricher writes `model.dns_lookups` (an `{ip: hostname}` map, optional). Any renderer that wants to display friendly names joins on indicator IP. The Tier-1 OTX summary table widens to add a "Hostname" column when at least one indicator in the table has a lookup; the Tier-2 HTML OTX list appends `(hostname)` after the indicator code. Quality caveat: PTR is great for owned ranges (`dns.google`, `one.one.one.one`) but generic for cloud IPs (`*.1e100.net` for Google frontends, `*.amazonaws.com`). A passive-DNS fallback via OTX's `/passive_dns` endpoint is a tracked v2 follow-up.
+
 ## Tests
 
 ```powershell
-cd scripts
-python -m unittest test_coldstep_detect_report_build test_coldstep_detect_report_render_summary test_coldstep_detect_report_render_html -v
+python -m unittest discover -s scripts -p "test_*.py"
 ```
 
-21 tests cover: schema invariants and fixture diffing (`build`), capability pills + `xychart-beta` + `sankey-beta` + GFM-cell escaping (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging (`render_html`).
+124 tests cover: schema invariants + diff/sankey indicators (`build`), capability pills + Mermaid charts + GFM-cell escaping + the OTX verdict column + the rDNS hostname column + the 3-column sankey pivot (`render_summary`), self-contained HTML5 + JSON island + SRI tag presence + `</script>` defanging + the OTX section anchor + pill classes + `dns_lookups` round-trip + the host→verdict / verdict→policy mounts (`render_html`), the standalone OTX summary renderer, the OTX HTTP client (retry / timeout / typed errors), the verdict classifier, the orchestrator's budget + skip + warning paths, the `traffic_indicators()` helper, the `coldstep_dns.rdns` batch resolver (wall budget + per-call timeout + dedupe + IPv4 filtering + trailing-dot normalisation), and the `coldstep_dns.enrich_rdns` orchestrator (always-exit-0 + idempotent overwrite).
 
 ## Why two tiers?
 

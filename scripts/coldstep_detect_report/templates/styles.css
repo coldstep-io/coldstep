@@ -54,3 +54,57 @@ code {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: .85rem;
 }
+
+/* OTX verdict pills (Tier-2 HTML artifact). Background + border + foreground all
+   meet WCAG AA contrast against the report's light surface. Bumping the verdict
+   palette only requires touching this block. */
+.coldstep-verdict-malicious {
+  background: #fde8ec;
+  color: #8a0d27;
+  border: 1px solid #c41e3a;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.coldstep-verdict-clean {
+  background: #e6f4ea;
+  color: #1b5e20;
+  border: 1px solid #2e7d32;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.coldstep-verdict-unidentified {
+  background: #f0f0f0;
+  color: #424242;
+  border: 1px solid #888888;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.coldstep-verdict-rate-limited {
+  background: #fff8e1;
+  color: #6a4f00;
+  border: 1px solid #c79100;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.coldstep-otx-list {
+  list-style: none;
+  padding-left: 0;
+}
+.coldstep-otx-list li {
+  margin: 4px 6px 4px 0;
+  display: inline-block;
+}
+.coldstep-otx-rdns {
+  color: var(--muted);
+  font-size: .85em;
+  margin-left: 2px;
+}
+.coldstep-otx-status {
+  color: var(--muted);
+  font-size: .9rem;
+  margin-bottom: .5rem;
+}
+.coldstep-otx-chart svg {
+  max-width: 480px;
+  height: auto;
+}

@@ -77,6 +77,160 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertEqual(_RMOD._md_cell("a\nb"), "a b")
         self.assertEqual(_RMOD._md_cell("a\\b"), r"a\\b")
 
+    def test_diff_table_gets_verdict_column_when_otx_present(self):
+        model = dict(self.model)
+        model["otx"] = {
+            "skipped": False, "skipped_reason": None,
+            "queried_at": "2026-04-18T17:00:00Z", "wall_ms": 100, "wall_budget_ms": 30000,
+            "partial_results": False, "api_calls": 1, "rate_limited": 0,
+            "indicators": [
+                {"indicator": "theclouddj.com", "type": "hostname", "verdict": "malicious",
+                 "pulse_count": 1, "evidence": []},
+            ],
+            "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1},
+        }
+        body = _RMOD._diff_md(model)
+        self.assertIn("Verdict", body)
+        self.assertIn("🟥", body)
+
+    def test_diff_table_unchanged_when_otx_None(self):
+        model = dict(self.model)
+        model["otx"] = None
+        body = _RMOD._diff_md(model)
+        self.assertNotIn("Verdict", body)
+
+    # --- Sankey: 3-column verdict pivot when OTX present ----------------
+
+    def _model_with_sankey(self, edges, otx=None, dns_lookups=None) -> dict:
+        m = dict(self.model)
+        m["egress_sankey"] = edges
+        m["otx"] = otx
+        if dns_lookups is not None:
+            m["dns_lookups"] = dns_lookups
+        return m
+
+    def test_sankey_falls_back_to_2col_when_otx_absent(self):
+        # No OTX -> classic host -> policy sankey unchanged.
+        m = self._model_with_sankey(
+            [{"source": "evil.example.com", "target": "allow", "value": 4,
+              "indicators": ["evil.example.com"]}],
+            otx=None,
+        )
+        out = _RMOD._egress_sankey_md(m)
+        self.assertIn("host \u2192 policy", out)
+        self.assertNotIn("\u2192 verdict \u2192", out)
+        self.assertIn("evil.example.com,allow,4", out)
+
+    def test_sankey_falls_back_to_2col_when_otx_skipped(self):
+        m = self._model_with_sankey(
+            [{"source": "evil.example.com", "target": "allow", "value": 4,
+              "indicators": ["evil.example.com"]}],
+            otx={"skipped": True, "skipped_reason": "no_api_key",
+                 "indicators": [], "summary": {}},
+        )
+        out = _RMOD._egress_sankey_md(m)
+        self.assertNotIn("verdict", out)
+        self.assertIn("evil.example.com,allow,4", out)
+
+    def test_sankey_emits_3col_verdict_pivot_when_otx_present(self):
+        # OTX present and edges have indicators that resolve to verdicts -
+        # pivot each edge into two sub-edges: host->verdict and verdict->policy.
+        m = self._model_with_sankey(
+            [
+                {"source": "evil.example.com", "target": "allow", "value": 5,
+                 "indicators": ["evil.example.com"]},
+                {"source": "8.8.8.8", "target": "allow", "value": 3,
+                 "indicators": ["8.8.8.8"]},
+            ],
+            otx={"skipped": False,
+                 "indicators": [
+                     {"indicator": "evil.example.com", "type": "hostname",
+                      "verdict": "malicious"},
+                     {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean"},
+                 ],
+                 "summary": {"malicious": 1, "clean": 1, "unidentified": 0, "total": 2}},
+        )
+        out = _RMOD._egress_sankey_md(m)
+        # Header advertises the new pivot.
+        self.assertIn("host \u2192 verdict \u2192 policy", out)
+        # Two sub-edges per host edge.
+        self.assertIn("evil.example.com,malicious,5", out)
+        self.assertIn("malicious,allow,5", out)
+        self.assertIn("8.8.8.8,clean,3", out)
+        self.assertIn("clean,allow,3", out)
+
+    def test_sankey_uses_unverified_bucket_for_indicators_not_in_otx_map(self):
+        # OTX ran but didn't get to this edge's indicator (partial budget,
+        # IPv6, unknown type, etc.) - the edge still pivots through a
+        # synthetic "unverified" node so the visualization stays balanced.
+        m = self._model_with_sankey(
+            [{"source": "203.0.113.5", "target": "unknown", "value": 7,
+              "indicators": ["203.0.113.5"]}],
+            otx={"skipped": False,
+                 "indicators": [
+                     {"indicator": "evil.example.com", "type": "hostname",
+                      "verdict": "malicious"},
+                 ],
+                 "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1}},
+        )
+        out = _RMOD._egress_sankey_md(m)
+        self.assertIn("203.0.113.5,unverified,7", out)
+        self.assertIn("unverified,unknown,7", out)
+
+    def test_sankey_picks_worst_verdict_when_edge_has_mixed_indicators(self):
+        # Severity priority is malicious > unidentified > clean; an edge with
+        # one malicious + one clean indicator should route through "malicious".
+        m = self._model_with_sankey(
+            [{"source": "mixed.example.com", "target": "allow", "value": 2,
+              "indicators": ["a.example.com", "b.example.com"]}],
+            otx={"skipped": False,
+                 "indicators": [
+                     {"indicator": "a.example.com", "type": "hostname", "verdict": "clean"},
+                     {"indicator": "b.example.com", "type": "hostname", "verdict": "malicious"},
+                 ],
+                 "summary": {"malicious": 1, "clean": 1, "unidentified": 0, "total": 2}},
+        )
+        out = _RMOD._egress_sankey_md(m)
+        self.assertIn("mixed.example.com,malicious,2", out)
+        self.assertIn("malicious,allow,2", out)
+        self.assertNotIn("mixed.example.com,clean,2", out)
+
+    def test_sankey_host_label_enriched_with_rdns_when_present(self):
+        # Now that scripts/coldstep_dns/enrich_rdns.py populates dns_lookups,
+        # the sankey host node should display "host (rdns)" so a reader can
+        # tell what 8.8.8.8 actually is.
+        m = self._model_with_sankey(
+            [{"source": "8.8.8.8", "target": "allow", "value": 3,
+              "indicators": ["8.8.8.8"]}],
+            otx=None,
+            dns_lookups={"8.8.8.8": "dns.google"},
+        )
+        out = _RMOD._egress_sankey_md(m)
+        # `_csv_field` only quotes on comma/quote/newline/edge-whitespace, not
+        # on interior spaces - Mermaid sankey-beta is fine with bare spaces.
+        self.assertIn("8.8.8.8 (dns.google),allow,3", out)
+
+    def test_sankey_host_label_unchanged_when_no_rdns(self):
+        m = self._model_with_sankey(
+            [{"source": "8.8.8.8", "target": "allow", "value": 3,
+              "indicators": ["8.8.8.8"]}],
+            otx=None,
+            dns_lookups={"1.1.1.1": "one.one.one.one"},  # no entry for 8.8.8.8
+        )
+        out = _RMOD._egress_sankey_md(m)
+        self.assertIn("8.8.8.8,allow,3", out)
+        self.assertNotIn("(", out.split("```mermaid")[1])
+
+    def test_diff_table_unchanged_when_otx_skipped(self):
+        model = dict(self.model)
+        model["otx"] = {"skipped": True, "skipped_reason": "no api key",
+                        "queried_at": "z", "wall_ms": 0, "wall_budget_ms": 30000,
+                        "partial_results": False, "api_calls": 0, "rate_limited": 0,
+                        "indicators": [],
+                        "summary": {"malicious": 0, "clean": 0, "unidentified": 0, "total": 0}}
+        body = _RMOD._diff_md(model)
+        self.assertNotIn("Verdict", body)
+
 
 if __name__ == "__main__":
     unittest.main()

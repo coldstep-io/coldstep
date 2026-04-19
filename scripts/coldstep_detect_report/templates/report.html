@@ -25,12 +25,33 @@
 
     <section id="egress">
       <h2>Egress flow (host &rarr; policy)</h2>
+      <!-- Single chart, used when OTX hasn't run for this build. -->
       <div data-mount="egress"></div>
+      <!-- Verdict-pivot pair, populated only when model.otx is present. The
+           inline JS unhides this when it sees a non-skipped OTX block. -->
+      <div data-mount="egress-verdict-pivot" hidden>
+        <h3>Host &rarr; verdict</h3>
+        <div data-mount="egress-host-verdict"></div>
+        <h3>Verdict &rarr; policy</h3>
+        <div data-mount="egress-verdict-policy"></div>
+      </div>
     </section>
 
     <section id="diff">
       <h2>Previous-run diff</h2>
       <div data-mount="diff"></div>
+    </section>
+
+    <!-- OTX threat-intel verdicts. The mount is hidden until the embedded JS
+         confirms model.otx is present and not skipped. See render_otx_summary.py
+         for the matching Tier-1 GFM rendering. -->
+    <section id="otx" data-section="otx" hidden>
+      <details open>
+        <summary><h2 style="display:inline">Threat-intel verdicts (AlienVault OTX)</h2></summary>
+        <div data-mount="otx-status" class="coldstep-otx-status"></div>
+        <div data-mount="otx-chart" class="coldstep-otx-chart"></div>
+        <ul data-mount="otx-list" class="coldstep-otx-list"></ul>
+      </details>
     </section>
   </main>
 
@@ -115,24 +136,106 @@
       );
     }
 
-    // 3. Egress: Plot ships no sankey mark in 0.6, so render host -> policy
-    //    as a stacked bar grouped by source, coloured by target.
-    if (window.Plot) {
-      $('[data-mount="egress"]').appendChild(
-        Plot.plot({
+    // 3. Egress flow. Plot ships no sankey mark in 0.6, so we render the
+    //    flow as stacked bars. When OTX has produced verdicts we pivot into
+    //    two charts (host -> verdict, verdict -> policy) so the reader can
+    //    see why "unverified" used to swallow everything. Otherwise we fall
+    //    back to the classic single host -> policy chart.
+    //
+    //    Host labels read from model.dns_lookups so 8.8.8.8 displays as
+    //    "8.8.8.8 (dns.google)" - the join key is the raw source IP.
+    {
+      const VERDICT_DOMAIN = ["malicious", "unidentified", "clean", "unverified", "rate-limited"];
+      const VERDICT_RANGE  = ["#c41e3a", "#888888",      "#2e7d32", "#9aa0a6",    "#f9a825"];
+      const VERDICT_PRIORITY = { malicious: 0, "rate-limited": 1, unidentified: 2, clean: 3 };
+      const dnsLookups = model.dns_lookups || {};
+      const labelHost = (h) => (dnsLookups[h] ? `${h} (${dnsLookups[h]})` : h);
+
+      // Build indicator -> verdict map, mirroring _verdict_lookup() in the
+      // Tier-1 GFM renderer. Empty when OTX is absent or skipped.
+      const verdictLookup = {};
+      const otx = model.otx;
+      if (otx && !otx.skipped) {
+        for (const r of (otx.indicators || [])) {
+          if (r && r.indicator && r.verdict) verdictLookup[r.indicator] = r.verdict;
+        }
+      }
+      const otxActive = Object.keys(verdictLookup).length > 0;
+
+      // Pick the worst-severity verdict among an edge's indicators, falling
+      // back to a synthetic "unverified" bucket when none are in the lookup.
+      // Mirrors render_step_summary._entry_verdict + _UNVERIFIED constant.
+      const edgeVerdict = (e) => {
+        const inds = e.indicators || [];
+        let best = null, bestPri = 99;
+        for (const ind of inds) {
+          const v = verdictLookup[ind];
+          if (!v) continue;
+          const p = VERDICT_PRIORITY[v] ?? 99;
+          if (p < bestPri) { bestPri = p; best = v; }
+        }
+        return best || "unverified";
+      };
+
+      if (window.Plot && otxActive) {
+        // Pivot pair: host -> verdict (top), verdict -> policy (bottom).
+        $('[data-mount="egress-verdict-pivot"]').removeAttribute("hidden");
+        $('[data-mount="egress"]').setAttribute("hidden", "");
+        const hostVerdictRows = (model.egress_sankey || []).map(e => ({
+          host: labelHost(e.source),
+          verdict: edgeVerdict(e),
+          value: e.value,
+        }));
+        // Aggregate verdict -> policy: same edge contributes once with its
+        // worst verdict; collapse into (verdict, target) -> sum(value).
+        const vpAgg = new Map();
+        for (const e of (model.egress_sankey || [])) {
+          const key = edgeVerdict(e) + "\u0000" + e.target;
+          vpAgg.set(key, (vpAgg.get(key) || 0) + e.value);
+        }
+        const verdictPolicyRows = Array.from(vpAgg, ([k, v]) => {
+          const sep = k.indexOf("\u0000");
+          return { verdict: k.slice(0, sep), policy: k.slice(sep + 1), value: v };
+        });
+        $('[data-mount="egress-host-verdict"]').appendChild(Plot.plot({
+          marginLeft: 180,
+          x: { label: "Events" },
+          color: { domain: VERDICT_DOMAIN, range: VERDICT_RANGE, legend: true },
+          marks: [
+            Plot.barX(hostVerdictRows, {
+              y: "host", x: "value", fill: "verdict",
+              sort: { y: "x", reverse: true },
+            }),
+          ],
+        }));
+        $('[data-mount="egress-verdict-policy"]').appendChild(Plot.plot({
           marginLeft: 140,
           x: { label: "Events" },
           color: { legend: true },
           marks: [
-            Plot.barX(model.egress_sankey, {
-              y: "source",
-              x: "value",
-              fill: "target",
+            Plot.barX(verdictPolicyRows, {
+              y: "verdict", x: "value", fill: "policy",
+              sort: { y: VERDICT_DOMAIN },
+            }),
+          ],
+        }));
+      } else if (window.Plot) {
+        // Classic single chart - same as before, plus host-label rDNS join.
+        const rows = (model.egress_sankey || []).map(e => ({
+          host: labelHost(e.source), value: e.value, target: e.target,
+        }));
+        $('[data-mount="egress"]').appendChild(Plot.plot({
+          marginLeft: 140,
+          x: { label: "Events" },
+          color: { legend: true },
+          marks: [
+            Plot.barX(rows, {
+              y: "host", x: "value", fill: "target",
               sort: { y: "x", reverse: true },
             }),
           ],
-        })
-      );
+        }));
+      }
     }
 
     // 4. Diff: small tables, one per bucket.
@@ -186,6 +289,78 @@
         p.className = "empty";
         p.textContent = `Diff unavailable: ${d.reason || "unknown"}`;
         mount.appendChild(p);
+      }
+    }
+
+    // 5. OTX threat-intel section. Indicator + evidence text comes from the
+    //    third-party OTX API, so we use textContent / createElement everywhere
+    //    to keep the XSS attack surface zero (no innerHTML for OTX data).
+    {
+      const otx = model.otx;
+      const section = document.getElementById("otx");
+      if (!otx) {
+        // Leave the section hidden when OTX wasn't run for this build.
+      } else {
+        section.removeAttribute("hidden");
+        const status = $('[data-mount="otx-status"]');
+        const list = $('[data-mount="otx-list"]');
+        const chart = $('[data-mount="otx-chart"]');
+        if (otx.skipped) {
+          status.textContent = "OTX enrichment skipped: " + (otx.skipped_reason || "unknown");
+        } else {
+          const partial = otx.partial_results ? " (partial — wall budget exhausted)" : "";
+          status.textContent =
+            "Queried " + (otx.api_calls || 0) + " indicator(s) in " +
+            (otx.wall_ms || 0) + " ms" + partial;
+          const order = { malicious: 0, unidentified: 1, clean: 2, "rate-limited": 3 };
+          const rows = (otx.indicators || []).slice().sort((a, b) =>
+            (order[a.verdict] ?? 99) - (order[b.verdict] ?? 99));
+          // Hostname (rDNS) annotations come from model.dns_lookups, populated
+          // by scripts/coldstep_dns/enrich_rdns.py during the workflow. Stays
+          // safe under untrusted inputs because we only read into textContent.
+          const dnsLookups = model.dns_lookups || {};
+          for (const r of rows) {
+            const li = document.createElement("li");
+            li.className = "coldstep-verdict-" + (r.verdict || "unidentified");
+            const indicator = document.createElement("code");
+            indicator.textContent = r.indicator || "";
+            li.appendChild(indicator);
+            const hostname = dnsLookups[r.indicator];
+            if (hostname) {
+              const host = document.createElement("span");
+              host.className = "coldstep-otx-rdns";
+              host.textContent = " (" + hostname + ")";
+              li.appendChild(host);
+            }
+            li.appendChild(document.createTextNode(
+              " — " + (r.verdict || "?") +
+              (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "")
+            ));
+            list.appendChild(li);
+          }
+          if (window.Plot) {
+            const summary = otx.summary || {};
+            const counts = ["malicious", "unidentified", "clean"]
+              .map(v => ({ verdict: v, count: summary[v] || 0 }))
+              .filter(d => d.count > 0);
+            if (counts.length) {
+              chart.appendChild(Plot.plot({
+                marginLeft: 80,
+                x: { label: null },
+                y: { label: "Count" },
+                color: {
+                  domain: ["malicious", "unidentified", "clean"],
+                  range: ["#c41e3a", "#888888", "#2e7d32"],
+                  legend: true,
+                },
+                marks: [
+                  Plot.barY(counts, { x: "verdict", y: "count", fill: "verdict" }),
+                  Plot.ruleY([0]),
+                ],
+              }));
+            }
+          }
+        }
       }
     }
   </script>

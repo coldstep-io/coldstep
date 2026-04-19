@@ -85,6 +85,28 @@ def traffic_fingerprint(ev: dict) -> str | None:
     return None
 
 
+def traffic_indicators(ev: dict) -> list[str]:
+    """Extract OTX-eligible indicators from a single traffic event.
+
+    Returns a deduped list containing the destination IPv4 (when non-empty
+    and not 0.0.0.0) and the most-specific FQDN (fqdn > sni > host, first
+    non-empty wins). Returns [] for non-traffic events (exec, fs_event,
+    proc_fork) since OTX has no meaningful enrichment for them.
+    """
+    if ev.get("type") not in ("tcp", "udp", "http", "tls"):
+        return []
+    out: list[str] = []
+    dst = (ev.get("dst") or "").strip()
+    if dst and dst != "0.0.0.0":
+        out.append(dst)
+    for key in ("fqdn", "sni", "host"):
+        name = (ev.get(key) or "").strip()
+        if name:
+            out.append(name)
+            break
+    return out
+
+
 def other_fingerprint(ev: dict) -> str | None:
     t = ev.get("type")
     if t == "exec":

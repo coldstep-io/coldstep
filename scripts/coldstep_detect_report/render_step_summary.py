@@ -13,6 +13,15 @@ from pathlib import Path
 # warn / unknown (❔) reserved for future capability statuses; v1 capability_matrix only emits pass | fail.
 STATUS_PILL = {"pass": "🟢", "warn": "🟡", "fail": "🔴"}
 
+# OTX verdict glyphs for the per-entry verdict cell in diff bucket tables.
+VERDICT_GLYPH = {
+    "malicious": "🟥",
+    "unidentified": "⬜",
+    "clean": "🟩",
+    "rate-limited": "⏱",
+}
+VERDICT_PRIORITY = {"malicious": 0, "unidentified": 1, "clean": 2, "rate-limited": 3}
+
 TOP_EVENTS_N = 10
 TOP_SANKEY_EDGES = 30
 TOP_DIFF_ROWS = 20
@@ -80,16 +89,55 @@ def _events_xychart_md(model: dict) -> str:
     )
 
 
+def _host_label(host: str, dns_lookups: dict) -> str:
+    """Decorate a host node with its rDNS hostname when known.
+
+    `8.8.8.8` -> `8.8.8.8 (dns.google)`. Hosts that aren't IPs (or that have
+    no PTR) come back unchanged - the renderer doesn't need to know the type,
+    it just looks up the literal string in the rDNS map. Quoting for CSV is
+    handled at emission time by `_csv_field`.
+    """
+    if not host:
+        return host
+    name = (dns_lookups or {}).get(host)
+    return f"{host} ({name})" if name else host
+
+
+# Synthetic verdict bucket for indicators OTX hasn't seen (partial budget,
+# IPv6, unsupported type, allowlist-but-no-OTX-row, or no indicators on the
+# edge at all). Keeps the 3-column visualization mass-balanced.
+_UNVERIFIED = "unverified"
+
+
 def _egress_sankey_md(model: dict) -> str:
     edges = model["egress_sankey"][:TOP_SANKEY_EDGES]
     if not edges:
         return ""
-    body = "\n".join(
-        f'  {_csv_field(e["source"])},{_csv_field(e["target"])},{e["value"]}'
-        for e in edges
-    )
+    dns_lookups = model.get("dns_lookups") or {}
+    verdict_lookup = _verdict_lookup(model)
+    # 3-column pivot only when OTX produced verdicts; otherwise keep the
+    # classic 2-column sankey so a no-OTX run isn't weirdly wider.
+    if verdict_lookup:
+        title = "### Egress flow (host → verdict → policy)\n\n"
+        rows: list[str] = []
+        for e in edges:
+            src_field = _csv_field(_host_label(e["source"], dns_lookups))
+            tgt_field = _csv_field(e["target"])
+            value = e["value"]
+            verdict = (_entry_verdict(e, verdict_lookup) or _UNVERIFIED)
+            v_field = _csv_field(verdict)
+            rows.append(f"  {src_field},{v_field},{value}")
+            rows.append(f"  {v_field},{tgt_field},{value}")
+        body = "\n".join(rows)
+    else:
+        title = "### Egress flow (host → policy)\n\n"
+        body = "\n".join(
+            f'  {_csv_field(_host_label(e["source"], dns_lookups))},'
+            f'{_csv_field(e["target"])},{e["value"]}'
+            for e in edges
+        )
     return (
-        "### Egress flow (host → policy)\n\n"
+        f"{title}"
         "```mermaid\n"
         "sankey-beta\n"
         f"{body}\n"
@@ -97,10 +145,42 @@ def _egress_sankey_md(model: dict) -> str:
     )
 
 
+def _verdict_lookup(model: dict) -> dict[str, str]:
+    """Build indicator -> verdict map; empty dict if otx absent or skipped."""
+    otx = model.get("otx")
+    if not otx or otx.get("skipped"):
+        return {}
+    out: dict[str, str] = {}
+    for row in otx.get("indicators", []):
+        ind = row.get("indicator")
+        v = row.get("verdict")
+        if ind and v:
+            out[ind] = v
+    return out
+
+
+def _entry_verdict(entry: dict, lookup: dict[str, str]) -> str:
+    """Highest-severity verdict among an entry's indicators (malicious wins)."""
+    if not lookup:
+        return ""
+    candidates = [lookup[i] for i in (entry.get("indicators") or []) if i in lookup]
+    if not candidates:
+        return ""
+    return min(candidates, key=lambda v: VERDICT_PRIORITY.get(v, 99))
+
+
+def _verdict_cell(verdict: str) -> str:
+    if not verdict:
+        return ""
+    return f"{VERDICT_GLYPH.get(verdict, '?')} {verdict}"
+
+
 def _diff_md(model: dict) -> str:
     diff = model["diff"]
     if diff.get("status") != "ok":
         return f"### Previous Run Diff\n\n_Diff unavailable: {diff.get('reason', 'unknown')}._\n"
+    lookup = _verdict_lookup(model)
+    show_verdict = bool(lookup)
     lines = ["### Previous Run Diff", ""]
     # Note: count_label is only used for the new/gone single-count tables;
     # the changed table uses a fixed 3-column layout below.
@@ -115,15 +195,31 @@ def _diff_md(model: dict) -> str:
             lines += ["_None._", ""]
             continue
         if key == "traffic_changed":
-            lines += ["| Baseline | Current | Fingerprint |", "|---:|---:|---|"]
+            if show_verdict:
+                lines += ["| Baseline | Current | Verdict | Fingerprint |",
+                          "|---:|---:|---|---|"]
+            else:
+                lines += ["| Baseline | Current | Fingerprint |", "|---:|---:|---|"]
             for r in rows:
                 fp = _md_cell(r['fingerprint'])
-                lines.append(f"| {r['baseline']} | {r['current']} | `{fp}` |")
+                if show_verdict:
+                    v_cell = _md_cell(_verdict_cell(_entry_verdict(r, lookup)))
+                    lines.append(f"| {r['baseline']} | {r['current']} | {v_cell} | `{fp}` |")
+                else:
+                    lines.append(f"| {r['baseline']} | {r['current']} | `{fp}` |")
         else:
-            lines += [f"| {count_label} count | Fingerprint |", "|---:|---|"]
+            if show_verdict:
+                lines += [f"| {count_label} count | Verdict | Fingerprint |",
+                          "|---:|---|---|"]
+            else:
+                lines += [f"| {count_label} count | Fingerprint |", "|---:|---|"]
             for r in rows:
                 fp = _md_cell(r['fingerprint'])
-                lines.append(f"| {r['count']} | `{fp}` |")
+                if show_verdict:
+                    v_cell = _md_cell(_verdict_cell(_entry_verdict(r, lookup)))
+                    lines.append(f"| {r['count']} | {v_cell} | `{fp}` |")
+                else:
+                    lines.append(f"| {r['count']} | `{fp}` |")
         lines.append("")
     return "\n".join(lines)
 

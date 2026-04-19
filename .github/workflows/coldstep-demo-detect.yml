@@ -279,6 +279,54 @@ jobs:
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
             python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
 
+      # rDNS enrichment runs first (no API key needed) so OTX renderers and the
+      # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
+      # continue-on-error + always-exit-0 mirror the OTX step contract.
+      - name: Enrich report model with reverse DNS
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_RDNS_WALL_BUDGET_MS: '5000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_dns.enrich_rdns
+          else
+            echo "::warning::report model missing, skipping rDNS enrichment"
+          fi
+
+      # OTX enrichment runs AFTER the diff step's model rebuild (which adds the
+      # diff buckets) and AFTER rDNS so OTX-table rows can carry hostnames.
+      # Both `continue-on-error` and the script's own always-exit-0 contract
+      # keep the detect job green on third-party failures.
+      - name: Enrich report model with OTX threat-intel
+        if: always()
+        env:
+          OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_OTX_WALL_BUDGET_MS: '30000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_otx.enrich
+          else
+            echo "::warning::report model missing, skipping OTX enrichment"
+          fi
+
+      - name: Render OTX section to step summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_otx_summary.py
+          else
+            echo "::warning::report model missing, skipping OTX summary render"
+          fi
+
       - name: Render self-contained HTML report
         if: always()
         env:
