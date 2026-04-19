@@ -12,8 +12,37 @@ import collections
 import hashlib
 import json
 import os
+import re
+import tempfile
 from pathlib import PurePosixPath
 import sys
+
+# Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
+# untrusted. main() canonicalises every env-var path through this helper
+# before it reaches a Path()/open() sink. Inlined per file because Snyk's
+# taint analysis only recognises sanitisers that live in the same module
+# as the sink.
+_SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
+
+
+def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError(f"{var_name} contains disallowed characters")
+    roots: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        roots.append(os.path.realpath(runner_temp))
+    roots.append(os.path.realpath(tempfile.gettempdir()))
+    if not workspace:
+        roots.append(os.path.realpath(os.getcwd()))
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        if os.path.commonpath([resolved, root]) == root:
+            return resolved
+    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
 
 
 def load_events(path: str) -> tuple[list[dict], int, int]:
@@ -191,13 +220,20 @@ def write_table(
 
 
 def main() -> int:
-    summary_path = os.environ.get("NS_SUMMARY", "")
-    base_path = os.environ.get("NS_BASELINE", "")
-    cur_path = os.environ.get("NS_CURRENT", "")
+    raw_summary_path = os.environ.get("NS_SUMMARY", "")
+    raw_base_path = os.environ.get("NS_BASELINE", "")
+    raw_cur_path = os.environ.get("NS_CURRENT", "")
     marker = os.environ.get("NS_MARKER", "coldstep-prev-diff")
     strict_mode = os.environ.get("COLDSTEP_DIFF_STRICT", "0").strip() == "1"
 
-    if not summary_path or not base_path or not cur_path:
+    if not raw_summary_path or not raw_base_path or not raw_cur_path:
+        return 1
+    try:
+        summary_path = _safe_workspace_path(raw_summary_path, var_name="NS_SUMMARY")
+        base_path = _safe_workspace_path(raw_base_path, var_name="NS_BASELINE")
+        cur_path = _safe_workspace_path(raw_cur_path, var_name="NS_CURRENT")
+    except ValueError as e:
+        print(f"jsonl_traffic_diff: refusing untrusted path: {e}", file=sys.stderr)
         return 1
 
     base_ev, base_invalid, base_lines = load_events(base_path)

@@ -1,5 +1,6 @@
 import io
 import json
+import secrets
 import unittest
 import urllib.error
 import urllib.request
@@ -88,10 +89,16 @@ class OTXClientRetryTests(unittest.TestCase):
         def open_capture(req, timeout=None):
             captured.append(req)
             return _resp(200, {"ok": True})
-        client = OTXClient(api_key="my-key", urlopen=open_capture, sleeper=lambda s: None)
+        # Per-test random fake key. The point of the test is that whatever
+        # api_key OTXClient is constructed with round-trips into the
+        # X-otx-api-key request header verbatim, so any opaque string works
+        # and a freshly generated value keeps Snyk's hardcoded-secret rule
+        # (python/HardcodedNonCryptoSecret/test, CWE-547) quiet.
+        fake_api_key = "test-" + secrets.token_hex(8)
+        client = OTXClient(api_key=fake_api_key, urlopen=open_capture, sleeper=lambda s: None)
         client.get_general("IPv4", "1.1.1.1")
         # urllib normalizes header name to "X-otx-api-key" capitalization on get_header().
-        self.assertEqual(captured[0].get_header("X-otx-api-key"), "my-key")
+        self.assertEqual(captured[0].get_header("X-otx-api-key"), fake_api_key)
 
     def test_socket_timeout_retries_then_raises_transport_error(self):
         # urlopen raises socket.timeout (== TimeoutError on 3.10+) when the read
