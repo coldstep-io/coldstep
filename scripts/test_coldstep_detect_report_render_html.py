@@ -160,7 +160,9 @@ class HtmlReportRendererTests(unittest.TestCase):
                         "partial_results": False, "api_calls": 1, "rate_limited": 0,
                         "indicators": [{"indicator": "evil.example.com",
                                         "type": "hostname", "verdict": "malicious",
-                                        "pulse_count": 1, "evidence": []}],
+                                        "pulse_count": 1,
+                                        "pulse_severity": "Low",
+                                        "evidence": []}],
                         "summary": {"malicious": 1, "clean": 0,
                                     "unidentified": 0, "total": 1}}
         with tempfile.TemporaryDirectory() as td:
@@ -169,6 +171,8 @@ class HtmlReportRendererTests(unittest.TestCase):
             html = out.read_text(encoding="utf-8")
         self.assertIn("evil.example.com", html)
         self.assertIn('"malicious"', html)
+        self.assertIn('"pulse_severity": "Low"', html)
+        self.assertIn(" · signal ", html)
 
     def test_otx_template_js_groups_indicators_by_confidence_tier(self):
         # write_html does not execute the inline module; tier <details> are built
