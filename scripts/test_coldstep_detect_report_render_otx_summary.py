@@ -146,8 +146,18 @@ class RenderOtxSummaryTests(unittest.TestCase):
         self.assertIn("Hostname", out)
         self.assertIn("dns.google", out)
         # Hostname-typed indicator's row should not duplicate the indicator into
-        # the Hostname column - that cell stays empty.
-        line_evil = [ln for ln in out.splitlines() if "evil.example.com" in ln][0]
+        # the Hostname column - that cell stays empty. Locate the row by parsing
+        # the GFM table cell structure (split on "|", strip), matching the
+        # indicator as the first cell rather than as a substring of the line —
+        # closes CodeQL py/incomplete-url-substring-sanitization.
+        def _indicator_cell(ln: str) -> str | None:
+            cells = [c.strip() for c in ln.split("|")]
+            if len(cells) <= 2:
+                return None
+            # Renderer wraps the indicator in backticks: `| \`evil.example.com\` |`
+            return cells[1].strip("`").strip()
+        line_evil = [ln for ln in out.splitlines()
+                     if _indicator_cell(ln) == "evil.example.com"][0]
         self.assertNotIn("evil.example.com (evil.example.com)", line_evil)
 
     def test_no_hostname_column_when_no_lookups(self):

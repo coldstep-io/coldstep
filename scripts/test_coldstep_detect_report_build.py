@@ -43,8 +43,15 @@ class BuildReportModelTests(unittest.TestCase):
 
     def test_diff_traffic_gone_for_theclouddj_has_indicator(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
+        # Match FQDN as a structured fingerprint component (split on the canonical
+        # "»" separator from ci_coldstep_jsonl_traffic_diff.traffic_fingerprint)
+        # rather than substring-matching the URL-shaped string. Closes CodeQL
+        # py/incomplete-url-substring-sanitization (rejects "not-theclouddj.com"
+        # false positives) — same fix pattern as line ~43 above.
+        def _fqdns(fp: str) -> set[str]:
+            return {p.strip() for p in fp.split("\u00bb")}
         gone_with_clouddj = [e for e in model["diff"]["traffic_gone"]
-                             if "theclouddj.com" in e["fingerprint"]]
+                             if "theclouddj.com" in _fqdns(e["fingerprint"])]
         self.assertTrue(gone_with_clouddj, "expected at least one theclouddj.com entry in traffic_gone")
         for e in gone_with_clouddj:
             self.assertIn("theclouddj.com", e["indicators"])
