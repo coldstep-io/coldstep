@@ -77,6 +77,41 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertEqual(_RMOD._md_cell("a\nb"), "a b")
         self.assertEqual(_RMOD._md_cell("a\\b"), r"a\\b")
 
+    def test_otx_pulse_signal_section_shows_highest_pulse_signal(self):
+        model = dict(self.model)
+        model["otx"] = {
+            "skipped": False,
+            "skipped_reason": None,
+            "queried_at": "2026-04-18T17:00:00Z",
+            "wall_ms": 100,
+            "wall_budget_ms": 30000,
+            "partial_results": False,
+            "api_calls": 2,
+            "rate_limited": 0,
+            "indicators": [
+                {
+                    "indicator": "a.example.com",
+                    "type": "hostname",
+                    "verdict": "malicious",
+                    "pulse_count": 50,
+                    "pulse_severity": "Critical",
+                    "evidence": [],
+                },
+                {
+                    "indicator": "b.example.com",
+                    "type": "hostname",
+                    "verdict": "malicious",
+                    "pulse_count": 3,
+                    "pulse_severity": "Low",
+                    "evidence": [],
+                },
+            ],
+            "summary": {"malicious": 2, "clean": 0, "unidentified": 0, "total": 2},
+        }
+        snippet = _RMOD._otx_highest_pulse_signal_md(model)
+        self.assertIn("Threat intel · OTX pulse signal", snippet)
+        self.assertIn("Critical", snippet)
+
     def test_diff_table_gets_verdict_column_when_otx_present(self):
         model = dict(self.model)
         model["otx"] = {

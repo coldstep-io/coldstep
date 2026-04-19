@@ -12,6 +12,8 @@ import sys
 import tempfile
 from pathlib import Path
 
+from scripts.coldstep_otx.pulse_severity import severity_rank
+
 # warn / unknown (❔) reserved for future capability statuses; v1 capability_matrix only emits pass | fail.
 STATUS_PILL = {"pass": "🟢", "warn": "🟡", "fail": "🔴"}
 
@@ -75,6 +77,23 @@ def _csv_field(value: object) -> str:
     if any(c in s for c in ',"\n\r') or s != s.strip():
         return '"' + s.replace('"', '""') + '"'
     return s
+
+
+def _highest_pulse_signal(indicators: list) -> str | None:
+    """Return worst pulse_severity among malicious rows, or None."""
+    best = None
+    best_rank = 99
+    for r in indicators:
+        if r.get("verdict") != "malicious":
+            continue
+        ps = str(r.get("pulse_severity") or "")
+        if not ps or ps == "Informational":
+            continue
+        rk = severity_rank(ps)
+        if rk < best_rank:
+            best_rank = rk
+            best = ps
+    return best
 
 
 def _xy_axis_label(value: object) -> str:
@@ -253,9 +272,28 @@ def _diff_md(model: dict) -> str:
     return "\n".join(lines)
 
 
+def _otx_highest_pulse_signal_md(model: dict) -> str:
+    """Short heading when OTX ran and at least one malicious row has pulse severity."""
+    otx = model.get("otx")
+    if not otx or otx.get("skipped"):
+        return ""
+    indicators = otx.get("indicators") or []
+    malicious_n = sum(1 for r in indicators if r.get("verdict") == "malicious")
+    if malicious_n <= 0:
+        return ""
+    worst = _highest_pulse_signal(indicators)
+    if worst is None:
+        return ""
+    return (
+        "### Threat intel · OTX pulse signal\n\n"
+        f"Highest pulse signal among malicious indicators: **{_md_cell(worst)}**.\n\n"
+    )
+
+
 def write_summary(model: dict, summary_path: str) -> None:
     parts = [
         _capability_matrix_md(model),
+        _otx_highest_pulse_signal_md(model),
         _events_xychart_md(model),
         _egress_sankey_md(model),
         _diff_md(model),
