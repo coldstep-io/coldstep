@@ -1,0 +1,6 @@
+{"type":"meta","ts":"2026-04-17T17:00:00Z","run_id":"sample-base"}
+{"type":"exec","ts":"2026-04-17T17:00:01Z","exe":"/usr/bin/curl","comm":"curl","pid":900}
+{"type":"tcp","ts":"2026-04-17T17:00:02Z","dst":"93.184.216.34","dport":443,"fqdn":"example.com","direction":"out","policy":"allow"}
+{"type":"http","ts":"2026-04-17T17:00:03Z","dst":"93.184.216.34","dport":80,"host":"example.com","method":"GET","path":"/","policy":"allow"}
+{"type":"http","ts":"2026-04-17T17:00:04Z","dst":"185.199.108.153","dport":443,"host":"theclouddj.com","method":"GET","path":"/","policy":"allow"}
+{"type":"udp","ts":"2026-04-17T17:00:05Z","dst":"8.8.8.8","dport":53,"fqdn":"","direction":"out","policy":"allow"}

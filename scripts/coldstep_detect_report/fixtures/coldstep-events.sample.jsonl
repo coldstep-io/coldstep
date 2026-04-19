@@ -1,0 +1,11 @@
+{"type":"meta","ts":"2026-04-18T17:00:00Z","run_id":"sample-curr"}
+{"type":"exec","ts":"2026-04-18T17:00:01Z","exe":"/usr/bin/curl","comm":"curl","pid":1001}
+{"type":"tcp","ts":"2026-04-18T17:00:02Z","dst":"93.184.216.34","dport":443,"fqdn":"example.com","direction":"out","policy":"allow"}
+{"type":"tls","ts":"2026-04-18T17:00:02Z","dst":"93.184.216.34","dport":443,"sni":"example.com","policy":"allow"}
+{"type":"http","ts":"2026-04-18T17:00:03Z","dst":"93.184.216.34","dport":80,"host":"example.com","method":"GET","path":"/","policy":"allow"}
+{"type":"udp","ts":"2026-04-18T17:00:04Z","dst":"8.8.8.8","dport":53,"fqdn":"","direction":"out","policy":"allow"}
+{"type":"proc_fork","ts":"2026-04-18T17:00:05Z","parent_comm":"bash","child_comm":"curl"}
+{"type":"fs_event","ts":"2026-04-18T17:00:06Z","op":"create","path":"/tmp/coldstep-nmap-demo-XXXXXX/a.txt"}
+{"type":"fs_event","ts":"2026-04-18T17:00:07Z","op":"rename","path":"/tmp/coldstep-nmap-demo-XXXXXX/b.txt"}
+{"type":"fs_event","ts":"2026-04-18T17:00:08Z","op":"chmod","path":"/tmp/coldstep-nmap-demo-XXXXXX/b.txt"}
+{"type":"fs_event","ts":"2026-04-18T17:00:09Z","op":"unlink","path":"/tmp/coldstep-nmap-demo-XXXXXX/b.txt"}

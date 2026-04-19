@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Coldstep detect-mode report</title>
+  <style>{{ STYLES }}</style>
+</head>
+<body>
+  <header class="report-header">
+    <h1>Coldstep detect-mode report</h1>
+    <p class="meta">Generated <time>{{ GENERATED_AT }}</time></p>
+  </header>
+
+  <main>
+    <section id="capabilities">
+      <h2>Detect Capability Matrix</h2>
+      <div data-mount="capabilities"></div>
+    </section>
+
+    <section id="events">
+      <h2>Events by type</h2>
+      <div data-mount="events"></div>
+    </section>
+
+    <section id="egress">
+      <h2>Egress flow (host &rarr; policy)</h2>
+      <div data-mount="egress"></div>
+    </section>
+
+    <section id="diff">
+      <h2>Previous-run diff</h2>
+      <div data-mount="diff"></div>
+    </section>
+  </main>
+
+  <!--
+    Inline report-model JSON. Lives in a <script type="application/json"> island
+    (raw-text element, not parsed as HTML). The Python renderer defangs any
+    literal `</` in the payload so this tag can't be terminated early.
+  -->
+  <script id="coldstep-report-model" type="application/json">{{ MODEL_JSON }}</script>
+
+  <!--
+    Vendor scripts loaded with Subresource Integrity. URLs MUST stay pinned to
+    an exact semver (jsDelivr explicitly forbids SRI on version-range aliases
+    like @7 or @0.6 - the CDN may regenerate those bytes on storage failover).
+    To bump: change the version in the URL, refetch the bytes, recompute sha384
+    with `Invoke-WebRequest | ... ComputeHash`, replace the integrity value.
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+          integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i"
+          crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/dist/plot.umd.min.js"
+          integrity="sha384-JUpn2GgRr0gxU0xOBd8D8P634jhRCwobtG8G2MMEkX1RnGJ7/FJNnuukpfT+H2w1"
+          crossorigin="anonymous"></script>
+
+  <script type="module">
+    const model = JSON.parse(document.getElementById("coldstep-report-model").textContent);
+    const $ = (sel) => document.querySelector(sel);
+
+    // 1. Capability matrix as a small table.
+    /* WARNING: these template literals write to innerHTML. Every field below
+       currently comes from constants in build_report_model.REQUIRED_CAPABILITIES
+       or controlled JSON keys produced by build_report_model.py. Before adding
+       any user-derived field (CLI label, observed traffic string, error text),
+       switch to textContent or an escapeHtml() helper. */
+    {
+      const rows = model.capability_matrix
+        .map(r => `<tr>
+            <td>${r.label}</td>
+            <td class="status ${r.status}">${r.status}</td>
+            <td>${r.evidence_count}</td>
+          </tr>`)
+        .join("");
+      $('[data-mount="capabilities"]').innerHTML =
+        `<table class="cap"><thead><tr><th>Capability</th><th>Status</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // 2. Events bar chart (Observable Plot).
+    if (window.Plot) {
+      $('[data-mount="events"]').appendChild(
+        Plot.plot({
+          marginLeft: 80,
+          x: { label: "Count" },
+          y: { label: null },
+          marks: [
+            Plot.barX(model.events_by_type, { y: "type", x: "count", sort: { y: "x", reverse: true } }),
+            Plot.ruleX([0]),
+          ],
+        })
+      );
+    }
+
+    // 3. Egress: Plot ships no sankey mark in 0.6, so render host -> policy
+    //    as a stacked bar grouped by source, coloured by target.
+    if (window.Plot) {
+      $('[data-mount="egress"]').appendChild(
+        Plot.plot({
+          marginLeft: 140,
+          x: { label: "Events" },
+          color: { legend: true },
+          marks: [
+            Plot.barX(model.egress_sankey, {
+              y: "source",
+              x: "value",
+              fill: "target",
+              sort: { y: "x", reverse: true },
+            }),
+          ],
+        })
+      );
+    }
+
+    // 4. Diff: small tables, one per bucket.
+    {
+      const sec = (label, rows) => {
+        if (!rows || !rows.length) return `<p class="empty">${label}: <em>none</em></p>`;
+        const body = rows.map(r =>
+          r.fingerprint
+            ? `<tr><td>${r.count ?? r.current ?? ""}</td><td><code>${r.fingerprint}</code></td></tr>`
+            : ""
+        ).join("");
+        return `<h3>${label}</h3><table class="diff"><tbody>${body}</tbody></table>`;
+      };
+      const d = model.diff;
+      $('[data-mount="diff"]').innerHTML =
+        d.status === "ok"
+          ? sec("New traffic", d.traffic_new) + sec("Missing traffic", d.traffic_gone) + sec("Changed multiplicity", d.traffic_changed)
+          : `<p class="empty">Diff unavailable: ${d.reason || "unknown"}</p>`;
+    }
+  </script>
+</body>
+</html>

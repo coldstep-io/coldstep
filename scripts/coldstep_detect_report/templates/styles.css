@@ -1,0 +1,56 @@
+:root {
+  --fg: #1e1e1e;
+  --muted: #555;
+  --border: #e1e4e8;
+  --pass: #1a7f37;
+  --fail: #cf222e;
+  --warn: #9a6700;
+  --bg: #fff;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  margin: 2rem auto;
+  max-width: 1100px;
+  color: var(--fg);
+  background: var(--bg);
+  padding: 0 1rem;
+}
+
+.report-header h1 { margin: 0; }
+.report-header .meta {
+  color: var(--muted);
+  margin: .25rem 0 2rem;
+  font-size: .9rem;
+}
+
+section { margin: 2rem 0; }
+
+h2 {
+  font-size: 1.15rem;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: .25rem;
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: .9rem;
+}
+
+th, td {
+  border-bottom: 1px solid var(--border);
+  padding: .35rem .5rem;
+  text-align: left;
+}
+
+.status.pass { color: var(--pass); font-weight: 600; }
+.status.fail { color: var(--fail); font-weight: 600; }
+.status.warn { color: var(--warn); font-weight: 600; }
+
+.empty { color: var(--muted); font-style: italic; }
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .85rem;
+}
