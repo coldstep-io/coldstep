@@ -98,19 +98,23 @@ class EnrichOrchestratorTests(unittest.TestCase):
                     "unidentified": 1,
                     "total": 3,
                     "by_confidence": {"high": 1, "medium": 0, "low": 0, "null": 2},
+                    "by_pulse_severity": {"Low": 1, "Medium": 0, "High": 0, "Critical": 0},
                 },
             )
             inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
             self.assertEqual(inds["evil.example.com"]["verdict"], "malicious")
             self.assertEqual(inds["evil.example.com"]["confidence"], "high")
+            self.assertEqual(inds["evil.example.com"]["pulse_severity"], "Low")
             self.assertEqual(inds["evil.example.com"]["pulse_count"], 2)
             self.assertEqual(inds["evil.example.com"]["pulse_count_unfiltered"], 7)
             self.assertEqual(inds["evil.example.com"]["filtered_pulses"], [])
             self.assertEqual(data["otx"]["filter_drops"], 0)
             self.assertEqual(inds["8.8.8.8"]["verdict"], "clean")
             self.assertIsNone(inds["8.8.8.8"]["confidence"])
+            self.assertEqual(inds["8.8.8.8"]["pulse_severity"], "Informational")
             self.assertEqual(inds["1.2.3.4"]["verdict"], "unidentified")
             self.assertIsNone(inds["1.2.3.4"]["confidence"])
+            self.assertEqual(inds["1.2.3.4"]["pulse_severity"], "Informational")
         finally:
             os.unlink(path)
 
@@ -127,6 +131,8 @@ class EnrichOrchestratorTests(unittest.TestCase):
             out = stderr.getvalue()
             self.assertIn("::warning", out)
             self.assertIn("evil.example.com", out)
+            self.assertIn("pulse_signal=", out)
+            self.assertIn("Low", out)
             self.assertNotIn("8.8.8.8", out)
         finally:
             os.unlink(path)
@@ -345,6 +351,10 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 data["otx"]["summary"]["by_confidence"]["null"], 2,
             )
+            self.assertEqual(
+                data["otx"]["summary"]["by_pulse_severity"],
+                {"Low": 0, "Medium": 0, "High": 0, "Critical": 0},
+            )
         finally:
             os.unlink(path)
 
@@ -457,6 +467,7 @@ class FilterAuditTests(unittest.TestCase):
         row = out["otx"]["indicators"][0]
         self.assertEqual(row["pulse_count_unfiltered"], 3)
         self.assertEqual(row["pulse_count"], 1)
+        self.assertEqual(row["pulse_severity"], "Low")
         filtered_by = {f["filtered_by"] for f in row["filtered_pulses"]}
         self.assertIn("name_blocklist", filtered_by)
         self.assertIn("is_subscribing=false", filtered_by)

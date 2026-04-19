@@ -35,6 +35,7 @@ from typing import Callable, Iterable
 from scripts.coldstep_otx.allowlist import is_allowlisted
 from scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
 from scripts.coldstep_otx.confidence import _filtered_pulses_with_audit, tier
+from scripts.coldstep_otx.pulse_severity import pulse_signal_severity
 from scripts.coldstep_otx.verdict import classify
 
 VERDICT_ORDER = {"malicious": 0, "unidentified": 1, "clean": 2}
@@ -81,7 +82,15 @@ def _wf_data(s: object) -> str:
     return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
-def _emit_annotation(stderr, indicator: str, evidence: list[dict], *, confidence: str) -> None:
+def _emit_annotation(
+    stderr,
+    indicator: str,
+    evidence: list[dict],
+    *,
+    confidence: str,
+    pulse_severity: str,
+    pulse_count: int,
+) -> None:
     """Emit ::warning:: for high, ::notice:: for medium; silent for low."""
     if confidence == "low":
         return
@@ -92,6 +101,9 @@ def _emit_annotation(stderr, indicator: str, evidence: list[dict], *, confidence
     msg = (
         f"::{level} title=OTX {_wf_data(confidence)} confidence malicious::{_wf_data(indicator)} matched "
         f"{len(evidence)} pulse(s){fam_part} ({titles})"
+    )
+    msg += (
+        f" pulse_signal={_wf_data(pulse_severity)} ({pulse_count} filtered pulse(s))"
     )
     print(msg, file=stderr)
 
@@ -116,6 +128,7 @@ def _set_skipped(model: dict, reason: str, *, queried_at: str) -> None:
             "unidentified": 0,
             "total": 0,
             "by_confidence": {"high": 0, "medium": 0, "low": 0, "null": 0},
+            "by_pulse_severity": {"Low": 0, "Medium": 0, "High": 0, "Critical": 0},
         },
     }
 
@@ -181,6 +194,7 @@ def run(
                 "reason": reason,
                 "confidence": None,
                 "confidence_reasons": [],
+                "pulse_severity": "Informational",
             })
             allowlisted += 1
             continue
@@ -203,6 +217,7 @@ def run(
                 "note": "rate-limited",
                 "confidence": None,
                 "confidence_reasons": [],
+                "pulse_severity": "Informational",
             })
             continue
         except OTXError as e:
@@ -213,6 +228,7 @@ def run(
                 "note": f"otx error: {e}",
                 "confidence": None,
                 "confidence_reasons": [],
+                "pulse_severity": "Informational",
             })
             continue
         except Exception as e:
@@ -228,6 +244,7 @@ def run(
                 "note": f"unexpected error: {type(e).__name__}: {e}",
                 "confidence": None,
                 "confidence_reasons": [],
+                "pulse_severity": "Informational",
             })
             continue
         verdict, evidence = classify(general)
@@ -245,10 +262,23 @@ def run(
             row["filtered_pulses"] = dropped
             filter_drops_total += len(dropped)
             row["evidence"] = evidence
-            _emit_annotation(stderr, indicator, evidence, confidence=conf)
+            ps = pulse_signal_severity(
+                verdict="malicious",
+                filtered_pulse_count=len(kept),
+            )
+            row["pulse_severity"] = ps
+            _emit_annotation(
+                stderr,
+                indicator,
+                evidence,
+                confidence=conf,
+                pulse_severity=ps,
+                pulse_count=len(kept),
+            )
         elif verdict == "clean":
             row["confidence"] = None
             row["confidence_reasons"] = []
+            row["pulse_severity"] = "Informational"
             validation = (general or {}).get("validation") or []
             row["validation"] = [
                 (v.get("name") if isinstance(v, dict) else str(v)) for v in validation
@@ -256,6 +286,7 @@ def run(
         else:
             row["confidence"] = None
             row["confidence_reasons"] = []
+            row["pulse_severity"] = "Informational"
         indicators_out.append(row)
 
     indicators_out.sort(key=lambda r: (VERDICT_ORDER.get(r["verdict"], 99), r["indicator"]))
@@ -268,6 +299,12 @@ def run(
         ck = row.get("confidence") or "null"
         by_confidence[ck] = by_confidence.get(ck, 0) + 1
     summary["by_confidence"] = by_confidence
+    by_pulse_severity = {"Low": 0, "Medium": 0, "High": 0, "Critical": 0}
+    for row in indicators_out:
+        ps = row.get("pulse_severity")
+        if ps in by_pulse_severity:
+            by_pulse_severity[ps] += 1
+    summary["by_pulse_severity"] = by_pulse_severity
 
     wall_ms = int((now_monotonic() - start) * 1000)
     model["otx"] = {
