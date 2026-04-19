@@ -42,14 +42,17 @@
   <script id="coldstep-report-model" type="application/json">{{ MODEL_JSON }}</script>
 
   <!--
-    Vendor scripts loaded with Subresource Integrity. The sha384-PLACEHOLDER_*
-    literals are replaced by Task 7 with the real hashes of the published bundle.
+    Vendor scripts loaded with Subresource Integrity. URLs MUST stay pinned to
+    an exact semver (jsDelivr explicitly forbids SRI on version-range aliases
+    like @7 or @0.6 - the CDN may regenerate those bytes on storage failover).
+    To bump: change the version in the URL, refetch the bytes, recompute sha384
+    with `Invoke-WebRequest | ... ComputeHash`, replace the integrity value.
   -->
-  <script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"
-          integrity="sha384-PLACEHOLDER_D3"
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+          integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i"
           crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6/dist/plot.umd.min.js"
-          integrity="sha384-PLACEHOLDER_PLOT"
+  <script src="https://cdn.jsdelivr.net/npm/@observablehq/plot@0.6.17/dist/plot.umd.min.js"
+          integrity="sha384-JUpn2GgRr0gxU0xOBd8D8P634jhRCwobtG8G2MMEkX1RnGJ7/FJNnuukpfT+H2w1"
           crossorigin="anonymous"></script>
 
   <script type="module">
