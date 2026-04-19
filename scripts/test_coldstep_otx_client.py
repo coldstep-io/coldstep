@@ -93,6 +93,23 @@ class OTXClientRetryTests(unittest.TestCase):
         # urllib normalizes header name to "X-otx-api-key" capitalization on get_header().
         self.assertEqual(captured[0].get_header("X-otx-api-key"), "my-key")
 
+    def test_socket_timeout_retries_then_raises_transport_error(self):
+        # urlopen raises socket.timeout (== TimeoutError on 3.10+) when the read
+        # timeout fires. It is NOT a URLError subclass — observed in CI run
+        # 24618444911 where a raw TimeoutError escaped to the workflow step.
+        fake_open = MagicMock(side_effect=TimeoutError("read timeout"))
+        client = OTXClient(api_key="k", urlopen=fake_open, sleeper=lambda s: None, max_attempts=3)
+        with self.assertRaises(TransportError):
+            client.get_general("IPv4", "1.1.1.1")
+        self.assertEqual(fake_open.call_count, 3)
+
+    def test_socket_timeout_then_success(self):
+        side = [TimeoutError("slow"), _resp(200, {"ok": True})]
+        fake_open = MagicMock(side_effect=side)
+        client = OTXClient(api_key="k", urlopen=fake_open, sleeper=lambda s: None, max_attempts=5)
+        self.assertEqual(client.get_general("IPv4", "1.1.1.1"), {"ok": True})
+        self.assertEqual(fake_open.call_count, 2)
+
     def test_url_format_uses_official_endpoint(self):
         captured = []
         def open_capture(req, timeout=None):

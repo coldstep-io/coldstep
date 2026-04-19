@@ -147,6 +147,16 @@ def run(
             indicators_out.append({"indicator": indicator, "type": ind_type,
                                    "verdict": "unidentified", "note": f"otx error: {e}"})
             continue
+        except Exception as e:
+            # Final safety net: any non-OTXError escaping the client (a regression
+            # in our own code, a stdlib bug, an unexpected runtime error, etc.)
+            # must NOT crash the detect job. Tag the indicator and move on.
+            # Regressed in CI run 24618444911 where a TimeoutError escaped a
+            # buggy client and killed the step.
+            indicators_out.append({"indicator": indicator, "type": ind_type,
+                                   "verdict": "unidentified",
+                                   "note": f"unexpected error: {type(e).__name__}: {e}"})
+            continue
         verdict, evidence = classify(general)
         row: dict = {"indicator": indicator, "type": ind_type, "verdict": verdict}
         if verdict == "malicious":

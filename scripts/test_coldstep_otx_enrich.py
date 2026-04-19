@@ -179,6 +179,33 @@ class EnrichOrchestratorTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_unexpected_client_exception_is_caught_per_indicator(self):
+        # Defense-in-depth: if the client throws an exception that isn't an
+        # OTXError subclass (e.g. a raw TimeoutError that escaped a buggy
+        # client, or any future regression), the orchestrator must NOT crash —
+        # it must mark that indicator as unidentified, keep going, and exit 0.
+        # Regressed in CI run 24618444911 where a TimeoutError from urllib
+        # killed the whole step.
+        fake = _FakeClient({
+            "evil.example.com": _fix("general-malicious.json"),
+            "8.8.8.8": TimeoutError("read timeout"),
+            "1.2.3.4": _fix("general-unidentified.json"),
+        })
+        path = self._write_model(_v2_model_with_indicators())
+        try:
+            rc = enrich.run(model_path=path, api_key="k", client_factory=lambda k: fake,
+                            stderr=io.StringIO(), now_monotonic=lambda: 0.0, wall_budget_ms=30000)
+            self.assertEqual(rc, 0)
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertFalse(data["otx"]["skipped"])
+            inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
+            self.assertEqual(inds["evil.example.com"]["verdict"], "malicious")
+            self.assertEqual(inds["8.8.8.8"]["verdict"], "unidentified")
+            self.assertIn("note", inds["8.8.8.8"])
+            self.assertEqual(inds["1.2.3.4"]["verdict"], "unidentified")
+        finally:
+            os.unlink(path)
+
     def test_no_indicators_in_model_skips_cleanly(self):
         model = _v2_model_with_indicators()
         model["egress_sankey"] = []

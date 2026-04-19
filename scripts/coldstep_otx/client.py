@@ -100,6 +100,15 @@ class OTXClient:
                     self._sleeper(_sleep_for_attempt(attempt))
                     continue
                 raise TransportError(f"OTX transport error after {attempt} attempts: {e.reason}") from e
+            except (TimeoutError, OSError) as e:
+                # urllib.request.urlopen raises socket.timeout (== TimeoutError on
+                # 3.10+) when the read timeout fires - it is NOT a URLError. Any
+                # other low-level OSError (connection reset, etc.) gets the same
+                # transient-retry treatment. Observed in CI run 24618444911.
+                if attempt < self._max_attempts:
+                    self._sleeper(_sleep_for_attempt(attempt))
+                    continue
+                raise TransportError(f"OTX transport error after {attempt} attempts: {e}") from e
         # Defensive: only reachable if max_attempts == 0 which the constructor forbids by convention.
         if last_429 is not None:
             raise RateLimited("OTX rate-limited (no successful attempt)") from last_429
