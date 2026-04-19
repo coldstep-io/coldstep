@@ -22,7 +22,8 @@ class BuildReportModelTests(unittest.TestCase):
         for k in ("schema_version", "generated_at", "run", "capability_matrix",
                   "events_by_type", "timeline", "egress_sankey", "diff", "otx"):
             self.assertIn(k, model, f"missing key: {k}")
-        self.assertEqual(model["schema_version"], 2)
+        self.assertEqual(model["schema_version"], "2.1")
+        self.assertIsInstance(model["schema_version"], str)
 
     def test_otx_slot_is_None_by_default(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))

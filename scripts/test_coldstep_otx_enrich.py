@@ -11,7 +11,7 @@ from scripts.coldstep_otx.client import InvalidAPIKey
 
 def _v2_model_with_indicators() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": "2.1",
         "generated_at": "2026-04-18T17:00:00Z",
         "run": {"run_id": "test"},
         "capability_matrix": [],
@@ -73,7 +73,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertTrue(data["otx"]["skipped"])
             self.assertEqual(data["otx"]["skipped_reason"], "no api key")
-            self.assertEqual(data["schema_version"], 2)
+            self.assertEqual(data["schema_version"], "2.1")
         finally:
             os.unlink(path)
 
@@ -90,12 +90,27 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(rc, 0)
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertFalse(data["otx"]["skipped"])
-            self.assertEqual(data["otx"]["summary"],
-                             {"malicious": 1, "clean": 1, "unidentified": 1, "total": 3})
+            self.assertEqual(
+                data["otx"]["summary"],
+                {
+                    "malicious": 1,
+                    "clean": 1,
+                    "unidentified": 1,
+                    "total": 3,
+                    "by_confidence": {"high": 1, "medium": 0, "low": 0, "null": 2},
+                },
+            )
             inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
             self.assertEqual(inds["evil.example.com"]["verdict"], "malicious")
+            self.assertEqual(inds["evil.example.com"]["confidence"], "high")
+            self.assertEqual(inds["evil.example.com"]["pulse_count"], 2)
+            self.assertEqual(inds["evil.example.com"]["pulse_count_unfiltered"], 7)
+            self.assertEqual(inds["evil.example.com"]["filtered_pulses"], [])
+            self.assertEqual(data["otx"]["filter_drops"], 0)
             self.assertEqual(inds["8.8.8.8"]["verdict"], "clean")
+            self.assertIsNone(inds["8.8.8.8"]["confidence"])
             self.assertEqual(inds["1.2.3.4"]["verdict"], "unidentified")
+            self.assertIsNone(inds["1.2.3.4"]["confidence"])
         finally:
             os.unlink(path)
 
@@ -297,6 +312,11 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(inds["127.0.0.1"]["reason"], "loopback")
             self.assertNotIn(("IPv4", "127.0.0.1"), fake.calls)
             self.assertEqual(data["otx"]["allowlisted"], 1)
+            self.assertEqual(
+                data["otx"]["allowlist_buckets"],
+                {"loopback": 1, "rfc1918": 0, "link-local": 0},
+            )
+            self.assertEqual(data["otx"]["filter_drops"], 0)
         finally:
             os.unlink(path)
 
@@ -316,8 +336,15 @@ class EnrichOrchestratorTests(unittest.TestCase):
             self.assertEqual(fake.calls, [])
             self.assertEqual(data["otx"]["api_calls"], 0)
             self.assertEqual(data["otx"]["allowlisted"], 2)
+            self.assertEqual(
+                data["otx"]["allowlist_buckets"],
+                {"loopback": 2, "rfc1918": 0, "link-local": 0},
+            )
             self.assertEqual(data["otx"]["summary"]["clean"], 2)
             self.assertEqual(data["otx"]["summary"]["total"], 2)
+            self.assertEqual(
+                data["otx"]["summary"]["by_confidence"]["null"], 2,
+            )
         finally:
             os.unlink(path)
 
@@ -345,7 +372,7 @@ class EnrichSanitizationParityTests(unittest.TestCase):
 
     def _write_model(self, dir_path: Path) -> Path:
         p = dir_path / "report-model.json"
-        p.write_text(json.dumps({"schema_version": 2}), encoding="utf-8")
+        p.write_text(json.dumps({"schema_version": "2.1"}), encoding="utf-8")
         return p
 
     def test_accepts_path_under_runner_temp(self):
@@ -386,6 +413,54 @@ class EnrichSanitizationParityTests(unittest.TestCase):
     def test_rejects_disallowed_chars(self):
         with self.assertRaises(ValueError):
             enrich._safe_workspace_path("/etc/passwd; rm -rf /", var_name="TEST")
+
+
+class FilterAuditTests(unittest.TestCase):
+    def _write_model(self, model: dict) -> str:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".json", delete=False, encoding="utf-8")
+        tmp.write(json.dumps(model))
+        tmp.close()
+        return tmp.name
+
+    def test_filter_drops_audit_trail(self):
+        model = {
+            "schema_version": "2.1",
+            "egress_sankey": [{"source": "x", "target": "y", "value": 1,
+                               "indicators": ["8.8.8.8"]}],
+            "diff": {"status": "ok", "traffic_new": [], "traffic_gone": [], "traffic_changed": []},
+            "otx": None,
+        }
+        resp = {
+            "pulse_info": {
+                "count": 3,
+                "pulses": [
+                    {"id": "p1", "name": "Emotet C2", "is_subscribing": True,
+                     "malware_families": [{"display_name": "Emotet"}]},
+                    {"id": "p2", "name": "dont subscribe", "is_subscribing": False,
+                     "malware_families": []},
+                    {"id": "p3", "name": "Some pulse", "is_subscribing": False,
+                     "malware_families": []},
+                ],
+            },
+            "validation": [],
+        }
+        fake = _FakeClient({"8.8.8.8": resp})
+        path = self._write_model(model)
+        try:
+            enrich.run(
+                model_path=path, api_key="k", client_factory=lambda k: fake,
+                stderr=io.StringIO(), now_monotonic=lambda: 0.0, wall_budget_ms=30000,
+            )
+            out = json.loads(Path(path).read_text(encoding="utf-8"))
+        finally:
+            os.unlink(path)
+        row = out["otx"]["indicators"][0]
+        self.assertEqual(row["pulse_count_unfiltered"], 3)
+        self.assertEqual(row["pulse_count"], 1)
+        filtered_by = {f["filtered_by"] for f in row["filtered_pulses"]}
+        self.assertIn("name_blocklist", filtered_by)
+        self.assertIn("is_subscribing=false", filtered_by)
+        self.assertEqual(out["otx"]["filter_drops"], 2)
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ MOD = _load("crd_render_otx_summary", RENDER)
 
 
 def _model_with_otx(otx):
-    return {"schema_version": 2, "otx": otx}
+    return {"schema_version": "2.1", "otx": otx}
 
 
 class RenderOtxSummaryTests(unittest.TestCase):
@@ -140,7 +140,7 @@ class RenderOtxSummaryTests(unittest.TestCase):
                     "evidence": [{"pulse_name": "Lazarus", "tags": [], "malware_families": []}]},
                ],
                "summary": {"malicious": 1, "clean": 1, "unidentified": 0, "total": 2}}
-        model = {"schema_version": 2, "otx": otx,
+        model = {"schema_version": "2.1", "otx": otx,
                  "dns_lookups": {"8.8.8.8": "dns.google"}}
         out = self._capture(model)
         self.assertIn("Hostname", out)
@@ -181,6 +181,85 @@ class RenderOtxSummaryTests(unittest.TestCase):
                "summary": {"malicious": 0, "clean": 0, "unidentified": 1, "total": 1}}
         out = self._capture(_model_with_otx(otx))
         self.assertIn("partial", out.lower())
+
+
+class TierSplitTests(unittest.TestCase):
+    def _capture(self, model: dict) -> str:
+        with tempfile.NamedTemporaryFile("w+", encoding="utf-8", delete=False) as tmp:
+            tmp_path = tmp.name
+        try:
+            MOD.write_otx_summary(model, tmp_path)
+            return Path(tmp_path).read_text(encoding="utf-8")
+        finally:
+            os.unlink(tmp_path)
+
+    def test_high_tier_details_and_why_column(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 10, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "evil.com", "type": "hostname", "verdict": "malicious",
+                    "confidence": "high", "pulse_count": 3,
+                    "confidence_reasons": ["tag:malware"],
+                    "evidence": [{"pulse_name": "P", "malware_families": []}]},
+               ],
+               "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("High-confidence malicious (1)", out)
+        self.assertIn("<details open>", out)
+        self.assertIn("tag:malware", out)
+
+    def test_legacy_malicious_without_confidence_defaults_to_high(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 10, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "legacy.bad", "type": "hostname", "verdict": "malicious",
+                    "pulse_count": 1,
+                    "evidence": [{"pulse_name": "Old"}]},
+               ],
+               "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("High-confidence malicious (1)", out)
+
+    def test_medium_and_low_tiers_render_when_present(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 10, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 3, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "h.com", "type": "hostname", "verdict": "malicious",
+                    "confidence": "high", "pulse_count": 1, "evidence": []},
+                   {"indicator": "m.com", "type": "hostname", "verdict": "malicious",
+                    "confidence": "medium", "pulse_count": 1, "evidence": []},
+                   {"indicator": "l.com", "type": "hostname", "verdict": "malicious",
+                    "confidence": "low", "pulse_count": 1, "evidence": []},
+               ],
+               "summary": {"malicious": 3, "clean": 0, "unidentified": 0, "total": 3}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("Medium-confidence malicious (1)", out)
+        self.assertIn("Low-confidence malicious (1)", out)
+
+    def test_filter_drops_appears_in_status(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 1, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 0, "rate_limited": 0,
+               "filter_drops": 12,
+               "indicators": [],
+               "summary": {"malicious": 0, "clean": 0, "unidentified": 0, "total": 0}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("filtered 12 pulse", out)
+
+    def test_other_verdicts_bucket_for_non_malicious(self):
+        otx = {"skipped": False, "skipped_reason": None,
+               "queried_at": "z", "wall_ms": 10, "wall_budget_ms": 30000,
+               "partial_results": False, "api_calls": 1, "rate_limited": 0,
+               "indicators": [
+                   {"indicator": "8.8.8.8", "type": "IPv4", "verdict": "clean",
+                    "validation": ["Listed on Alexa"]},
+               ],
+               "summary": {"malicious": 0, "clean": 1, "unidentified": 0, "total": 1}}
+        out = self._capture(_model_with_otx(otx))
+        self.assertIn("Other verdicts (1)", out)
 
 
 if __name__ == "__main__":

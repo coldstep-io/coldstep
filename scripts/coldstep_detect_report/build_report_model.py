@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = "2.1"
 
 # Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
 # untrusted. main() canonicalises every env-var path through this helper

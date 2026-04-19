@@ -51,7 +51,7 @@ class HtmlReportRendererTests(unittest.TestCase):
         )
         self.assertIsNotNone(m, "missing inline JSON island")
         embedded = json.loads(m.group(1))
-        self.assertEqual(embedded["schema_version"], 2)
+        self.assertEqual(embedded["schema_version"], "2.1")
 
     def test_html_loads_observable_plot_with_sri(self):
         html = self._render()
@@ -73,6 +73,7 @@ class HtmlReportRendererTests(unittest.TestCase):
         # template must contain the OTX section markup that the embedded JS reads.
         html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
         self.assertIn('data-section="otx"', html)
+        self.assertIn('data-mount="otx-tiers"', html)
         self.assertIn("Threat-intel verdicts", html)
 
     def test_styles_have_verdict_pill_classes(self):
@@ -80,6 +81,8 @@ class HtmlReportRendererTests(unittest.TestCase):
         for cls in (".coldstep-verdict-malicious", ".coldstep-verdict-clean",
                     ".coldstep-verdict-unidentified", ".coldstep-verdict-rate-limited"):
             self.assertIn(cls, css, f"missing CSS class {cls}")
+        for tok in ("--coldstep-confidence-high", '.coldstep-otx-tier[data-tier="high"]'):
+            self.assertIn(tok, css)
 
     def test_dns_lookups_round_trip_into_json_island(self):
         # rDNS enrichment writes model.dns_lookups; the HTML renderer must
@@ -166,6 +169,14 @@ class HtmlReportRendererTests(unittest.TestCase):
             html = out.read_text(encoding="utf-8")
         self.assertIn("evil.example.com", html)
         self.assertIn('"malicious"', html)
+
+    def test_otx_template_js_groups_indicators_by_confidence_tier(self):
+        # write_html does not execute the inline module; tier <details> are built
+        # client-side. Assert the template wires confidence tiers + schema v2.1 mount.
+        tpl = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        self.assertIn("confidenceTier", tpl)
+        self.assertIn('setAttribute("data-tier"', tpl)
+        self.assertIn("coldstep-otx-tier-null", tpl)
 
 
 if __name__ == "__main__":

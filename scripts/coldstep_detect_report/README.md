@@ -1,6 +1,6 @@
-# Coldstep detect-mode report (v2)
+# Coldstep detect-mode report (v2.1)
 
-Two-tier report driven by a single `report-model.json` (schema v2 — adds the `otx` block and per-entry `indicators`). Built for the `coldstep-demo-detect.yml` workflow.
+Two-tier report driven by a single `report-model.json` (schema **v2.1** — string `schema_version`, OTX `confidence` tiers on malicious indicators, filter audit fields). Built for the `coldstep-demo-detect.yml` workflow.
 
 | Surface | What renders it | Where you see it | Owner |
 |---|---|---|---|
@@ -9,13 +9,13 @@ Two-tier report driven by a single `report-model.json` (schema v2 — adds the `
 
 > GitHub does **not** preview HTML artifacts inline. The Tier-2 file ships as a downloadable artifact, not as a clickable surface inside the run UI. The Tier-1 summary is the always-visible counterpart that needs no clicks. If we ever want a clickable rich URL, see `knowledge/wiki/gha-reports-formats.md` (local) for the GitHub-Pages route — that's a deferred follow-up, not a v1 concern.
 
-## Data contract (`report-model.json`, schema v1)
+## Data contract (`report-model.json`, schema v2.1)
 
 `build_report_model.py` produces this shape; both renderers consume it. Insertion order is part of the contract — do not `sort_keys=True` on a re-encode.
 
 | Key | Type | Notes |
 |---|---|---|
-| `schema_version` | `int` | Currently `2`. Bump this any time the shape below changes incompatibly. |
+| `schema_version` | `string` | Currently **`"2.1"`**. Bump when the shape changes incompatibly (semver-style string). |
 | `generated_at` | ISO-8601 UTC string with `Z` suffix | Emitted by the builder, not by the renderer. Deterministic when `build()` is called with `now=...` (used in tests). |
 | `run.run_id` | string | From the JSONL `meta` event if present, else `$GITHUB_RUN_ID`. |
 | `run.workflow_file` | string | Parsed from `$GITHUB_WORKFLOW_REF` (the `{repo}/.github/workflows/{file}@{ref}` format). |
@@ -115,7 +115,7 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 
 **Allowlist (OTX bypass, not OTX skip).** RFC-reserved address space (loopback `127.0.0.0/8` in v1) is matched against `scripts/coldstep_otx/allowlist.py` *before* the OTX call. Allowlisted indicators are still recorded in `model.otx.indicators[]` with `verdict: "clean"`, `source: "allowlist"`, `reason: "loopback"` so the action is auditable, but they consume zero API calls and zero wall-clock budget. The Tier-1 GFM verdict cell shows `🟩 clean (allowlist: loopback)` so a reader can tell the two flavours of "clean" apart. Adding RFC1918 / link-local is a one-tuple edit in `allowlist.py` — no schema or renderer change needed.
 
-The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + indicator table) appended by `render_otx_summary.py`. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart and verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}` in `styles.css`).
+The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + per-tier `<details>` tables for malicious confidence, plus an "Other verdicts" table for non-malicious rows) appended by `render_otx_summary.py`. Malicious indicators without `confidence` render as **high** tier for backwards compatibility. When `filter_drops` / `filtered_pulses` are set, the GFM section includes a short filter-audit block. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart, verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}`), and confidence-tier grouping (`.coldstep-otx-tier`, `data-tier`, CSS vars `--coldstep-confidence-*` in `styles.css`).
 
 **Egress-flow verdict pivot.** When OTX has produced verdicts the egress flow becomes 3-column instead of 2: `host → verdict → policy`. Tier-1 emits a Mermaid `sankey-beta` with two sub-edges per host (host → verdict, verdict → policy); Tier-2 splits the existing single stacked-bar into a pair (host → verdict on top, verdict → policy below). Edges whose indicators OTX never saw (partial budget, IPv6, allowlist-but-no-OTX-row) route through a synthetic `unverified` bucket so the visualization stays mass-balanced. Host labels also pick up the rDNS hostname from `model.dns_lookups` when present, so `8.8.8.8` displays as `8.8.8.8 (dns.google)`. Both renderers fall back to the classic 2-column flow when OTX is absent or skipped.
 

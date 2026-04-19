@@ -1,0 +1,43 @@
+{
+  "schema_version": "2.1",
+  "generated_at": "2026-04-19T00:00:00Z",
+  "run": {
+    "run_id": "24630349770",
+    "workflow_file": "coldstep-demo-detect.yml",
+    "branch": "dev",
+    "runner_label": "github-hosted"
+  },
+  "dns_lookups": {
+    "142.251.111.136": "lga34s33-in-f4.1e100.net",
+    "142.251.111.93": "lga34s33-in-f5.1e100.net",
+    "185.125.190.75": "archive.ubuntu.com"
+  },
+  "egress_sankey": [
+    {
+      "source": "lga34s33-in-f4.1e100.net",
+      "target": "",
+      "value": 1,
+      "indicators": ["142.251.111.136"]
+    },
+    {
+      "source": "lga34s33-in-f5.1e100.net",
+      "target": "",
+      "value": 1,
+      "indicators": ["142.251.111.93"]
+    },
+    {
+      "source": "archive.ubuntu.com",
+      "target": "",
+      "value": 1,
+      "indicators": ["185.125.190.75"]
+    }
+  ],
+  "diff": {
+    "status": "unavailable",
+    "reason": "fixture",
+    "traffic_new": [],
+    "traffic_gone": [],
+    "traffic_changed": []
+  },
+  "otx": null
+}
