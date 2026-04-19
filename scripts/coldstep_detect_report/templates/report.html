@@ -50,7 +50,7 @@
         <summary><h2 style="display:inline">Threat-intel verdicts (AlienVault OTX)</h2></summary>
         <div data-mount="otx-status" class="coldstep-otx-status"></div>
         <div data-mount="otx-chart" class="coldstep-otx-chart"></div>
-        <ul data-mount="otx-list" class="coldstep-otx-list"></ul>
+        <div data-mount="otx-tiers" class="coldstep-otx-tiers"></div>
       </details>
     </section>
   </main>
@@ -295,7 +295,20 @@
     // 5. OTX threat-intel section. Indicator + evidence text comes from the
     //    third-party OTX API, so we use textContent / createElement everywhere
     //    to keep the XSS attack surface zero (no innerHTML for OTX data).
+    //    Malicious indicators are grouped by confidence tier (schema v2.1);
+    //    non-malicious rows land under "Other verdicts".
     {
+      const confidenceTier = (r) => {
+        if (!r || r.verdict !== "malicious") return "null";
+        return r.confidence || "high";
+      };
+      const tierLabel = {
+        high: "High-confidence malicious",
+        medium: "Medium-confidence malicious",
+        low: "Low-confidence malicious",
+      };
+      const tierOrder = ["high", "medium", "low"];
+
       const otx = model.otx;
       const section = document.getElementById("otx");
       if (!otx) {
@@ -303,25 +316,40 @@
       } else {
         section.removeAttribute("hidden");
         const status = $('[data-mount="otx-status"]');
-        const list = $('[data-mount="otx-list"]');
+        const tierMount = $('[data-mount="otx-tiers"]');
         const chart = $('[data-mount="otx-chart"]');
+        tierMount.replaceChildren();
         if (otx.skipped) {
           status.textContent = "OTX enrichment skipped: " + (otx.skipped_reason || "unknown");
         } else {
           const partial = otx.partial_results ? " (partial — wall budget exhausted)" : "";
-          status.textContent =
+          let st =
             "Queried " + (otx.api_calls || 0) + " indicator(s) in " +
-            (otx.wall_ms || 0) + " ms" + partial;
+            (otx.wall_ms || 0) + " ms";
+          const allow = otx.allowlisted || 0;
+          if (allow) {
+            st += ", " + allow + " from allowlist (skipped OTX)";
+          }
+          const fd = otx.filter_drops || 0;
+          if (fd) {
+            st += ", filtered " + fd + " pulse(s)";
+          }
+          st += partial;
+          status.textContent = st;
           const order = { malicious: 0, unidentified: 1, clean: 2, "rate-limited": 3 };
           const rows = (otx.indicators || []).slice().sort((a, b) =>
             (order[a.verdict] ?? 99) - (order[b.verdict] ?? 99));
-          // Hostname (rDNS) annotations come from model.dns_lookups, populated
-          // by scripts/coldstep_dns/enrich_rdns.py during the workflow. Stays
-          // safe under untrusted inputs because we only read into textContent.
           const dnsLookups = model.dns_lookups || {};
+          const buckets = { high: [], medium: [], low: [], null: [] };
           for (const r of rows) {
+            const k = confidenceTier(r);
+            buckets[k].push(r);
+          }
+          const appendLi = (ul, r, tierAttr) => {
             const li = document.createElement("li");
-            li.className = "coldstep-verdict-" + (r.verdict || "unidentified");
+            li.className =
+              "coldstep-verdict-" + (r.verdict || "unidentified") +
+              " coldstep-confidence-" + tierAttr;
             const indicator = document.createElement("code");
             indicator.textContent = r.indicator || "";
             li.appendChild(indicator);
@@ -336,7 +364,70 @@
               " — " + (r.verdict || "?") +
               (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "")
             ));
-            list.appendChild(li);
+            ul.appendChild(li);
+          };
+          for (const t of tierOrder) {
+            const tierRows = buckets[t];
+            if (!tierRows.length) continue;
+            const det = document.createElement("details");
+            if (t === "high") det.open = true;
+            det.className = "coldstep-otx-tier coldstep-otx-tier-" + t;
+            det.setAttribute("data-tier", t);
+            const sum = document.createElement("summary");
+            sum.textContent = tierLabel[t] + " (" + tierRows.length + ")";
+            det.appendChild(sum);
+            const ul = document.createElement("ul");
+            ul.className = "coldstep-otx-list coldstep-otx-tier-list";
+            for (const r of tierRows) appendLi(ul, r, t);
+            det.appendChild(ul);
+            tierMount.appendChild(det);
+          }
+          const nullRows = buckets.null;
+          if (nullRows.length) {
+            const det = document.createElement("details");
+            det.open = true;
+            det.className = "coldstep-otx-tier coldstep-otx-tier-null";
+            det.setAttribute("data-tier", "null");
+            const sum = document.createElement("summary");
+            sum.textContent = "Other verdicts (" + nullRows.length + ")";
+            det.appendChild(sum);
+            const ul = document.createElement("ul");
+            ul.className = "coldstep-otx-list coldstep-otx-tier-list";
+            for (const r of nullRows) appendLi(ul, r, "null");
+            det.appendChild(ul);
+            tierMount.appendChild(det);
+          }
+          const fp = otx.filtered_pulses || [];
+          if (fd || (fp && fp.length)) {
+            const fa = document.createElement("details");
+            fa.className = "coldstep-otx-filter-audit";
+            const fsum = document.createElement("summary");
+            fsum.textContent = "Filter audit";
+            fa.appendChild(fsum);
+            const ul = document.createElement("ul");
+            ul.className = "coldstep-otx-filter-list";
+            if (fd) {
+              const li = document.createElement("li");
+              li.textContent = "Dropped " + fd + " pulse row(s) during filtering.";
+              ul.appendChild(li);
+            }
+            const cap = Math.min(fp.length, 20);
+            for (let i = 0; i < cap; i++) {
+              const li = document.createElement("li");
+              const e = fp[i];
+              li.textContent =
+                typeof e === "object" && e !== null
+                  ? (e.pulse_name || e.pulse_id || "?")
+                  : String(e);
+              ul.appendChild(li);
+            }
+            if (fp.length > 20) {
+              const li = document.createElement("li");
+              li.textContent = "…and " + (fp.length - 20) + " more.";
+              ul.appendChild(li);
+            }
+            fa.appendChild(ul);
+            tierMount.appendChild(fa);
           }
           if (window.Plot) {
             const summary = otx.summary || {};

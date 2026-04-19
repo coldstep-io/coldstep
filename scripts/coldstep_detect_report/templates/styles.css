@@ -6,6 +6,10 @@
   --fail: #cf222e;
   --warn: #9a6700;
   --bg: #fff;
+  /* OTX malicious confidence tiers (schema v2.1) — borders/accents only; verdict pills stay canonical. */
+  --coldstep-confidence-high: #8a0d27;
+  --coldstep-confidence-medium: #b45309;
+  --coldstep-confidence-low: #525252;
 }
 
 body {
@@ -86,6 +90,38 @@ code {
   padding: 2px 6px;
   border-radius: 4px;
 }
+.coldstep-otx-tiers {
+  margin-top: .75rem;
+}
+.coldstep-otx-tier {
+  margin: .5rem 0 .75rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .35rem .5rem .5rem;
+}
+.coldstep-otx-tier[data-tier="high"] {
+  border-left: 4px solid var(--coldstep-confidence-high);
+}
+.coldstep-otx-tier[data-tier="medium"] {
+  border-left: 4px solid var(--coldstep-confidence-medium);
+}
+.coldstep-otx-tier[data-tier="low"] {
+  border-left: 4px solid var(--coldstep-confidence-low);
+}
+.coldstep-otx-tier summary {
+  cursor: pointer;
+  font-weight: 600;
+  margin-bottom: .25rem;
+}
+.coldstep-otx-filter-audit {
+  margin-top: .75rem;
+  font-size: .9rem;
+  color: var(--muted);
+}
+.coldstep-otx-filter-list {
+  margin: .35rem 0 0 1.25rem;
+  padding: 0;
+}
 .coldstep-otx-list {
   list-style: none;
   padding-left: 0;
@@ -94,6 +130,9 @@ code {
   margin: 4px 6px 4px 0;
   display: inline-block;
 }
+.coldstep-confidence-high { box-shadow: inset 3px 0 0 0 var(--coldstep-confidence-high); padding-left: 6px; }
+.coldstep-confidence-medium { box-shadow: inset 3px 0 0 0 var(--coldstep-confidence-medium); padding-left: 6px; }
+.coldstep-confidence-low { box-shadow: inset 3px 0 0 0 var(--coldstep-confidence-low); padding-left: 6px; }
 .coldstep-otx-rdns {
   color: var(--muted);
   font-size: .85em;

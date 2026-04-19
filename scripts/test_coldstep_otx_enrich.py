@@ -11,7 +11,7 @@ from scripts.coldstep_otx.client import InvalidAPIKey
 
 def _v2_model_with_indicators() -> dict:
     return {
-        "schema_version": 2,
+        "schema_version": "2.1",
         "generated_at": "2026-04-18T17:00:00Z",
         "run": {"run_id": "test"},
         "capability_matrix": [],
@@ -73,7 +73,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
             data = json.loads(Path(path).read_text(encoding="utf-8"))
             self.assertTrue(data["otx"]["skipped"])
             self.assertEqual(data["otx"]["skipped_reason"], "no api key")
-            self.assertEqual(data["schema_version"], 2)
+            self.assertEqual(data["schema_version"], "2.1")
         finally:
             os.unlink(path)
 
@@ -372,7 +372,7 @@ class EnrichSanitizationParityTests(unittest.TestCase):
 
     def _write_model(self, dir_path: Path) -> Path:
         p = dir_path / "report-model.json"
-        p.write_text(json.dumps({"schema_version": 2}), encoding="utf-8")
+        p.write_text(json.dumps({"schema_version": "2.1"}), encoding="utf-8")
         return p
 
     def test_accepts_path_under_runner_temp(self):

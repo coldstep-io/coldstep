@@ -50,6 +50,27 @@ VERDICT_GLYPH = {
 VERDICT_PRIORITY = {"malicious": 0, "unidentified": 1, "clean": 2, "rate-limited": 3}
 TOP_INDICATOR_ROWS = 30
 
+TIER_LABEL = {
+    "high": "🟥 High-confidence malicious",
+    "medium": "🟧 Medium-confidence malicious",
+    "low": "🟨 Low-confidence malicious",
+}
+TIER_ORDER = ("high", "medium", "low")
+
+
+def _confidence_bucket(row: dict) -> str:
+    """Partition key for tier tables: malicious rows by confidence tier; else null."""
+    if row.get("verdict") != "malicious":
+        return "null"
+    return row.get("confidence") or "high"
+
+
+def _why_cell(row: dict) -> str:
+    reasons = row.get("confidence_reasons") or []
+    if reasons:
+        return "; ".join(_md_cell(str(x)) for x in reasons)
+    return _md_cell(_evidence_summary(row))
+
 
 def _md_cell(value: object) -> str:
     s = str(value)
@@ -91,12 +112,15 @@ def _section(model: dict) -> str:
     api_calls = otx.get("api_calls") or 0
     allowlisted = otx.get("allowlisted") or 0
     partial = otx.get("partial_results")
+    filter_drops = int(otx.get("filter_drops") or 0)
     status = (
         f"_Queried {api_calls} indicator(s) at {_md_cell(queried_at)} "
         f"in {wall_ms} ms"
     )
     if allowlisted:
         status += f", {allowlisted} from allowlist (skipped OTX)"
+    if filter_drops:
+        status += f", filtered {filter_drops} pulse(s)"
     if partial:
         status += " (partial — wall budget exhausted)"
     status += "._"
@@ -124,11 +148,60 @@ def _section(model: dict) -> str:
                        r.get("indicator", "")),
     )[:TOP_INDICATOR_ROWS]
     dns_lookups = model.get("dns_lookups") or {}
-    # Only widen the table with a Hostname column when at least one indicator
-    # in the table actually has a reverse-DNS entry; otherwise the column is
-    # noise.
     show_hostname = any(dns_lookups.get(r.get("indicator", "")) for r in indicators)
-    if indicators:
+
+    buckets: dict[str, list[dict]] = {
+        "high": [], "medium": [], "low": [], "null": [],
+    }
+    for r in indicators:
+        buckets[_confidence_bucket(r)].append(r)
+
+    def _append_malicious_tier_table(tier_key: str, tier_rows: list[dict]) -> None:
+        nonlocal lines
+        label = TIER_LABEL[tier_key]
+        open_attr = " open" if tier_key == "high" else ""
+        lines.append(f"<details{open_attr}>")
+        lines.append(f"<summary>{label} ({len(tier_rows)})</summary>")
+        lines.append("")
+        if show_hostname:
+            lines += [
+                "| Indicator | Hostname | Type | Pulses | Why |",
+                "|---|---|---|---:|---|",
+            ]
+        else:
+            lines += [
+                "| Indicator | Type | Pulses | Why |",
+                "|---|---|---:|---|",
+            ]
+        for r in tier_rows:
+            indicator = r.get("indicator", "")
+            pulses = r.get("pulse_count")
+            pulses_cell = "" if pulses is None else str(pulses)
+            why = _why_cell(r)
+            if show_hostname:
+                hostname = dns_lookups.get(indicator) or ""
+                lines.append(
+                    f"| `{_md_cell(indicator)}` | {_md_cell(hostname)} "
+                    f"| {_md_cell(r.get('type', ''))} | {pulses_cell} | {why} |"
+                )
+            else:
+                lines.append(
+                    f"| `{_md_cell(indicator)}` | {_md_cell(r.get('type', ''))} "
+                    f"| {pulses_cell} | {why} |"
+                )
+        lines.append("</details>")
+        lines.append("")
+
+    for tier_key in TIER_ORDER:
+        tier_rows = buckets[tier_key]
+        if tier_rows:
+            _append_malicious_tier_table(tier_key, tier_rows)
+
+    null_rows = buckets["null"]
+    if null_rows:
+        lines.append("<details>")
+        lines.append(f"<summary>Other verdicts ({len(null_rows)})</summary>")
+        lines.append("")
         if show_hostname:
             lines += [
                 "| Indicator | Hostname | Type | Verdict | Pulses | Top evidence |",
@@ -139,15 +212,12 @@ def _section(model: dict) -> str:
                 "| Indicator | Type | Verdict | Pulses | Top evidence |",
                 "|---|---|---|---:|---|",
             ]
-        for r in indicators:
+        for r in null_rows:
             verdict = r.get("verdict", "")
             glyph = VERDICT_GLYPH.get(verdict, "?")
             pulses = r.get("pulse_count")
             pulses_cell = "" if pulses is None else str(pulses)
             verdict_cell = f"{glyph} {_md_cell(verdict)}"
-            # Distinguish "clean by OTX validation" from "clean because we never
-            # asked OTX (allowlist hit)" - the JSON island carries `source`
-            # but the GFM table is the always-visible audit surface.
             if r.get("source") == "allowlist":
                 reason = r.get("reason") or "?"
                 verdict_cell += f" (allowlist: {_md_cell(reason)})"
@@ -157,14 +227,34 @@ def _section(model: dict) -> str:
                 hostname = dns_lookups.get(indicator) or ""
                 lines.append(
                     f"| `{_md_cell(indicator)}` | {_md_cell(hostname)} "
-                    f"| {_md_cell(r.get('type',''))} | {verdict_cell} | {pulses_cell} | {ev} |"
+                    f"| {_md_cell(r.get('type', ''))} | {verdict_cell} | {pulses_cell} | {ev} |"
                 )
             else:
                 lines.append(
-                    f"| `{_md_cell(indicator)}` | {_md_cell(r.get('type',''))} "
+                    f"| `{_md_cell(indicator)}` | {_md_cell(r.get('type', ''))} "
                     f"| {verdict_cell} | {pulses_cell} | {ev} |"
                 )
+        lines.append("</details>")
         lines.append("")
+
+    filtered_entries = otx.get("filtered_pulses") or []
+    if filter_drops or filtered_entries:
+        lines.append("<details>")
+        lines.append("<summary>Filter audit</summary>")
+        lines.append("")
+        if filter_drops:
+            lines.append(f"- Dropped **{filter_drops}** pulse row(s) during filtering.")
+        for entry in filtered_entries[:20]:
+            if isinstance(entry, dict):
+                nm = entry.get("pulse_name") or entry.get("pulse_id") or "?"
+                lines.append(f"- {_md_cell(nm)}")
+            else:
+                lines.append(f"- {_md_cell(entry)}")
+        if len(filtered_entries) > 20:
+            lines.append(f"- _…and {len(filtered_entries) - 20} more._")
+        lines.append("</details>")
+        lines.append("")
+
     return "\n".join(lines) + "\n"
 
 
