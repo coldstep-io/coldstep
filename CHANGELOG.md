@@ -10,9 +10,21 @@ Nothing listed yet — add changes here before tagging the next release, then ro
 
 ---
 
+## [0.1.7] — 2026-04-20
+
+**Pre-release** — pin alignment only (no Go agent, BPF, or composite TypeScript changes in this PR). Documentation, website, **`scripts/check_workflow_action_pins.py`**, Marketplace demo, and **`COLDSTEP_AGENT_VERSION`** on **`coldstep-demo*`** workflows now target **`v0.1.7`**.
+
+### Publishing this pre-release
+
+1. Merge the release PR to **`main`**.
+2. **`git tag -s v0.1.7 -m "…"`** and **`git push origin v0.1.7`** — triggers **`supply-chain-attest`** (binary + SBOM + attestations).
+3. **GitHub → Releases → v0.1.7 → Edit** — enable **Set as pre-release** until soak tests pass; attach notes from **`CHANGELOG`**. Clear pre-release when promoting to **Latest**.
+
+---
+
 ## [0.1.6] — 2026-04-20
 
-Re-dock the **recommended consumer tag** and in-repo demo **`COLDSTEP_AGENT_VERSION`** to **`v0.1.6`**. No application or eBPF changes in this bump—documentation, website, workflows, **`AGENTS.md`** pin, and the workflow pin checker only.
+Re-dock the **recommended consumer tag** and in-repo demo **`COLDSTEP_AGENT_VERSION`** to **`v0.1.6`**. No application or eBPF changes in this bump—documentation, website, workflows, and the workflow pin checker only.
 
 ### Why publish **v0.1.6**
 
@@ -20,7 +32,7 @@ GitHub Releases can be **immutable**. If **`v0.1.5`** was finalized before **`su
 
 ### Changed
 
-- README, QUICK_START, CONTRIBUTING, website, **`AGENTS.md`**, **`scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
+- README, QUICK_START, CONTRIBUTING, website, **`scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
 
 ---
 
@@ -71,7 +83,8 @@ Baseline for comparison with **0.1.5**. Highlights included publishing **`coldst
 
 See [comparison **v0.1.4…v0.1.5**](https://github.com/coldstep-io/coldstep/compare/v0.1.4...v0.1.5).
 
-[Unreleased]: https://github.com/coldstep-io/coldstep/compare/v0.1.6...HEAD
+[Unreleased]: https://github.com/coldstep-io/coldstep/compare/v0.1.7...HEAD
+[0.1.7]: https://github.com/coldstep-io/coldstep/releases/tag/v0.1.7
 [0.1.6]: https://github.com/coldstep-io/coldstep/releases/tag/v0.1.6
 [0.1.5]: https://github.com/coldstep-io/coldstep/releases/tag/v0.1.5
 [0.1.4]: https://github.com/coldstep-io/coldstep/releases/tag/v0.1.4

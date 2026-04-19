@@ -1,6 +1,6 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.1.6`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`**); there is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.1.7`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`**); there is no maintained local build path for the Linux agent.
 
 ## TL;DR (copy/paste)
 
@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.6
+      - uses: coldstep-io/coldstep@v0.1.7
 ```
 
 That is enough to get:
@@ -35,8 +35,8 @@ That is enough to get:
 
 ## Versioning
 
-- Prefer **`coldstep-io/coldstep@v0.1.6`** (or a **newer tag** you publish, for example **`v0.2.0`**). **`@main`** tracks the default branch and can change without notice.
-- **`v0.1.0`** is not usable with `uses: coldstep-io/coldstep@v0.1.0` (that tag lacks repo-root **`action.yml`**); use **`v0.1.6`** or later.
+- Prefer **`coldstep-io/coldstep@v0.1.7`** (or a **newer tag** you publish, for example **`v0.2.0`**). **`@main`** tracks the default branch and can change without notice.
+- **`v0.1.0`** is not usable with `uses: coldstep-io/coldstep@v0.1.0` (that tag lacks repo-root **`action.yml`**); use **`v0.1.7`** or later.
 
 **Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-enforce.yml`](.github/workflows/coldstep-demo-enforce.yml)** (minimal enforce), and **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift).
 
@@ -53,7 +53,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.6
+      - uses: coldstep-io/coldstep@v0.1.7
         with:
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           report-job-summary: true
@@ -73,10 +73,10 @@ jobs:
 
 ## Enforce mode (optional)
 
-Detect mode is default. For enforce behavior, reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.1.6`** pin as above, then configure `with:`:
+Detect mode is default. For enforce behavior, reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.1.7`** pin as above, then configure `with:`:
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.1.6
+- uses: coldstep-io/coldstep@v0.1.7
   with:
     mode: enforce
     allowed-domains: google.com,github.com
