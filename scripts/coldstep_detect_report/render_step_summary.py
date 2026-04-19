@@ -1,7 +1,11 @@
 """Render the Tier-1 step-summary surface from report-model.json.
 
-Output: GFM Markdown + Mermaid blocks (xychart-beta, sankey-beta).
-Constraint: must stay well under 1 MiB and rely on no `<script>`.
+BLUF-only Markdown for `$GITHUB_STEP_SUMMARY`: capabilities, baseline diff, OTX
+headline, artifact pointer. Charts, sankey, full diff rows, and OTX tables live
+in Tier-2 `coldstep-detect-report.html` only.
+
+Heavy helpers (`_diff_md`, `_egress_sankey_md`, …) remain for unit tests and any
+local debugging; `write_summary` emits only `_bluf_summary_md`.
 """
 from __future__ import annotations
 
@@ -94,6 +98,86 @@ def _highest_pulse_signal(indicators: list) -> str | None:
             best_rank = rk
             best = ps
     return best
+
+
+def _capabilities_bluf_line(model: dict) -> str:
+    rows = model.get("capability_matrix") or []
+    if not rows:
+        return "- **Capabilities:** *(none in model).*"
+    fails = sum(1 for r in rows if r.get("status") == "fail")
+    warns = sum(1 for r in rows if r.get("status") == "warn")
+    if fails:
+        return f"- **Capabilities:** **{fails}** failed, **{warns}** warned."
+    if warns:
+        return (
+            "- **Capabilities:** all required probes observed; "
+            f"**{warns}** capability row(s) in **warn** state."
+        )
+    return "- **Capabilities:** all pass."
+
+
+def _diff_bluf_line(model: dict) -> str:
+    d = model.get("diff") or {}
+    if d.get("status") != "ok":
+        r = _md_cell(str(d.get("reason") or "unknown"))
+        return f"- **Baseline diff:** unavailable ({r})."
+    tn = len(d.get("traffic_new") or [])
+    tg = len(d.get("traffic_gone") or [])
+    tc = len(d.get("traffic_changed") or [])
+    return f"- **Baseline diff:** ok — new={tn}, gone={tg}, changed={tc}."
+
+
+def _otx_bluf_lines(model: dict) -> list[str]:
+    otx = model.get("otx")
+    if otx is None:
+        return ["- **Threat intel (OTX):** *(not in model).*"]
+    if otx.get("skipped"):
+        sr = _md_cell(str(otx.get("skipped_reason") or "unknown"))
+        return [f"- **Threat intel (OTX):** skipped ({sr})."]
+    summary = otx.get("summary") or {}
+    mal = int(summary.get("malicious") or 0)
+    partial = otx.get("partial_results")
+    api_calls = int(otx.get("api_calls") or 0)
+    line = (
+        f"- **Threat intel (OTX):** queried {api_calls} indicator(s); "
+        f"**{mal}** malicious in summary."
+    )
+    if partial:
+        line += " *(partial — wall budget exhausted).*"
+    lines = [line]
+    if mal > 0:
+        worst = _highest_pulse_signal(otx.get("indicators") or [])
+        if worst:
+            lines.append(f"  - Highest pulse signal: **{worst}**.")
+    return lines
+
+
+def _artifact_footer_md() -> str:
+    lab = (os.environ.get("NS_RUNNER_LABEL") or "").strip()
+    if lab:
+        return (
+            "_Full capability matrix, charts, egress sankey, diff tables, and OTX evidence: "
+            f"download artifact **`coldstep-detect-report-html-{lab}`** and open "
+            "**`coldstep-detect-report.html`**._"
+        )
+    return (
+        "_Full capability matrix, charts, egress sankey, diff tables, and OTX evidence: "
+        "download the workflow’s HTML report artifact and open **`coldstep-detect-report.html`**._"
+    )
+
+
+def _bluf_summary_md(model: dict) -> str:
+    lines = [
+        "## Coldstep detect — summary",
+        "",
+        _capabilities_bluf_line(model),
+        _diff_bluf_line(model),
+        *_otx_bluf_lines(model),
+        "",
+        _artifact_footer_md(),
+        "",
+    ]
+    return "\n".join(lines)
 
 
 def _xy_axis_label(value: object) -> str:
@@ -272,33 +356,8 @@ def _diff_md(model: dict) -> str:
     return "\n".join(lines)
 
 
-def _otx_highest_pulse_signal_md(model: dict) -> str:
-    """Short heading when OTX ran and at least one malicious row has pulse severity."""
-    otx = model.get("otx")
-    if not otx or otx.get("skipped"):
-        return ""
-    indicators = otx.get("indicators") or []
-    malicious_n = sum(1 for r in indicators if r.get("verdict") == "malicious")
-    if malicious_n <= 0:
-        return ""
-    worst = _highest_pulse_signal(indicators)
-    if worst is None:
-        return ""
-    return (
-        "### Threat intel · OTX pulse signal\n\n"
-        f"Highest pulse signal among malicious indicators: **{_md_cell(worst)}**.\n\n"
-    )
-
-
 def write_summary(model: dict, summary_path: str) -> None:
-    parts = [
-        _capability_matrix_md(model),
-        _otx_highest_pulse_signal_md(model),
-        _events_xychart_md(model),
-        _egress_sankey_md(model),
-        _diff_md(model),
-    ]
-    body = "\n".join(p for p in parts if p)
+    body = _bluf_summary_md(model)
     if not body.endswith("\n"):
         body += "\n"
     # Append: $GITHUB_STEP_SUMMARY may already contain output from earlier steps in the same job.

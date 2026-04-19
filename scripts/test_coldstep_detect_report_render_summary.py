@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,32 +36,29 @@ class StepSummaryRendererTests(unittest.TestCase):
             _RMOD.write_summary(model=self.model, summary_path=str(summary))
             return summary.read_text(encoding="utf-8")
 
-    def test_summary_contains_capability_matrix_with_pills(self):
+    def test_bluf_contains_headings_and_capability_line(self):
         out = self._render()
-        self.assertIn("### Detect Capability Matrix", out)
-        self.assertIn("🟢", out)
-        self.assertIn("Exec tracing", out)
+        self.assertIn("## Coldstep detect — summary", out)
+        self.assertIn("**Capabilities:**", out)
+        self.assertIn("all pass", out.lower())
 
-    def test_summary_contains_mermaid_xychart_for_events_by_type(self):
+    def test_bluf_has_no_mermaid(self):
         out = self._render()
-        self.assertIn("```mermaid", out)
-        self.assertIn("xychart-beta", out)
+        self.assertNotIn("```mermaid", out)
+        self.assertNotIn("xychart-beta", out)
+        self.assertNotIn("sankey-beta", out)
 
-    def test_summary_contains_mermaid_sankey_for_egress(self):
+    def test_bluf_contains_baseline_diff_counts(self):
         out = self._render()
-        self.assertIn("sankey-beta", out)
-        self.assertIn("example.com", out)
+        self.assertIn("**Baseline diff:** ok", out)
+        self.assertIn("new=", out)
+        self.assertIn("gone=", out)
 
-    def test_summary_contains_diff_table_with_missing_host(self):
+    def test_summary_size_small_bluf(self):
         out = self._render()
-        self.assertIn("Missing traffic", out)
-        self.assertIn("theclouddj.com", out)
+        self.assertLess(len(out.encode("utf-8")), 16 * 1024)
 
-    def test_summary_size_well_under_one_mib(self):
-        out = self._render()
-        self.assertLess(len(out.encode("utf-8")), 256 * 1024)
-
-    def test_diff_unavailable_renders_explanatory_message(self):
+    def test_diff_unavailable_bluf_line(self):
         model = _BMOD.build(
             current_jsonl=str(PKG_DIR / "fixtures" / "coldstep-events.sample.jsonl"),
             baseline_jsonl=None,
@@ -69,15 +67,15 @@ class StepSummaryRendererTests(unittest.TestCase):
             summary = Path(td) / "summary.md"
             _RMOD.write_summary(model=model, summary_path=str(summary))
             out = summary.read_text(encoding="utf-8")
-        self.assertIn("_Diff unavailable: no_baseline_provided._", out)
+        self.assertIn("**Baseline diff:** unavailable", out)
+        self.assertIn("no_baseline_provided", out)
 
     def test_md_cell_escapes_pipe_and_newline(self):
-        # _md_cell is the hardening helper for GFM table cells.
         self.assertEqual(_RMOD._md_cell("a|b"), r"a\|b")
         self.assertEqual(_RMOD._md_cell("a\nb"), "a b")
         self.assertEqual(_RMOD._md_cell("a\\b"), r"a\\b")
 
-    def test_otx_pulse_signal_section_shows_highest_pulse_signal(self):
+    def test_bluf_includes_otx_pulse_signal_when_model_has_malicious(self):
         model = dict(self.model)
         model["otx"] = {
             "skipped": False,
@@ -108,9 +106,20 @@ class StepSummaryRendererTests(unittest.TestCase):
             ],
             "summary": {"malicious": 2, "clean": 0, "unidentified": 0, "total": 2},
         }
-        snippet = _RMOD._otx_highest_pulse_signal_md(model)
-        self.assertIn("Threat intel · OTX pulse signal", snippet)
-        self.assertIn("Critical", snippet)
+        bluf = _RMOD._bluf_summary_md(model)
+        self.assertIn("Critical", bluf)
+        self.assertIn("Highest pulse signal", bluf)
+
+    def test_artifact_footer_uses_ns_runner_label_when_set(self):
+        old = os.environ.get("NS_RUNNER_LABEL")
+        try:
+            os.environ["NS_RUNNER_LABEL"] = "ubuntu-latest"
+            self.assertIn("coldstep-detect-report-html-ubuntu-latest", _RMOD._artifact_footer_md())
+        finally:
+            if old is None:
+                os.environ.pop("NS_RUNNER_LABEL", None)
+            else:
+                os.environ["NS_RUNNER_LABEL"] = old
 
     def test_diff_table_gets_verdict_column_when_otx_present(self):
         model = dict(self.model)
@@ -145,7 +154,6 @@ class StepSummaryRendererTests(unittest.TestCase):
         return m
 
     def test_sankey_falls_back_to_2col_when_otx_absent(self):
-        # No OTX -> classic host -> policy sankey unchanged.
         m = self._model_with_sankey(
             [{"source": "evil.example.com", "target": "allow", "value": 4,
               "indicators": ["evil.example.com"]}],
@@ -168,8 +176,6 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertIn("evil.example.com,allow,4", out)
 
     def test_sankey_emits_3col_verdict_pivot_when_otx_present(self):
-        # OTX present and edges have indicators that resolve to verdicts -
-        # pivot each edge into two sub-edges: host->verdict and verdict->policy.
         m = self._model_with_sankey(
             [
                 {"source": "evil.example.com", "target": "allow", "value": 5,
@@ -186,18 +192,13 @@ class StepSummaryRendererTests(unittest.TestCase):
                  "summary": {"malicious": 1, "clean": 1, "unidentified": 0, "total": 2}},
         )
         out = _RMOD._egress_sankey_md(m)
-        # Header advertises the new pivot.
         self.assertIn("host \u2192 verdict \u2192 policy", out)
-        # Two sub-edges per host edge.
         self.assertIn("evil.example.com,malicious,5", out)
         self.assertIn("malicious,allow,5", out)
         self.assertIn("8.8.8.8,clean,3", out)
         self.assertIn("clean,allow,3", out)
 
     def test_sankey_uses_unverified_bucket_for_indicators_not_in_otx_map(self):
-        # OTX ran but didn't get to this edge's indicator (partial budget,
-        # IPv6, unknown type, etc.) - the edge still pivots through a
-        # synthetic "unverified" node so the visualization stays balanced.
         m = self._model_with_sankey(
             [{"source": "203.0.113.5", "target": "unknown", "value": 7,
               "indicators": ["203.0.113.5"]}],
@@ -213,8 +214,6 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertIn("unverified,unknown,7", out)
 
     def test_sankey_picks_worst_verdict_when_edge_has_mixed_indicators(self):
-        # Severity priority is malicious > unidentified > clean; an edge with
-        # one malicious + one clean indicator should route through "malicious".
         m = self._model_with_sankey(
             [{"source": "mixed.example.com", "target": "allow", "value": 2,
               "indicators": ["a.example.com", "b.example.com"]}],
@@ -231,9 +230,6 @@ class StepSummaryRendererTests(unittest.TestCase):
         self.assertNotIn("mixed.example.com,clean,2", out)
 
     def test_sankey_host_label_enriched_with_rdns_when_present(self):
-        # Now that scripts/coldstep_dns/enrich_rdns.py populates dns_lookups,
-        # the sankey host node should display "host (rdns)" so a reader can
-        # tell what 8.8.8.8 actually is.
         m = self._model_with_sankey(
             [{"source": "8.8.8.8", "target": "allow", "value": 3,
               "indicators": ["8.8.8.8"]}],
@@ -241,8 +237,6 @@ class StepSummaryRendererTests(unittest.TestCase):
             dns_lookups={"8.8.8.8": "dns.google"},
         )
         out = _RMOD._egress_sankey_md(m)
-        # `_csv_field` only quotes on comma/quote/newline/edge-whitespace, not
-        # on interior spaces - Mermaid sankey-beta is fine with bare spaces.
         self.assertIn("8.8.8.8 (dns.google),allow,3", out)
 
     def test_sankey_host_label_unchanged_when_no_rdns(self):
@@ -250,7 +244,7 @@ class StepSummaryRendererTests(unittest.TestCase):
             [{"source": "8.8.8.8", "target": "allow", "value": 3,
               "indicators": ["8.8.8.8"]}],
             otx=None,
-            dns_lookups={"1.1.1.1": "one.one.one.one"},  # no entry for 8.8.8.8
+            dns_lookups={"1.1.1.1": "one.one.one.one"},
         )
         out = _RMOD._egress_sankey_md(m)
         self.assertIn("8.8.8.8,allow,3", out)

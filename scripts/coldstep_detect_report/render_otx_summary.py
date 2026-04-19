@@ -1,8 +1,8 @@
-"""Append the standalone "Threat-intel verdicts" section to GITHUB_STEP_SUMMARY.
+"""Legacy OTX Markdown renderer (unit-tested via `_section`).
 
-Runs after `render_step_summary.py` and after the OTX enrichment step. Kept
-as a separate script so re-renders don't double-emit the capability matrix
-that lives in render_step_summary.
+Tier-1 `$GITHUB_STEP_SUMMARY` no longer includes OTX tables or charts; that
+detail is Tier-2 **`coldstep-detect-report.html`** only. `write_otx_summary`
+is a no-op so CI can keep invoking this module without growing the job summary.
 """
 from __future__ import annotations
 
@@ -268,12 +268,8 @@ def _section(model: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def write_otx_summary(model: dict, summary_path: str) -> None:
-    body = _section(model)
-    if not body:
-        return
-    with open(summary_path, "a", encoding="utf-8") as f:
-        f.write(body)
+def write_otx_summary(_model: dict, _summary_path: str) -> None:
+    """Do not append OTX prose to the step summary; full OTX UX is Tier-2 HTML."""
 
 
 def main() -> int:

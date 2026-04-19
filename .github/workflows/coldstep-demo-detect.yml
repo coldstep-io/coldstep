@@ -153,9 +153,8 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
 
-      # Tier-1 step-summary pipeline (markdown + Mermaid): render runs AFTER the optional
-      # previous-run diff step so build_report_model can ingest baseline JSONL first; see
-      # README data-flow. HTML artifact follows rDNS/OTX on the same model file.
+      # Tier-1 BLUF step summary runs AFTER rDNS + OTX enrich so OTX headlines are accurate.
+      # Full charts/tables live in Tier-2 HTML only. HTML artifact uses the same model file.
       - name: Build report model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
@@ -274,11 +273,6 @@ jobs:
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
             python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
 
-      - name: Render step summary (markdown + mermaid)
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/render_step_summary.py
-
       # rDNS enrichment runs first (no API key needed) so OTX renderers and the
       # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
       # continue-on-error + always-exit-0 mirror the OTX step contract.
@@ -315,16 +309,16 @@ jobs:
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
 
-      - name: Render OTX section to step summary
+      - name: Render step summary (BLUF)
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_otx_summary.py
+            python3 scripts/coldstep_detect_report/render_step_summary.py
           else
-            echo "::warning::report model missing, skipping OTX summary render"
+            echo "::warning::report model missing, skipping step summary render"
           fi
 
       - name: Render self-contained HTML report
@@ -349,16 +343,6 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
           overwrite: true
-
-      - name: Link to HTML report from step summary
-        if: always()
-        run: |
-          set -euo pipefail
-          {
-            echo ""
-            echo "---"
-            echo "📎 **Rich HTML report:** download the \`coldstep-detect-report-html-${NS_RUNNER_LABEL}\` artifact from this run and open \`coldstep-detect-report.html\` in a browser. (GitHub does not preview HTML artifacts inline.)"
-          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Persist detect JSONL baseline artifact
         if: always()
