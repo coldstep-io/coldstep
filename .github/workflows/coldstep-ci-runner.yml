@@ -14,6 +14,13 @@ on:
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
+# Default to least-privilege for every job in this reusable workflow.
+# Jobs that legitimately need more (e.g. `actions: read` to download a
+# previous-run baseline artifact for JSONL diff) override this block at the
+# job level — see `coldstep-demo-detect.yml` for the same pattern.
+permissions:
+  contents: read
+
 jobs:
   action_manifest:
     runs-on: ubuntu-latest

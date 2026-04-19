@@ -60,21 +60,44 @@
     const $ = (sel) => document.querySelector(sel);
 
     // 1. Capability matrix as a small table.
-    /* WARNING: these template literals write to innerHTML. Every field below
-       currently comes from constants in build_report_model.REQUIRED_CAPABILITIES
-       or controlled JSON keys produced by build_report_model.py. Before adding
-       any user-derived field (CLI label, observed traffic string, error text),
-       switch to textContent or an escapeHtml() helper. */
+    // Built via createElement + textContent so adding any future user-derived
+    // field (CLI label, observed traffic string, error text) cannot smuggle
+    // HTML or script tags. The status string is constrained via classList.add
+    // (whitespace would throw). Closes CodeQL js/xss-through-dom on this mount.
     {
-      const rows = model.capability_matrix
-        .map(r => `<tr>
-            <td>${r.label}</td>
-            <td class="status ${r.status}">${r.status}</td>
-            <td>${r.evidence_count}</td>
-          </tr>`)
-        .join("");
-      $('[data-mount="capabilities"]').innerHTML =
-        `<table class="cap"><thead><tr><th>Capability</th><th>Status</th><th>Evidence</th></tr></thead><tbody>${rows}</tbody></table>`;
+      const mount = $('[data-mount="capabilities"]');
+      mount.replaceChildren();
+      const table = document.createElement("table");
+      table.className = "cap";
+      const thead = document.createElement("thead");
+      const headerRow = document.createElement("tr");
+      for (const h of ["Capability", "Status", "Evidence"]) {
+        const th = document.createElement("th");
+        th.textContent = h;
+        headerRow.appendChild(th);
+      }
+      thead.appendChild(headerRow);
+      table.appendChild(thead);
+      const tbody = document.createElement("tbody");
+      for (const r of model.capability_matrix) {
+        const tr = document.createElement("tr");
+        const tdLabel = document.createElement("td");
+        tdLabel.textContent = r.label;
+        const tdStatus = document.createElement("td");
+        tdStatus.classList.add("status");
+        if (typeof r.status === "string" && /^[a-z0-9_-]+$/i.test(r.status)) {
+          tdStatus.classList.add(r.status);
+        }
+        tdStatus.textContent = r.status;
+        const tdCount = document.createElement("td");
+        tdCount.textContent = String(r.evidence_count);
+        tr.appendChild(tdLabel);
+        tr.appendChild(tdStatus);
+        tr.appendChild(tdCount);
+        tbody.appendChild(tr);
+      }
+      table.appendChild(tbody);
+      mount.appendChild(table);
     }
 
     // 2. Events bar chart (Observable Plot).
@@ -113,21 +136,57 @@
     }
 
     // 4. Diff: small tables, one per bucket.
+    // r.fingerprint is the canonical "traffic » <type> » <dst> » <dport> » <fqdn> » ..."
+    // string built from observed network egress — IS user-derived. Every insert
+    // below routes through textContent (or an attribute set via property) so
+    // embedded HTML/script bytes are neutralised. Closes CodeQL js/xss-through-dom.
     {
+      const mount = $('[data-mount="diff"]');
+      mount.replaceChildren();
       const sec = (label, rows) => {
-        if (!rows || !rows.length) return `<p class="empty">${label}: <em>none</em></p>`;
-        const body = rows.map(r =>
-          r.fingerprint
-            ? `<tr><td>${r.count ?? r.current ?? ""}</td><td><code>${r.fingerprint}</code></td></tr>`
-            : ""
-        ).join("");
-        return `<h3>${label}</h3><table class="diff"><tbody>${body}</tbody></table>`;
+        if (!rows || !rows.length) {
+          const p = document.createElement("p");
+          p.className = "empty";
+          p.append(`${label}: `);
+          const em = document.createElement("em");
+          em.textContent = "none";
+          p.appendChild(em);
+          return [p];
+        }
+        const heading = document.createElement("h3");
+        heading.textContent = label;
+        const table = document.createElement("table");
+        table.className = "diff";
+        const tbody = document.createElement("tbody");
+        for (const r of rows) {
+          if (!r.fingerprint) continue;
+          const tr = document.createElement("tr");
+          const tdCount = document.createElement("td");
+          tdCount.textContent = String(r.count ?? r.current ?? "");
+          const tdFp = document.createElement("td");
+          const code = document.createElement("code");
+          code.textContent = r.fingerprint;
+          tdFp.appendChild(code);
+          tr.appendChild(tdCount);
+          tr.appendChild(tdFp);
+          tbody.appendChild(tr);
+        }
+        table.appendChild(tbody);
+        return [heading, table];
       };
       const d = model.diff;
-      $('[data-mount="diff"]').innerHTML =
-        d.status === "ok"
-          ? sec("New traffic", d.traffic_new) + sec("Missing traffic", d.traffic_gone) + sec("Changed multiplicity", d.traffic_changed)
-          : `<p class="empty">Diff unavailable: ${d.reason || "unknown"}</p>`;
+      if (d.status === "ok") {
+        for (const node of [
+          ...sec("New traffic", d.traffic_new),
+          ...sec("Missing traffic", d.traffic_gone),
+          ...sec("Changed multiplicity", d.traffic_changed),
+        ]) mount.appendChild(node);
+      } else {
+        const p = document.createElement("p");
+        p.className = "empty";
+        p.textContent = `Diff unavailable: ${d.reason || "unknown"}`;
+        mount.appendChild(p);
+      }
     }
   </script>
 </body>

@@ -40,8 +40,14 @@ class BuildReportModelTests(unittest.TestCase):
     def test_diff_lists_missing_traffic_fingerprint_for_removed_host(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
         gone = [row["fingerprint"] for row in model["diff"]["traffic_gone"]]
-        self.assertTrue(any("theclouddj.com" in fp for fp in gone),
-                        f"expected theclouddj.com in traffic_gone, got {gone}")
+        # Fingerprint shape from ci_coldstep_jsonl_traffic_diff.traffic_fingerprint
+        # is "traffic » <type> » <dst> » <dport> » <fqdn> » ..." — split on the
+        # separator and check the FQDN component as a structured field rather
+        # than substring-matching the full fingerprint (avoids false positives
+        # like "not-theclouddj.com" and CodeQL py/incomplete-url-substring-sanitization).
+        gone_fqdns = {part.strip() for fp in gone for part in fp.split("\u00bb")}
+        self.assertIn("theclouddj.com", gone_fqdns,
+                      f"expected theclouddj.com in traffic_gone fqdns, got {gone}")
 
     def test_egress_sankey_aggregates_by_host_and_policy(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
