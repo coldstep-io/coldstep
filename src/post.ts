@@ -109,6 +109,14 @@ function readDetectDigest(): string {
   return fs.readFileSync(logPath, 'utf8');
 }
 
+/** Remove workspace digest without merging (used when report-job-summary is false). */
+function discardDigestFileIfPresent(): void {
+  const logPath = detectLogPath();
+  if (fs.existsSync(logPath)) {
+    fs.unlinkSync(logPath);
+  }
+}
+
 function flushDetectLogToJobSummary(body: string): void {
   const logPath = detectLogPath();
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
@@ -220,6 +228,8 @@ async function post(): Promise<void> {
     const digestEarly = readDetectDigest();
     if (reportJobSummary) {
       flushDetectLogToJobSummary(digestEarly);
+    } else {
+      discardDigestFileIfPresent();
     }
     await maybePostPRSummary(digestEarly);
     await maybeSlackWebhook(digestEarly);
@@ -242,6 +252,8 @@ async function post(): Promise<void> {
   const digestBody = readDetectDigest();
   if (reportJobSummary) {
     flushDetectLogToJobSummary(digestBody);
+  } else {
+    discardDigestFileIfPresent();
   }
   try {
     await maybePostPRSummary(digestBody);

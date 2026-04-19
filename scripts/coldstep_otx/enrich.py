@@ -10,15 +10,16 @@ Constraints:
 - Missing/empty OTX_API_KEY -> skipped: true, exit code 0.
 - 403 from OTX -> skipped: true, exit code 0 (the secret is wrong but we don't
   fail the detect job over a third-party auth issue).
-- Each malicious indicator may emit a workflow annotation on stderr: `::warning::`
-  when confidence is high, `::notice::` when medium; low-confidence malicious
-  hits are silent (no annotation).
+- Per-indicator `::warning::` / `::notice::` lines on stderr are **off** by default
+  (set `COLDSTEP_OTX_VERBOSE_ANNOTATIONS=1` to opt in). Full OTX rows live in
+  Tier-2 HTML. Low-confidence malicious is always silent.
 - Verdict precedence for sort and join: malicious > unidentified > clean.
 
 Env vars when run as a script:
 - COLDSTEP_REPORT_MODEL_IN     (required) - path to the v2 model to enrich in place
 - OTX_API_KEY                  (optional) - if empty, the step is skipped cleanly
 - COLDSTEP_OTX_WALL_BUDGET_MS  (optional, default 30000)
+- COLDSTEP_OTX_VERBOSE_ANNOTATIONS  (optional, default 0) - per-indicator stderr annotations
 """
 from __future__ import annotations
 
@@ -82,6 +83,15 @@ def _wf_data(s: object) -> str:
     return str(s).replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
 
 
+def _otx_stderr_annotations_enabled() -> bool:
+    """Per-indicator workflow annotations are noisy; Tier-2 HTML holds full detail.
+
+    Opt in with ``COLDSTEP_OTX_VERBOSE_ANNOTATIONS=1`` (local debugging).
+    """
+    raw = os.environ.get("COLDSTEP_OTX_VERBOSE_ANNOTATIONS", "0").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
 def _emit_annotation(
     stderr,
     indicator: str,
@@ -92,6 +102,8 @@ def _emit_annotation(
     pulse_count: int,
 ) -> None:
     """Emit ::warning:: for high, ::notice:: for medium; silent for low."""
+    if not _otx_stderr_annotations_enabled():
+        return
     if confidence == "low":
         return
     titles = ", ".join(_wf_data(e.get("pulse_name") or e.get("pulse_id") or "?") for e in evidence[:2])
