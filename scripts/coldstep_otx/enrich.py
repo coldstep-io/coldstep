@@ -34,7 +34,7 @@ from typing import Callable, Iterable
 
 from scripts.coldstep_otx.allowlist import is_allowlisted
 from scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
-from scripts.coldstep_otx.confidence import tier
+from scripts.coldstep_otx.confidence import _filtered_pulses_with_audit, tier
 from scripts.coldstep_otx.verdict import classify
 
 VERDICT_ORDER = {"malicious": 0, "unidentified": 1, "clean": 2}
@@ -165,6 +165,7 @@ def run(
         "link-local": 0,
     }
     partial = False
+    filter_drops_total = 0
     for indicator, ind_type in pairs:
         # Allowlist runs first so loopback/RFC-reserved space never hits the
         # network or the wall-clock budget. Indicator is still recorded - we
@@ -232,10 +233,17 @@ def run(
         verdict, evidence = classify(general)
         row: dict = {"indicator": indicator, "type": ind_type, "verdict": verdict}
         if verdict == "malicious":
+            kept, dropped = _filtered_pulses_with_audit(general)
+            pulse_info = (general or {}).get("pulse_info") or {}
+            raw_pulses = pulse_info.get("pulses") or []
+            pulse_count_unfiltered = pulse_info.get("count", len(raw_pulses))
             conf, conf_reasons = tier(general, hostname=dns_lookups.get(indicator))
             row["confidence"] = conf
             row["confidence_reasons"] = conf_reasons
-            row["pulse_count"] = (general or {}).get("pulse_info", {}).get("count", len(evidence))
+            row["pulse_count"] = len(kept)
+            row["pulse_count_unfiltered"] = pulse_count_unfiltered
+            row["filtered_pulses"] = dropped
+            filter_drops_total += len(dropped)
             row["evidence"] = evidence
             _emit_annotation(stderr, indicator, evidence, confidence=conf)
         elif verdict == "clean":
@@ -273,7 +281,7 @@ def run(
         "rate_limited": rate_limited,
         "allowlisted": allowlisted,
         "allowlist_buckets": allowlist_buckets,
-        "filter_drops": 0,
+        "filter_drops": filter_drops_total,
         "indicators": indicators_out,
         "summary": summary,
     }
