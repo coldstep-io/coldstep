@@ -1,0 +1,9 @@
+{
+  "indicator": "192.0.2.1",
+  "type": "IPv4",
+  "validation": [],
+  "pulse_info": {
+    "count": 0,
+    "pulses": []
+  }
+}

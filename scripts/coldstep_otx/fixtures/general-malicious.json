@@ -1,0 +1,28 @@
+{
+  "indicator": "evil.example.com",
+  "type": "hostname",
+  "validation": [],
+  "pulse_info": {
+    "count": 7,
+    "pulses": [
+      {
+        "id": "62a1f0aaaaaaaaaaaaaaaaaa",
+        "name": "Lazarus Q2 IOCs",
+        "modified": "2026-04-15T10:11:12.000",
+        "tags": ["lazarus", "apt", "north-korea"],
+        "malware_families": [{"display_name": "AppleJeus"}],
+        "attack_ids": [{"id": "T1071.001", "display_name": "Web Protocols"}],
+        "tlp": "white"
+      },
+      {
+        "id": "5fbbbbbbbbbbbbbbbbbbbbbb",
+        "name": "Old IOC roundup",
+        "modified": "2025-09-01T00:00:00.000",
+        "tags": ["misc"],
+        "malware_families": [],
+        "attack_ids": [],
+        "tlp": "green"
+      }
+    ]
+  }
+}
