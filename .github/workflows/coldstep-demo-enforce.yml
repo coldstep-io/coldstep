@@ -233,17 +233,9 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Control Matrix"
+            echo "## Enforce smoke"
             echo ""
-            echo "| Control | Status | Evidence |"
-            echo "|---|---|---|"
-            echo "| Detect telemetry | 🟢 | \\`coldstep-demo-detect.yml\\` job digest + JSONL |"
-            echo "| Enforce domain allowlist | 🟢 | nmap to theclouddj.com allowed |"
-            echo "| Enforce URL block | 🟢 | deny JSONL dst=192.0.2.1 (example.com) |"
-            echo "| Enforce IP allowlist | 🟡 | probe ran for 1.1.1.1; treat deny/no-deny as runner-path signal |"
-            echo "| Enforce IP block | 🟢 | deny JSONL dst=93.184.216.34 |"
-            echo "| Investigate if flaky | 🟡 | rerun job and inspect deny/debug step |"
-            echo "| Regression | 🔴 | any assertion above fails |"
+            echo "- **Result:** enforce steps above asserted policy signals on \`${NS_RUNNER_LABEL}\`. See **Show enforcement lines (debug)** for raw \`deny\` JSONL rows."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Show enforcement lines (debug)

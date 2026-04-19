@@ -164,20 +164,9 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
           {
-            echo "### Detect Capability Matrix (GitHub-hosted ubuntu-latest)"
+            echo "## Detect verification"
             echo ""
-            echo "| Capability | Status | Evidence |"
-            echo "|---|---|---|"
-            echo "| Exec tracing | 🟢 | \\`type:exec\\` present |"
-            echo "| TCP connect telemetry | 🟢 | \\`type:tcp\\` present (nmap/curl) |"
-            echo "| UDP sendto telemetry | 🟢 | \\`type:udp\\` present (:53 probe) |"
-            echo "| HTTP cleartext telemetry | 🟢 | \\`type:http\\` present |"
-            echo "| TLS ClientHello/SNI hint | 🟢 | \\`type:tls\\` with \\`tls_sni=1\\` |"
-            echo "| Process tree (fork) | 🟢 | \\`type:proc_fork\\` present |"
-            echo "| Filesystem events | 🟢 | \\`type:fs_event\\` with required create (+ best-effort unlink/rename/chmod) |"
-            echo "| Runner defense posture | 🟢 | detect telemetry + enforce demo in this workflow |"
-            echo ""
-            echo "_Legend: 🟢 pass, 🟡 investigate, 🔴 fail_"
+            echo "- **Result:** pass — required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Compare detect output with previous successful run (opt-in)
@@ -395,17 +384,9 @@ jobs:
         if: always()
         run: |
           {
-            echo "### Control Matrix"
+            echo "## Enforce smoke"
             echo ""
-            echo "| Control | Status | Evidence |"
-            echo "|---|---|---|"
-            echo "| Detect telemetry | 🟢 | detect-mode job digest + JSONL |"
-            echo "| Enforce domain allowlist | 🟢 | nmap to theclouddj.com allowed |"
-            echo "| Enforce URL block | 🟢 | deny JSONL dst=192.0.2.1 (example.com) |"
-            echo "| Enforce IP allowlist | 🟡 | probe ran for 1.1.1.1; treat deny/no-deny as runner-path signal |"
-            echo "| Enforce IP block | 🟢 | deny JSONL dst=93.184.216.34 |"
-            echo "| Investigate if flaky | 🟡 | rerun job and inspect deny/debug step |"
-            echo "| Regression | 🔴 | any assertion above fails |"
+            echo "- **Result:** prior steps asserted allowlist / URL block / IP deny telemetry. See **Show deny lines (debug)** in the log for raw \`deny\` JSONL rows."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Show deny lines (debug)
