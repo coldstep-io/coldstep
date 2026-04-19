@@ -12,7 +12,7 @@ Nothing listed yet — add changes here before tagging the next release, then ro
 
 ## [0.1.6] — 2026-04-20
 
-Re-dock the **recommended consumer tag** and in-repo demo **`COLDSTEP_AGENT_VERSION`** to **`v0.1.6`**. No application or eBPF changes in this bump—documentation, website, workflows, **`AGENTS.md`** pin, and the workflow pin checker only.
+Re-dock the **recommended consumer tag** and in-repo demo **`COLDSTEP_AGENT_VERSION`** to **`v0.1.6`**. No application or eBPF changes in this bump—documentation, website, workflows, and the workflow pin checker only.
 
 ### Why publish **v0.1.6**
 
@@ -20,7 +20,7 @@ GitHub Releases can be **immutable**. If **`v0.1.5`** was finalized before **`su
 
 ### Changed
 
-- README, QUICK_START, CONTRIBUTING, website, **`AGENTS.md`**, **`scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
+- README, QUICK_START, CONTRIBUTING, website, **`scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
 
 ---
 
