@@ -112,8 +112,13 @@ func parseIPv4CIDR(raw string) (*net.IPNet, error) {
 	if ip.To4() == nil {
 		return nil, fmt.Errorf("allowed-ips: IPv6 CIDRs are not supported, use IPv4: %q", raw)
 	}
-	bits, _ := ipNet.Mask.Size()
-	_ = bits
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return nil, fmt.Errorf("allowed-ips: invalid IPv4 CIDR %q", raw)
+	}
+	if !ip4.Equal(ip4.Mask(ipNet.Mask)) {
+		return nil, fmt.Errorf("allowed-ips: CIDR must use network address (host bits set): %q", raw)
+	}
 	return ipNet, nil
 }
 

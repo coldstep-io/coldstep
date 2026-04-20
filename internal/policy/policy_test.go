@@ -73,6 +73,16 @@ func TestParse_AllowedIPv4CIDR(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedIPv4CIDRRejectsHostBitsSet(t *testing.T) {
+	_, err := Parse("", "203.0.113.42/24")
+	if err == nil {
+		t.Fatal("expected error for host bits set in allowed CIDR")
+	}
+	if !strings.Contains(err.Error(), "CIDR must use network address") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestParse_AllowedIPv6CIDRRejected(t *testing.T) {
 	_, err := Parse("", "2001:db8::/32")
 	if err == nil {
