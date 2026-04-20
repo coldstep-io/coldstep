@@ -2,6 +2,8 @@
 
 Two-tier report driven by a single `report-model.json` (schema **v2.1** — string `schema_version`, OTX `confidence` tiers on malicious indicators, filter audit fields). Built for the `coldstep-demo-detect.yml` workflow.
 
+**Reusable Tier-1 contract (“pattern D”):** see [`GHA_JOB_SUMMARY_REUSABLE_PATTERN.md`](GHA_JOB_SUMMARY_REUSABLE_PATTERN.md) for BLUF section order, triage alerts, run deeplink, and vocabulary parity with Tier-2 HTML headings.
+
 ## `coldstep-demo-detect.yml` pipeline order
 
 1. `build_report_model.py` — current JSONL only (`diff` may be `unavailable` until baseline exists).

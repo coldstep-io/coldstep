@@ -147,3 +147,23 @@ code {
   max-width: 480px;
   height: auto;
 }
+
+.report-toc {
+  margin: 0 0 1.25rem;
+  padding: 0.75rem 1rem;
+  border: 1px solid var(--border, #ccc);
+  border-radius: 6px;
+  background: var(--toc-bg, #f8f9fa);
+}
+.report-toc .toc-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+}
+.report-toc ul {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+.report-toc a:focus-visible {
+  outline: 2px solid #0969da;
+  outline-offset: 2px;
+}

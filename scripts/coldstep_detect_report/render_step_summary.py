@@ -174,18 +174,57 @@ def _artifact_footer_md() -> str:
     )
 
 
-def _bluf_summary_md(model: dict) -> str:
-    lines = [
-        "## Coldstep detect — summary",
-        "",
-        _capabilities_bluf_line(model),
-        _diff_bluf_line(model),
-        *_otx_bluf_lines(model),
-        "",
-        _artifact_footer_md(),
-        "",
-    ]
+def _run_context_bullet() -> str | None:
+    """Single markdown bullet linking to the workflow run, or None if env incomplete."""
+    server = (os.environ.get("GITHUB_SERVER_URL") or "").rstrip("/")
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    run_id = (os.environ.get("GITHUB_RUN_ID") or "").strip()
+    if not server or not repo or not run_id:
+        return None
+    url = f"{server}/{repo}/actions/runs/{run_id}"
+    job = (os.environ.get("GITHUB_JOB") or "").strip()
+    job_part = f" · job `{_md_cell(job)}`" if job else ""
+    return f"- **Run:** [{_md_cell(run_id)}]({url}){job_part}"
+
+
+def _triage_alert_md(model: dict) -> str | None:
+    """Return a GFM alert when capability failures or OTX malicious counts warrant.
+
+    Baseline diff `unavailable` is omitted — first-run / no-baseline is usually expected;
+    the BLUF pulse line already states the reason.
+    """
+    reasons: list[str] = []
+    for row in model.get("capability_matrix") or []:
+        if row.get("status") == "fail":
+            label = _md_cell(row.get("label") or row.get("id") or "capability")
+            reasons.append(f"Capability **fail**: {label}")
+            break
+    otx = model.get("otx")
+    if isinstance(otx, dict) and not otx.get("skipped"):
+        mal = int((otx.get("summary") or {}).get("malicious") or 0)
+        if mal > 0:
+            reasons.append(f"OTX reports **{mal}** malicious indicator(s)")
+    if not reasons:
+        return None
+    lines = ["> [!WARNING]", "> **Triage**"]
+    for r in reasons:
+        lines.append(f"> - {r}")
     return "\n".join(lines)
+
+
+def _bluf_summary_md(model: dict) -> str:
+    chunks: list[str] = ["## Coldstep detect — summary", ""]
+    run_b = _run_context_bullet()
+    if run_b:
+        chunks.extend([run_b, ""])
+    alert = _triage_alert_md(model)
+    if alert:
+        chunks.extend([alert, ""])
+    chunks.append(_capabilities_bluf_line(model))
+    chunks.append(_diff_bluf_line(model))
+    chunks.extend(_otx_bluf_lines(model))
+    chunks.extend(["", _artifact_footer_md(), ""])
+    return "\n".join(chunks)
 
 
 def _xy_axis_label(value: object) -> str:

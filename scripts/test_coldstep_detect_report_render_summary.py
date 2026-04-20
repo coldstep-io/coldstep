@@ -58,6 +58,57 @@ class StepSummaryRendererTests(unittest.TestCase):
         out = self._render()
         self.assertLess(len(out.encode("utf-8")), 16 * 1024)
 
+    def test_bluf_includes_run_link_when_github_env_set(self):
+        keys = ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID", "GITHUB_JOB")
+        old = {k: os.environ.get(k) for k in keys}
+        try:
+            os.environ["GITHUB_SERVER_URL"] = "https://github.com"
+            os.environ["GITHUB_REPOSITORY"] = "coldstep-io/coldstep"
+            os.environ["GITHUB_RUN_ID"] = "12345"
+            os.environ["GITHUB_JOB"] = "detect"
+            out = self._render()
+            self.assertIn("](https://github.com/coldstep-io/coldstep/actions/runs/12345)", out)
+            self.assertIn("detect", out)
+        finally:
+            for k in keys:
+                v = old[k]
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+
+    def test_triage_warning_when_capability_fails(self):
+        model = dict(self.model)
+        matrix = [dict(r) for r in model["capability_matrix"]]
+        matrix[0]["status"] = "fail"
+        model["capability_matrix"] = matrix
+        bluf = _RMOD._bluf_summary_md(model)
+        self.assertIn("> [!WARNING]", bluf)
+        self.assertIn("**Triage**", bluf)
+        self.assertIn("Capability **fail**", bluf)
+
+    def test_triage_warning_when_otx_malicious(self):
+        model = dict(self.model)
+        model["otx"] = {
+            "skipped": False,
+            "skipped_reason": None,
+            "summary": {"malicious": 1, "clean": 0, "unidentified": 0, "total": 1},
+            "indicators": [
+                {
+                    "indicator": "x.example.com",
+                    "type": "hostname",
+                    "verdict": "malicious",
+                    "pulse_count": 1,
+                    "evidence": [],
+                },
+            ],
+            "api_calls": 1,
+            "partial_results": False,
+        }
+        bluf = _RMOD._bluf_summary_md(model)
+        self.assertIn("> [!WARNING]", bluf)
+        self.assertIn("OTX reports **1** malicious", bluf)
+
     def test_diff_unavailable_bluf_line(self):
         model = _BMOD.build(
             current_jsonl=str(PKG_DIR / "fixtures" / "coldstep-events.sample.jsonl"),
