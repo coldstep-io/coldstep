@@ -167,3 +167,70 @@ code {
   outline: 2px solid #0969da;
   outline-offset: 2px;
 }
+
+/* Visual triage strip — matches Tier-1 pulse order */
+.report-triage {
+  margin: 0 0 1.75rem;
+  padding: 1rem 1.15rem 1.25rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+.report-triage--ok {
+  background: linear-gradient(135deg, #f6fff8 0%, #fff 55%);
+  border-color: #bbf7cc;
+}
+.report-triage--attention {
+  background: linear-gradient(135deg, #fff8f6 0%, #fff 55%);
+  border-color: #f5b5a8;
+}
+.triage-heading {
+  margin: 0 0 .35rem;
+  font-size: 1.2rem;
+  border-bottom: none;
+  padding-bottom: 0;
+}
+.triage-lead {
+  margin: 0 0 1rem;
+  font-size: .92rem;
+  color: var(--muted);
+  max-width: 52rem;
+}
+.triage-strong-bad {
+  color: var(--fail);
+  font-weight: 600;
+}
+.triage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr));
+  gap: 0.75rem;
+}
+.triage-card {
+  border-radius: 6px;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  box-shadow: 0 1px 2px rgba(30, 30, 30, 0.06);
+}
+.triage-card--ok {
+  border-left: 4px solid var(--pass);
+}
+.triage-card--warn {
+  border-left: 4px solid var(--warn);
+}
+.triage-card--bad {
+  border-left: 4px solid var(--fail);
+  background: #fffafb;
+}
+.triage-card-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.95rem;
+}
+.triage-card-body {
+  margin: 0 0 0.5rem;
+  font-size: 0.88rem;
+  line-height: 1.35;
+}
+.triage-card-jump {
+  font-size: 0.82rem;
+  font-weight: 600;
+}

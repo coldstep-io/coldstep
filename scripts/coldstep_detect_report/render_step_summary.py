@@ -212,8 +212,15 @@ def _triage_alert_md(model: dict) -> str | None:
     return "\n".join(lines)
 
 
+_BLUF_VISUAL_TIP = (
+    "> [!TIP]\n"
+    "> **Visual scan:** Read the pulse lines below **in order** — they match **section titles** in "
+    "**`coldstep-detect-report.html`** (use **What to look at first** at the top of that page).\n"
+)
+
+
 def _bluf_summary_md(model: dict) -> str:
-    chunks: list[str] = ["## Coldstep detect — summary", ""]
+    chunks: list[str] = ["## Coldstep detect — summary", "", _BLUF_VISUAL_TIP, ""]
     run_b = _run_context_bullet()
     if run_b:
         chunks.extend([run_b, ""])
