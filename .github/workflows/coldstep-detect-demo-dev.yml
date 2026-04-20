@@ -293,6 +293,7 @@ jobs:
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_SUMMARY_OUT: ${{ github.workspace }}/.coldstep-step-summary.md
         run: |
           set -euo pipefail
           if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
@@ -310,7 +311,7 @@ jobs:
           import sys
           from pathlib import Path
 
-          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          summary_path = Path(os.environ["GITHUB_WORKSPACE"]) / ".coldstep-step-summary.md"
           if not summary_path.is_file():
               print(f"::error::summary file missing: {summary_path}")
               sys.exit(1)
