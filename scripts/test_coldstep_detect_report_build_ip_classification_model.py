@@ -129,6 +129,38 @@ class BuildIPClassificationModelTests(unittest.TestCase):
         self.assertNotIn("rdns-missing", row["uncertainty_flags"])
         self.assertNotIn("fqdn-missing", row["uncertainty_flags"])
 
+    def test_projects_otx_from_fqdn_when_ip_indicator_absent(self) -> None:
+        """OTX may attach pulses to hostname indicator; IP row should inherit counts."""
+        model = {
+            "ip_classification": [
+                {
+                    "ip": "142.250.99.91",
+                    "fqdn": "dl.google.com",
+                    "rdns": "",
+                    "classification": "unidentified",
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {},
+            "otx": {
+                "indicators": [
+                    {
+                        "indicator": "dl.google.com",
+                        "verdict": "malicious",
+                        "pulse_severity": "Low",
+                        "pulse_count": 4,
+                        "confidence": "high",
+                    }
+                ]
+            },
+        }
+        projected = project_otx_classification(model)
+        row = projected["ip_classification"][0]
+        self.assertEqual(row["classification"], "malicious")
+        self.assertEqual(row["pulse_count"], 4)
+        self.assertEqual(row["pulse_severity"], "Low")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -200,6 +200,12 @@ def build(
     current = _load_jsonl(current_jsonl)
     baseline = _load_jsonl(baseline_jsonl) if baseline_jsonl else None
     meta = next((ev for ev in current if ev.get("type") == "meta"), {})
+    # Lazy import: keeps this module loadable even if the IP helper changes.
+    from scripts.coldstep_detect_report.build_ip_classification_model import (
+        build as build_ip_classification,
+    )
+
+    ip_payload = build_ip_classification(current_jsonl=current_jsonl, now=when)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": when.isoformat().replace("+00:00", "Z"),
@@ -215,6 +221,7 @@ def build(
         "timeline": _timeline(current),
         "egress_sankey": _egress_sankey(current),
         "diff": _diff(current, baseline),
+        "ip_classification": ip_payload.get("ip_classification") or [],
         "otx": None,
     }
 

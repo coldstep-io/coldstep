@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Support direct script execution (python3 scripts/.../render_ip_classification_summary.py)
+# Support direct script execution (`python3 scripts/.../render_ip_classification_summary.py`)
 # by ensuring repo root is on sys.path before importing `scripts.*`.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -45,26 +45,6 @@ _KNOWN_INFRA_SUFFIXES = (
 )
 
 
-def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
-    if not _SAFE_PATH_RE.match(raw):
-        raise ValueError(f"{var_name} contains disallowed characters")
-    roots: list[str] = []
-    workspace = os.environ.get("GITHUB_WORKSPACE")
-    if workspace:
-        roots.append(os.path.realpath(workspace))
-    runner_temp = os.environ.get("RUNNER_TEMP")
-    if runner_temp:
-        roots.append(os.path.realpath(runner_temp))
-    roots.append(os.path.realpath(tempfile.gettempdir()))
-    if not workspace:
-        roots.append(os.path.realpath(os.getcwd()))
-    resolved = os.path.realpath(raw)
-    for root in roots:
-        if os.path.commonpath([resolved, root]) == root:
-            return resolved
-    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
-
-
 def _spark(value: int, max_value: int, *, width: int = 12) -> str:
     if max_value <= 0 or value <= 0:
         return " " * width
@@ -83,6 +63,7 @@ def _is_known_infra_row(row: dict) -> bool:
     if ip.startswith("127."):
         return True
     if ip == "168.63.129.16":
+        # Azure platform DNS virtual IP.
         return True
     names = [fqdn, rdns]
     for name in names:
@@ -91,6 +72,26 @@ def _is_known_infra_row(row: dict) -> bool:
         if any(name.endswith(suffix) for suffix in _KNOWN_INFRA_SUFFIXES):
             return True
     return False
+
+
+def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
+    if not _SAFE_PATH_RE.match(raw):
+        raise ValueError(f"{var_name} contains disallowed characters")
+    roots: list[str] = []
+    workspace = os.environ.get("GITHUB_WORKSPACE")
+    if workspace:
+        roots.append(os.path.realpath(workspace))
+    runner_temp = os.environ.get("RUNNER_TEMP")
+    if runner_temp:
+        roots.append(os.path.realpath(runner_temp))
+    roots.append(os.path.realpath(tempfile.gettempdir()))
+    if not workspace:
+        roots.append(os.path.realpath(os.getcwd()))
+    resolved = os.path.realpath(raw)
+    for root in roots:
+        if os.path.commonpath([resolved, root]) == root:
+            return resolved
+    raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
 
 
 def render_markdown(model: dict) -> str:
@@ -222,6 +223,7 @@ def render_markdown(model: dict) -> str:
             lines.append(f"- `{label}` `{_spark(pulse_count, max_top)}` {pulse_count}")
     else:
         lines.append("- No pulse-backed destinations in this run.")
+
     lines.extend(
         [
             "",

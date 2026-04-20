@@ -38,7 +38,7 @@ That is enough to get:
 - Prefer **`coldstep-io/coldstep@v0.1.7`** (or a **newer tag** you publish, for example **`v0.2.0`**). **`@main`** tracks the default branch and can change without notice.
 - **`v0.1.0`** is not usable with `uses: coldstep-io/coldstep@v0.1.0` (that tag lacks repo-root **`action.yml`**); use **`v0.1.7`** or later.
 
-**Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-enforce.yml`](.github/workflows/coldstep-demo-enforce.yml)** (minimal enforce), and **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift).
+**Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`** except **`coldstep-detect-demo-dev`** which also runs on **`push` to `dev`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-enforce.yml`](.github/workflows/coldstep-demo-enforce.yml)** (minimal enforce), **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift), and **[`coldstep-detect-demo-dev.yml`](.github/workflows/coldstep-detect-demo-dev.yml)** — same agent detect setup on **`dev`** with full BLUF + HTML artifact plus an extra **IP classification** Job Summary section.
 
 ---
 
@@ -96,9 +96,18 @@ Denied egress appears as `"type":"deny"` in JSONL and in the digest.
 
 Start with default **detect**, then add **`feature-gates`** when you need those streams.
 
+### Report pipelines (maintainers)
+
+| Workflow | Summary surface | Artifact notes |
+| -------- | ---------------- | -------------- |
+| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`render_step_summary.py`) | Tier-2 **`coldstep-detect-report.html`** artifact |
+| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown (`render_ip_classification_summary.py`) | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
+
+Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
+
 ### Optional: OTX enrichment (detect reports)
 
-Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX lookups in the detect report pipeline. No secret → enrichment skipped. See **`scripts/coldstep_detect_report/README.md`**.
+Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`scripts/coldstep_detect_report/README.md`**.
 
 ---
 
