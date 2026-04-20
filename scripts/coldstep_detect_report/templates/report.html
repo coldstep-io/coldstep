@@ -12,6 +12,17 @@
     <p class="meta">Generated <time>{{ GENERATED_AT }}</time></p>
   </header>
 
+  <nav class="report-toc" aria-label="On this page">
+    <h2 class="toc-title">On this page</h2>
+    <ul>
+      <li><a href="#capabilities">Capabilities</a></li>
+      <li><a href="#events">Events by type</a></li>
+      <li><a href="#egress">Egress flow</a></li>
+      <li><a href="#diff">Previous-run diff</a></li>
+      <li><a href="#otx">Threat-intel verdicts</a></li>
+    </ul>
+  </nav>
+
   <main>
     <section id="capabilities">
       <h2>Detect Capability Matrix</h2>
@@ -308,6 +319,17 @@
         low: "Low-confidence malicious",
       };
       const tierOrder = ["high", "medium", "low"];
+      const pulseSeverityRank = (s) => {
+        const m = {
+          Critical: 0,
+          High: 1,
+          Medium: 2,
+          Low: 3,
+          Informational: 4,
+        };
+        return m[s] ?? 99;
+      };
+      const confOrder = { high: 0, medium: 1, low: 2, null: 3 };
 
       const otx = model.otx;
       const section = document.getElementById("otx");
@@ -337,8 +359,20 @@
           st += partial;
           status.textContent = st;
           const order = { malicious: 0, unidentified: 1, clean: 2, "rate-limited": 3 };
-          const rows = (otx.indicators || []).slice().sort((a, b) =>
-            (order[a.verdict] ?? 99) - (order[b.verdict] ?? 99));
+          const rows = (otx.indicators || []).slice().sort((a, b) => {
+            const va = order[a.verdict] ?? 99;
+            const vb = order[b.verdict] ?? 99;
+            if (va !== vb) return va - vb;
+            if (a.verdict === "malicious" && b.verdict === "malicious") {
+              const pa = pulseSeverityRank(a.pulse_severity || "Informational");
+              const pb = pulseSeverityRank(b.pulse_severity || "Informational");
+              if (pa !== pb) return pa - pb;
+              const ca = confOrder[confidenceTier(a)] ?? 99;
+              const cb = confOrder[confidenceTier(b)] ?? 99;
+              if (ca !== cb) return ca - cb;
+            }
+            return String(a.indicator || "").localeCompare(String(b.indicator || ""));
+          });
           const dnsLookups = model.dns_lookups || {};
           const buckets = { high: [], medium: [], low: [], null: [] };
           for (const r of rows) {
@@ -360,10 +394,13 @@
               host.textContent = " (" + hostname + ")";
               li.appendChild(host);
             }
-            li.appendChild(document.createTextNode(
+            let tail =
               " — " + (r.verdict || "?") +
-              (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "")
-            ));
+              (r.pulse_count ? " (" + r.pulse_count + " pulse(s))" : "");
+            if (r.pulse_severity && r.verdict === "malicious") {
+              tail += " · signal " + r.pulse_severity;
+            }
+            li.appendChild(document.createTextNode(tail));
             ul.appendChild(li);
           };
           for (const t of tierOrder) {

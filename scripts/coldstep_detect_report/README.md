@@ -2,16 +2,21 @@
 
 Two-tier report driven by a single `report-model.json` (schema **v2.1** — string `schema_version`, OTX `confidence` tiers on malicious indicators, filter audit fields). Built for the `coldstep-demo-detect.yml` workflow.
 
+**Reusable Tier-1 contract (“pattern D”):** see [`GHA_JOB_SUMMARY_REUSABLE_PATTERN.md`](GHA_JOB_SUMMARY_REUSABLE_PATTERN.md) for BLUF section order, triage alerts, run deeplink, and vocabulary parity with Tier-2 HTML headings.
+
 ## `coldstep-demo-detect.yml` pipeline order
 
 1. `build_report_model.py` — current JSONL only (`diff` may be `unavailable` until baseline exists).
-2. **Previous-run diff** — downloads baseline artifact, appends markdown to `GITHUB_STEP_SUMMARY`, then **rebuilds** `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
-3. `render_step_summary.py` — Tier-1 matrix/charts/`diff` GFM (must run after step 2 when baseline is present).
-4. `enrich_rdns.py` → `enrich.py` (OTX) → `render_otx_summary.py` → `render_html_report.py` — same model path, in-place enrichment.
+2. **Previous-run diff** — downloads baseline artifact, runs `ci_coldstep_jsonl_traffic_diff.py` with **`COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal`** (compact counts + markers only; no fingerprint tables in the job summary), then **rebuilds** `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
+3. `enrich_rdns.py` → `scripts.coldstep_otx.enrich` — in-place enrichment on `.coldstep-report-model.json` (PTR + AlienVault OTX).
+4. `render_step_summary.py` — Tier-1 **BLUF only** (capabilities headline, baseline-diff headline, OTX headline, artifact pointer). Runs **after** enrich so OTX lines reflect the enriched model.
+5. `render_html_report.py` — Tier-2 self-contained HTML (`coldstep-detect-report.html`).
+
+`render_otx_summary.py` remains importable but **does not append** to `$GITHUB_STEP_SUMMARY`; full OTX tables and charts are Tier-2 only.
 
 | Surface | What renders it | Where you see it | Owner |
 |---|---|---|---|
-| **Tier 1** — `$GITHUB_STEP_SUMMARY` (Markdown + Mermaid) | `render_step_summary.py` | Workflow run page, automatically | Engineering / agent |
+| **Tier 1** — `$GITHUB_STEP_SUMMARY` (short BLUF Markdown, no Mermaid) | `render_step_summary.py` | Workflow run page, automatically | Engineering / agent |
 | **Tier 2** — `report.html` (Observable Plot + d3) | `render_html_report.py` | Run page → Artifacts → download ZIP → unzip → open in a browser | **Frontend designer** |
 
 > GitHub does **not** preview HTML artifacts inline. The Tier-2 file ships as a downloadable artifact, not as a clickable surface inside the run UI. The Tier-1 summary is the always-visible counterpart that needs no clicks. If we ever want a clickable rich URL, see `knowledge/wiki/gha-reports-formats.md` (local) for the GitHub-Pages route — that's a deferred follow-up, not a v1 concern.

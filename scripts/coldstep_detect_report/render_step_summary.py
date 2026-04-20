@@ -1,7 +1,11 @@
 """Render the Tier-1 step-summary surface from report-model.json.
 
-Output: GFM Markdown + Mermaid blocks (xychart-beta, sankey-beta).
-Constraint: must stay well under 1 MiB and rely on no `<script>`.
+BLUF-only Markdown for `$GITHUB_STEP_SUMMARY`: capabilities, baseline diff, OTX
+headline, artifact pointer. Charts, sankey, full diff rows, and OTX tables live
+in Tier-2 `coldstep-detect-report.html` only.
+
+Heavy helpers (`_diff_md`, `_egress_sankey_md`, …) remain for unit tests and any
+local debugging; `write_summary` emits only `_bluf_summary_md`.
 """
 from __future__ import annotations
 
@@ -11,6 +15,16 @@ import re
 import sys
 import tempfile
 from pathlib import Path
+
+# CI runs `python3 scripts/coldstep_detect_report/render_step_summary.py`; that puts only
+# this directory on sys.path — not the repo root — so `import scripts.*` fails unless
+# we prepend the workspace root (same layout as `python -m unittest discover`).
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+_rr = str(_REPO_ROOT)
+if _rr not in sys.path:
+    sys.path.insert(0, _rr)
+
+from scripts.coldstep_otx.pulse_severity import severity_rank
 
 # warn / unknown (❔) reserved for future capability statuses; v1 capability_matrix only emits pass | fail.
 STATUS_PILL = {"pass": "🟢", "warn": "🟡", "fail": "🔴"}
@@ -77,65 +91,145 @@ def _csv_field(value: object) -> str:
     return s
 
 
+def _highest_pulse_signal(indicators: list) -> str | None:
+    """Return worst pulse_severity among malicious rows, or None."""
+    best = None
+    best_rank = 99
+    for r in indicators:
+        if r.get("verdict") != "malicious":
+            continue
+        ps = str(r.get("pulse_severity") or "")
+        if not ps or ps == "Informational":
+            continue
+        rk = severity_rank(ps)
+        if rk < best_rank:
+            best_rank = rk
+            best = ps
+    return best
+
+
+def _capabilities_bluf_line(model: dict) -> str:
+    rows = model.get("capability_matrix") or []
+    if not rows:
+        return "- **Capabilities:** *(none in model).*"
+    fails = sum(1 for r in rows if r.get("status") == "fail")
+    warns = sum(1 for r in rows if r.get("status") == "warn")
+    if fails:
+        return f"- **Capabilities:** **{fails}** failed, **{warns}** warned."
+    if warns:
+        return (
+            "- **Capabilities:** all required probes observed; "
+            f"**{warns}** capability row(s) in **warn** state."
+        )
+    return "- **Capabilities:** all pass."
+
+
+def _diff_bluf_line(model: dict) -> str:
+    d = model.get("diff") or {}
+    if d.get("status") != "ok":
+        r = _md_cell(str(d.get("reason") or "unknown"))
+        return f"- **Baseline diff:** unavailable ({r})."
+    tn = len(d.get("traffic_new") or [])
+    tg = len(d.get("traffic_gone") or [])
+    tc = len(d.get("traffic_changed") or [])
+    return f"- **Baseline diff:** ok — new={tn}, gone={tg}, changed={tc}."
+
+
+def _otx_bluf_lines(model: dict) -> list[str]:
+    otx = model.get("otx")
+    if otx is None:
+        return ["- **Threat intel (OTX):** *(not in model).*"]
+    if otx.get("skipped"):
+        sr = _md_cell(str(otx.get("skipped_reason") or "unknown"))
+        return [f"- **Threat intel (OTX):** skipped ({sr})."]
+    summary = otx.get("summary") or {}
+    mal = int(summary.get("malicious") or 0)
+    partial = otx.get("partial_results")
+    api_calls = int(otx.get("api_calls") or 0)
+    line = (
+        f"- **Threat intel (OTX):** queried {api_calls} indicator(s); "
+        f"**{mal}** malicious in summary."
+    )
+    if partial:
+        line += " *(partial — wall budget exhausted).*"
+    lines = [line]
+    if mal > 0:
+        worst = _highest_pulse_signal(otx.get("indicators") or [])
+        if worst:
+            lines.append(f"  - Highest pulse signal: **{worst}**.")
+    return lines
+
+
+def _artifact_footer_md() -> str:
+    lab = (os.environ.get("NS_RUNNER_LABEL") or "").strip()
+    if lab:
+        return (
+            "_Full capability matrix, charts, egress sankey, diff tables, and OTX evidence: "
+            f"download artifact **`coldstep-detect-report-html-{lab}`** and open "
+            "**`coldstep-detect-report.html`**._"
+        )
+    return (
+        "_Full capability matrix, charts, egress sankey, diff tables, and OTX evidence: "
+        "download the workflow’s HTML report artifact and open **`coldstep-detect-report.html`**._"
+    )
+
+
+def _run_context_bullet() -> str | None:
+    """Single markdown bullet linking to the workflow run, or None if env incomplete."""
+    server = (os.environ.get("GITHUB_SERVER_URL") or "").rstrip("/")
+    repo = (os.environ.get("GITHUB_REPOSITORY") or "").strip()
+    run_id = (os.environ.get("GITHUB_RUN_ID") or "").strip()
+    if not server or not repo or not run_id:
+        return None
+    url = f"{server}/{repo}/actions/runs/{run_id}"
+    job = (os.environ.get("GITHUB_JOB") or "").strip()
+    job_part = f" · job `{_md_cell(job)}`" if job else ""
+    return f"- **Run:** [{_md_cell(run_id)}]({url}){job_part}"
+
+
+def _triage_alert_md(model: dict) -> str | None:
+    """Return a GFM alert when capability failures or OTX malicious counts warrant.
+
+    Baseline diff `unavailable` is omitted — first-run / no-baseline is usually expected;
+    the BLUF pulse line already states the reason.
+    """
+    reasons: list[str] = []
+    for row in model.get("capability_matrix") or []:
+        if row.get("status") == "fail":
+            label = _md_cell(row.get("label") or row.get("id") or "capability")
+            reasons.append(f"Capability **fail**: {label}")
+            break
+    otx = model.get("otx")
+    if isinstance(otx, dict) and not otx.get("skipped"):
+        mal = int((otx.get("summary") or {}).get("malicious") or 0)
+        if mal > 0:
+            reasons.append(f"OTX reports **{mal}** malicious indicator(s)")
+    if not reasons:
+        return None
+    lines = ["> [!WARNING]", "> **Triage**"]
+    for r in reasons:
+        lines.append(f"> - {r}")
+    return "\n".join(lines)
+
+
+def _bluf_summary_md(model: dict) -> str:
+    chunks: list[str] = ["## Coldstep detect — summary", ""]
+    run_b = _run_context_bullet()
+    if run_b:
+        chunks.extend([run_b, ""])
+    alert = _triage_alert_md(model)
+    if alert:
+        chunks.extend([alert, ""])
+    chunks.append(_capabilities_bluf_line(model))
+    chunks.append(_diff_bluf_line(model))
+    chunks.extend(_otx_bluf_lines(model))
+    chunks.extend(["", _artifact_footer_md(), ""])
+    return "\n".join(chunks)
+
+
 def _xy_axis_label(value: object) -> str:
     # xychart-beta uses double-quoted axis labels; embedded " would break the block.
     return '"' + str(value).replace('"', "'") + '"'
-
-
-def _triage_ribbon_md(model: dict) -> str:
-    """Compact decision strip before charts — baseline / OTX / volume."""
-    lines = [
-        "### Detect report · triage",
-        "",
-        "| Question | Answer |",
-        "|---|---|",
-    ]
-    diff = model.get("diff") or {}
-    if diff.get("status") == "ok":
-        new_n = len(diff.get("traffic_new") or [])
-        gone_n = len(diff.get("traffic_gone") or [])
-        ch_n = len(diff.get("traffic_changed") or [])
-        lines.append(
-            f"| **Baseline diff** | **OK** — new={new_n}, gone={gone_n}, changed={ch_n} |"
-        )
-    else:
-        reason = _md_cell(str(diff.get("reason", "unknown")))
-        lines.append(f"| **Baseline diff** | **Unavailable** — {reason} |")
-
-    evs = model.get("events_by_type") or []
-    total_ev = sum(e.get("count", 0) for e in evs)
-    top = evs[0] if evs else None
-    if top is not None:
-        lines.append(
-            "| **Event mix** | "
-            f"**{total_ev}** events — top type `{_md_cell(top['type'])}` ({top['count']}) |"
-        )
-    else:
-        lines.append("| **Event mix** | _No typed events_ |")
-
-    otx = model.get("otx")
-    if not otx:
-        lines.append("| **OTX threat intel** | *(not in model — run enrich step)* |")
-    elif otx.get("skipped"):
-        sr = _md_cell(str(otx.get("skipped_reason") or "unknown"))
-        lines.append(f"| **OTX threat intel** | **Skipped** — {sr} |")
-    else:
-        indicators = otx.get("indicators") or []
-        malicious = sum(1 for r in indicators if r.get("verdict") == "malicious")
-        n_ind = len(indicators)
-        if malicious > 0:
-            lines.append(
-                f"| **OTX threat intel** | **Review** — **{malicious}** malicious / {n_ind} indicators |"
-            )
-        else:
-            lines.append(
-                f"| **OTX threat intel** | **OK** — 0 malicious ({n_ind} indicators) |"
-            )
-
-    lines.append("")
-    lines.append("_Expand sections below for charts, sankey, and diff tables._")
-    lines.append("")
-    return "\n".join(lines)
 
 
 def _capability_matrix_md(model: dict) -> str:
@@ -310,14 +404,7 @@ def _diff_md(model: dict) -> str:
 
 
 def write_summary(model: dict, summary_path: str) -> None:
-    parts = [
-        _triage_ribbon_md(model),
-        _capability_matrix_md(model),
-        _events_xychart_md(model),
-        _egress_sankey_md(model),
-        _diff_md(model),
-    ]
-    body = "\n".join(p for p in parts if p)
+    body = _bluf_summary_md(model)
     if not body.endswith("\n"):
         body += "\n"
     # Append: $GITHUB_STEP_SUMMARY may already contain output from earlier steps in the same job.

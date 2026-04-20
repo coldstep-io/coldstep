@@ -175,6 +175,40 @@ class DiffScriptTests(unittest.TestCase):
         self.assertEqual([(1, "a")], gone)
         self.assertEqual([(2, 3, "b")], chg)
 
+    def test_main_minimal_skips_fingerprint_tables(self):
+        """Tier-1 job summary uses compact counts; full fingerprint tables are HTML-only."""
+        with tempfile.TemporaryDirectory() as td:
+            summary = Path(td) / "summary.md"
+            baseline = Path(td) / "base.jsonl"
+            current = Path(td) / "cur.jsonl"
+            baseline.write_text(
+                '{"type":"tcp","dst":"1.1.1.1","dport":443}\n', encoding="utf-8"
+            )
+            current.write_text(
+                '{"type":"tcp","dst":"8.8.8.8","dport":443}\n', encoding="utf-8"
+            )
+            summary.touch()
+
+            old = dict(os.environ)
+            try:
+                os.environ["NS_SUMMARY"] = str(summary)
+                os.environ["NS_BASELINE"] = str(baseline)
+                os.environ["NS_CURRENT"] = str(current)
+                os.environ["NS_MARKER"] = "unit"
+                os.environ["COLDSTEP_DIFF_STRICT"] = "0"
+                os.environ["COLDSTEP_TRAFFIC_DIFF_SUMMARY"] = "minimal"
+                rc = MOD.main()
+            finally:
+                os.environ.clear()
+                os.environ.update(old)
+
+            self.assertEqual(0, rc)
+            text = summary.read_text(encoding="utf-8")
+            self.assertIn("Previous-run traffic diff (compact)", text)
+            self.assertIn("unit.result=changed", text)
+            self.assertNotIn("New traffic (present in current", text)
+            self.assertNotIn("traffic » tcp", text)
+
     def test_main_writes_unclassified_marker_totals_to_summary(self):
         """C-SR-03: workflow summary lists unclassified counts (unknown type buckets)."""
         with tempfile.TemporaryDirectory() as td:

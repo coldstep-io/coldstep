@@ -76,6 +76,15 @@ class HtmlReportRendererTests(unittest.TestCase):
         self.assertIn('data-mount="otx-tiers"', html)
         self.assertIn("Threat-intel verdicts", html)
 
+    def test_template_has_report_toc_nav(self):
+        html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        self.assertIn('class="report-toc"', html)
+        self.assertIn('href="#capabilities"', html)
+        self.assertIn('href="#events"', html)
+        self.assertIn('href="#egress"', html)
+        self.assertIn('href="#diff"', html)
+        self.assertIn('href="#otx"', html)
+
     def test_styles_have_verdict_pill_classes(self):
         css = (PKG_DIR / "templates" / "styles.css").read_text(encoding="utf-8")
         for cls in (".coldstep-verdict-malicious", ".coldstep-verdict-clean",
@@ -83,6 +92,11 @@ class HtmlReportRendererTests(unittest.TestCase):
             self.assertIn(cls, css, f"missing CSS class {cls}")
         for tok in ("--coldstep-confidence-high", '.coldstep-otx-tier[data-tier="high"]'):
             self.assertIn(tok, css)
+
+    def test_styles_have_report_toc(self):
+        css = (PKG_DIR / "templates" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn(".report-toc", css)
+        self.assertIn(".report-toc a:focus-visible", css)
 
     def test_dns_lookups_round_trip_into_json_island(self):
         # rDNS enrichment writes model.dns_lookups; the HTML renderer must
@@ -160,7 +174,9 @@ class HtmlReportRendererTests(unittest.TestCase):
                         "partial_results": False, "api_calls": 1, "rate_limited": 0,
                         "indicators": [{"indicator": "evil.example.com",
                                         "type": "hostname", "verdict": "malicious",
-                                        "pulse_count": 1, "evidence": []}],
+                                        "pulse_count": 1,
+                                        "pulse_severity": "Low",
+                                        "evidence": []}],
                         "summary": {"malicious": 1, "clean": 0,
                                     "unidentified": 0, "total": 1}}
         with tempfile.TemporaryDirectory() as td:
@@ -169,6 +185,8 @@ class HtmlReportRendererTests(unittest.TestCase):
             html = out.read_text(encoding="utf-8")
         self.assertIn("evil.example.com", html)
         self.assertIn('"malicious"', html)
+        self.assertIn('"pulse_severity": "Low"', html)
+        self.assertIn(" · signal ", html)
 
     def test_otx_template_js_groups_indicators_by_confidence_tier(self):
         # write_html does not execute the inline module; tier <details> are built

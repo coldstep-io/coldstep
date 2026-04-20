@@ -1,46 +1,42 @@
-# Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
-#
-# Job `prevent-mode`: same BPF stack as product `mode: enforce` (cgroup block non-allowlisted egress). apt runs before the
-# agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
-# after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
+# Dev-branch detect demo: same steps as `coldstep-demo-detect.yml`, but triggers on `push` to `dev` plus
+# `workflow_dispatch` so report/summary changes can be exercised without touching `main`.
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.4`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (published by `supply-chain-attest.yml` on version tags). Both jobs pass `release-path` and do not compile locally.
+# (published by `supply-chain-attest.yml` on version tags). The action uses `release-path` and does not compile.
 
-name: coldstep-demo
+name: coldstep-detect-demo-dev
 
-# Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
-# from the workflow ref. Published tags (e.g. v0.1.7) must also ship `action.yml` at the root
-# for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
+concurrency:
+  group: coldstep-detect-demo-dev-${{ github.ref }}
+  cancel-in-progress: true
 
 on:
   workflow_dispatch:
     inputs:
       coldstep_diff_strict:
-        description: Fail detect-mode if previous-run JSONL diff cannot be computed
+        description: Fail job if previous-run JSONL diff cannot be computed
         type: boolean
         default: true
+  push:
+    branches:
+      - dev
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
-
-# Default to least-privilege; the detect-mode job overrides with
-# `permissions: { actions: read, contents: read }` when previous-run baseline
-# diff is enabled (mirrors `coldstep-demo-detect.yml`).
-permissions:
-  contents: read
+  COLDSTEP_AGENT_VERSION: v0.1.4
 
 jobs:
-  detect-mode:
+  demo:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       actions: read
       contents: read
     env:
-      COLDSTEP_DIFF_PREV_RUN: '1'
-      COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
+      COLDSTEP_DIFF_PREV_RUN: "1"
+      # Push runs have no workflow_dispatch inputs; default strict-on for baseline diff.
+      COLDSTEP_DIFF_STRICT: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.coldstep_diff_strict == true && '1' || '0') }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -70,12 +66,14 @@ jobs:
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 
-      - name: Start Coldstep (detect mode)
+      - name: coldstep-io/coldstep (detect)
         uses: ./
         with:
           mode: detect
+          log-level: info
+          fail-on-error: 'false'
+          report-job-summary: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
-          # Exercise all detect-time capabilities in one demo run.
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           release-path: bin/coldstep
 
@@ -113,8 +111,6 @@ jobs:
           printf 'demo\n' > "${TMP_A}"
           mv "${TMP_A}" "${TMP_B}"
           chmod 600 "${TMP_B}"
-          # Exercise unlinkat path explicitly: some `rm` code paths are harder to observe
-          # consistently on shared runners than a direct libc unlink of an absolute path.
           export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
           if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
             rm -f "${TMP_B}" || true
@@ -122,7 +118,7 @@ jobs:
           unset _NS_DEMO_UNLINK_TARGET || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop agent (flush digest to workspace)
+      - name: Stop agent (flush digest)
         run: |
           set -euo pipefail
           ap="${GITHUB_ACTION_PATH:-}"
@@ -133,7 +129,7 @@ jobs:
             sleep 2
           fi
 
-      - name: Verify detect capabilities and write visual summary
+      - name: Verify detect capabilities
         run: |
           set -euo pipefail
           f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
@@ -163,11 +159,14 @@ jobs:
           grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
-          {
-            echo "## Detect verification"
-            echo ""
-            echo "- **Result:** pass — required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
-          } >> "${GITHUB_STEP_SUMMARY}"
+
+      # Tier-1 BLUF step summary runs AFTER rDNS + OTX enrich so OTX headlines are accurate.
+      # Full charts/tables live in Tier-2 HTML only. HTML artifact uses the same model file.
+      - name: Build report model
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 scripts/coldstep_detect_report/build_report_model.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -195,8 +194,6 @@ jobs:
           current_run="${GITHUB_RUN_ID}"
           branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
-          # Single gh --jq filter (no awk|head): awk exiting first line SIGPIPEs jq under pipefail (exit 141).
-          # gh only accepts one --jq string (not jq --arg); embed run id in the expression (digits only).
           baseline_run="$(
             gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \
               --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
@@ -239,6 +236,86 @@ jobs:
             fail_diff_unavailable "traffic diff script failed"
           fi
 
+          # Re-build the report model now that the baseline JSONL is on disk, so the
+          # downstream HTML artifact carries the diff section too. Without this, the
+          # earlier "Build report model" step ran without baseline_jsonl and emitted
+          # diff.status="unavailable".
+          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
+          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
+          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
+            python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
+
+      # rDNS enrichment runs first (no API key needed) so OTX renderers and the
+      # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
+      # continue-on-error + always-exit-0 mirror the OTX step contract.
+      - name: Enrich report model with reverse DNS
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_RDNS_WALL_BUDGET_MS: '5000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_dns.enrich_rdns
+          else
+            echo "::warning::report model missing, skipping rDNS enrichment"
+          fi
+
+      # OTX enrichment runs AFTER the diff step's model rebuild (which adds the
+      # diff buckets) and AFTER rDNS so OTX-table rows can carry hostnames.
+      # Both `continue-on-error` and the script's own always-exit-0 contract
+      # keep the detect job green on third-party failures.
+      - name: Enrich report model with OTX threat-intel
+        if: always()
+        env:
+          OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_OTX_WALL_BUDGET_MS: '30000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 -m scripts.coldstep_otx.enrich
+          else
+            echo "::warning::report model missing, skipping OTX enrichment"
+          fi
+
+      - name: Render step summary (BLUF)
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_step_summary.py
+          else
+            echo "::warning::report model missing, skipping step summary render"
+          fi
+
+      - name: Render self-contained HTML report
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-detect-report.html
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_html_report.py
+          else
+            echo "::warning::report model missing, skipping HTML render"
+          fi
+
+      - name: Upload HTML report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coldstep-detect-report-html-${{ env.NS_RUNNER_LABEL }}
+          path: ${{ github.workspace }}/coldstep-detect-report.html
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
+
       - name: Persist detect JSONL baseline artifact
         if: always()
         uses: actions/upload-artifact@v7
@@ -249,149 +326,8 @@ jobs:
           include-hidden-files: true
           overwrite: true
 
-      - name: List workspace Coldstep artifacts
+      - name: List workspace outputs
         if: always()
         run: |
           set -euo pipefail
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
-
-  prevent-mode:
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 scripts/assert_utf8_text.py
-
-      - name: Download coldstep agent (GitHub Release)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p bin
-          for attempt in 1 2 3; do
-            if gh release download "${COLDSTEP_AGENT_VERSION}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'coldstep-linux-amd64' \
-              --dir bin; then
-              break
-            fi
-            if [[ "${attempt}" -eq 3 ]]; then
-              echo "failed to download coldstep release artifact after ${attempt} attempts"
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-          mv bin/coldstep-linux-amd64 bin/coldstep
-          chmod +x bin/coldstep
-
-      # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
-      - name: Install runtime probes (before enforce so mirrors/DNS still work)
-        run: |
-          set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
-
-      - name: Assert required tools are present
-        run: |
-          set -euo pipefail
-          command -v dig
-          command -v nc
-          command -v nmap
-          command -v curl
-
-      - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
-        run: |
-          set -euo pipefail
-          ip=$(dig +short theclouddj.com A | awk 'NF{print; exit}')
-          test -n "${ip}"
-          echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
-
-      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
-        uses: ./
-        with:
-          mode: enforce
-          fail-on-error: 'true'
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
-          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
-          release-path: bin/coldstep
-
-      - name: Allowed target — nmap port 80 (theclouddj.com)
-        run: |
-          set -euo pipefail
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
-
-      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
-        run: |
-          set -euo pipefail
-          timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null || true
-
-      # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
-      # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.
-      - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
-        run: |
-          set -euo pipefail
-          echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
-
-      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
-        run: |
-          set -euo pipefail
-          if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
-            echo "expected curl to example.com to fail under enforce allowlist"
-            exit 1
-          fi
-
-      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
-        run: |
-          set -euo pipefail
-          if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
-            echo "expected direct IP connect to be blocked under enforce allowlist"
-            exit 1
-          fi
-
-      - name: Stop agent (flush digest to workspace)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
-
-      - name: Settle then verify deny telemetry
-        run: |
-          set -euo pipefail
-          sleep 2
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
-          test -f "$j"
-          grep -q '### Enforcement' "$f" || { echo "expected enforcement section in digest"; exit 1; }
-          grep -q '"type":"deny"' "$j" || { echo "expected deny JSONL (blocked non-allowlisted egress)"; exit 1; }
-          grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
-          grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }
-          grep -Eq '"type":"deny".*"dst":"192.0.2.1"' "$j" || { echo "expected deny for blocked URL target example.com -> 192.0.2.1"; exit 1; }
-          grep -Eq '"type":"deny".*"dst":"93.184.216.34"' "$j" || { echo "expected deny for blocked direct IP 93.184.216.34"; exit 1; }
-          if grep -Eq '"type":"deny".*"dst":"1.1.1.1"' "$j"; then
-            echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
-          fi
-
-      - name: Quick control matrix (GitHub-native R/Y/G)
-        if: always()
-        run: |
-          {
-            echo "## Enforce smoke"
-            echo ""
-            echo "- **Result:** prior steps asserted allowlist / URL block / IP deny telemetry. See **Show deny lines (debug)** in the log for raw \`deny\` JSONL rows."
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Show deny lines (debug)
-        if: always()
-        run: |
-          set -x
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          if [ -f "$j" ]; then grep '"type":"deny"' "$j" || true; fi

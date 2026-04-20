@@ -65,7 +65,8 @@ jobs:
           mode: detect
           log-level: info
           fail-on-error: 'false'
-          report-job-summary: 'true'
+          # Full digest (exec/tcp/fs paths, …) duplicates Tier-2 HTML + BLUF; keep Summary short.
+          report-job-summary: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           release-path: bin/coldstep
@@ -153,9 +154,9 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
 
-      # Tier-1 step-summary pipeline (markdown + Mermaid): render runs AFTER the optional
-      # previous-run diff step so build_report_model can ingest baseline JSONL first; see
-      # README data-flow. HTML artifact follows rDNS/OTX on the same model file.
+      # Tier-1 BLUF runs AFTER rDNS + OTX enrich so OTX headlines are accurate. Optional
+      # previous-run diff step may append compact markers to $GITHUB_STEP_SUMMARY; full
+      # charts/tables stay Tier-2 HTML; same model file for HTML as README.
       - name: Build report model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
@@ -180,9 +181,6 @@ jobs:
             fi
             exit 0
           }
-          echo "### Previous Run Diff" >> "${summary}"
-          echo "" >> "${summary}"
-          echo "- Feature flag: enabled (\`COLDSTEP_DIFF_PREV_RUN=1\`)" >> "${summary}"
 
           if [[ ! -f "${current_file}" ]]; then
             fail_diff_unavailable "current JSONL missing"
@@ -210,8 +208,7 @@ jobs:
             fail_diff_unavailable "no prior successful run found"
           fi
 
-          echo "- ${marker_prefix}.baseline_run_id=${baseline_run}" >> "${summary}"
-          echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
+          echo "::notice::coldstep-prev-diff baseline_run=${baseline_run} fallback_used=${fallback_used}"
 
           rm -rf prev-state
           mkdir -p prev-state
@@ -225,42 +222,11 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          if ! jq -r '.type // "unknown"' "${baseline_file}" | sort | uniq -c > prev_counts.raw; then
-            fail_diff_unavailable "baseline JSONL parse failed"
-          fi
-          if ! jq -r '.type // "unknown"' "${current_file}" | sort | uniq -c > curr_counts.raw; then
-            fail_diff_unavailable "current JSONL parse failed"
-          fi
-
-          declare -A prev_counts curr_counts all_types
-          while read -r n t; do
-            [[ -z "${t}" ]] && continue
-            prev_counts["${t}"]="${n}"
-            all_types["${t}"]=1
-          done < prev_counts.raw
-          while read -r n t; do
-            [[ -z "${t}" ]] && continue
-            curr_counts["${t}"]="${n}"
-            all_types["${t}"]=1
-          done < curr_counts.raw
-
-          echo "" >> "${summary}"
-          echo "#### Event volume by \`type\` (includes meta/exec noise)" >> "${summary}"
-          echo "" >> "${summary}"
-          echo "| Type | Baseline | Current | Delta |" >> "${summary}"
-          echo "|---|---:|---:|---:|" >> "${summary}"
-          while read -r t; do
-            [[ -z "${t}" ]] && continue
-            prev="${prev_counts[${t}]:-0}"
-            curr="${curr_counts[${t}]:-0}"
-            delta=$((curr - prev))
-            printf '| `%s` | %s | %s | %+d |\n' "${t}" "${prev}" "${curr}" "${delta}" >> "${summary}"
-          done < <(printf '%s\n' "${!all_types[@]}" | sort)
-
           export NS_SUMMARY="${summary}"
           export NS_BASELINE="${baseline_file}"
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
+          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
           if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
@@ -315,16 +281,16 @@ jobs:
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
 
-      - name: Render OTX section to step summary
+      - name: Render step summary (BLUF)
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_otx_summary.py
+            python3 scripts/coldstep_detect_report/render_step_summary.py
           else
-            echo "::warning::report model missing, skipping OTX summary render"
+            echo "::warning::report model missing, skipping step summary render"
           fi
 
       - name: Render self-contained HTML report
@@ -349,16 +315,6 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
           overwrite: true
-
-      - name: Link to HTML report from step summary
-        if: always()
-        run: |
-          set -euo pipefail
-          {
-            echo ""
-            echo "---"
-            echo "📎 **Rich HTML report:** download the \`coldstep-detect-report-html-${NS_RUNNER_LABEL}\` artifact from this run and open \`coldstep-detect-report.html\` in a browser. (GitHub does not preview HTML artifacts inline.)"
-          } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Persist detect JSONL baseline artifact
         if: always()

@@ -4,6 +4,10 @@ Append a GitHub Actions job-summary section comparing two Coldstep JSONL files.
 
 Traffic fingerprints intentionally omit pid / tgid / thread_id / comm / seq / ts so
 consecutive runs can be compared on egress shape (TCP/UDP/HTTP/TLS/deny).
+
+``COLDSTEP_TRAFFIC_DIFF_SUMMARY`` controls verbosity (default ``full``):
+``minimal`` writes counts + markers only; fingerprint rows stay in Tier-2 HTML.
+CI workflows set ``minimal`` so the job summary stays short.
 """
 
 from __future__ import annotations
@@ -195,6 +199,16 @@ def multiset_diff(
     return new, gone, chg
 
 
+def _traffic_diff_summary_style() -> str:
+    """``full`` (default): fingerprint tables. ``minimal``: counts + markers only (Tier-2 HTML has tables)."""
+    raw = os.environ.get("COLDSTEP_TRAFFIC_DIFF_SUMMARY", "").strip().lower()
+    if raw in ("", "full", "verbose"):
+        return "full"
+    if raw in ("minimal", "compact", "bluf", "none", "0", "false", "no"):
+        return "minimal"
+    return "full"
+
+
 def write_table(
     out,
     title: str,
@@ -219,6 +233,59 @@ def write_table(
         out.write("| " + " | ".join(cells) + " |\n")
 
 
+def _write_minimal_summary(
+    out,
+    *,
+    marker: str,
+    tr_new: list,
+    tr_gone: list,
+    tr_chg: list,
+    ot_new: list,
+    ot_gone: list,
+    ot_chg: list,
+    un_new: list,
+    un_gone: list,
+    un_chg: list,
+    base_invalid: int,
+    cur_invalid: int,
+    base_lines: int,
+    cur_lines: int,
+    prev_un: collections.Counter[str],
+    cur_un: collections.Counter[str],
+    changed: bool,
+) -> None:
+    """High-signal lines only; fingerprint rows live in Tier-2 HTML report."""
+    out.write("\n#### Previous-run traffic diff (compact)\n\n")
+    out.write(
+        f"- **Traffic fingerprints:** {len(tr_new)} new, {len(tr_gone)} gone, "
+        f"{len(tr_chg)} count deltas.\n"
+    )
+    out.write(
+        f"- **Other fingerprints:** {len(ot_new)} new, {len(ot_gone)} gone, "
+        f"{len(ot_chg)} count deltas.\n"
+    )
+    out.write(
+        f"- **Unclassified event-type buckets:** {len(un_new)} new types, "
+        f"{len(un_gone)} gone, {len(un_chg)} multiplicity changes "
+        f"(totals {sum(prev_un.values())} → {sum(cur_un.values())}).\n"
+    )
+    parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
+    out.write(f"- `{marker}.parse.base_invalid={base_invalid}`\n")
+    out.write(f"- `{marker}.parse.current_invalid={cur_invalid}`\n")
+    out.write(f"- `{marker}.parse.base_lines={base_lines}`\n")
+    out.write(f"- `{marker}.parse.current_lines={cur_lines}`\n")
+    out.write(f"- `{marker}.parse.health={parse_health}`\n")
+    out.write(f"- `{marker}.unclassified.base_total={sum(prev_un.values())}`\n")
+    out.write(f"- `{marker}.unclassified.current_total={sum(cur_un.values())}`\n")
+    if changed:
+        out.write(f"- `{marker}.result=changed`\n")
+        out.write("- **Drift:** at least one fingerprint differs vs baseline.\n")
+    else:
+        out.write(f"- `{marker}.result=no-change`\n")
+        out.write("- **No fingerprint drift** (event-type volume may still differ).\n")
+    out.write("\n_Full fingerprint tables are in the **coldstep-detect-report.html** artifact._\n")
+
+
 def main() -> int:
     raw_summary_path = os.environ.get("NS_SUMMARY", "")
     raw_base_path = os.environ.get("NS_BASELINE", "")
@@ -235,6 +302,8 @@ def main() -> int:
     except ValueError as e:
         print(f"jsonl_traffic_diff: refusing untrusted path: {e}", file=sys.stderr)
         return 1
+
+    style = _traffic_diff_summary_style()
 
     base_ev, base_invalid, base_lines = load_events(base_path)
     cur_ev, cur_invalid, cur_lines = load_events(cur_path)
@@ -266,116 +335,138 @@ def main() -> int:
 
     max_rows = 30
     with open(summary_path, "a", encoding="utf-8") as out:
-        out.write("\n#### Traffic shape diff (ignores pid / seq / ts / comm)\n\n")
-        out.write(
-            "Fingerprints are built from **dst/dport**, **HTTP host/path/method**, **TLS SNI**, "
-            "**UDP/TCP policy labels**, and **deny tuples** — not process IDs.\n"
-        )
-
-        write_table(
-            out,
-            "New traffic (present in current, absent in baseline)",
-            [(c, k) for c, k in tr_new[:max_rows]],
-            ["Current count", "Fingerprint"],
-        )
-        if len(tr_new) > max_rows:
-            out.write(f"\n_Showing first {max_rows} of {len(tr_new)} new traffic fingerprints._\n")
-
-        write_table(
-            out,
-            "Missing traffic (present in baseline, absent in current)",
-            [(c, k) for c, k in tr_gone[:max_rows]],
-            ["Baseline count", "Fingerprint"],
-        )
-        if len(tr_gone) > max_rows:
-            out.write(f"\n_Showing first {max_rows} of {len(tr_gone)} missing traffic fingerprints._\n")
-
-        write_table(
-            out,
-            "Traffic multiplicity changes (same fingerprint, different counts)",
-            [(a, b, k) for a, b, k in tr_chg[:max_rows]],
-            ["Baseline", "Current", "Fingerprint"],
-        )
-        if len(tr_chg) > max_rows:
-            out.write(
-                f"\n_Showing first {max_rows} of {len(tr_chg)} multiplicity changes._\n"
-            )
-
-        out.write("\n#### Other telemetry shape diff (PID ignored)\n\n")
-        out.write(
-            "Exec / fs_event / proc_fork fingerprints drop **pid** / **seq** / **ts**; "
-            "paths and comm strings may still vary between runs.\n"
-        )
-
-        write_table(
-            out,
-            "New other fingerprints",
-            [(c, k) for c, k in ot_new[:max_rows]],
-            ["Current count", "Fingerprint"],
-        )
-        if len(ot_new) > max_rows:
-            out.write(f"\n_Showing first {max_rows} of {len(ot_new)} new other fingerprints._\n")
-
-        write_table(
-            out,
-            "Missing other fingerprints",
-            [(c, k) for c, k in ot_gone[:max_rows]],
-            ["Baseline count", "Fingerprint"],
-        )
-        if len(ot_gone) > max_rows:
-            out.write(f"\n_Showing first {max_rows} of {len(ot_gone)} missing other fingerprints._\n")
-
-        write_table(
-            out,
-            "Other multiplicity changes",
-            [(a, b, k) for a, b, k in ot_chg[:max_rows]],
-            ["Baseline", "Current", "Fingerprint"],
-        )
-        if len(ot_chg) > max_rows:
-            out.write(
-                f"\n_Showing first {max_rows} of {len(ot_chg)} other multiplicity changes._\n"
-            )
-
-        out.write("\n#### Unclassified event-type diff\n\n")
-        write_table(
-            out,
-            "New unclassified event types",
-            [(c, k) for c, k in un_new[:max_rows]],
-            ["Current count", "Event type"],
-        )
-        write_table(
-            out,
-            "Missing unclassified event types",
-            [(c, k) for c, k in un_gone[:max_rows]],
-            ["Baseline count", "Event type"],
-        )
-        write_table(
-            out,
-            "Unclassified multiplicity changes",
-            [(a, b, k) for a, b, k in un_chg[:max_rows]],
-            ["Baseline", "Current", "Event type"],
-        )
-
-        out.write("\n")
-        parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
-        out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
-        out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
-        out.write(f"- {marker}.parse.base_lines={base_lines}\n")
-        out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
-        out.write(f"- {marker}.parse.health={parse_health}\n")
-        out.write(f"- {marker}.unclassified.base_total={sum(prev_un.values())}\n")
-        out.write(f"- {marker}.unclassified.current_total={sum(cur_un.values())}\n")
-        if changed:
-            out.write(f"- {marker}.result=changed\n")
-            out.write(
-                "- **Traffic / telemetry drift:** at least one traffic or other fingerprint differs.\n"
+        if style == "minimal":
+            _write_minimal_summary(
+                out,
+                marker=marker,
+                tr_new=tr_new,
+                tr_gone=tr_gone,
+                tr_chg=tr_chg,
+                ot_new=ot_new,
+                ot_gone=ot_gone,
+                ot_chg=ot_chg,
+                un_new=un_new,
+                un_gone=un_gone,
+                un_chg=un_chg,
+                base_invalid=base_invalid,
+                cur_invalid=cur_invalid,
+                base_lines=base_lines,
+                cur_lines=cur_lines,
+                prev_un=prev_un,
+                cur_un=cur_un,
+                changed=changed,
             )
         else:
-            out.write(f"- {marker}.result=no-change\n")
+            out.write("\n#### Traffic shape diff (ignores pid / seq / ts / comm)\n\n")
             out.write(
-                "- **No drift:** traffic and other fingerprints match between runs "
-                "(per-type volume table above may still differ).\n"
+                "Fingerprints are built from **dst/dport**, **HTTP host/path/method**, **TLS SNI**, "
+                "**UDP/TCP policy labels**, and **deny tuples** — not process IDs.\n"
             )
+
+            write_table(
+                out,
+                "New traffic (present in current, absent in baseline)",
+                [(c, k) for c, k in tr_new[:max_rows]],
+                ["Current count", "Fingerprint"],
+            )
+            if len(tr_new) > max_rows:
+                out.write(f"\n_Showing first {max_rows} of {len(tr_new)} new traffic fingerprints._\n")
+
+            write_table(
+                out,
+                "Missing traffic (present in baseline, absent in current)",
+                [(c, k) for c, k in tr_gone[:max_rows]],
+                ["Baseline count", "Fingerprint"],
+            )
+            if len(tr_gone) > max_rows:
+                out.write(f"\n_Showing first {max_rows} of {len(tr_gone)} missing traffic fingerprints._\n")
+
+            write_table(
+                out,
+                "Traffic multiplicity changes (same fingerprint, different counts)",
+                [(a, b, k) for a, b, k in tr_chg[:max_rows]],
+                ["Baseline", "Current", "Fingerprint"],
+            )
+            if len(tr_chg) > max_rows:
+                out.write(
+                    f"\n_Showing first {max_rows} of {len(tr_chg)} multiplicity changes._\n"
+                )
+
+            out.write("\n#### Other telemetry shape diff (PID ignored)\n\n")
+            out.write(
+                "Exec / fs_event / proc_fork fingerprints drop **pid** / **seq** / **ts**; "
+                "paths and comm strings may still vary between runs.\n"
+            )
+
+            write_table(
+                out,
+                "New other fingerprints",
+                [(c, k) for c, k in ot_new[:max_rows]],
+                ["Current count", "Fingerprint"],
+            )
+            if len(ot_new) > max_rows:
+                out.write(f"\n_Showing first {max_rows} of {len(ot_new)} new other fingerprints._\n")
+
+            write_table(
+                out,
+                "Missing other fingerprints",
+                [(c, k) for c, k in ot_gone[:max_rows]],
+                ["Baseline count", "Fingerprint"],
+            )
+            if len(ot_gone) > max_rows:
+                out.write(f"\n_Showing first {max_rows} of {len(ot_gone)} missing other fingerprints._\n")
+
+            write_table(
+                out,
+                "Other multiplicity changes",
+                [(a, b, k) for a, b, k in ot_chg[:max_rows]],
+                ["Baseline", "Current", "Fingerprint"],
+            )
+            if len(ot_chg) > max_rows:
+                out.write(
+                    f"\n_Showing first {max_rows} of {len(ot_chg)} other multiplicity changes._\n"
+                )
+
+            out.write("\n#### Unclassified event-type diff\n\n")
+            write_table(
+                out,
+                "New unclassified event types",
+                [(c, k) for c, k in un_new[:max_rows]],
+                ["Current count", "Event type"],
+            )
+            write_table(
+                out,
+                "Missing unclassified event types",
+                [(c, k) for c, k in un_gone[:max_rows]],
+                ["Baseline count", "Event type"],
+            )
+            write_table(
+                out,
+                "Unclassified multiplicity changes",
+                [(a, b, k) for a, b, k in un_chg[:max_rows]],
+                ["Baseline", "Current", "Event type"],
+            )
+
+            out.write("\n")
+            parse_health = "degraded" if (base_invalid or cur_invalid) else "ok"
+            out.write(f"- {marker}.parse.base_invalid={base_invalid}\n")
+            out.write(f"- {marker}.parse.current_invalid={cur_invalid}\n")
+            out.write(f"- {marker}.parse.base_lines={base_lines}\n")
+            out.write(f"- {marker}.parse.current_lines={cur_lines}\n")
+            out.write(f"- {marker}.parse.health={parse_health}\n")
+            out.write(f"- {marker}.unclassified.base_total={sum(prev_un.values())}\n")
+            out.write(f"- {marker}.unclassified.current_total={sum(cur_un.values())}\n")
+            if changed:
+                out.write(f"- {marker}.result=changed\n")
+                out.write(
+                    "- **Traffic / telemetry drift:** at least one traffic or other fingerprint differs.\n"
+                )
+            else:
+                out.write(f"- {marker}.result=no-change\n")
+                out.write(
+                    "- **No drift:** traffic and other fingerprints match between runs "
+                    "(per-type volume table above may still differ).\n"
+                )
     if strict_mode and (base_invalid or cur_invalid):
         return 1
     return 0
