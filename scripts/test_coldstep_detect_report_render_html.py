@@ -78,7 +78,10 @@ class HtmlReportRendererTests(unittest.TestCase):
 
     def test_template_has_report_toc_nav(self):
         html = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
+        self.assertIn('id="triage-first"', html)
+        self.assertIn('data-mount="triage-first"', html)
         self.assertIn('class="report-toc"', html)
+        self.assertIn('href="#triage-first"', html)
         self.assertIn('href="#capabilities"', html)
         self.assertIn('href="#events"', html)
         self.assertIn('href="#egress"', html)
@@ -97,6 +100,8 @@ class HtmlReportRendererTests(unittest.TestCase):
         css = (PKG_DIR / "templates" / "styles.css").read_text(encoding="utf-8")
         self.assertIn(".report-toc", css)
         self.assertIn(".report-toc a:focus-visible", css)
+        self.assertIn(".report-triage", css)
+        self.assertIn(".triage-grid", css)
 
     def test_dns_lookups_round_trip_into_json_island(self):
         # rDNS enrichment writes model.dns_lookups; the HTML renderer must

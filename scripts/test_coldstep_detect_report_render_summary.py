@@ -39,6 +39,8 @@ class StepSummaryRendererTests(unittest.TestCase):
     def test_bluf_contains_headings_and_capability_line(self):
         out = self._render()
         self.assertIn("## Coldstep detect — summary", out)
+        self.assertIn("> [!TIP]", out)
+        self.assertIn("**Visual scan:**", out)
         self.assertIn("**Capabilities:**", out)
         self.assertIn("all pass", out.lower())
 

@@ -19,6 +19,8 @@ Two-tier report driven by a single `report-model.json` (schema **v2.1** — stri
 | **Tier 1** — `$GITHUB_STEP_SUMMARY` (short BLUF Markdown, no Mermaid) | `render_step_summary.py` | Workflow run page, automatically | Engineering / agent |
 | **Tier 2** — `report.html` (Observable Plot + d3) | `render_html_report.py` | Run page → Artifacts → download ZIP → unzip → open in a browser | **Frontend designer** |
 
+At the top of Tier-2 HTML, **What to look at first** is a three-card triage strip (capabilities → baseline diff → OTX) with green / amber / red borders so the scan path matches the Job Summary pulses above the charts.
+
 > GitHub does **not** preview HTML artifacts inline. The Tier-2 file ships as a downloadable artifact, not as a clickable surface inside the run UI. The Tier-1 summary is the always-visible counterpart that needs no clicks. If we ever want a clickable rich URL, see `knowledge/wiki/gha-reports-formats.md` (local) for the GitHub-Pages route — that's a deferred follow-up, not a v1 concern.
 
 ## Data contract (`report-model.json`, schema v2.1)

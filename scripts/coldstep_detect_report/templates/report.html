@@ -15,6 +15,7 @@
   <nav class="report-toc" aria-label="On this page">
     <h2 class="toc-title">On this page</h2>
     <ul>
+      <li><a href="#triage-first">What to look at first</a></li>
       <li><a href="#capabilities">Capabilities</a></li>
       <li><a href="#events">Events by type</a></li>
       <li><a href="#egress">Egress flow</a></li>
@@ -24,6 +25,12 @@
   </nav>
 
   <main>
+    <section id="triage-first" class="report-triage report-triage--ok" aria-labelledby="triage-first-title">
+      <h2 id="triage-first-title" class="triage-heading">What to look at first</h2>
+      <p class="triage-lead">Three cards match the Job Summary pulses (capabilities → diff → threat intel). Anything marked <strong class="triage-strong-bad">needs attention</strong> is worth opening below.</p>
+      <div class="triage-cards" data-mount="triage-first"></div>
+    </section>
+
     <section id="capabilities">
       <h2>Detect Capability Matrix</h2>
       <div data-mount="capabilities"></div>
@@ -90,6 +97,108 @@
   <script type="module">
     const model = JSON.parse(document.getElementById("coldstep-report-model").textContent);
     const $ = (sel) => document.querySelector(sel);
+
+    // 0. Visual triage strip — scan order before charts (pairs with Tier-1 BLUF pulses).
+    {
+      const mount = $('[data-mount="triage-first"]');
+      mount.replaceChildren();
+      const strip = document.getElementById("triage-first");
+      let attention = false;
+
+      function makeCard(stepNum, title, href, tone, bodyText) {
+        const art = document.createElement("article");
+        art.className = "triage-card triage-card--" + tone;
+        const h3 = document.createElement("h3");
+        h3.className = "triage-card-title";
+        h3.textContent = stepNum + " · " + title;
+        const p = document.createElement("p");
+        p.className = "triage-card-body";
+        p.textContent = bodyText;
+        const a = document.createElement("a");
+        a.href = href;
+        a.className = "triage-card-jump";
+        a.textContent = "Jump to section →";
+        art.appendChild(h3);
+        art.appendChild(p);
+        art.appendChild(a);
+        return art;
+      }
+
+      const grid = document.createElement("div");
+      grid.className = "triage-grid";
+
+      const matrix = model.capability_matrix || [];
+      let nFail = 0;
+      let nWarn = 0;
+      for (const r of matrix) {
+        if (r.status === "fail") nFail += 1;
+        if (r.status === "warn") nWarn += 1;
+      }
+      let capTone = "ok";
+      let capText = "All required probes observed.";
+      if (nFail > 0) {
+        capTone = "bad";
+        capText =
+          String(nFail) +
+          " capability row(s) failed" +
+          (nWarn ? ", " + String(nWarn) + " warned" : "") +
+          ".";
+        attention = true;
+      } else if (nWarn > 0) {
+        capTone = "warn";
+        capText = String(nWarn) + " capability row(s) in warn state.";
+      }
+      grid.appendChild(makeCard("1", "Capabilities", "#capabilities", capTone, capText));
+
+      const d = model.diff || {};
+      let diffTone = "ok";
+      let diffText = "";
+      if (d.status === "ok") {
+        const tn = (d.traffic_new || []).length;
+        const tg = (d.traffic_gone || []).length;
+        const tc = (d.traffic_changed || []).length;
+        diffText = "OK — new " + String(tn) + ", gone " + String(tg) + ", changed " + String(tc) + ".";
+      } else {
+        diffTone = "warn";
+        diffText =
+          "Unavailable — " +
+          (d.reason != null && String(d.reason).length ? String(d.reason) : "unknown") +
+          ".";
+      }
+      grid.appendChild(makeCard("2", "Baseline diff", "#diff", diffTone, diffText));
+
+      const otx = model.otx;
+      let otxTone = "ok";
+      let otxText = "";
+      if (!otx) {
+        otxTone = "warn";
+        otxText = "Not in model (run enrich step).";
+      } else if (otx.skipped) {
+        otxTone = "warn";
+        otxText =
+          "Skipped — " +
+          (otx.skipped_reason != null && String(otx.skipped_reason).length
+            ? String(otx.skipped_reason)
+            : "skipped") +
+          ".";
+      } else {
+        const mal = Number((otx.summary || {}).malicious || 0);
+        const api = Number(otx.api_calls || 0);
+        otxText =
+          "Queried " + String(api) + " indicator(s); " + String(mal) + " malicious in summary.";
+        if (mal > 0) {
+          otxTone = "bad";
+          attention = true;
+        }
+      }
+      grid.appendChild(makeCard("3", "Threat intel (OTX)", "#otx", otxTone, otxText));
+
+      mount.appendChild(grid);
+      if (strip) {
+        strip.classList.remove("report-triage--ok", "report-triage--attention");
+        strip.classList.add(attention ? "report-triage--attention" : "report-triage--ok");
+      }
+    }
 
     // 1. Capability matrix as a small table.
     // Built via createElement + textContent so adding any future user-derived
