@@ -1,8 +1,9 @@
 """Reverse-DNS enrichment orchestrator.
 
 Reads a coldstep report-model.json, gathers every IPv4 indicator from the
-egress sankey + diff buckets, runs a best-effort PTR batch via the rdns
-resolver, and writes `model.dns_lookups: {ip: hostname}` back in place.
+egress sankey + diff buckets **and from `ip_classification`** (IP-only
+detect-dev model), runs a best-effort PTR batch via the rdns resolver, and
+writes `model.dns_lookups: {ip: hostname}` back in place.
 
 Contract mirrors the OTX enricher:
 - Always exits 0 (third-party / I/O issues never fail the detect job).
@@ -23,7 +24,16 @@ import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
+import ipaddress
+
 from scripts.coldstep_dns.rdns import Resolver, _default_resolver, lookup_batch
+
+
+def _is_ipv4(value: str) -> bool:
+    try:
+        return isinstance(ipaddress.ip_address(value), ipaddress.IPv4Address)
+    except ValueError:
+        return False
 
 
 def _gather_ipv4_indicators(model: dict) -> list[str]:
@@ -41,6 +51,14 @@ def _gather_ipv4_indicators(model: dict) -> list[str]:
     for bucket in ("traffic_new", "traffic_gone", "traffic_changed"):
         for entry in (model.get("diff") or {}).get(bucket, []):
             add_iter(entry.get("indicators") or [])
+    for row in model.get("ip_classification") or []:
+        if not isinstance(row, dict):
+            continue
+        ind = str(row.get("ip") or "").strip()
+        if not ind or not _is_ipv4(ind) or ind in seen:
+            continue
+        seen.add(ind)
+        out.append(ind)
     return out
 
 
