@@ -1,8 +1,9 @@
 """OTX enrichment orchestrator.
 
 Reads a coldstep report-model.json (schema v2 with `otx: null` placeholder),
-walks every indicator-bearing slot (egress sankey + diff buckets), classifies
-each unique indicator via OTX, and writes the enriched model back in place.
+walks every indicator-bearing slot (**egress sankey**, **diff buckets**, and
+**ip_classification** rows from the IP-only detect-dev model), classifies each
+unique indicator via OTX, and writes the enriched model back in place.
 
 Constraints:
 - Wall-clock budget (default 30s). Budget exhaustion -> partial_results: true,
@@ -69,6 +70,15 @@ def _gather_indicators(model: dict) -> list[tuple[str, str]]:
     for bucket in ("traffic_new", "traffic_gone", "traffic_changed"):
         for entry in (model.get("diff") or {}).get(bucket, []):
             add_iter(entry.get("indicators") or [])
+    # IP classification model (coldstep-detect-demo-dev): deduped IPs + FQDN hints only.
+    for row in model.get("ip_classification") or []:
+        if not isinstance(row, dict):
+            continue
+        for key in ("ip", "fqdn"):
+            ind = str(row.get(key) or "").strip()
+            if not ind or ind in seen:
+                continue
+            seen[ind] = "IPv4" if _is_ipv4(ind) else "hostname"
     # Stable sort: IPv4 first, then hostnames; within each, alphabetical.
     return sorted(seen.items(), key=lambda kv: (kv[1] != "IPv4", kv[0]))
 
