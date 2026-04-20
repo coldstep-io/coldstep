@@ -325,8 +325,14 @@ jobs:
           missing = [m for m in markers if m not in body]
           if missing:
               print(f"::error::missing summary markers: {', '.join(missing)}")
+              print(f"::notice::summary path: {summary_path}")
+              print(f"::notice::summary bytes: {len(body.encode('utf-8', errors='replace'))}")
               print("::group::summary body")
-              print(body)
+              # Keep diagnostics readable in CI logs.
+              max_chars = 4000
+              print(body[:max_chars])
+              if len(body) > max_chars:
+                  print(f"... [truncated {len(body) - max_chars} chars]")
               print("::endgroup::")
               sys.exit(1)
           PY
