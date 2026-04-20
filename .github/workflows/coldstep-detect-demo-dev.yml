@@ -1,6 +1,6 @@
 # Dev-branch detect demo: same steps as `coldstep-demo-detect.yml`, but triggers on `push` to `dev` plus
 # `workflow_dispatch` so report/summary changes can be exercised without touching `main`.
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.4`
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
 # (published by `supply-chain-attest.yml` on version tags). The action uses `release-path` and does not compile.
@@ -24,7 +24,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.4
+  COLDSTEP_AGENT_VERSION: v0.1.7
 
 jobs:
   demo:
@@ -160,13 +160,34 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
 
-      # Tier-1 BLUF step summary runs AFTER rDNS + OTX enrich so OTX headlines are accurate.
-      # Full charts/tables live in Tier-2 HTML only. HTML artifact uses the same model file.
-      - name: Build report model
+      - name: Build IP classification model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/build_report_model.py
+        run: |
+          set -euo pipefail
+          python3 scripts/coldstep_detect_report/build_ip_classification_model.py
+          if [[ ! -s "${COLDSTEP_REPORT_MODEL_OUT}" ]]; then
+            echo "::error::report model was not created: ${COLDSTEP_REPORT_MODEL_OUT}"
+            ls -la "${GITHUB_WORKSPACE}" || true
+            exit 1
+          fi
+
+      - name: Assert report model exists before enrichment/render
+        run: |
+          set -euo pipefail
+          f="${GITHUB_WORKSPACE}/.coldstep-report-model.json"
+          if [[ ! -s "${f}" ]]; then
+            echo "::warning::report model missing before enrichment; attempting rebuild"
+            export COLDSTEP_REPORT_CURRENT_JSONL="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+            export COLDSTEP_REPORT_MODEL_OUT="${f}"
+            python3 scripts/coldstep_detect_report/build_ip_classification_model.py
+          fi
+          if [[ ! -s "${f}" ]]; then
+            echo "::error::report model still missing after rebuild attempt"
+            ls -la "${GITHUB_WORKSPACE}" || true
+            exit 1
+          fi
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -236,18 +257,8 @@ jobs:
             fail_diff_unavailable "traffic diff script failed"
           fi
 
-          # Re-build the report model now that the baseline JSONL is on disk, so the
-          # downstream HTML artifact carries the diff section too. Without this, the
-          # earlier "Build report model" step ran without baseline_jsonl and emitted
-          # diff.status="unavailable".
-          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
-          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
-          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
-            python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
-
-      # rDNS enrichment runs first (no API key needed) so OTX renderers and the
-      # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
-      # continue-on-error + always-exit-0 mirror the OTX step contract.
+      # rDNS enrichment runs before summary render so each deduped IP row can
+      # include reverse lookup context when available.
       - name: Enrich report model with reverse DNS
         if: always()
         env:
@@ -256,16 +267,13 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_dns.enrich_rdns
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
 
-      # OTX enrichment runs AFTER the diff step's model rebuild (which adds the
-      # diff buckets) and AFTER rDNS so OTX-table rows can carry hostnames.
-      # Both `continue-on-error` and the script's own always-exit-0 contract
-      # keep the detect job green on third-party failures.
+      # OTX enrichment provides verdict + pulse signal for at-a-glance rows.
       - name: Enrich report model with OTX threat-intel
         if: always()
         env:
@@ -275,46 +283,53 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_otx.enrich
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
 
-      - name: Render step summary (BLUF)
+      - name: Render IP classification summary
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_SUMMARY_OUT: ${{ github.workspace }}/.coldstep-step-summary.md
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_step_summary.py
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
           else
             echo "::warning::report model missing, skipping step summary render"
           fi
 
-      - name: Render self-contained HTML report
+      - name: Verify IP classification summary output
         if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-detect-report.html
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_html_report.py
-          else
-            echo "::warning::report model missing, skipping HTML render"
-          fi
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
 
-      - name: Upload HTML report artifact
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: coldstep-detect-report-html-${{ env.NS_RUNNER_LABEL }}
-          path: ${{ github.workspace }}/coldstep-detect-report.html
-          retention-days: 14
-          if-no-files-found: ignore
-          overwrite: true
+          summary_path = Path(os.environ["GITHUB_WORKSPACE"]) / ".coldstep-step-summary.md"
+          if not summary_path.is_file():
+              print(f"::error::summary file missing: {summary_path}")
+              sys.exit(1)
+
+          body = summary_path.read_text(encoding="utf-8", errors="replace")
+          markers = (
+              "IP classification",
+              "Decision banner",
+              "Uncertainty and contradictions",
+          )
+          missing = [m for m in markers if m not in body]
+          if missing:
+              print(f"::error::missing summary markers: {', '.join(missing)}")
+              print("::group::summary body")
+              print(body)
+              print("::endgroup::")
+              sys.exit(1)
+          PY
 
       - name: Persist detect JSONL baseline artifact
         if: always()

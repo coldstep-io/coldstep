@@ -97,7 +97,10 @@ jobs:
       - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |
           set -euo pipefail
-          timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null || true
+          if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
+            echo "expected allowlisted IP connect to succeed under enforce allowlist"
+            exit 1
+          fi
 
       # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
       # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.

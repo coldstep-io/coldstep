@@ -73,6 +73,23 @@ func TestParse_AllowedIPv4CIDR(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedIPv4CIDRNormalizesHostBitsSetInput(t *testing.T) {
+	p, err := Parse("", "203.0.113.42/24")
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	nets := p.AllowedIPv4Nets()
+	if len(nets) != 1 {
+		t.Fatalf("expected 1 CIDR allowlist entry, got %d", len(nets))
+	}
+	if nets[0].String() != "203.0.113.0/24" {
+		t.Fatalf("CIDR entry: got %q want 203.0.113.0/24", nets[0].String())
+	}
+	if got := p.Classify("", net.ParseIP("203.0.113.99")); got != ClassAllowed {
+		t.Fatalf("normalized CIDR should allow member IP: got %q", got)
+	}
+}
+
 func TestParse_AllowedIPv6CIDRRejected(t *testing.T) {
 	_, err := Parse("", "2001:db8::/32")
 	if err == nil {
