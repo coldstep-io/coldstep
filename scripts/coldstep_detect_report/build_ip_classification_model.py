@@ -15,6 +15,42 @@ _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
 _EGRESS_TYPES = {"tcp", "udp", "http", "tls"}
 _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Informational": 4}
 _CONFIDENCE_ORDER = {"A": 0, "B": 1, "C": 2}
+_KNOWN_DESTINATION_HINTS = {
+    "1.1.1.1": "one.one.one.one",
+    "1.0.0.1": "one.one.one.one",
+    "8.8.8.8": "dns.google",
+    "8.8.4.4": "dns.google",
+    "9.9.9.9": "dns.quad9.net",
+    "149.112.112.112": "dns.quad9.net",
+    "208.67.222.222": "resolver1.opendns.com",
+    "208.67.220.220": "resolver2.opendns.com",
+    "127.0.0.1": "localhost",
+    "127.0.0.53": "localhost.systemd-resolved",
+    "168.63.129.16": "azure-platform-dns",
+}
+
+
+def classify_destination_context(*, ip: str, fqdn: str, rdns: str) -> str:
+    if ip.startswith("127."):
+        return "Localhost"
+    if ip == "168.63.129.16":
+        return "Platform DNS"
+    known_resolver_ips = {
+        "1.1.1.1",
+        "1.0.0.1",
+        "8.8.8.8",
+        "8.8.4.4",
+        "9.9.9.9",
+        "149.112.112.112",
+        "208.67.222.222",
+        "208.67.220.220",
+    }
+    if ip in known_resolver_ips:
+        return "Known Public Resolver"
+    name = (fqdn or rdns or "").lower()
+    if any(token in name for token in ("resolver", "dns.google", "one.one.one.one", "quad9", "opendns")):
+        return "Known Public Resolver"
+    return "External"
 
 
 def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
@@ -146,20 +182,27 @@ def _score_row(*, ip: str, row: dict, otx_indicator: dict | None, dns_lookup: di
         confidence_score += 4
         evidence_flags.append("PULSE:repeat")
 
+    has_threat_signal = (
+        verdict == "malicious"
+        or pulse_severity in {"Critical", "High", "Medium"}
+        or pulse_count > 0
+    )
+
     if rdns:
         confidence_score += 6
         evidence_flags.append("RDNS:present")
         corroboration += 1
-    else:
+    elif has_threat_signal:
         confidence_score -= 8
         uncertainty_flags.append("rdns-missing")
         evidence_flags.append("RDNS:missing")
 
     fqdn = str(row.get("fqdn", "") or "")
     if not fqdn:
-        confidence_score -= 5
-        uncertainty_flags.append("fqdn-missing")
-        evidence_flags.append("FQDN:missing")
+        if has_threat_signal:
+            confidence_score -= 5
+            uncertainty_flags.append("fqdn-missing")
+            evidence_flags.append("FQDN:missing")
     else:
         confidence_score += 4
         evidence_flags.append("FQDN:present")
@@ -229,6 +272,10 @@ def build(*, current_jsonl: str, now: dt.datetime | None = None) -> dict:
         if hints:
             # Deterministic tie-break: highest count then lexicographic.
             fqdn = sorted(hints.items(), key=lambda item: (-item[1], item[0]))[0][0]
+        elif ip in _KNOWN_DESTINATION_HINTS:
+            # Deterministic fallback for known infra/resolver destinations when
+            # event-level hints and rDNS are absent.
+            fqdn = _KNOWN_DESTINATION_HINTS[ip]
         rows.append(
             {
                 "ip": ip,
@@ -283,6 +330,11 @@ def project_otx_classification(model: dict) -> dict:
                 "confidence_score": score["confidence_score"],
                 "evidence_flags": score["evidence_flags"],
                 "uncertainty_flags": score["uncertainty_flags"],
+                "context": classify_destination_context(
+                    ip=str(ip or ""),
+                    fqdn=str(row.get("fqdn", "") or ""),
+                    rdns=str(dns_lookup.get(ip, row.get("rdns", "")) or ""),
+                ),
             }
         )
     items.sort(

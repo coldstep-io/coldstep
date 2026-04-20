@@ -61,6 +61,27 @@ class EnrichRdnsTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_ip_classification_rows_supply_ipv4_for_rdns(self):
+        model = {
+            "schema_version": "ip-classification-v1",
+            "ip_classification": [
+                {"ip": "8.8.8.8", "fqdn": "dns.google"},
+            ],
+        }
+        path = self._write_model(model)
+        try:
+            rc = enrich_rdns.run(
+                model_path=path,
+                resolver=lambda ip: "dns.google" if ip == "8.8.8.8" else None,
+                wall_budget_s=2.0,
+                stderr=io.StringIO(),
+            )
+            self.assertEqual(rc, 0)
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertEqual(data["dns_lookups"]["8.8.8.8"], "dns.google")
+        finally:
+            os.unlink(path)
+
     def test_no_resolvable_ips_writes_empty_dict(self):
         path = self._write_model(_v2_model())
         try:

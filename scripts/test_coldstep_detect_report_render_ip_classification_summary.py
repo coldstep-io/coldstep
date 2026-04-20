@@ -47,8 +47,16 @@ class RenderIPClassificationSummaryTests(unittest.TestCase):
             self.assertIn("## Coldstep detect - IP classification", out)
             self.assertIn("### Decision banner", out)
             self.assertIn("Highest severity: 🟥 Critical", out)
-            self.assertIn("| 1.1.1.1 | one.one.one.one | one.one.one.one | clean | 🟩 Low | B | OTX:clean | 🟩 Informational | 0 |", out)
-            self.assertIn("| 8.8.8.8 | dns.google | dns.google | malicious | 🟥 Critical | A | OTX:strong, PULSE:volume | 🟧 High | 12 |", out)
+            self.assertIn("Triage signal rows:", out)
+            self.assertIn("Known infra rows:", out)
+            self.assertIn("| 1.1.1.1 | one.one.one.one | one.one.one.one | clean | Known Public Resolver | 🟩 Low | B | OTX:clean | 🟩 Informational | 0 |", out)
+            self.assertIn("| 8.8.8.8 | dns.google | dns.google | malicious | Known Public Resolver | 🟥 Critical | A | OTX:strong, PULSE:volume | 🟧 High | 12 |", out)
+            self.assertIn("### Known infra snapshot", out)
+            self.assertIn("`8.8.8.8 (dns.google)` pulse=12", out)
+            self.assertIn("### OTX pulse chart", out)
+            self.assertIn("| 🟧 High |", out)
+            self.assertIn("#### Top pulse-backed destinations", out)
+            self.assertIn("`8.8.8.8 (dns.google)`", out)
             self.assertIn("### Uncertainty and contradictions", out)
             self.assertIn("### Action queue", out)
             self.assertNotIn("Capabilities", out)
@@ -87,6 +95,52 @@ class RenderIPClassificationSummaryTests(unittest.TestCase):
         out = render_markdown(model)
         self.assertIn("🟥 Critical", out)
         self.assertIn("🟩 Informational", out)
+
+    def test_pulse_chart_handles_no_pulses(self) -> None:
+        model = {
+            "ip_classification": [
+                {
+                    "ip": "203.0.113.5",
+                    "fqdn": "",
+                    "rdns": "",
+                    "classification": "unidentified",
+                    "severity": "Informational",
+                    "confidence": "C",
+                    "evidence_flags": [],
+                    "uncertainty_flags": [],
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {},
+            "otx": None,
+        }
+        out = render_markdown(model)
+        self.assertIn("### OTX pulse chart", out)
+        self.assertIn("Total pulse count observed: 0", out)
+        self.assertIn("No pulse-backed destinations in this run.", out)
+
+    def test_summary_renders_dash_when_evidence_flags_empty(self) -> None:
+        model = {
+            "ip_classification": [
+                {
+                    "ip": "203.0.113.5",
+                    "fqdn": "",
+                    "rdns": "",
+                    "classification": "unidentified",
+                    "severity": "Informational",
+                    "confidence": "C",
+                    "evidence_flags": [],
+                    "uncertainty_flags": [],
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {},
+            "otx": None,
+        }
+        out = render_markdown(model)
+        self.assertIn("| 203.0.113.5 |  |  | unidentified | External | 🟩 Informational | C | - | 🟩 Informational | 0 |", out)
 
 
 if __name__ == "__main__":

@@ -393,6 +393,46 @@ class EnrichOrchestratorTests(unittest.TestCase):
         finally:
             os.unlink(path)
 
+    def test_ip_classification_rows_supply_otx_indicators(self):
+        """coldstep-detect-demo-dev builds ip_classification-only models; enrich must query OTX."""
+        clean = _fix("general-clean.json")
+        fake = _FakeClient({"8.8.8.8": clean, "dns.google": clean})
+        model = {
+            "schema_version": "ip-classification-v1",
+            "generated_at": "2026-04-20T00:00:00Z",
+            "ip_classification": [
+                {
+                    "ip": "8.8.8.8",
+                    "fqdn": "dns.google",
+                    "rdns": "",
+                    "classification": "unidentified",
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {},
+            "otx": None,
+        }
+        path = self._write_model(model)
+        try:
+            rc = enrich.run(
+                model_path=path,
+                api_key="k",
+                client_factory=lambda k: fake,
+                stderr=io.StringIO(),
+                now_monotonic=lambda: 0.0,
+                wall_budget_ms=30000,
+            )
+            self.assertEqual(rc, 0)
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            self.assertFalse(data["otx"]["skipped"])
+            inds = {row["indicator"]: row for row in data["otx"]["indicators"]}
+            self.assertEqual(inds["8.8.8.8"]["verdict"], "clean")
+            self.assertEqual(inds["dns.google"]["verdict"], "clean")
+            self.assertEqual(len(fake.calls), 2)
+        finally:
+            os.unlink(path)
+
 
 class EnrichSanitizationParityTests(unittest.TestCase):
     """F-P2-01: enrich.py must accept paths under the same trusted-root set as
