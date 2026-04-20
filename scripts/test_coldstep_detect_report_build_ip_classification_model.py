@@ -62,6 +62,20 @@ class BuildIPClassificationModelTests(unittest.TestCase):
         self.assertEqual(row["confidence"], "A")
         self.assertIn("OTX:strong", row["evidence_flags"])
         self.assertEqual(row["uncertainty_flags"], [])
+        self.assertEqual(row["context"], "Known Public Resolver")
+
+    def test_build_applies_known_destination_fallback_hints(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            jsonl = Path(td) / "events.jsonl"
+            jsonl.write_text(
+                '{"type":"udp","dst":"8.8.8.8"}\n'
+                '{"type":"udp","dst":"127.0.0.1"}\n',
+                encoding="utf-8",
+            )
+            model = build(current_jsonl=str(jsonl), now=dt.datetime(2026, 4, 20, tzinfo=dt.timezone.utc))
+            rows = {row["ip"]: row for row in model["ip_classification"]}
+            self.assertEqual(rows["8.8.8.8"]["fqdn"], "dns.google")
+            self.assertEqual(rows["127.0.0.1"]["fqdn"], "localhost")
 
     def test_critical_gate_downgrades_when_not_corroborated(self) -> None:
         model = {
@@ -92,6 +106,28 @@ class BuildIPClassificationModelTests(unittest.TestCase):
         row = projected["ip_classification"][0]
         self.assertEqual(row["severity"], "High")
         self.assertIn("critical-gate-downgrade", row["uncertainty_flags"])
+
+    def test_does_not_flag_missing_rdns_or_fqdn_for_informational_rows(self) -> None:
+        model = {
+            "ip_classification": [
+                {
+                    "ip": "203.0.113.5",
+                    "fqdn": "",
+                    "rdns": "",
+                    "classification": "unidentified",
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {},
+            "otx": {"indicators": []},
+        }
+        projected = project_otx_classification(model)
+        row = projected["ip_classification"][0]
+        self.assertEqual(row["severity"], "Informational")
+        self.assertEqual(row["evidence_flags"], [])
+        self.assertNotIn("rdns-missing", row["uncertainty_flags"])
+        self.assertNotIn("fqdn-missing", row["uncertainty_flags"])
 
 
 if __name__ == "__main__":
