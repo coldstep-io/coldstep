@@ -101,9 +101,9 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 
 // parseIPv4CIDR validates a CIDR string and returns its canonical *net.IPNet.
 // Used by allowed-ips parsing to support whole-range allowlist entries via the
-// BPF LPM trie introduced in PR-G. Rejects IPv6, malformed strings, and host
-// bits that don't align to the network mask (matches the strictness applied
-// to ignored-ip-nets parsing in ParseIgnoredIPNets).
+// BPF LPM trie introduced in PR-G. Rejects IPv6 and malformed strings.
+// Host-bit CIDR inputs are accepted and normalized to canonical network CIDRs
+// by net.ParseCIDR (for example, 203.0.113.42/24 becomes 203.0.113.0/24).
 func parseIPv4CIDR(raw string) (*net.IPNet, error) {
 	ip, ipNet, err := net.ParseCIDR(raw)
 	if err != nil {
@@ -111,13 +111,6 @@ func parseIPv4CIDR(raw string) (*net.IPNet, error) {
 	}
 	if ip.To4() == nil {
 		return nil, fmt.Errorf("allowed-ips: IPv6 CIDRs are not supported, use IPv4: %q", raw)
-	}
-	ip4 := ip.To4()
-	if ip4 == nil {
-		return nil, fmt.Errorf("allowed-ips: invalid IPv4 CIDR %q", raw)
-	}
-	if !ip4.Equal(ip4.Mask(ipNet.Mask)) {
-		return nil, fmt.Errorf("allowed-ips: CIDR must use network address (host bits set): %q", raw)
 	}
 	return ipNet, nil
 }
