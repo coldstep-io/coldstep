@@ -8,6 +8,12 @@ import sys
 import tempfile
 from pathlib import Path
 
+# Support direct script execution (python3 scripts/.../render_ip_classification_summary.py)
+# by ensuring repo root is on sys.path before importing `scripts.*`.
+_REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
 from scripts.coldstep_detect_report.build_ip_classification_model import project_otx_classification
 
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
