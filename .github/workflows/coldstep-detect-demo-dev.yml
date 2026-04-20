@@ -282,10 +282,30 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          test -f "${GITHUB_STEP_SUMMARY}"
-          grep -q "IP classification" "${GITHUB_STEP_SUMMARY}"
-          grep -q "Decision banner" "${GITHUB_STEP_SUMMARY}"
-          grep -q "Uncertainty and contradictions" "${GITHUB_STEP_SUMMARY}"
+          python3 - <<'PY'
+          import os
+          import sys
+          from pathlib import Path
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          if not summary_path.is_file():
+              print(f"::error::summary file missing: {summary_path}")
+              sys.exit(1)
+
+          body = summary_path.read_text(encoding="utf-8", errors="replace")
+          markers = (
+              "IP classification",
+              "Decision banner",
+              "Uncertainty and contradictions",
+          )
+          missing = [m for m in markers if m not in body]
+          if missing:
+              print(f"::error::missing summary markers: {', '.join(missing)}")
+              print("::group::summary body")
+              print(body)
+              print("::endgroup::")
+              sys.exit(1)
+          PY
 
       - name: Persist detect JSONL baseline artifact
         if: always()
