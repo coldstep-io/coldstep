@@ -12,7 +12,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 ## Before you open a PR
 
 1. **Describe the change** — behavior, risk (especially for **enforce** mode and BPF), and how you validated it (e.g. link to a fork run or `workflow_dispatch` on **`coldstep-ci`** / **`coldstep-demo`**).
-2. **Go** — CI uses **`setup-go`** with **`go-version: 1.24.x`**, matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
+2. **Go** — CI uses **`setup-go`** with **`go-version: 1.25.x`** (see **`.github/workflows/coldstep-ci-runner.yml`**), matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
 3. **TypeScript** — if you edit `src/main.ts` or `src/post.ts`, run `npm run typecheck` and **`npm run build`** (**`ncc`** writes **`dist/main`** and **`dist/post`**) so committed **`dist/`** stays in sync with sources.
 4. **Docs** — if you change workflow pins or action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
 5. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.1.7`**), not **`@main`**, unless they intentionally track head.
