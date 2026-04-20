@@ -164,7 +164,30 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/build_ip_classification_model.py
+        run: |
+          set -euo pipefail
+          python3 scripts/coldstep_detect_report/build_ip_classification_model.py
+          if [[ ! -s "${COLDSTEP_REPORT_MODEL_OUT}" ]]; then
+            echo "::error::report model was not created: ${COLDSTEP_REPORT_MODEL_OUT}"
+            ls -la "${GITHUB_WORKSPACE}" || true
+            exit 1
+          fi
+
+      - name: Assert report model exists before enrichment/render
+        run: |
+          set -euo pipefail
+          f="${GITHUB_WORKSPACE}/.coldstep-report-model.json"
+          if [[ ! -s "${f}" ]]; then
+            echo "::warning::report model missing before enrichment; attempting rebuild"
+            export COLDSTEP_REPORT_CURRENT_JSONL="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+            export COLDSTEP_REPORT_MODEL_OUT="${f}"
+            python3 scripts/coldstep_detect_report/build_ip_classification_model.py
+          fi
+          if [[ ! -s "${f}" ]]; then
+            echo "::error::report model still missing after rebuild attempt"
+            ls -la "${GITHUB_WORKSPACE}" || true
+            exit 1
+          fi
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -244,7 +267,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_dns.enrich_rdns
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
@@ -260,7 +283,7 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_otx.enrich
           else
             echo "::warning::report model missing, skipping OTX enrichment"
@@ -272,7 +295,7 @@ jobs:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
         run: |
           set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
           else
             echo "::warning::report model missing, skipping step summary render"
