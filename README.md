@@ -80,7 +80,7 @@ The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary
 
 - **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`build_report_model.py`), enriches (rDNS + OTX), writes Tier-1 BLUF via **`render_step_summary.py`** and Tier-2 **`coldstep-detect-report.html`** via **`render_html_report.py`** (downloadable artifact).
 
-- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): builds a minimal **IP classification** model (`build_ip_classification_model.py`), enriches (rDNS + OTX), renders **`render_ip_classification_summary.py`** into the Job Summary (decision banner, pulse chart, etc.). **No** HTML report artifact from this workflow path.
+- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same **`build_report_model.py`** pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends **`render_ip_classification_summary.py`** for the IP/FQDN/rDNS matrix in the Job Summary.
 
 Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
