@@ -6,7 +6,7 @@
     <title>ColdStep — eBPF observability for GitHub-hosted Ubuntu runners</title>
     <meta
       name="description"
-      content="ColdStep is a GitHub Action and Linux eBPF agent that observes process and network activity on ubuntu-latest runners. Detect by default; optional egress enforcement."
+      content="ColdStep is a GitHub Action and Linux eBPF agent for ubuntu-latest runners: detect mode, optional egress enforcement, and optional AlienVault OTX enrichment for detect HTML reports when OTX_API_KEY is set."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -121,14 +121,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.4</code></pre>
+      - uses: coldstep-io/coldstep@v0.1.7
+</code></pre>
           </div>
         </section>
 
         <section class="section section--tight-top" aria-labelledby="modes-heading">
           <h2 id="modes-heading">Two modes, one agent</h2>
           <p class="section-intro">
-            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.4</code>) instead of tracking
+            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.7</code>) instead of tracking
             <code>@main</code> unless you intentionally want churn.
           </p>
           <div class="modes">
@@ -161,11 +162,47 @@ jobs:
             </li>
             <li>
               <code>.coldstep-detect.md</code>
-              <span>Shutdown digest with KPI tables and collapsible sections for quick scans.</span>
+              <span>Shutdown digest with triage ribbon, KPI tables, and collapsible sections for quick scans.</span>
             </li>
             <li>
               <code>.coldstep-telemetry.json</code>
               <span>Totals and BPF health at shutdown for operational dashboards.</span>
+            </li>
+          </ul>
+        </section>
+
+        <section class="section" aria-labelledby="otx-heading">
+          <h2 id="otx-heading">Optional AlienVault OTX enrichment</h2>
+          <p class="section-intro">
+            For <strong>detect</strong> workflows that build the bundled HTML report and job Summary, you can layer
+            <strong>AlienVault Open Threat Exchange (OTX)</strong> lookups on IPv4 and hostname indicators. Results feed
+            verdict columns and charts in the Markdown summary and self-contained HTML artifact—without changing core
+            egress telemetry.
+          </p>
+          <ul class="outputs">
+            <li>
+              <code>OTX_API_KEY</code>
+              <span>
+                Store your key as a repository or organization secret with this name. Create a free OTX account at
+                <a href="https://otx.alienvault.com/">otx.alienvault.com</a> if you need a key.
+              </span>
+            </li>
+            <li>
+              <code>If unset</code>
+              <span>
+                Enrichment is skipped entirely: no calls to OTX, no API usage, and detect jobs still finish
+                successfully. Fork PRs and repos without the secret behave the same way.
+              </span>
+            </li>
+            <li>
+              <code>Best-effort</code>
+              <span>
+                The enrichment step does not fail the job on third-party errors; rate limits and budgets surface as
+                warnings or partial results in the report model. See the pipeline description in
+                <a href="https://github.com/coldstep-io/coldstep/blob/main/scripts/coldstep_detect_report/README.md"
+                  >detect report tooling</a>
+                for environment variables and schema details.
+              </span>
             </li>
           </ul>
         </section>

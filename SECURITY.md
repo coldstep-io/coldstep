@@ -39,6 +39,10 @@ Workflow steps run with the **same privileges** as the job (modulo `sudo` elevat
 
 No userland agent can promise **complete** observation of every kernel path on every kernel revision. Consumers needing **audit-grade non-repudiation** must combine Coldstep with **organizational controls** (locked-down workflows, secrets policies, optional additional LSM / host controls outside this project).
 
+### Optional third-party threat intel (OTX)
+
+When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the detect-report enrichment step, the runner performs **HTTPS requests** to AlienVault Open Threat Exchange (`otx.alienvault.com`) for indicator lookups. When the secret is **absent or empty**, **no such requests** occur. Enrichment is designed not to fail the job on API errors (see **`scripts/coldstep_detect_report/README.md`**).
+
 ### Further reading
 
 Maintain optional extended design material under **`docs/design/`** in your clone; that tree is **gitignored** and **not** published from Git. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.

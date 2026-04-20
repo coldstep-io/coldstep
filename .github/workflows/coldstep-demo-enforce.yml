@@ -1,6 +1,6 @@
 # Simplified enforce-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
 # (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` prevent-mode (nmap/nc allow, curl/nc deny).
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.4`
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
 #
 # Agent binary: same GitHub Release download + `release-path` as `coldstep-demo-detect.yml`.
 
@@ -16,7 +16,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.4
+  COLDSTEP_AGENT_VERSION: v0.1.7
 
 jobs:
   demo:

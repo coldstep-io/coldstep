@@ -2,7 +2,7 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
-**Pin workflows to** **`coldstep-io/coldstep@v0.1.4`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`coldstep-io/coldstep@v0.1.7`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
@@ -12,7 +12,7 @@
 
 ## Add it to a workflow
 
-**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.4`** (or a newer tag you publish), not **`@main`**.
+**v1:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.1.7`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 env:
@@ -24,14 +24,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.4
+      - uses: coldstep-io/coldstep@v0.1.7
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.1.4`** (or a newer tag).
+**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.1.7`** (or a newer tag).
 
 ---
 
@@ -73,7 +73,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | File | Role |
 | :--- | :--- |
 | **`.coldstep-events.jsonl`** | Append-only event stream (source of truth for investigations). |
-| **`.coldstep-detect.md`** | Shutdown digest (KPI tables, collapsible sections). |
+| **`.coldstep-detect.md`** | Shutdown digest (triage ribbon, KPI tables, collapsible sections). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
 The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default **on**). Repo detect-report workflows (`coldstep-demo-detect.yml`, **`coldstep-detect-demo-dev`**) set **`report-job-summary: false`** so the Summary stays Tier-1 BLUF + Tier-2 HTML artifact instead of duplicate KPI/filesystem rows. Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
@@ -95,6 +95,10 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
 | `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
+
+### Optional threat intel (AlienVault OTX)
+
+Detect workflows that build the **report model** (see [`scripts/coldstep_detect_report/README.md`](scripts/coldstep_detect_report/README.md)) can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed). Details, env vars, and schema: **`scripts/coldstep_detect_report/README.md`**.
 
 ---
 

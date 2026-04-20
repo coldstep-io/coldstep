@@ -10,7 +10,7 @@
 name: coldstep-demo
 
 # Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
-# from the workflow ref. Published tags (e.g. v0.1.4) must also ship `action.yml` at the root
+# from the workflow ref. Published tags (e.g. v0.1.7) must also ship `action.yml` at the root
 # for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
 
 on:
@@ -23,7 +23,7 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.4
+  COLDSTEP_AGENT_VERSION: v0.1.7
 
 # Default to least-privilege; the detect-mode job overrides with
 # `permissions: { actions: read, contents: read }` when previous-run baseline
