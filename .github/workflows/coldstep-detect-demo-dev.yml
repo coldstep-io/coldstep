@@ -1,6 +1,7 @@
 # Dev-branch detect demo: matches `coldstep-demo-detect.yml` reporting (report model, baseline diff rebuild,
 # Tier-1 BLUF, rDNS, OTX, Tier-2 HTML artifact) plus `render_ip_classification_summary.py` for the IP matrix in
-# Job Summary. Triggers on `push` to `dev` and `workflow_dispatch` so changes can be exercised without `main`.
+# Job Summary (runs after OTX enrichment, before the BLUF pass, to reduce summary-size truncation risk). Triggers on
+# `push` to `dev` and `workflow_dispatch` so changes can be exercised without `main`.
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
@@ -279,6 +280,20 @@ jobs:
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
 
+      # Append before BLUF so the IP matrix is less likely to be truncated when the
+      # GitHub Job Summary approaches its size limit (last appends drop first).
+      - name: Render IP classification summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
+          else
+            echo "::warning::report model missing, skipping IP classification summary"
+          fi
+
       - name: Render step summary (BLUF)
         if: always()
         env:
@@ -314,26 +329,32 @@ jobs:
           if-no-files-found: ignore
           overwrite: true
 
-      - name: Render IP classification summary
-        if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: |
-          set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
-          else
-            echo "::warning::report model missing, skipping step summary render"
-          fi
-
       - name: Verify IP classification summary output
         if: always()
         run: |
           set -euo pipefail
-          test -f "${GITHUB_STEP_SUMMARY}"
-          grep -q "IP classification" "${GITHUB_STEP_SUMMARY}"
-          grep -q "Decision banner" "${GITHUB_STEP_SUMMARY}"
-          grep -q "Uncertainty and contradictions" "${GITHUB_STEP_SUMMARY}"
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+          sys.path.insert(0, str(root))
+          model_path = root / ".coldstep-report-model.json"
+          if not model_path.is_file():
+              print("::error::missing .coldstep-report-model.json for IP classification verify")
+              sys.exit(1)
+          model = json.loads(model_path.read_text(encoding="utf-8"))
+          from scripts.coldstep_detect_report.render_ip_classification_summary import render_markdown
+
+          body = render_markdown(model)
+          needles = ("IP classification", "Decision banner", "Uncertainty and contradictions")
+          missing = [n for n in needles if n not in body]
+          if missing:
+              print(f"::error::render_markdown missing expected phrases: {missing}")
+              sys.exit(1)
+          PY
 
       - name: Persist detect JSONL baseline artifact
         if: always()
