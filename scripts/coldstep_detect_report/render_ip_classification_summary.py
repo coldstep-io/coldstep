@@ -168,7 +168,17 @@ def main() -> int:
         print(f"render_ip_classification_summary: refusing untrusted path: {e}", file=sys.stderr)
         return 1
     model = json.loads(Path(model_path).read_text(encoding="utf-8"))
-    write_summary(model=model, summary_path=summary_path)
+    body = render_markdown(model)
+    with open(summary_path, "a", encoding="utf-8") as f:
+        f.write(body + "\n")
+    raw_copy_path = os.environ.get("COLDSTEP_REPORT_SUMMARY_OUT", "").strip()
+    if raw_copy_path:
+        try:
+            copy_path = _safe_workspace_path(raw_copy_path, var_name="COLDSTEP_REPORT_SUMMARY_OUT")
+        except ValueError as e:
+            print(f"render_ip_classification_summary: refusing untrusted summary copy path: {e}", file=sys.stderr)
+            return 1
+        Path(copy_path).write_text(body + "\n", encoding="utf-8")
     return 0
 
 
