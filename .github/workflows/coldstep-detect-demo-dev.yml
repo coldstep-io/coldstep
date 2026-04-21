@@ -1,5 +1,7 @@
-# Dev-branch detect demo: same steps as `coldstep-demo-detect.yml`, but triggers on `push` to `dev` plus
-# `workflow_dispatch` so report/summary changes can be exercised without touching `main`.
+# Dev-branch detect demo: matches `coldstep-demo-detect.yml` reporting (report model, baseline diff rebuild,
+# Tier-1 BLUF, rDNS, OTX, Tier-2 HTML artifact) plus `render_ip_classification_summary.py` for the IP matrix in
+# Job Summary (runs after OTX enrichment, before the BLUF pass, to reduce summary-size truncation risk). Triggers on
+# `push` to `dev` and `workflow_dispatch` so changes can be exercised without `main`.
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
@@ -160,34 +162,12 @@ jobs:
           grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
           grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
 
-      - name: Build IP classification model
+      # Tier-1 BLUF runs AFTER rDNS + OTX enrich so OTX headlines are accurate; full charts/tables stay Tier-2 HTML.
+      - name: Build report model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: |
-          set -euo pipefail
-          python3 scripts/coldstep_detect_report/build_ip_classification_model.py
-          if [[ ! -s "${COLDSTEP_REPORT_MODEL_OUT}" ]]; then
-            echo "::error::report model was not created: ${COLDSTEP_REPORT_MODEL_OUT}"
-            ls -la "${GITHUB_WORKSPACE}" || true
-            exit 1
-          fi
-
-      - name: Assert report model exists before enrichment/render
-        run: |
-          set -euo pipefail
-          f="${GITHUB_WORKSPACE}/.coldstep-report-model.json"
-          if [[ ! -s "${f}" ]]; then
-            echo "::warning::report model missing before enrichment; attempting rebuild"
-            export COLDSTEP_REPORT_CURRENT_JSONL="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-            export COLDSTEP_REPORT_MODEL_OUT="${f}"
-            python3 scripts/coldstep_detect_report/build_ip_classification_model.py
-          fi
-          if [[ ! -s "${f}" ]]; then
-            echo "::error::report model still missing after rebuild attempt"
-            ls -la "${GITHUB_WORKSPACE}" || true
-            exit 1
-          fi
+        run: python3 scripts/coldstep_detect_report/build_report_model.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -257,6 +237,17 @@ jobs:
             fail_diff_unavailable "traffic diff script failed"
           fi
 
+          # Re-build the report model with baseline JSONL so diff + downstream HTML carry traffic_new/gone/changed.
+          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
+          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
+          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
+            python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
+
+      - name: Render step summary (markdown + mermaid)
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 scripts/coldstep_detect_report/render_step_summary.py
+
       # rDNS enrichment runs before summary render so each deduped IP row can
       # include reverse lookup context when available.
       - name: Enrich report model with reverse DNS
@@ -267,13 +258,13 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_dns.enrich_rdns
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
 
-      # OTX enrichment provides verdict + pulse signal for at-a-glance rows.
+      # OTX enrichment runs AFTER the diff step's model rebuild (when present) and AFTER rDNS.
       - name: Enrich report model with OTX threat-intel
         if: always()
         env:
@@ -283,52 +274,89 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 -m scripts.coldstep_otx.enrich
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
 
+      # Append before BLUF so the IP matrix is less likely to be truncated when the
+      # GitHub Job Summary approaches its size limit (last appends drop first).
       - name: Render IP classification summary
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_REPORT_SUMMARY_OUT: ${{ github.workspace }}/.coldstep-step-summary.md
         run: |
           set -euo pipefail
-          if [[ -s "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
             python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
+          else
+            echo "::warning::report model missing, skipping IP classification summary"
+          fi
+
+      - name: Render step summary (BLUF)
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_step_summary.py
           else
             echo "::warning::report model missing, skipping step summary render"
           fi
+
+      - name: Render self-contained HTML report
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-detect-report.html
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 scripts/coldstep_detect_report/render_html_report.py
+          else
+            echo "::warning::report model missing, skipping HTML render"
+          fi
+
+      - name: Upload HTML report artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coldstep-detect-report-html-${{ env.NS_RUNNER_LABEL }}
+          path: ${{ github.workspace }}/coldstep-detect-report.html
+          retention-days: 14
+          if-no-files-found: ignore
+          overwrite: true
 
       - name: Verify IP classification summary output
         if: always()
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          import json
           import os
+          import pathlib
           import sys
-          from pathlib import Path
 
-          summary_path = Path(os.environ["GITHUB_WORKSPACE"]) / ".coldstep-step-summary.md"
-          if not summary_path.is_file():
-              print(f"::error::summary file missing: {summary_path}")
+          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
+          sys.path.insert(0, str(root))
+          model_path = root / ".coldstep-report-model.json"
+          if not model_path.is_file():
+              print("::error::missing .coldstep-report-model.json for IP classification verify")
               sys.exit(1)
+          model = json.loads(model_path.read_text(encoding="utf-8"))
+          from scripts.coldstep_detect_report.render_ip_classification_summary import render_markdown
 
-          body = summary_path.read_text(encoding="utf-8", errors="replace")
-          markers = (
-              "IP classification",
-              "Decision banner",
-              "Uncertainty and contradictions",
-          )
-          missing = [m for m in markers if m not in body]
+          body = render_markdown(model)
+          needles = ("IP classification", "Decision banner", "Uncertainty and contradictions")
+          missing = [n for n in needles if n not in body]
           if missing:
-              print(f"::error::missing summary markers: {', '.join(missing)}")
-              print(f"::notice::summary path: {summary_path}")
-              print(f"::notice::summary bytes: {len(body.encode('utf-8', errors='replace'))}")
-              print("::group::summary body")
-              # Keep diagnostics readable in CI logs.
+              print(f"::error::render_markdown missing expected phrases: {missing}")
+              print(
+                  f"::notice::markdown body bytes: {len(body.encode('utf-8', errors='replace'))}"
+              )
+              print("::group::render_markdown excerpt")
               max_chars = 4000
               print(body[:max_chars])
               if len(body) > max_chars:

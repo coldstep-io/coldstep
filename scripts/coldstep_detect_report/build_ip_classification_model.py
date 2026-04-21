@@ -296,6 +296,45 @@ def build(*, current_jsonl: str, now: dt.datetime | None = None) -> dict:
     }
 
 
+_OtxVerdictRank = {"malicious": 0, "unidentified": 1, "clean": 2, "rate-limited": 3}
+_OtxPulseRank = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Informational": 4}
+
+
+def _otx_blob_class(blob: dict) -> str:
+    return str(blob.get("classification") or blob.get("verdict") or "unidentified")
+
+
+def _pick_best_otx_blob(candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+
+    def rank(b: dict) -> tuple:
+        cls = _otx_blob_class(b)
+        vr = _OtxVerdictRank.get(cls, 99)
+        pc = int(b.get("pulse_count") or 0)
+        ps = str(b.get("pulse_severity") or "Informational")
+        pr = _OtxPulseRank.get(ps, 99)
+        return (vr, -pc, pr)
+
+    return min(candidates, key=rank)
+
+
+def _merge_otx_for_row(
+    *,
+    ip: str,
+    fqdn: str,
+    rdns: str,
+    lookup: dict[str, dict],
+) -> dict | None:
+    keys: list[str] = []
+    for k in (ip, fqdn, rdns):
+        s = str(k or "").strip()
+        if s and s not in keys:
+            keys.append(s)
+    cands = [lookup[k] for k in keys if k in lookup]
+    return _pick_best_otx_blob(cands)
+
+
 def project_otx_classification(model: dict) -> dict:
     lookup: dict[str, dict] = {}
     otx = model.get("otx") or {}
@@ -314,13 +353,19 @@ def project_otx_classification(model: dict) -> dict:
     items = []
     for row in model.get("ip_classification") or []:
         ip = row.get("ip")
-        matched = lookup.get(ip)
+        rdns_val = str(dns_lookup.get(ip, row.get("rdns", "")) or "")
+        matched = _merge_otx_for_row(
+            ip=str(ip or ""),
+            fqdn=str(row.get("fqdn", "") or ""),
+            rdns=rdns_val,
+            lookup=lookup,
+        )
         score = _score_row(ip=str(ip or ""), row=row, otx_indicator=matched, dns_lookup=dns_lookup)
         items.append(
             {
                 "ip": ip,
                 "fqdn": row.get("fqdn", ""),
-                "rdns": dns_lookup.get(ip, row.get("rdns", "")),
+                "rdns": rdns_val,
                 "classification": (matched or {}).get("classification", row.get("classification", "unidentified")),
                 "pulse_severity": (matched or {}).get("pulse_severity", row.get("pulse_severity", "Informational")),
                 "pulse_count": (matched or {}).get("pulse_count", row.get("pulse_count", 0)),
@@ -333,7 +378,7 @@ def project_otx_classification(model: dict) -> dict:
                 "context": classify_destination_context(
                     ip=str(ip or ""),
                     fqdn=str(row.get("fqdn", "") or ""),
-                    rdns=str(dns_lookup.get(ip, row.get("rdns", "")) or ""),
+                    rdns=rdns_val,
                 ),
             }
         )

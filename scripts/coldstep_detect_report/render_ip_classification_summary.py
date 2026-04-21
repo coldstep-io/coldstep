@@ -8,7 +8,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-# Support direct script execution (python3 scripts/.../render_ip_classification_summary.py)
+# Support direct script execution (`python3 scripts/.../render_ip_classification_summary.py`)
 # by ensuring repo root is on sys.path before importing `scripts.*`.
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(_REPO_ROOT) not in sys.path:
@@ -222,6 +222,7 @@ def render_markdown(model: dict) -> str:
             lines.append(f"- `{label}` `{_spark(pulse_count, max_top)}` {pulse_count}")
     else:
         lines.append("- No pulse-backed destinations in this run.")
+
     lines.extend(
         [
             "",

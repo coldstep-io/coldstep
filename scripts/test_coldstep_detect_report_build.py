@@ -20,7 +20,8 @@ class BuildReportModelTests(unittest.TestCase):
     def test_model_has_required_top_level_keys(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
         for k in ("schema_version", "generated_at", "run", "capability_matrix",
-                  "events_by_type", "timeline", "egress_sankey", "diff", "otx"):
+                  "events_by_type", "timeline", "egress_sankey", "diff",
+                  "ip_classification", "otx"):
             self.assertIn(k, model, f"missing key: {k}")
         self.assertEqual(model["schema_version"], "2.1")
         self.assertIsInstance(model["schema_version"], str)

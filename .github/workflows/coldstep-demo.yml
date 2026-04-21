@@ -316,6 +316,7 @@ jobs:
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
+          allowed-ips: 1.1.1.1
           release-path: bin/coldstep
 
       - name: Allowed target — nmap port 80 (theclouddj.com)

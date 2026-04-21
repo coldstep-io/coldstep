@@ -76,7 +76,13 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | **`.coldstep-detect.md`** | Shutdown digest (triage ribbon, KPI tables, collapsible sections). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
-The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default **on**). Repo detect-report workflows (`coldstep-demo-detect.yml`, **`coldstep-detect-demo-dev`**) set **`report-job-summary: false`** so the Summary stays Tier-1 BLUF + Tier-2 HTML artifact instead of duplicate KPI/filesystem rows. Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
+The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default **on**). Full **detect-report** workflows keep that digest **off** so the Summary is not dominated by the long shutdown digest:
+
+- **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`build_report_model.py`), enriches (rDNS + OTX), writes Tier-1 BLUF via **`render_step_summary.py`** and Tier-2 **`coldstep-detect-report.html`** via **`render_html_report.py`** (downloadable artifact).
+
+- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same **`build_report_model.py`** pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends **`render_ip_classification_summary.py`** for the IP/FQDN/rDNS matrix in the Job Summary.
+
+Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
 ---
 
@@ -91,7 +97,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
-| `report-job-summary` | Merge workspace digest into the job Summary (long); off in detect-report workflows using **report-model** HTML instead. |
+| `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated Python summary (full BLUF + HTML **or** IP classification on `dev`). |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
 | `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
@@ -99,6 +105,8 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 ### Optional threat intel (AlienVault OTX)
 
 Detect workflows that build the **report model** (see [`scripts/coldstep_detect_report/README.md`](scripts/coldstep_detect_report/README.md)) can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed). Details, env vars, and schema: **`scripts/coldstep_detect_report/README.md`**.
+
+Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`scripts/coldstep_otx/enrich.py`**).
 
 ---
 
@@ -124,6 +132,28 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 
 - **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-enforce.yml`** (minimal `uses: ./` demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
+
+### Deep-debug escalation guide
+
+Use **`scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
+
+- flaky failures (non-deterministic test or workflow behavior),
+- BPF verifier/load or attach instability,
+- cross-layer regressions that involve workflow + agent + report output,
+- failures that reproduce in CI but not in a narrow local/unit loop.
+
+Expected deep-debug output:
+
+- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
+- per-stage logs for fast pinpointing of first failing gate,
+- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
+
+Recommended usage pattern:
+
+1. Run it in a Linux environment aligned with CI toolchains.
+2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
+3. Enable Stage 4 only when sudo/BPF integration checks are required.
+4. Attach report snippets and failing stage logs to the bug or PR discussion.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
 

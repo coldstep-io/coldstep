@@ -19,6 +19,14 @@ from typing import Optional
 
 SCHEMA_VERSION = "2.1"
 
+
+def _ensure_repo_root_on_sys_path() -> None:
+    """Direct `python3 scripts/.../build_report_model.py` does not put repo root on sys.path."""
+    repo_root = str(Path(__file__).resolve().parents[2])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
+
 # Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
 # untrusted. main() canonicalises every env-var path through this helper
 # before it reaches a Path()/open() sink. Inlined per file because Snyk's
@@ -200,6 +208,13 @@ def build(
     current = _load_jsonl(current_jsonl)
     baseline = _load_jsonl(baseline_jsonl) if baseline_jsonl else None
     meta = next((ev for ev in current if ev.get("type") == "meta"), {})
+    _ensure_repo_root_on_sys_path()
+    # Lazy import: keeps this module loadable even if the IP helper changes.
+    from scripts.coldstep_detect_report.build_ip_classification_model import (
+        build as build_ip_classification,
+    )
+
+    ip_payload = build_ip_classification(current_jsonl=current_jsonl, now=when)
     return {
         "schema_version": SCHEMA_VERSION,
         "generated_at": when.isoformat().replace("+00:00", "Z"),
@@ -215,6 +230,7 @@ def build(
         "timeline": _timeline(current),
         "egress_sankey": _egress_sankey(current),
         "diff": _diff(current, baseline),
+        "ip_classification": ip_payload.get("ip_classification") or [],
         "otx": None,
     }
 
