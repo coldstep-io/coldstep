@@ -353,6 +353,15 @@ jobs:
           missing = [n for n in needles if n not in body]
           if missing:
               print(f"::error::render_markdown missing expected phrases: {missing}")
+              print(
+                  f"::notice::markdown body bytes: {len(body.encode('utf-8', errors='replace'))}"
+              )
+              print("::group::render_markdown excerpt")
+              max_chars = 4000
+              print(body[:max_chars])
+              if len(body) > max_chars:
+                  print(f"... [truncated {len(body) - max_chars} chars]")
+              print("::endgroup::")
               sys.exit(1)
           PY
 

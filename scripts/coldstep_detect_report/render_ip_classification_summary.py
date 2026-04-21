@@ -45,35 +45,6 @@ _KNOWN_INFRA_SUFFIXES = (
 )
 
 
-def _spark(value: int, max_value: int, *, width: int = 12) -> str:
-    if max_value <= 0 or value <= 0:
-        return " " * width
-    filled = max(1, int(round((value / max_value) * width)))
-    filled = min(width, filled)
-    return ("#" * filled).ljust(width)
-
-
-def _is_known_infra_row(row: dict) -> bool:
-    context = str(row.get("context", "") or "")
-    if context in {"Localhost", "Platform DNS", "Known Public Resolver"}:
-        return True
-    ip = str(row.get("ip", ""))
-    fqdn = str(row.get("fqdn", "")).lower()
-    rdns = str(row.get("rdns", "")).lower()
-    if ip.startswith("127."):
-        return True
-    if ip == "168.63.129.16":
-        # Azure platform DNS virtual IP.
-        return True
-    names = [fqdn, rdns]
-    for name in names:
-        if not name:
-            continue
-        if any(name.endswith(suffix) for suffix in _KNOWN_INFRA_SUFFIXES):
-            return True
-    return False
-
-
 def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
     if not _SAFE_PATH_RE.match(raw):
         raise ValueError(f"{var_name} contains disallowed characters")
@@ -92,6 +63,34 @@ def _safe_workspace_path(raw: str, *, var_name: str = "path") -> str:
         if os.path.commonpath([resolved, root]) == root:
             return resolved
     raise ValueError(f"{var_name} resolves outside trusted roots: {resolved!r}")
+
+
+def _spark(value: int, max_value: int, *, width: int = 12) -> str:
+    if max_value <= 0 or value <= 0:
+        return " " * width
+    filled = max(1, int(round((value / max_value) * width)))
+    filled = min(width, filled)
+    return ("#" * filled).ljust(width)
+
+
+def _is_known_infra_row(row: dict) -> bool:
+    context = str(row.get("context", "") or "")
+    if context in {"Localhost", "Platform DNS", "Known Public Resolver"}:
+        return True
+    ip = str(row.get("ip", ""))
+    fqdn = str(row.get("fqdn", "")).lower()
+    rdns = str(row.get("rdns", "")).lower()
+    if ip.startswith("127."):
+        return True
+    if ip == "168.63.129.16":
+        return True
+    names = [fqdn, rdns]
+    for name in names:
+        if not name:
+            continue
+        if any(name.endswith(suffix) for suffix in _KNOWN_INFRA_SUFFIXES):
+            return True
+    return False
 
 
 def render_markdown(model: dict) -> str:
