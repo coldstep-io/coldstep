@@ -15,6 +15,8 @@ _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
 _EGRESS_TYPES = {"tcp", "udp", "http", "tls"}
 _SEVERITY_ORDER = {"Critical": 0, "High": 1, "Medium": 2, "Low": 3, "Informational": 4}
 _CONFIDENCE_ORDER = {"A": 0, "B": 1, "C": 2}
+# OTX pulse_signal_severity tiers (non-Informational); row severity tracks these when set.
+_PULSE_SIGNAL_SEVERITY_TIERS = frozenset({"Low", "Medium", "High", "Critical"})
 _KNOWN_DESTINATION_HINTS = {
     "1.1.1.1": "one.one.one.one",
     "1.0.0.1": "one.one.one.one",
@@ -221,16 +223,19 @@ def _score_row(*, ip: str, row: dict, otx_indicator: dict | None, dns_lookup: di
     else:
         confidence = "C"
 
-    if risk_score >= 85:
-        severity = "Critical"
-    elif risk_score >= 65:
-        severity = "High"
-    elif risk_score >= 45:
-        severity = "Medium"
-    elif risk_score >= 25:
-        severity = "Low"
+    if pulse_severity in _PULSE_SIGNAL_SEVERITY_TIERS:
+        severity = pulse_severity
     else:
-        severity = "Informational"
+        if risk_score >= 85:
+            severity = "Critical"
+        elif risk_score >= 65:
+            severity = "High"
+        elif risk_score >= 45:
+            severity = "Medium"
+        elif risk_score >= 25:
+            severity = "Low"
+        else:
+            severity = "Informational"
 
     # Hard guardrail: no single-source critical. Critical requires high confidence
     # and corroboration across at least two independent factors.

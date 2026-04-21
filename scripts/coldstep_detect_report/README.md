@@ -44,6 +44,7 @@ At the top of Tier-2 HTML, **What to look at first** is a three-card triage stri
 | `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). Each entry in the three buckets carries `indicators: list[str]` (schema v2). |
 | `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
 | `dns_lookups` | `{ip: hostname}` map, optional | Populated by `scripts/coldstep_dns/enrich_rdns.py`. Best-effort PTR resolution for every IPv4 indicator on the model (hostnames are skipped — they already are names). Missing entry = no PTR / timed out / not asked. Schema-additive: renderers that don't know about it ignore the key, renderers that do know join on the IP to display "8.8.8.8 (dns.google)". |
+| `ip_classification` | `[{...}]` | Embedded IP/FQDN/rDNS classification rows. **`severity`** matches **`pulse_severity`** when OTX reports a pulse tier (Low/Medium/High/Critical); otherwise **`severity`** uses composite risk bands. Critical may still downgrade via the usual confidence/corroboration guardrail. |
 
 ### Required capabilities (anchor the matrix)
 
