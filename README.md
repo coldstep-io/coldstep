@@ -108,6 +108,8 @@ Detect workflows that build the **report model** (see [`public_scripts/coldstep_
 
 Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`public_scripts/coldstep_otx/enrich.py`**).
 
+Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`scripts/coldstep_otx/enrich.py`**).
+
 ---
 
 ## Limits (read before relying on signals)
@@ -136,6 +138,28 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 ### Deep-debug escalation guide
 
 Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
+
+- flaky failures (non-deterministic test or workflow behavior),
+- BPF verifier/load or attach instability,
+- cross-layer regressions that involve workflow + agent + report output,
+- failures that reproduce in CI but not in a narrow local/unit loop.
+
+Expected deep-debug output:
+
+- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
+- per-stage logs for fast pinpointing of first failing gate,
+- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
+
+Recommended usage pattern:
+
+1. Run it in a Linux environment aligned with CI toolchains.
+2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
+3. Enable Stage 4 only when sudo/BPF integration checks are required.
+4. Attach report snippets and failing stage logs to the bug or PR discussion.
+
+### Deep-debug escalation guide
+
+Use **`scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
 
 - flaky failures (non-deterministic test or workflow behavior),
 - BPF verifier/load or attach instability,

@@ -259,7 +259,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_dns.enrich_rdns
+            python3 -m public_scripts.coldstep_dns.enrich_rdns
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
@@ -275,7 +275,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_otx.enrich
+            python3 -m public_scripts.coldstep_otx.enrich
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
