@@ -42,8 +42,9 @@ At the top of Tier-2 HTML, **What to look at first** is a three-card triage stri
 | `timeline` | `[{bucket, type, count}]` | `bucket` is a 1-second UTC bin, ISO-8601 with `Z` suffix. |
 | `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the OTX-eligible indicator list (IPv4/FQDN) for the edge — added in schema v2 for cross-joining with the `otx` block. |
 | `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` (with the three buckets) or `"unavailable"` (with `reason`). Each entry in the three buckets carries `indicators: list[str]` (schema v2). |
-| `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
-| `dns_lookups` | `{ip: hostname}` map, optional | Populated by `scripts/coldstep_dns/enrich_rdns.py`. Best-effort PTR resolution for every IPv4 indicator on the model (hostnames are skipped — they already are names). Missing entry = no PTR / timed out / not asked. Schema-additive: renderers that don't know about it ignore the key, renderers that do know join on the IP to display "8.8.8.8 (dns.google)". |
+| `otx` | `null` \| `{skipped, ...}` \| `{schema_version, generated_at, indicators[], summary, partial_results, api_calls, wall_time_ms}` | Populated by `public_scripts/coldstep_otx/enrich.py`. `null` until enrichment runs; `{"skipped": "no_api_key" \| "invalid_key" \| "no_indicators"}` when enrichment short-circuits; full block when enrichment completes (possibly partial). Each `indicators[]` entry is `{indicator, type, verdict, evidence[], rate_limited?}`. |
+| `dns_lookups` | `{ip: hostname}` map, optional | Populated by `public_scripts/coldstep_dns/enrich_rdns.py`. Best-effort PTR resolution for every IPv4 indicator on the model (hostnames are skipped — they already are names). Missing entry = no PTR / timed out / not asked. Schema-additive: renderers that don't know about it ignore the key, renderers that do know join on the IP to display "8.8.8.8 (dns.google)". |
+| `ip_classification` | `[{...}]` | Embedded IP/FQDN/rDNS classification rows. **`severity`** matches **`pulse_severity`** when OTX reports a pulse tier (Low/Medium/High/Critical); otherwise **`severity`** uses composite risk bands. Critical may still downgrade via the usual confidence/corroboration guardrail. |
 
 ### Required capabilities (anchor the matrix)
 
@@ -55,21 +56,21 @@ The same pipeline runs end-to-end against the bundled fixtures:
 
 ```powershell
 # 1. Build the model from the fixtures.
-$env:COLDSTEP_REPORT_CURRENT_JSONL  = "scripts/coldstep_detect_report/fixtures/coldstep-events.sample.jsonl"
-$env:COLDSTEP_REPORT_BASELINE_JSONL = "scripts/coldstep_detect_report/fixtures/baseline-events.sample.jsonl"
+$env:COLDSTEP_REPORT_CURRENT_JSONL  = "public_scripts/coldstep_detect_report/fixtures/coldstep-events.sample.jsonl"
+$env:COLDSTEP_REPORT_BASELINE_JSONL = "public_scripts/coldstep_detect_report/fixtures/baseline-events.sample.jsonl"
 $env:COLDSTEP_REPORT_MODEL_OUT      = "report-model.json"
-python scripts/coldstep_detect_report/build_report_model.py
+python public_scripts/coldstep_detect_report/build_report_model.py
 
 # 2a. Render the HTML artifact.
 $env:COLDSTEP_REPORT_MODEL_IN  = "report-model.json"
 $env:COLDSTEP_REPORT_HTML_OUT  = "report.html"
-python scripts/coldstep_detect_report/render_html_report.py
+python public_scripts/coldstep_detect_report/render_html_report.py
 # open report.html in a browser
 
 # 2b. (Optional) render the GitHub step summary too. GitHub injects
 #     GITHUB_STEP_SUMMARY in CI; locally you point it at any file.
 $env:GITHUB_STEP_SUMMARY = "step-summary.md"
-python scripts/coldstep_detect_report/render_step_summary.py
+python public_scripts/coldstep_detect_report/render_step_summary.py
 # step-summary.md previews in any markdown viewer that supports Mermaid
 ```
 
@@ -80,7 +81,7 @@ Drop `COLDSTEP_REPORT_BASELINE_JSONL` to simulate a first run (the diff section 
 `render_html_report.py` is a 60-line substitute-and-write script. The visual surface lives in two files:
 
 ```
-scripts/coldstep_detect_report/templates/
+public_scripts/coldstep_detect_report/templates/
   report.html     ← layout, mark up, chart code
   styles.css      ← inline-injected CSS
 ```
@@ -101,7 +102,7 @@ The substitution order is intentional and security-sensitive — see the comment
 - Plot mark configurations in the inline `<script type="module">` (try a different `Plot.dot()` instead of `Plot.barX()`, swap colour scales, etc.).
 
 **Edits that require coordinating with the Python side:**
-- Adding a new top-level field to the model → edit `build_report_model.py` and bump `SCHEMA_VERSION`. Tests in `scripts/test_coldstep_detect_report_build.py` will need a new assertion.
+- Adding a new top-level field to the model → edit `build_report_model.py` and bump `SCHEMA_VERSION`. Tests in `public_scripts/test_coldstep_detect_report_build.py` will need a new assertion.
 - Removing a model field → same deal. Don't silently change the contract.
 - Adding a new `{{ PLACEHOLDER }}` → add the corresponding `.replace()` call in `render_html_report.py` *after* `{{ MODEL_JSON }}` (so a malicious upstream value can't inject the literal).
 
@@ -119,7 +120,7 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 
 ## OTX threat-intel enrichment (schema v2)
 
-`scripts/coldstep_otx/enrich.py` runs **between** the diff-step model rebuild and the HTML render. It reads the model in place, dedupes IPv4/FQDN indicators from `egress_sankey[].indicators` and `diff.traffic_*[].indicators`, looks up each one against AlienVault OTX's `general` endpoint, classifies the response into `malicious` / `clean` / `unidentified`, and writes the enriched model back to disk.
+`public_scripts/coldstep_otx/enrich.py` runs **between** the diff-step model rebuild and the HTML render. It reads the model in place, dedupes IPv4/FQDN indicators from `egress_sankey[].indicators` and `diff.traffic_*[].indicators`, looks up each one against AlienVault OTX's `general` endpoint, classifies the response into `malicious` / `clean` / `unidentified`, and writes the enriched model back to disk.
 
 | Env var | Default | Notes |
 |---|---|---|
@@ -129,7 +130,7 @@ Inputs to the report come from a controlled source (Coldstep's own JSONL events 
 
 **Failure modes are observational, not fatal.** Every error path (missing key, 403 invalid key, transport error, exhausted budget) returns exit 0. The CI step also pins `continue-on-error: true` for belt-and-braces. Malicious indicators surface as GitHub `::warning::` annotations on the run — they never fail the job.
 
-**Allowlist (OTX bypass, not OTX skip).** RFC-reserved address space (loopback `127.0.0.0/8` in v1) is matched against `scripts/coldstep_otx/allowlist.py` *before* the OTX call. Allowlisted indicators are still recorded in `model.otx.indicators[]` with `verdict: "clean"`, `source: "allowlist"`, `reason: "loopback"` so the action is auditable, but they consume zero API calls and zero wall-clock budget. The Tier-1 GFM verdict cell shows `🟩 clean (allowlist: loopback)` so a reader can tell the two flavours of "clean" apart. Adding RFC1918 / link-local is a one-tuple edit in `allowlist.py` — no schema or renderer change needed.
+**Allowlist (OTX bypass, not OTX skip).** RFC-reserved address space (loopback `127.0.0.0/8` in v1) is matched against `public_scripts/coldstep_otx/allowlist.py` *before* the OTX call. Allowlisted indicators are still recorded in `model.otx.indicators[]` with `verdict: "clean"`, `source: "allowlist"`, `reason: "loopback"` so the action is auditable, but they consume zero API calls and zero wall-clock budget. The Tier-1 GFM verdict cell shows `🟩 clean (allowlist: loopback)` so a reader can tell the two flavours of "clean" apart. Adding RFC1918 / link-local is a one-tuple edit in `allowlist.py` — no schema or renderer change needed.
 
 The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended to the `traffic_new` / `traffic_gone` / `traffic_changed` diff tables (rendered by `render_step_summary.py`), plus a standalone "Threat-intel verdicts" section (Mermaid pie + per-tier `<details>` tables for malicious confidence, plus an "Other verdicts" table for non-malicious rows) appended by `render_otx_summary.py`. Malicious indicators without `confidence` render as **high** tier for backwards compatibility. When `filter_drops` / `filtered_pulses` are set, the GFM section includes a short filter-audit block. The Tier-2 HTML report adds a collapsible OTX section with an Observable Plot `barY` chart, verdict-color-coded indicator pills (`.coldstep-verdict-{malicious,clean,unidentified,rate-limited}`), and confidence-tier grouping (`.coldstep-otx-tier`, `data-tier`, CSS vars `--coldstep-confidence-*` in `styles.css`).
 
@@ -137,7 +138,7 @@ The Tier-1 GFM summary picks up OTX in two places: a "Verdict" column appended t
 
 ## Reverse-DNS enrichment (rDNS)
 
-`scripts/coldstep_dns/enrich_rdns.py` runs **before** OTX enrichment so that the OTX renderers (and a future 3-column Sankey) can label IPv4 indicators with their PTR hostname (e.g. `8.8.8.8 (dns.google)`). Stdlib only — no API key, no third-party dep, no per-indicator HTTP request. Best-effort: missing PTR / OS-level timeout / unexpected exception silently omits the entry; never fails the job.
+`public_scripts/coldstep_dns/enrich_rdns.py` runs **before** OTX enrichment so that the OTX renderers (and a future 3-column Sankey) can label IPv4 indicators with their PTR hostname (e.g. `8.8.8.8 (dns.google)`). Stdlib only — no API key, no third-party dep, no per-indicator HTTP request. Best-effort: missing PTR / OS-level timeout / unexpected exception silently omits the entry; never fails the job.
 
 | Env var | Default | Notes |
 |---|---|---|

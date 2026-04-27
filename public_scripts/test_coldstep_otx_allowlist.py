@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.coldstep_otx.allowlist import is_allowlisted
+from public_scripts.coldstep_otx.allowlist import is_allowlisted
 
 
 class AllowlistTests(unittest.TestCase):

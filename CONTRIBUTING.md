@@ -7,7 +7,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 - **CI is the gate:** meaningful validation (BPF generation, `go test`, integration tests, TypeScript bundle) runs on **GitHub-hosted `ubuntu-latest`** via **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** and **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. There is no supported path to reproduce the full Linux/eBPF matrix purely on Windows or macOS dev machines.
 - **Composite action runtime:** the action declares **`node24`**; workflows in this repo set **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`** so behavior matches hosted runner defaults. Keep that in mind when copying workflow snippets.
 - **Composite manifest name:** GitHub only loads a repo-root composite from **`action.yml`** or **`action.yaml`** (`uses: ./`, marketplace). Renaming it (for example to `coldstep-action.yml`) breaks **`uses: ./`** with “Can't find `action.yml`”.
-- **Generated artifacts:** `bpf/vmlinux.h` and bpf2go outputs under `internal/bpf/**` are **gitignored**; CI builds them with **`scripts/build-agent-linux.sh`**. Do not commit generated BPF headers or `*_bpfel.go` / `*_bpfeb.go` stubs.
+- **Generated artifacts:** `bpf/vmlinux.h` and bpf2go outputs under `internal/bpf/**` are **gitignored**; CI builds them with **`public_scripts/build-agent-linux.sh`**. Do not commit generated BPF headers or `*_bpfel.go` / `*_bpfeb.go` stubs.
 
 ## Before you open a PR
 

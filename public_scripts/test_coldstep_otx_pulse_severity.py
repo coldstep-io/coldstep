@@ -1,6 +1,6 @@
 import unittest
 
-from scripts.coldstep_otx.pulse_severity import pulse_signal_severity, severity_rank
+from public_scripts.coldstep_otx.pulse_severity import pulse_signal_severity, severity_rank
 
 
 class PulseSeverityTests(unittest.TestCase):

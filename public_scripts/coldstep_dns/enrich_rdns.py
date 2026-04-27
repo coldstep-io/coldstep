@@ -26,7 +26,7 @@ from typing import Iterable, Optional
 
 import ipaddress
 
-from scripts.coldstep_dns.rdns import Resolver, _default_resolver, lookup_batch
+from public_scripts.coldstep_dns.rdns import Resolver, _default_resolver, lookup_batch
 
 
 def _is_ipv4(value: str) -> bool:
@@ -101,7 +101,7 @@ def _wf_data(s: object) -> str:
 # untrusted. main() canonicalises every env-var path through this helper
 # before it reaches a Path()/open() sink. Inlined per file because Snyk's
 # taint analysis only recognises sanitisers that live in the same module
-# as the sink. Mirrors scripts/coldstep_detect_report/build_report_model.py
+# as the sink. Mirrors public_scripts/coldstep_detect_report/build_report_model.py
 # so the trusted-root set stays identical (AGENTS.md canonical helper).
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
 

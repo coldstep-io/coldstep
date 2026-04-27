@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from scripts.coldstep_otx.confidence import (
+from public_scripts.coldstep_otx.confidence import (
     PULSE_HARD_DROP_RE,
     GENERIC_LIST_NAME_RE,
     _filtered_pulses,

@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_detect_report.build_ip_classification_model import (
+from public_scripts.coldstep_detect_report.build_ip_classification_model import (
     build,
     project_otx_classification,
 )
@@ -160,6 +160,38 @@ class BuildIPClassificationModelTests(unittest.TestCase):
         self.assertEqual(row["classification"], "malicious")
         self.assertEqual(row["pulse_count"], 4)
         self.assertEqual(row["pulse_severity"], "Low")
+        self.assertEqual(row["severity"], "Low")
+
+    def test_severity_tracks_pulse_tier_not_risk_score_composite(self) -> None:
+        """Composite risk_score would be High from malicious+medium pulse+repeat; severity follows pulse tier."""
+        model = {
+            "ip_classification": [
+                {
+                    "ip": "198.51.100.10",
+                    "fqdn": "tracked.example",
+                    "rdns": "ptr.tracked.example",
+                    "classification": "unidentified",
+                    "pulse_severity": "Informational",
+                    "pulse_count": 0,
+                }
+            ],
+            "dns_lookups": {"198.51.100.10": "ptr.tracked.example"},
+            "otx": {
+                "indicators": [
+                    {
+                        "indicator": "198.51.100.10",
+                        "verdict": "malicious",
+                        "pulse_severity": "Medium",
+                        "pulse_count": 12,
+                        "confidence": "high",
+                    }
+                ]
+            },
+        }
+        projected = project_otx_classification(model)
+        row = projected["ip_classification"][0]
+        self.assertEqual(row["pulse_severity"], "Medium")
+        self.assertEqual(row["severity"], "Medium")
 
 
 if __name__ == "__main__":

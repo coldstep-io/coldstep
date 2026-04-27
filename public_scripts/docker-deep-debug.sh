@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Run deep-debug.sh inside Dockerfile.deep-debug. Repo root mounted at /workspace.
-# Usage: ./scripts/docker-deep-debug.sh [--privileged] [--] [args passed to deep-debug.sh]
+# Usage: ./public_scripts/docker-deep-debug.sh [--privileged] [--] [args passed to deep-debug.sh]
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
@@ -23,4 +23,4 @@ exec docker run --rm -i "${PRIV[@]}" \
   -e GOTOOLCHAIN=auto \
   -e DEEP_DEBUG_IN_DOCKER=1 \
   "${IMAGE}" \
-  bash scripts/deep-debug.sh "$@"
+  bash public_scripts/deep-debug.sh "$@"

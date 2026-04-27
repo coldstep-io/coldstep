@@ -36,7 +36,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go (same graph as PR unit job)
-        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Install govulncheck
         env:
           GOTOOLCHAIN: auto
@@ -58,7 +58,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Unit tests with shuffle (stress test execution order)
         env:
           GOTOOLCHAIN: auto
@@ -75,7 +75,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Race detector — full module
         env:
           GOTOOLCHAIN: auto

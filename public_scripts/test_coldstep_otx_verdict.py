@@ -2,7 +2,7 @@ import json
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_otx.verdict import classify
+from public_scripts.coldstep_otx.verdict import classify
 
 FIX = Path(__file__).parent / "coldstep_otx" / "fixtures"
 

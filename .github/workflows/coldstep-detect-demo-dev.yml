@@ -44,7 +44,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 scripts/assert_utf8_text.py
+        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -167,7 +167,7 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/build_report_model.py
+        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -233,7 +233,7 @@ jobs:
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
           export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 
@@ -241,12 +241,12 @@ jobs:
           COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
           COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
           COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
-            python3 "${GITHUB_WORKSPACE}/scripts/coldstep_detect_report/build_report_model.py"
+            python3 "${GITHUB_WORKSPACE}/public_scripts/coldstep_detect_report/build_report_model.py"
 
       - name: Render step summary (markdown + mermaid)
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 scripts/coldstep_detect_report/render_step_summary.py
+        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
 
       # rDNS enrichment runs before summary render so each deduped IP row can
       # include reverse lookup context when available.
@@ -259,7 +259,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_dns.enrich_rdns
+            python3 -m public_scripts.coldstep_dns.enrich_rdns
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
@@ -275,7 +275,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_otx.enrich
+            python3 -m public_scripts.coldstep_otx.enrich
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
@@ -289,7 +289,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_ip_classification_summary.py
+            python3 public_scripts/coldstep_detect_report/render_ip_classification_summary.py
           else
             echo "::warning::report model missing, skipping IP classification summary"
           fi
@@ -301,7 +301,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_step_summary.py
+            python3 public_scripts/coldstep_detect_report/render_step_summary.py
           else
             echo "::warning::report model missing, skipping step summary render"
           fi
@@ -314,7 +314,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 scripts/coldstep_detect_report/render_html_report.py
+            python3 public_scripts/coldstep_detect_report/render_html_report.py
           else
             echo "::warning::report model missing, skipping HTML render"
           fi
@@ -346,7 +346,7 @@ jobs:
               print("::error::missing .coldstep-report-model.json for IP classification verify")
               sys.exit(1)
           model = json.loads(model_path.read_text(encoding="utf-8"))
-          from scripts.coldstep_detect_report.render_ip_classification_summary import render_markdown
+          from public_scripts.coldstep_detect_report.render_ip_classification_summary import render_markdown
 
           body = render_markdown(model)
           needles = ("IP classification", "Decision banner", "Uncertainty and contradictions")

@@ -1,7 +1,7 @@
 import socket
 import unittest
 
-from scripts.coldstep_dns.rdns import lookup_batch
+from public_scripts.coldstep_dns.rdns import lookup_batch
 
 
 def _resolver_table(table: dict, *, raise_for=None):

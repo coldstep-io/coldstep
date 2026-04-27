@@ -33,7 +33,7 @@ jobs:
       - uses: actions/checkout@v6
 
       - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 scripts/assert_utf8_text.py
+        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -219,7 +219,7 @@ jobs:
           export NS_CURRENT="${current_file}"
           export NS_MARKER="${marker_prefix}"
           export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 
