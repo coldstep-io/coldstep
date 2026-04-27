@@ -763,6 +763,7 @@ func writeAgentStatus(path string, ok bool) error {
 	}
 	dir := filepath.Dir(path)
 	if dir != "" && dir != "." {
+		// #nosec G301 -- directory must be traversable by the non-root runner user polling readiness.
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
 		}
@@ -774,6 +775,7 @@ func writeAgentStatus(path string, ok bool) error {
 	}
 	// GitHub Actions polls this path as the runner user while the agent runs under sudo; 0o600
 	// root-owned files are unreadable (EACCES). Payload is non-secret (ok + version only).
+	// #nosec G306 -- readiness file intentionally world-readable for runner polling semantics.
 	if err := os.WriteFile(path, b, 0o644); err != nil {
 		return err
 	}
@@ -965,38 +967,38 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 		Program: objs.HandleRawSysEnter,
 	})
 	if err != nil {
-		objs.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 
 	connRd, err = ringbuf.NewReader(objs.ConnectEvents)
 	if err != nil {
-		lnk.Close()
-		objs.Close()
+		_ = lnk.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	udpRd, err = ringbuf.NewReader(objs.UdpEvents)
 	if err != nil {
-		connRd.Close()
-		lnk.Close()
-		objs.Close()
+		_ = connRd.Close()
+		_ = lnk.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	httpRd, err = ringbuf.NewReader(objs.HttpEvents)
 	if err != nil {
-		udpRd.Close()
-		connRd.Close()
-		lnk.Close()
-		objs.Close()
+		_ = udpRd.Close()
+		_ = connRd.Close()
+		_ = lnk.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 	tlsRd, err = ringbuf.NewReader(objs.TlsEvents)
 	if err != nil {
-		httpRd.Close()
-		udpRd.Close()
-		connRd.Close()
-		lnk.Close()
-		objs.Close()
+		_ = httpRd.Close()
+		_ = udpRd.Close()
+		_ = connRd.Close()
+		_ = lnk.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, nil, nil, false, err
 	}
 
@@ -1021,7 +1023,7 @@ func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, lin
 		Program: objs.HandleRawSysEnterDns,
 	})
 	if err != nil {
-		objs.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, err
 	}
 
@@ -1030,16 +1032,16 @@ func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, lin
 		Program: objs.HandleRawSysExitDns,
 	})
 	if err != nil {
-		lnkEnter.Close()
-		objs.Close()
+		_ = lnkEnter.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, err
 	}
 
 	rd, err := ringbuf.NewReader(objs.DnsEvents)
 	if err != nil {
-		lnkExit.Close()
-		lnkEnter.Close()
-		objs.Close()
+		_ = lnkExit.Close()
+		_ = lnkEnter.Close()
+		_ = objs.Close()
 		return nil, nil, nil, nil, err
 	}
 
