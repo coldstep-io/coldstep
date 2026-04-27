@@ -207,7 +207,7 @@ async function run(): Promise<void> {
   const detectLog = path.join(baseDir, '.coldstep-detect.md');
   const pidFile = path.join(actionPath, '.coldstep.pid');
   const binPath = path.join(actionPath, 'bin', 'coldstep');
-  const script = path.join(actionPath, 'scripts', 'build-agent-linux.sh');
+  const script = path.join(actionPath, 'public_scripts', 'build-agent-linux.sh');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');
   const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
 

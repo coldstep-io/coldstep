@@ -32,7 +32,7 @@ jobs:
       - name: Check workflow action pins (no @main; marketplace tag)
         run: python3 public_scripts/check_workflow_action_pins.py
       - name: Python script regression tests (diff + pins)
-        run: python3 -m unittest discover -s scripts -p 'test_*.py' -v
+        run: python3 -m unittest discover -s public_scripts -p 'test_*.py' -v
       - name: Shell contract (prev-diff summary markers)
         run: bash public_scripts/test_workflow_diff_markers.sh
 
