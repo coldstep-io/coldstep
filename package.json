@@ -6,7 +6,7 @@
     "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/main/index.js && esbuild src/post.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/post/index.js"
   },
   "dependencies": {
-    "@actions/core": "^3.0.0",
+    "@actions/core": "^3.0.1",
     "@actions/github": "^9.1.0"
   },
   "overrides": {
