@@ -1,0 +1,185 @@
+name: coldstep-redteam-ebpf
+
+on:
+  workflow_dispatch:
+    inputs:
+      strict_telemetry_gate:
+        description: Fail when anti-blindness telemetry gates are not met
+        type: boolean
+        default: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLDSTEP_AGENT_VERSION: v0.1.7
+
+jobs:
+  redteam-detect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      NS_RUNNER_LABEL: ubuntu-latest
+      STRICT_TELEMETRY_GATE: ${{ inputs.strict_telemetry_gate == true && '1' || '0' }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Assert tracked text is UTF-8
+        run: python3 public_scripts/assert_utf8_text.py
+
+      - name: Download coldstep agent (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          for attempt in 1 2 3; do
+            if gh release download "${COLDSTEP_AGENT_VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'coldstep-linux-amd64' \
+              --dir bin; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "failed to download coldstep release artifact after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
+          mv bin/coldstep-linux-amd64 bin/coldstep
+          chmod +x bin/coldstep
+
+      - name: Start coldstep in detect mode
+        uses: ./
+        with:
+          mode: detect
+          log-level: info
+          fail-on-error: "false"
+          report-job-summary: "false"
+          allowed-hosts: example.com, theclouddj.com, *.ubuntu.com
+          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          release-path: bin/coldstep
+
+      - name: Install probe tooling
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+
+      - name: Run attacker-style probe workload
+        run: |
+          set -euo pipefail
+          # TCP connect scan-like behavior
+          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com || true
+
+          # HTTP and TLS egress
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+
+          # UDP send evidence
+          timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
+
+          # Process and filesystem activity
+          for _ in 1 2 3; do bash -c 'echo "redteam-proc" >/dev/null'; done
+          TMP_FS_DIR="$(mktemp -d /tmp/coldstep-redteam-XXXXXX)"
+          TMP_A="${TMP_FS_DIR}/a.txt"
+          TMP_B="${TMP_FS_DIR}/b.txt"
+          printf 'redteam\n' > "${TMP_A}"
+          mv "${TMP_A}" "${TMP_B}"
+          chmod 600 "${TMP_B}"
+          rm -f "${TMP_B}" || true
+          rmdir "${TMP_FS_DIR}" || true
+
+      - name: Stop agent (flush outputs)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: Anti-blindness telemetry gate
+        run: |
+          set -euo pipefail
+          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          test -f "${j}" || { echo "missing events jsonl"; exit 1; }
+          test -f "${f}" || { echo "missing detect markdown"; exit 1; }
+
+          python3 - <<'PY'
+          import json
+          import os
+          import pathlib
+          import sys
+          from collections import Counter
+
+          events_path = pathlib.Path(os.environ["GITHUB_WORKSPACE"]) / ".coldstep-events.jsonl"
+          strict = os.environ.get("STRICT_TELEMETRY_GATE", "1") == "1"
+          required_types = {"meta", "exec", "tcp", "udp", "http", "tls", "proc_fork", "fs_event"}
+
+          counts = Counter()
+          total = 0
+          for line in events_path.read_text(encoding="utf-8").splitlines():
+              line = line.strip()
+              if not line:
+                  continue
+              total += 1
+              try:
+                  evt = json.loads(line)
+              except Exception:
+                  continue
+              t = evt.get("type")
+              if isinstance(t, str):
+                  counts[t] += 1
+
+          missing = sorted(t for t in required_types if counts.get(t, 0) == 0)
+          # Guardrail against "green but silent": require non-trivial event volume.
+          too_small = total < 20
+
+          print(f"total_events={total}")
+          print("type_counts=" + ", ".join(f"{k}:{counts[k]}" for k in sorted(counts)))
+          if missing:
+              print("missing_types=" + ",".join(missing))
+
+          if strict and (missing or too_small):
+              if too_small:
+                  print("telemetry volume below threshold (<20 events)")
+              sys.exit(1)
+          PY
+
+      - name: Build report model
+        if: always()
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+
+      - name: Render step summary (BLUF)
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            python3 public_scripts/coldstep_detect_report/render_step_summary.py
+          else
+            echo "::warning::report model missing, skipping step summary render"
+          fi
+
+      - name: Upload redteam detect artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coldstep-redteam-detect-${{ env.NS_RUNNER_LABEL }}
+          path: |
+            ${{ github.workspace }}/.coldstep-detect.md
+            ${{ github.workspace }}/.coldstep-events.jsonl
+            ${{ github.workspace }}/.coldstep-report-model.json
+          retention-days: 14
+          include-hidden-files: true
+          if-no-files-found: ignore
+          overwrite: true
