@@ -12,7 +12,7 @@ Nothing listed yet — add changes here before tagging the next release, then ro
 
 ## [0.1.7] — 2026-04-20
 
-**Pre-release** — pin alignment only (no Go agent, BPF, or composite TypeScript changes in this PR). Documentation, website, **`scripts/check_workflow_action_pins.py`**, Marketplace demo, and **`COLDSTEP_AGENT_VERSION`** on **`coldstep-demo*`** workflows now target **`v0.1.7`**.
+**Pre-release** — pin alignment only (no Go agent, BPF, or composite TypeScript changes in this PR). Documentation, website, **`public_scripts/check_workflow_action_pins.py`**, Marketplace demo, and **`COLDSTEP_AGENT_VERSION`** on **`coldstep-demo*`** workflows now target **`v0.1.7`**.
 
 ### Publishing this pre-release
 
@@ -32,7 +32,7 @@ GitHub Releases can be **immutable**. If **`v0.1.5`** was finalized before **`su
 
 ### Changed
 
-- README, QUICK_START, CONTRIBUTING, website, **`scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
+- README, QUICK_START, CONTRIBUTING, website, **`public_scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
 
 ---
 
@@ -42,12 +42,12 @@ Detect-mode reporting matured with a two-tier pipeline (Tier-1 GitHub Actions st
 
 ### Added
 
-- **Detect-mode report pipeline (PR #29):** `report-model.json` builder (`build_report_model.py`), Tier-1 GFM/Mermaid step summary (`render_step_summary.py`), Tier-2 self-contained **`report.html`** (`render_html_report.py`, templates, pinned Plot/d3 vendors with SRI); designer-handoff README under `scripts/coldstep_detect_report/README.md`.
-- **OTX threat-intel enrichment (PR #30, extended in PR #43):** `scripts/coldstep_otx/` — client, verdicts (`malicious` / `clean` / `unidentified`), confidence tiers (schema **v2.1**), integration in `coldstep-demo-detect` with optional `secrets.OTX_API_KEY` and skip when unset.
-- **Reverse DNS enrichment:** `scripts/coldstep_dns/` (`rdns.py`, `enrich_rdns.py`) wired into the detect report flow.
+- **Detect-mode report pipeline (PR #29):** `report-model.json` builder (`build_report_model.py`), Tier-1 GFM/Mermaid step summary (`render_step_summary.py`), Tier-2 self-contained **`report.html`** (`render_html_report.py`, templates, pinned Plot/d3 vendors with SRI); designer-handoff README under `public_scripts/coldstep_detect_report/README.md`.
+- **OTX threat-intel enrichment (PR #30, extended in PR #43):** `public_scripts/coldstep_otx/` — client, verdicts (`malicious` / `clean` / `unidentified`), confidence tiers (schema **v2.1**), integration in `coldstep-demo-detect` with optional `secrets.OTX_API_KEY` and skip when unset.
+- **Reverse DNS enrichment:** `public_scripts/coldstep_dns/` (`rdns.py`, `enrich_rdns.py`) wired into the detect report flow.
 - **Job Summary / digest — triage-first output:** `internal/report/digest.go` and summary rendering emphasize IR-style triage (ribbon, collapsed technical detail, hot egress) for faster review; aligned Python/GFM tier (release train).
 - **CI coverage:** Multi-distro matrix (ubuntu LTS x64 + arm), `coldstep-ci-nightly` (govulncheck, shuffle, optional race), **`coldstep-deep-debug`** + `Dockerfile.deep-debug` / helper scripts for staged deep triage.
-- **Workflow guardrails:** `scripts/check_workflow_action_pins.py` + CI hook; shell markers test for JSONL diff summaries.
+- **Workflow guardrails:** `public_scripts/check_workflow_action_pins.py` + CI hook; shell markers test for JSONL diff summaries.
 - **`supply-chain-attest`:** Continued publishing of **`coldstep-linux-amd64`** on matching tags (consumer demos align `COLDSTEP_AGENT_VERSION`).
 - **`coldstep-demo-marketplace.yml`:** Minimal Marketplace-style consumer workflow.
 

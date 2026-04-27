@@ -2,7 +2,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_detect_report.render_ip_classification_summary import (
+from public_scripts.coldstep_detect_report.render_ip_classification_summary import (
     render_markdown,
     write_summary,
 )

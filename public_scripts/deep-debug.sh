@@ -59,10 +59,10 @@ run_cmd() {
 
 # --- Stage 0 ---
 S0_OK=0
-run_cmd 0 utf8             python3 scripts/assert_utf8_text.py                 || S0_OK=1
-run_cmd 0 pins           python3 scripts/check_workflow_action_pins.py         || S0_OK=1
+run_cmd 0 utf8             python3 public_scripts/assert_utf8_text.py                 || S0_OK=1
+run_cmd 0 pins           python3 public_scripts/check_workflow_action_pins.py         || S0_OK=1
 run_cmd 0 unittest       python3 -m unittest discover -s scripts -p "test_*.py" -v || S0_OK=1
-run_cmd 0 shell_markers  bash scripts/test_workflow_diff_markers.sh            || S0_OK=1
+run_cmd 0 shell_markers  bash public_scripts/test_workflow_diff_markers.sh            || S0_OK=1
 [[ "$S0_OK" -eq 0 ]] || P0_FAIL=1
 
 # --- Stage 1 ---
@@ -80,8 +80,8 @@ fi
 # --- Stage 2 ---
 S2_OK=0
 if [[ "$P0_FAIL" -eq 0 ]]; then
-  run_cmd 2 gofmt        bash scripts/check-gofmt.sh                         || S2_OK=1
-  run_cmd 2 bpf_build    bash scripts/build-agent-linux.sh "$ROOT"           || S2_OK=1
+  run_cmd 2 gofmt        bash public_scripts/check-gofmt.sh                         || S2_OK=1
+  run_cmd 2 bpf_build    bash public_scripts/build-agent-linux.sh "$ROOT"           || S2_OK=1
   run_cmd 2 vet          go vet ./...                                       || S2_OK=1
   # bash -lc drops Go toolchain PATH on some images; keep explicit /usr/local/go/bin.
   run_cmd 2 staticcheck bash -c 'export PATH="/usr/local/go/bin:${PATH}" && export PATH="$(go env GOPATH)/bin:${PATH}" && go install honnef.co/go/tools/cmd/staticcheck@v0.7.0 && staticcheck ./...' || S2_OK=1

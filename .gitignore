@@ -1,26 +1,32 @@
-# Build outputs (repo root; e.g. scripts/build-agent-linux.sh → bin/coldstep)
+# Build outputs (repo root; e.g. public_scripts/build-agent-linux.sh → bin/coldstep)
 /bin/
 /node_modules/
 
 # Local Windows tooling binaries (not published)
 *.exe
 
-# Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
+# Generated BPF: public_scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
 bpf/vmlinux.h
 internal/bpf/**/*.o
 internal/bpf/**/*_bpfel.go
 internal/bpf/**/*_bpfeb.go
+public_scripts/__pycache__/
+public_scripts/**/__pycache__/
 scripts/__pycache__/
-# Catch nested pycache too (e.g. scripts/coldstep_dns/__pycache__/, scripts/coldstep_otx/__pycache__/).
 scripts/**/__pycache__/
 **/__pycache__/
 *.pyc
 
-# Local Docker MCP Toolkit reconnect helper (copy from scripts/docker-mcp-reconnect.ps1.example)
-scripts/docker-mcp-reconnect.ps1
-
 # Secrets
 .env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+*.crt
+*.kubeconfig
 
 # Editor / machine-local (not published), including Cursor rules
 /.cursor/
@@ -31,18 +37,22 @@ AGENTS.md
 # Agent runtime artifacts in workspace (detect digest); do not commit
 .coldstep-detect.md
 .coldstep-agent.stderr.log
-scripts/__pycache__/
 
-# Local deep-debug pass output (scripts/deep-debug.sh)
+# Local deep-debug pass output (public_scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
 # Local-only trees — never staged, never committed (do not `git add` docs/ or knowledge/, never `git add -f`).
 /docs/
 /knowledge/
+/.worktrees/
+# Soft alias junction (mklink /J elon knowledge) — same vault, local-only.
+/elon/
 # Local-only orchestrator package: tooling that operates on the gitignored knowledge/ vault.
 # Lives next to scripts/ but is not part of the shipped product surface.
 /scripts/orchestrator/
 /scripts/test_orchestrator_*.py
+/scripts/**
+!/scripts/docker-mcp-reconnect.ps1.example
 
 # Ignore stray copies under .github only.
 /.github/design/

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_dns import enrich_rdns
+from public_scripts.coldstep_dns import enrich_rdns
 
 
 def _v2_model() -> dict:
@@ -136,7 +136,7 @@ class EnrichRdnsTests(unittest.TestCase):
 
 class EnrichRDNSSanitizationParityTests(unittest.TestCase):
     """F-P2-04: enrich_rdns.py must accept paths under the same trusted-root
-    set as scripts/coldstep_detect_report/build_report_model.py - workspace,
+    set as public_scripts/coldstep_detect_report/build_report_model.py - workspace,
     runner temp, system temp, and (when no workspace) cwd. AGENTS.md
     canonical helper.
     """

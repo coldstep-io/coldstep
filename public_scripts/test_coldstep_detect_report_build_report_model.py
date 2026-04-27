@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_detect_report.build_report_model import build
+from public_scripts.coldstep_detect_report.build_report_model import build
 
 
 class BuildReportModelTests(unittest.TestCase):

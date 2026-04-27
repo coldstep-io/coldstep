@@ -38,7 +38,7 @@ jobs:
           cache: npm
 
       - name: Build Go agent (BPF + binary)
-        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
 
       - name: Build action bundle (esbuild)
         run: |

@@ -13,7 +13,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from scripts.coldstep_otx.pulse_severity import severity_rank
+from public_scripts.coldstep_otx.pulse_severity import severity_rank
 
 # Snyk Code (python/PT, CWE-23) treats every os.environ.get(...) value as
 # untrusted. main() canonicalises every env-var path through this helper

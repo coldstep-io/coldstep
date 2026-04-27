@@ -16,15 +16,15 @@ import sys
 import tempfile
 from pathlib import Path
 
-# CI runs `python3 scripts/coldstep_detect_report/render_step_summary.py`; that puts only
-# this directory on sys.path — not the repo root — so `import scripts.*` fails unless
+# CI runs `python3 public_scripts/coldstep_detect_report/render_step_summary.py`; that puts only
+# this directory on sys.path — not the repo root — so `import public_scripts.*` fails unless
 # we prepend the workspace root (same layout as `python -m unittest discover`).
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _rr = str(_REPO_ROOT)
 if _rr not in sys.path:
     sys.path.insert(0, _rr)
 
-from scripts.coldstep_otx.pulse_severity import severity_rank
+from public_scripts.coldstep_otx.pulse_severity import severity_rank
 
 # warn / unknown (❔) reserved for future capability statuses; v1 capability_matrix only emits pass | fail.
 STATUS_PILL = {"pass": "🟢", "warn": "🟡", "fail": "🔴"}

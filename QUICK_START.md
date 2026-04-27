@@ -107,7 +107,7 @@ Consumers copying **`QUICK_START`** alone only need the default digest + JSONL u
 
 ### Optional: OTX enrichment (detect reports)
 
-Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`scripts/coldstep_detect_report/README.md`**.
+Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`public_scripts/coldstep_detect_report/README.md`**.
 
 ---
 

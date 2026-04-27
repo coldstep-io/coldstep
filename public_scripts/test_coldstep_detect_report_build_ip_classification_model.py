@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_detect_report.build_ip_classification_model import (
+from public_scripts.coldstep_detect_report.build_ip_classification_model import (
     build,
     project_otx_classification,
 )

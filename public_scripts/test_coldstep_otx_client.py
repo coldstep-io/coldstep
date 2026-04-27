@@ -6,7 +6,7 @@ import urllib.error
 import urllib.request
 from unittest.mock import MagicMock
 
-from scripts.coldstep_otx.client import (
+from public_scripts.coldstep_otx.client import (
     InvalidAPIKey,
     OTXClient,
     RateLimited,

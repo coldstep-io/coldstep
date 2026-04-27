@@ -43,6 +43,6 @@ The table below summarizes **third-party and co-licensed material** that appears
 ### Notes
 
 - **Distributed action bundle:** `npm run build` produces `dist/main` and `dist/post` with **esbuild**, which vendors the npm dependency graph above. Treat the bundle as subject to those upstream licenses in addition to this repo’s **BSD-3-Clause** for first-party code.
-- **Kernel / BTF at build time:** `scripts/build-agent-linux.sh` may generate **`bpf/vmlinux.h`** from the **running kernel’s BTF**. That header is derived from kernel metadata; building or loading BPF against a given kernel does not re-license this repo’s Go/TS sources, but downstream packaging should respect **kernel COPYING** and **GPL** obligations where they apply to combined or derivative works (consult your counsel for distribution scenarios).
+- **Kernel / BTF at build time:** `public_scripts/build-agent-linux.sh` may generate **`bpf/vmlinux.h`** from the **running kernel’s BTF**. That header is derived from kernel metadata; building or loading BPF against a given kernel does not re-license this repo’s Go/TS sources, but downstream packaging should respect **kernel COPYING** and **GPL** obligations where they apply to combined or derivative works (consult your counsel for distribution scenarios).
 
 If you believe an entry is missing or a license changed upstream, please open an issue or pull request with a pointer to the upstream `LICENSE` file or SPDX metadata.

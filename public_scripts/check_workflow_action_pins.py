@@ -5,7 +5,7 @@
 - Requires the marketplace smoke workflow to pin coldstep-io/coldstep at the
   canonical release tag (keep in sync with README / QUICK_START / AGENTS.md).
 
-Run from repository root: python3 scripts/check_workflow_action_pins.py
+Run from repository root: python3 public_scripts/check_workflow_action_pins.py
 """
 
 from __future__ import annotations
@@ -76,7 +76,7 @@ def check_file(path: Path) -> list[str]:
         if left == "coldstep-io/coldstep" and ref != MARKETPLACE_COLDSTEP_TAG:
             errors.append(
                 f"{path}:{i}: coldstep-io/coldstep must pin @{MARKETPLACE_COLDSTEP_TAG} "
-                f"(got @{ref}); update scripts/check_workflow_action_pins.py + docs together"
+                f"(got @{ref}); update public_scripts/check_workflow_action_pins.py + docs together"
             )
     return errors
 

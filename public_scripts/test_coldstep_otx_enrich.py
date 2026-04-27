@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.coldstep_otx import enrich
-from scripts.coldstep_otx.client import InvalidAPIKey
+from public_scripts.coldstep_otx import enrich
+from public_scripts.coldstep_otx.client import InvalidAPIKey
 
 
 def _v2_model_with_indicators() -> dict:
@@ -436,7 +436,7 @@ class EnrichOrchestratorTests(unittest.TestCase):
 
 class EnrichSanitizationParityTests(unittest.TestCase):
     """F-P2-01: enrich.py must accept paths under the same trusted-root set as
-    scripts/coldstep_detect_report/build_report_model.py — workspace, runner
+    public_scripts/coldstep_detect_report/build_report_model.py — workspace, runner
     temp, system temp, and (when no workspace) cwd. AGENTS.md canonical helper.
     """
 

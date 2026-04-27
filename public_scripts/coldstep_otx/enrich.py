@@ -35,11 +35,11 @@ import time
 from pathlib import Path
 from typing import Callable, Iterable
 
-from scripts.coldstep_otx.allowlist import is_allowlisted
-from scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
-from scripts.coldstep_otx.confidence import _filtered_pulses_with_audit, tier
-from scripts.coldstep_otx.pulse_severity import pulse_signal_severity
-from scripts.coldstep_otx.verdict import classify
+from public_scripts.coldstep_otx.allowlist import is_allowlisted
+from public_scripts.coldstep_otx.client import InvalidAPIKey, OTXClient, OTXError, RateLimited
+from public_scripts.coldstep_otx.confidence import _filtered_pulses_with_audit, tier
+from public_scripts.coldstep_otx.pulse_severity import pulse_signal_severity
+from public_scripts.coldstep_otx.verdict import classify
 
 VERDICT_ORDER = {"malicious": 0, "unidentified": 1, "clean": 2}
 
@@ -354,7 +354,7 @@ def run(
 # untrusted. main() canonicalises every env-var path through this helper
 # before it reaches a Path()/open() sink. Inlined per file because Snyk's
 # taint analysis only recognises sanitisers that live in the same module
-# as the sink. Mirrors scripts/coldstep_detect_report/build_report_model.py
+# as the sink. Mirrors public_scripts/coldstep_detect_report/build_report_model.py
 # so the trusted-root set stays identical (AGENTS.md canonical helper).
 _SAFE_PATH_RE = re.compile(r"^[A-Za-z0-9_./\\:-]+$")
 

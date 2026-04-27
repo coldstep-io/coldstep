@@ -41,7 +41,7 @@ No userland agent can promise **complete** observation of every kernel path on e
 
 ### Optional third-party threat intel (OTX)
 
-When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the detect-report enrichment step, the runner performs **HTTPS requests** to AlienVault Open Threat Exchange (`otx.alienvault.com`) for indicator lookups. When the secret is **absent or empty**, **no such requests** occur. Enrichment is designed not to fail the job on API errors (see **`scripts/coldstep_detect_report/README.md`**).
+When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the detect-report enrichment step, the runner performs **HTTPS requests** to AlienVault Open Threat Exchange (`otx.alienvault.com`) for indicator lookups. When the secret is **absent or empty**, **no such requests** occur. Enrichment is designed not to fail the job on API errors (see **`public_scripts/coldstep_detect_report/README.md`**).
 
 ### Further reading
 

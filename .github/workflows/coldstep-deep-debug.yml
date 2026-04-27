@@ -1,4 +1,4 @@
-# On-demand full pass mirroring scripts/deep-debug.sh (workflow_dispatch).
+# On-demand full pass mirroring public_scripts/deep-debug.sh (workflow_dispatch).
 name: coldstep deep-debug
 
 on:
@@ -56,7 +56,7 @@ jobs:
           DEEP_DEBUG_SHUFFLE: ${{ inputs.shuffle && '1' || '0' }}
           DEEP_DEBUG_RACE_FULL: ${{ inputs.race_full && '1' || '0' }}
           DEEP_DEBUG_RUN_4: ${{ inputs.run_4_integration && '1' || '0' }}
-        run: bash scripts/deep-debug.sh
+        run: bash public_scripts/deep-debug.sh
 
       - name: Upload deep-debug output
         if: always()
