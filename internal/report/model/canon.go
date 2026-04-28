@@ -20,5 +20,5 @@ func MarshalCanonical(r *Report) ([]byte, error) {
 	if n := len(out); n > 0 && out[n-1] == '\n' {
 		out = out[:n-1]
 	}
-	return out, nil
+	return bytes.Clone(out), nil
 }
