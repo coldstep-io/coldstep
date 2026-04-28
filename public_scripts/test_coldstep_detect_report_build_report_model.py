@@ -19,7 +19,7 @@ class BuildReportModelTests(unittest.TestCase):
                 baseline_jsonl=None,
                 now=dt.datetime(2026, 4, 20, tzinfo=dt.timezone.utc),
             )
-            self.assertEqual(model["schema_version"], "2.1")
+            self.assertEqual(model["schema_version"], "2.2")
             rows = model.get("ip_classification") or []
             self.assertTrue(rows)
             self.assertEqual(rows[0]["ip"], "8.8.8.8")
