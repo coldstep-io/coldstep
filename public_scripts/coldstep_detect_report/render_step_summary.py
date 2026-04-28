@@ -203,6 +203,8 @@ def _triage_alert_md(model: dict) -> str | None:
     """
     reasons: list[str] = []
     for row in model.get("capability_matrix") or []:
+        if row.get("status") == "fail":
+            label = row.get("label") or "unknown"
             reasons.append(f"Capability **fail**: {label}")
             break
             
