@@ -187,8 +187,8 @@ jobs:
         run: |
           set -euo pipefail
           nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
-          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
-          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://theclouddj.com/ >/dev/null || true
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null || true
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           bash -c 'echo "coldstep-demo" >/dev/null'
           # BPF Audit (if supported)
