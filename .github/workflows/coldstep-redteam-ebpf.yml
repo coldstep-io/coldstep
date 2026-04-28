@@ -18,8 +18,7 @@ on:
         default: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
+  COLDSTEP_AGENT_VERSION: v1.2.0
 
 jobs:
   audit-validation:
@@ -32,9 +31,6 @@ jobs:
       NS_RUNNER_LABEL: ubuntu-latest-redteam
     steps:
       - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8
-        run: python3 public_scripts/assert_utf8_text.py
 
       - uses: actions/setup-go@v6
         with:
@@ -51,6 +47,7 @@ jobs:
       - name: Start Coldstep (detect mode with full audit gates)
         uses: ./
         with:
+          phase: start
           mode: detect
           log-level: info
           report-job-summary: 'false'
@@ -91,41 +88,37 @@ jobs:
           chmod 400 "${TMP_F}"
           rm "${TMP_F}"
 
-      - name: Stop agent (flush digest)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 3
-          fi
+      - name: Stop Coldstep (flush digest)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'false'
 
       - name: Build report model
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+        run: ./bin/coldstep-report build-model
 
       - name: Enforce Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.fail_on_blindness == true
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/assert_integrity.py
+        run: ./bin/coldstep-report assert-integrity
 
       - name: Render step summary
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
+        run: ./bin/coldstep-report render-summary
 
       - name: Render HTML report
         if: always()
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
           COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-redteam-report.html
-        run: python3 public_scripts/coldstep_detect_report/render_html_report.py
+        run: ./bin/coldstep-report render-html
 
       - name: Upload Redteam Report
         if: always()

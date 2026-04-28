@@ -1,6 +1,6 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.1.7`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`**); there is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v1.2.0`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`**); there is no maintained local build path for the Linux agent.
 
 ## TL;DR (copy/paste)
 
@@ -13,16 +13,19 @@ on:
   push:
   pull_request:
 
-# Matches coldstep-ci / coldstep-demo: composite action runs on Node 24 (`node24` in action.yml).
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.7
+      - uses: coldstep-io/coldstep@v1.2.0
+        with:
+          phase: start
+      - run: echo "build/test/deploy steps"
+      - uses: coldstep-io/coldstep@v1.2.0
+        if: always()
+        with:
+          phase: stop
 ```
 
 That is enough to get:
@@ -35,7 +38,7 @@ That is enough to get:
 
 ## Versioning
 
-- Prefer **`coldstep-io/coldstep@v0.1.7`** (or a **newer tag** you publish, for example **`v0.2.0`**). **`@main`** tracks the default branch and can change without notice.
+- Prefer **`coldstep-io/coldstep@v1.2.0`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
 - **`v0.1.0`** is not usable with `uses: coldstep-io/coldstep@v0.1.0` (that tag lacks repo-root **`action.yml`**); use **`v0.1.7`** or later.
 
 **Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`** except **`coldstep-detect-demo-dev`** which also runs on **`push` to `dev`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-enforce.yml`](.github/workflows/coldstep-demo-enforce.yml)** (minimal enforce), **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift), and **[`coldstep-detect-demo-dev.yml`](.github/workflows/coldstep-detect-demo-dev.yml)** — same agent detect setup on **`dev`** with full BLUF + HTML artifact plus an extra **IP classification** Job Summary section.
@@ -45,21 +48,24 @@ That is enough to get:
 ## Add useful controls
 
 ```yaml
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 jobs:
   guard:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.7
+      - uses: coldstep-io/coldstep@v1.2.0
         with:
+          phase: start
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           report-job-summary: true
           report-pr-summary: false
           fail-on-error: true
           log-level: info
+      - uses: coldstep-io/coldstep@v1.2.0
+        if: always()
+        with:
+          phase: stop
+          report-job-summary: true
 ```
 
 ### What these controls do
@@ -73,16 +79,22 @@ jobs:
 
 ## Enforce mode (optional)
 
-Detect mode is default. For enforce behavior, reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.1.7`** pin as above, then configure `with:`:
+Detect mode is default. For enforce behavior, reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v1.2.0`** pin as above, then configure `with:`:
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.1.7
+- uses: coldstep-io/coldstep@v1.2.0
   with:
+    phase: start
     mode: enforce
     allowed-domains: google.com,github.com
     # optional:
     # allowed-hosts: api.example.com,*.svc.example.com
     # allowed-ips: 1.1.1.1,8.8.8.8   # IPv4 literals
+  # ... workload steps ...
+- uses: coldstep-io/coldstep@v1.2.0
+  if: always()
+  with:
+    phase: stop
 ```
 
 Denied egress appears as `"type":"deny"` in JSONL and in the digest.
@@ -117,7 +129,6 @@ The **[`coldstep-demo`](.github/workflows/coldstep-demo.yml)**-style detect job 
 
 ```yaml
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   COLDSTEP_DIFF_PREV_RUN: '1'
 ```
 

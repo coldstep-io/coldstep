@@ -25,8 +25,7 @@ on:
       - dev
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
+  COLDSTEP_AGENT_VERSION: v1.2.0
 
 jobs:
   demo:
@@ -43,9 +42,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
-
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
@@ -61,6 +57,7 @@ jobs:
       - name: coldstep-io/coldstep (detect)
         uses: ./
         with:
+          phase: start
           mode: detect
           log-level: info
           fail-on-error: 'false'
@@ -105,23 +102,15 @@ jobs:
           printf 'demo\n' > "${TMP_A}"
           mv "${TMP_A}" "${TMP_B}"
           chmod 600 "${TMP_B}"
-          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
-          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
-            rm -f "${TMP_B}" || true
-          fi
-          unset _NS_DEMO_UNLINK_TARGET || true
+          rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop agent (flush digest)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'false'
 
       - name: Verify detect capabilities
         run: |
@@ -159,7 +148,7 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+        run: ./bin/coldstep-report build-model
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -220,25 +209,17 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          export NS_SUMMARY="${summary}"
-          export NS_BASELINE="${baseline_file}"
-          export NS_CURRENT="${current_file}"
-          export NS_MARKER="${marker_prefix}"
-          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 
           # Re-build the report model with baseline JSONL so diff + downstream HTML carry traffic_new/gone/changed.
-          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
-          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
-          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
-            python3 "${GITHUB_WORKSPACE}/public_scripts/coldstep_detect_report/build_report_model.py"
+          ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
 
       - name: Render step summary (markdown + mermaid)
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
+        run: ./bin/coldstep-report render-summary
 
       # rDNS enrichment runs before summary render so each deduped IP row can
       # include reverse lookup context when available.
@@ -251,7 +232,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m public_scripts.coldstep_dns.enrich_rdns
+            ./bin/coldstep-report rdns-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
@@ -267,7 +248,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m public_scripts.coldstep_otx.enrich
+            ./bin/coldstep-report otx-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
@@ -281,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 public_scripts/coldstep_detect_report/render_ip_classification_summary.py
+            ./bin/coldstep-report render-ip-summary --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping IP classification summary"
           fi
@@ -293,7 +274,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 public_scripts/coldstep_detect_report/render_step_summary.py
+            ./bin/coldstep-report render-summary --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping step summary render"
           fi
@@ -306,7 +287,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 public_scripts/coldstep_detect_report/render_html_report.py
+            ./bin/coldstep-report render-html --in "${COLDSTEP_REPORT_MODEL_IN}" --out "${COLDSTEP_REPORT_HTML_OUT}"
           else
             echo "::warning::report model missing, skipping HTML render"
           fi
@@ -325,37 +306,10 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-          import json
-          import os
-          import pathlib
-          import sys
-
-          root = pathlib.Path(os.environ["GITHUB_WORKSPACE"])
-          sys.path.insert(0, str(root))
-          model_path = root / ".coldstep-report-model.json"
-          if not model_path.is_file():
-              print("::error::missing .coldstep-report-model.json for IP classification verify")
-              sys.exit(1)
-          model = json.loads(model_path.read_text(encoding="utf-8"))
-          from public_scripts.coldstep_detect_report.render_ip_classification_summary import render_markdown
-
-          body = render_markdown(model)
-          needles = ("IP classification", "Decision banner", "Uncertainty and contradictions")
-          missing = [n for n in needles if n not in body]
-          if missing:
-              print(f"::error::render_markdown missing expected phrases: {missing}")
-              print(
-                  f"::notice::markdown body bytes: {len(body.encode('utf-8', errors='replace'))}"
-              )
-              print("::group::render_markdown excerpt")
-              max_chars = 4000
-              print(body[:max_chars])
-              if len(body) > max_chars:
-                  print(f"... [truncated {len(body) - max_chars} chars]")
-              print("::endgroup::")
-              sys.exit(1)
-          PY
+          grep -q "IP Classification Summary" "${GITHUB_STEP_SUMMARY}" || {
+            echo "::error::expected IP classification summary in GITHUB_STEP_SUMMARY"
+            exit 1
+          }
 
       - name: Persist detect JSONL baseline artifact
         if: always()

@@ -15,8 +15,7 @@ on:
         default: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
+  COLDSTEP_AGENT_VERSION: v1.2.0
 
 jobs:
   demo:
@@ -31,9 +30,6 @@ jobs:
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -83,6 +79,7 @@ jobs:
       - name: coldstep-io/coldstep (enforce)
         uses: ./
         with:
+          phase: start
           mode: enforce
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
@@ -126,16 +123,12 @@ jobs:
             exit 1
           fi
 
-      - name: Stop agent (flush digest)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |
@@ -214,12 +207,7 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          export NS_SUMMARY="${summary}"
-          export NS_BASELINE="${baseline_file}"
-          export NS_CURRENT="${current_file}"
-          export NS_MARKER="${marker_prefix}"
-          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 

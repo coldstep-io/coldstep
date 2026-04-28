@@ -6,7 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-Nothing listed yet — add changes here before tagging the next release, then roll them under a dated version heading.
+### Planned for `v1.2.0` (breaking)
+
+- Action runtime migrates from JavaScript (`node24` + `dist/main|post`) to a composite action that invokes Go binaries (`bin/coldstep-action`, `bin/coldstep-report`).
+- Action lifecycle becomes explicit two-phase orchestration:
+  - `phase: start` before workload steps
+  - `phase: stop` at job tail (`if: always()`) to flush digest and optional notifications
+- Runtime detect/enforce/report/diff/enrichment workflows remove Python execution paths and use Go CLIs.
+- Supply-chain bundle moves from JS dist assets to composite + Go binaries archive.
+- `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is no longer required for Coldstep action execution.
+
+### Migration note
+
+Existing single-step workflows that relied on JS `post` hooks must add an explicit second `uses:` invocation with `phase: stop`.
 
 ---
 
@@ -30,7 +42,7 @@ Re-dock the **recommended consumer tag** and in-repo demo **`COLDSTEP_AGENT_VERS
 
 GitHub Releases can be **immutable**. If **`v0.1.5`** was finalized before **`supply-chain-attest`** uploaded **`coldstep-linux-amd64`**, later upload attempts could return **HTTP 422**. **`main`** now continues the workflow in that situation so attestations and downloadable artifacts still publish (change shipped after **PR #47**). Pin **`coldstep-io/coldstep@v0.1.6`** (or a newer tag) for new installs, then **create tag `v0.1.6`** and run **`supply-chain-attest`** (tag push or **`workflow_dispatch`**) so the Release and binary line up.
 
-### Changed
+### Changed (0.1.5)
 
 - README, QUICK_START, CONTRIBUTING, website, **`public_scripts/check_workflow_action_pins.py`**, **`coldstep-demo-marketplace.yml`**, and demo workflows (**`COLDSTEP_AGENT_VERSION`**) use **`v0.1.6`**.
 

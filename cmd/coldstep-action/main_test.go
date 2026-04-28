@@ -1,0 +1,220 @@
+package main
+
+import (
+	"net/url"
+	"strings"
+	"testing"
+)
+
+func TestParseSlackIncomingWebhookURL_Valid(t *testing.T) {
+	cases := []string{
+		"https://hooks.slack.com/services/T123/B456/abc",
+		"https://hooks.slack.com/services/A/B/C",
+	}
+	for _, raw := range cases {
+		u := parseSlackIncomingWebhookURL(raw)
+		if u == nil {
+			t.Errorf("expected valid URL for %q, got nil", raw)
+		}
+	}
+}
+
+func TestParseSlackIncomingWebhookURL_Invalid(t *testing.T) {
+	cases := []string{
+		"",
+		"http://hooks.slack.com/services/T/B/x",
+		"https://evil.com/services/T/B/x",
+		"https://hooks.slack.com/hooks/T/B/x",
+		"https://user:pass@hooks.slack.com/services/T/B/x",
+		"ftp://hooks.slack.com/services/T/B/x",
+		"https://hooks.slack.com/",
+		"not-a-url",
+	}
+	for _, raw := range cases {
+		u := parseSlackIncomingWebhookURL(raw)
+		if u != nil {
+			t.Errorf("expected nil for %q, got %v", raw, u)
+		}
+	}
+}
+
+func TestSanitizeDigestForMarkdown_BOM(t *testing.T) {
+	// BOM must be stripped
+	input := "\uFEFF## heading"
+	out := sanitizeDigestForMarkdown(input)
+	if strings.Contains(out, "\uFEFF") {
+		t.Error("BOM not stripped")
+	}
+	if !strings.Contains(out, "## heading") {
+		t.Errorf("content lost after BOM strip: %q", out)
+	}
+}
+
+func TestSanitizeDigestForMarkdown_BackslashFirst(t *testing.T) {
+	// Backslash must be escaped before backtick/tilde (order-sensitive)
+	// If \` is in input, we must get \\` not \\`` which would be wrong
+	input := "\\`test"
+	out := sanitizeDigestForMarkdown(input)
+	// Original \ → \\ and then the ` is a single backtick (not 3), so no fence escaping
+	if !strings.Contains(out, "\\\\`") {
+		t.Errorf("backslash-first rule violated: got %q", out)
+	}
+}
+
+func TestSanitizeDigestForMarkdown_FenceBreakout(t *testing.T) {
+	// Triple backticks and tildes must be escaped to prevent fence breakout
+	cases := []struct {
+		input    string
+		mustHave string
+	}{
+		{"```code```", "\\`\\`\\`"},
+		{"~~~block~~~", "\\~\\~\\~"},
+	}
+	for _, c := range cases {
+		out := sanitizeDigestForMarkdown(c.input)
+		if !strings.Contains(out, c.mustHave) {
+			t.Errorf("fence breakout not prevented for %q: got %q", c.input, out)
+		}
+	}
+}
+
+func TestSanitizeDigestForMarkdown_HTMLEntity(t *testing.T) {
+	input := "<script>alert(1)</script>"
+	out := sanitizeDigestForMarkdown(input)
+	if strings.Contains(out, "<script>") {
+		t.Errorf("HTML not escaped: got %q", out)
+	}
+	if !strings.Contains(out, "&lt;") {
+		t.Errorf("expected &lt; in output: got %q", out)
+	}
+}
+
+func TestSanitizeDigestForMarkdown_LineLengthCap(t *testing.T) {
+	// Lines over 4096 chars must be truncated
+	line := strings.Repeat("x", 5000)
+	out := sanitizeDigestForMarkdown(line)
+	parts := strings.Split(out, "\n")
+	if len(parts[0]) > 4096+len(" …(truncated)") {
+		t.Errorf("line not capped at 4096: len=%d", len(parts[0]))
+	}
+	if !strings.Contains(parts[0], "…(truncated)") {
+		t.Errorf("truncated marker missing: %q", parts[0][:80])
+	}
+}
+
+func TestSanitizeDigestForMarkdown_Empty(t *testing.T) {
+	if out := sanitizeDigestForMarkdown(""); out != "" {
+		t.Errorf("expected empty output for empty input, got %q", out)
+	}
+}
+
+func TestSanitizeDigestForMarkdown_CRLFNormalization(t *testing.T) {
+	input := "line1\r\nline2\rline3"
+	out := sanitizeDigestForMarkdown(input)
+	if strings.Contains(out, "\r") {
+		t.Errorf("CRLF not normalized: %q", out)
+	}
+}
+
+func TestParseStartFlags_Defaults(t *testing.T) {
+	cfg, err := parseStartFlags([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "detect" {
+		t.Errorf("expected default mode=detect, got %q", cfg.Mode)
+	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("expected default log-level=info, got %q", cfg.LogLevel)
+	}
+	if !cfg.IoUringDisable {
+		t.Error("expected io-uring-disable default=true")
+	}
+	if cfg.FailOnError {
+		t.Error("expected fail-on-error default=false")
+	}
+}
+
+func TestParseStartFlags_Explicit(t *testing.T) {
+	cfg, err := parseStartFlags([]string{
+		"--mode", "enforce",
+		"--log-level", "debug",
+		"--fail-on-error",
+		"--io-uring-disable=false",
+		"--ready-timeout-seconds", "120",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Mode != "enforce" {
+		t.Errorf("expected enforce, got %q", cfg.Mode)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected debug, got %q", cfg.LogLevel)
+	}
+	if !cfg.FailOnError {
+		t.Error("expected fail-on-error=true")
+	}
+	if cfg.IoUringDisable {
+		t.Error("expected io-uring-disable=false")
+	}
+	if cfg.ReadyTimeoutSeconds != 120 {
+		t.Errorf("expected 120, got %d", cfg.ReadyTimeoutSeconds)
+	}
+}
+
+func TestParseStopFlags_Defaults(t *testing.T) {
+	cfg, err := parseStopFlags([]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.ReportJobSummary {
+		t.Error("expected report-job-summary default=true")
+	}
+	if cfg.ReportPRSummary {
+		t.Error("expected report-pr-summary default=false")
+	}
+}
+
+func TestClamp(t *testing.T) {
+	cases := []struct{ v, lo, hi, want int }{
+		{50, 60, 2700, 60},
+		{3000, 60, 2700, 2700},
+		{1500, 60, 2700, 1500},
+	}
+	for _, c := range cases {
+		got := clamp(c.v, c.lo, c.hi)
+		if got != c.want {
+			t.Errorf("clamp(%d,%d,%d)=%d want %d", c.v, c.lo, c.hi, got, c.want)
+		}
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	s := strings.Repeat("a", 100)
+	out := truncate(s, 50)
+	if len(out) > 50+len("\n\n_(truncated)_\n") {
+		t.Errorf("truncate did not shorten: len=%d", len(out))
+	}
+	if truncate("short", 100) != "short" {
+		t.Error("truncate mutated short string")
+	}
+}
+
+func TestBoolString(t *testing.T) {
+	if boolString(true) != "true" {
+		t.Error("expected true")
+	}
+	if boolString(false) != "false" {
+		t.Error("expected false")
+	}
+}
+
+func TestParseSlackURL_PathPrefix(t *testing.T) {
+	// Must require /services/ prefix
+	u, _ := url.Parse("https://hooks.slack.com/workflows/T/B/x")
+	parsed := parseSlackIncomingWebhookURL(u.String())
+	if parsed != nil {
+		t.Error("expected nil for /workflows/ path")
+	}
+}

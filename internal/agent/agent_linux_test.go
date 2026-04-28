@@ -353,10 +353,10 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 	rawUDP := fillTestDenyRawV6(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("2001:db8::53"), 53)
 
-	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append tcp: %v", err)
 	}
-	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append udp: %v", err)
 	}
 
@@ -383,7 +383,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state)
+	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -403,7 +403,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 
 	raw := fillTestDenyRawV4(1, 1, "", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 
-	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state)
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected append deny jsonl error")
 	}
@@ -421,7 +421,7 @@ func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state)
+	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("decode failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -444,7 +444,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 
 	raw := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state)
+	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state, nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("JSONL failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -742,7 +742,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	var jsonlMu sync.Mutex
 
 	// 1. Initial check (mismatch expected)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected 2 failures (allowed=0, ignored=0), got %d", state.mapIntegrityFailureCount())
 	}
@@ -757,7 +757,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	kIgnored := [8]byte{24, 0, 0, 0, 10, 0, 0, 0}
 	_ = ignoredIpv4.Update(&kIgnored, &v, ebpf.UpdateAny)
 
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected failures to remain at 2 after clean check, got %d", state.mapIntegrityFailureCount())
 	}
@@ -765,7 +765,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	// 3. Tamper with enforce_cfg
 	val0 := uint32(0)
 	_ = enforceCfg.Update(&key0, &val0, ebpf.UpdateAny)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 3 {
 		t.Fatalf("expected 3 failures after enforce_cfg tampering, got %d", state.mapIntegrityFailureCount())
 	}
