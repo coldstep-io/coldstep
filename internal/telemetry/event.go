@@ -63,7 +63,7 @@ type ProcForkEvent struct {
 	ChildPID      uint32 `json:"child_pid"`
 	ParentComm    string `json:"parent_comm"`
 	ChildComm     string `json:"child_comm"`
-	ChildSID      uint32 `json:"child_sid,omitempty"`       // v0.3: session leader PID
+	ChildSID      uint32 `json:"child_sid,omitempty"`        // v0.3: session leader PID
 	ChildPidnsNum uint32 `json:"child_pidns_inum,omitempty"` // v0.3: PID namespace inode
 	Note          string `json:"note,omitempty"`
 	Sig           string `json:"sig,omitempty"`

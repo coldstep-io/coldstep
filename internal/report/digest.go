@@ -182,7 +182,7 @@ type DigestInput struct {
 	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
 	// PR-E did not ship. The symbol exists so userspace surfaces the gap
 	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
-	TCPDNSResponsesObserved int
+	TCPDNSResponsesObserved        int
 	BPFHeartbeatFailures           int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow

@@ -25,9 +25,9 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceenforce"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
@@ -56,34 +56,34 @@ type bpfAuditEvent struct {
 }
 
 type runStats struct {
-	mu                             sync.Mutex
-	execN                          int
-	tcpN                           int
-	udpN                           int
-	httpN                          int
-	tlsN                           int
-	procForkN                      int
-	fsN                            int
-	connect4TupleUpdateFailuresN   int
-	udpRingbufReserveFailuresN     int
-	dnsRingbufReserveFailuresN     int
-	connectRingbufReserveFailuresN int
-	httpRingbufReserveFailuresN    int
-	tlsRingbufReserveFailuresN     int
-	execRingbufReserveFailuresN    int
-	forkRingbufReserveFailuresN    int
-	fsRingbufReserveFailuresN      int
-	udpSendmsgMultiIovecObservedN  int
-	tlsWritevMultiIovecObservedN   int
-	unobservedEgressSyscallsN      int
-	ioUringSetupObservedN          int
-	tcpDNSResponsesObservedN       int
-	bpfAuditN                      int
-	bpfMapIntegrityFailuresN       int
+	mu                              sync.Mutex
+	execN                           int
+	tcpN                            int
+	udpN                            int
+	httpN                           int
+	tlsN                            int
+	procForkN                       int
+	fsN                             int
+	connect4TupleUpdateFailuresN    int
+	udpRingbufReserveFailuresN      int
+	dnsRingbufReserveFailuresN      int
+	connectRingbufReserveFailuresN  int
+	httpRingbufReserveFailuresN     int
+	tlsRingbufReserveFailuresN      int
+	execRingbufReserveFailuresN     int
+	forkRingbufReserveFailuresN     int
+	fsRingbufReserveFailuresN       int
+	udpSendmsgMultiIovecObservedN   int
+	tlsWritevMultiIovecObservedN    int
+	unobservedEgressSyscallsN       int
+	ioUringSetupObservedN           int
+	tcpDNSResponsesObservedN        int
+	bpfAuditN                       int
+	bpfMapIntegrityFailuresN        int
 	bpfAuditRingbufReserveFailuresN int
-	bpfHeartbeatFailures           int
-	policyCounts                   map[string]int
-	droppedCounts                  map[string]int
+	bpfHeartbeatFailures            int
+	policyCounts                    map[string]int
+	droppedCounts                   map[string]int
 }
 
 type forkSectionState struct {
@@ -314,11 +314,11 @@ func (c *canaryState) checkAndRecordFailure() bool {
 }
 
 type enforcementState struct {
-	mu                   sync.Mutex
-	mode                 string
-	allowlistSize        int
-	denyCountN           int
-	denyReserveFailuresN int
+	mu                     sync.Mutex
+	mode                   string
+	allowlistSize          int
+	denyCountN             int
+	denyReserveFailuresN   int
 	mapIntegrityFailures   int
 	expectedEntries        int
 	expectedIgnoredEntries int
@@ -326,12 +326,12 @@ type enforcementState struct {
 }
 
 type enforcementSnapshot struct {
-	mode                string
+	mode                 string
 	allowlistSize        int
-	denyCount           int
-	denyReserveFailures int
+	denyCount            int
+	denyReserveFailures  int
 	mapIntegrityFailures int
-	firstDeny           *report.DenyDigestRow
+	firstDeny            *report.DenyDigestRow
 }
 
 type enforceDenyError struct {
@@ -774,36 +774,36 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		dropped[k] = v
 	}
 	return telemetry.Summary{
-		Version:                       2,
-		SchemaVersion:                 telemetry.SchemaVersion,
-		ExecEvents:                    s.execN,
-		TCPEvents:                     s.tcpN,
-		UDPEvents:                     s.udpN,
-		HTTPEvents:                    s.httpN,
-		TLSEvents:                     s.tlsN,
-		ProcForkEvents:                s.procForkN,
-		Connect4TupleUpdateFailures:   s.connect4TupleUpdateFailuresN,
-		UDPRingbufReserveFailures:     s.udpRingbufReserveFailuresN,
-		DNSRingbufReserveFailures:     s.dnsRingbufReserveFailuresN,
-		ConnectRingbufReserveFailures: s.connectRingbufReserveFailuresN,
-		HTTPRingbufReserveFailures:    s.httpRingbufReserveFailuresN,
-		TLSRingbufReserveFailures:     s.tlsRingbufReserveFailuresN,
-		ExecRingbufReserveFailures:    s.execRingbufReserveFailuresN,
-		ForkRingbufReserveFailures:    s.forkRingbufReserveFailuresN,
-		FSRingbufReserveFailures:      s.fsRingbufReserveFailuresN,
-		UDPSendmsgMultiIovecObserved:  s.udpSendmsgMultiIovecObservedN,
-		TLSWritevMultiIovecObserved:   s.tlsWritevMultiIovecObservedN,
-		UnobservedEgressSyscalls:      s.unobservedEgressSyscallsN,
-		IoUringSetupObserved:          s.ioUringSetupObservedN,
-		TCPDNSResponsesObserved:       s.tcpDNSResponsesObservedN,
-		BPFAuditEvents:                s.bpfAuditN,
-		BPFHeartbeatFailures:          s.bpfHeartbeatFailures,
-		BPFMapIntegrityFailures:       s.bpfMapIntegrityFailuresN,
+		Version:                        2,
+		SchemaVersion:                  telemetry.SchemaVersion,
+		ExecEvents:                     s.execN,
+		TCPEvents:                      s.tcpN,
+		UDPEvents:                      s.udpN,
+		HTTPEvents:                     s.httpN,
+		TLSEvents:                      s.tlsN,
+		ProcForkEvents:                 s.procForkN,
+		Connect4TupleUpdateFailures:    s.connect4TupleUpdateFailuresN,
+		UDPRingbufReserveFailures:      s.udpRingbufReserveFailuresN,
+		DNSRingbufReserveFailures:      s.dnsRingbufReserveFailuresN,
+		ConnectRingbufReserveFailures:  s.connectRingbufReserveFailuresN,
+		HTTPRingbufReserveFailures:     s.httpRingbufReserveFailuresN,
+		TLSRingbufReserveFailures:      s.tlsRingbufReserveFailuresN,
+		ExecRingbufReserveFailures:     s.execRingbufReserveFailuresN,
+		ForkRingbufReserveFailures:     s.forkRingbufReserveFailuresN,
+		FSRingbufReserveFailures:       s.fsRingbufReserveFailuresN,
+		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
+		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
+		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
+		IoUringSetupObserved:           s.ioUringSetupObservedN,
+		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
+		BPFAuditEvents:                 s.bpfAuditN,
+		BPFHeartbeatFailures:           s.bpfHeartbeatFailures,
+		BPFMapIntegrityFailures:        s.bpfMapIntegrityFailuresN,
 		BPFAuditRingbufReserveFailures: s.bpfAuditRingbufReserveFailuresN,
-		DroppedCounts:                 dropped,
-		PolicyCounts:                  pc,
-		KernelRelease:                 kernel,
-		BPF:                           bpf,
+		DroppedCounts:                  dropped,
+		PolicyCounts:                   pc,
+		KernelRelease:                  kernel,
+		BPF:                            bpf,
 	}
 }
 
@@ -1344,10 +1344,10 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		pcomm := string(bytes.TrimRight(ev.ParentComm[:], "\x00"))
 		ccomm := string(bytes.TrimRight(ev.ChildComm[:], "\x00"))
 		forkBuf.add(proctree.Edge{
-			ParentTGID: ev.ParentPID,
-			ChildTGID:  ev.ChildPID,
-			ParentComm: pcomm,
-			ChildComm:  ccomm,
+			ParentTGID:    ev.ParentPID,
+			ChildTGID:     ev.ChildPID,
+			ParentComm:    pcomm,
+			ChildComm:     ccomm,
 			ChildSID:      ev.ChildSID,
 			ChildPidnsNum: ev.ChildPidnsNum,
 		})
@@ -1363,7 +1363,7 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				ParentComm: pcomm, ChildComm: ccomm,
 				ChildSID:      ev.ChildSID,
 				ChildPidnsNum: ev.ChildPidnsNum,
-				Note: "best-effort pid namespace; parent/child are kernel fork trace ids",
+				Note:          "best-effort pid namespace; parent/child are kernel fork trace ids",
 			}
 			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut, signer)
 			jsonlMu.Unlock()
@@ -2914,7 +2914,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})
 	} else {
 		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true} )
+		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
 		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
 		defer bpfAuditLnk.Close()
 		defer bpfAuditObjs.Close()
