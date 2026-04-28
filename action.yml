@@ -102,6 +102,12 @@ inputs:
       closes the single largest evasion vector for CI workloads that do not need io_uring.
     required: false
     default: 'true'
+  signing-key:
+    description: >-
+      Optional base64-encoded Ed25519 seed (32 bytes) or private key (64 bytes) for telemetry signing.
+      When set, every emitted JSONL event is signed.
+    required: false
+    default: ''
 runs:
   using: node24
   main: dist/main/index.js

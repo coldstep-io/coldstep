@@ -92,7 +92,7 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 func TestSigning(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "e.jsonl")
-	signer, err := NewSigner("0000000000000000000000000000000000000000000000000000000000000001") // 32 bytes hex seed
+	signer, err := NewSigner("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // 32 bytes of zeros in base64
 	if err != nil {
 		t.Fatal(err)
 	}

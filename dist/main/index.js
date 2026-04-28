@@ -19242,6 +19242,7 @@ async function run() {
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
   const smokeTestEgress = inputBoolDefault("smoke-test-egress", false);
   const ioUringDisable = inputBoolDefault("io-uring-disable", true);
+  const signingKey = getInput("signing-key") || "";
   if (ioUringDisable) {
     try {
       (0, import_child_process.execFileSync)("sudo", ["sysctl", "-w", "io_uring_disabled=2"], { stdio: "inherit" });
@@ -19296,7 +19297,8 @@ async function run() {
     CI_GUARD_MODE: mode,
     COLDSTEP_LOG_LEVEL: logLevel,
     COLDSTEP_AGENT_STATUS: agentStatus,
-    COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? "true" : "false"
+    COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? "true" : "false",
+    COLDSTEP_SIGNING_KEY: signingKey
   };
   if (smokeTestEgress) {
     childEnv.COLDSTEP_EVENTS_LOG = eventsLog;

@@ -202,6 +202,7 @@ async function run(): Promise<void> {
   const reportJobSummary = inputBoolDefault('report-job-summary', true);
   const smokeTestEgress = inputBoolDefault('smoke-test-egress', false);
   const ioUringDisable = inputBoolDefault('io-uring-disable', true);
+  const signingKey = core.getInput('signing-key') || '';
 
   if (ioUringDisable) {
     try {
@@ -263,6 +264,7 @@ async function run(): Promise<void> {
     COLDSTEP_LOG_LEVEL: logLevel,
     COLDSTEP_AGENT_STATUS: agentStatus,
     COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? 'true' : 'false',
+    COLDSTEP_SIGNING_KEY: signingKey,
   };
   if (smokeTestEgress) {
     childEnv.COLDSTEP_EVENTS_LOG = eventsLog;
