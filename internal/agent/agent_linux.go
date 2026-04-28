@@ -48,12 +48,8 @@ type execEvent struct {
 	ExePath [256]byte
 }
 
-type bpfAuditEvent struct {
-	TGID uint32
-	TID  uint32
-	Comm [16]byte
-	Cmd  uint32
-}
+// bpf_audit events are decoded directly via decodeBPFAuditEvent on the raw
+// ringbuf byte slice; no Go-side struct mirror is required.
 
 type runStats struct {
 	mu                              sync.Mutex

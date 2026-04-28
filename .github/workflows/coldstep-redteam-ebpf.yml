@@ -59,7 +59,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils linux-tools-common linux-tools-generic linux-tools-azure bpftool
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils linux-tools-common linux-tools-generic linux-tools-azure
 
       - name: Red-team probes (Generate Telemetry)
         run: |
