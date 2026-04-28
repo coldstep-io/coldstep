@@ -1,0 +1,9 @@
+{"ts":"2026-04-28T22:00:00Z","type":"meta","run_id":"42"}
+{"ts":"2026-04-28T22:00:01Z","type":"exec","comm":"bash","pid":1234}
+{"ts":"2026-04-28T22:00:02Z","type":"tcp","dst":"1.1.1.1","port":443}
+{"ts":"2026-04-28T22:00:03Z","type":"udp","dst":"8.8.8.8","port":53}
+{"ts":"2026-04-28T22:00:04Z","type":"tls","sni":"theclouddj.com"}
+{"ts":"2026-04-28T22:00:05Z","type":"fs_event","op":"chmod","path":"/tmp/x"}
+{"ts":"2026-04-28T22:00:06Z","type":"bpf_audit","comm":"bpftool","cmd":3}
+malformed line should not crash
+{"ts":"2026-04-28T22:00:07Z","type":"exec","comm":"go","pid":1235}
