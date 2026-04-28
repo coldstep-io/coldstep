@@ -95,6 +95,13 @@ inputs:
       so the digest and workspace JSONL commonly show udp/http rows on ubuntu-latest (opt-in extra egress).
     required: false
     default: 'false'
+  io-uring-disable:
+    description: >-
+      When true (default), disables io_uring on the runner via sysctl (io_uring_disabled=2) before
+      the agent starts. io_uring operations bypass syscall-based eBPF hooks entirely; disabling it
+      closes the single largest evasion vector for CI workloads that do not need io_uring.
+    required: false
+    default: 'true'
 runs:
   using: node24
   main: dist/main/index.js

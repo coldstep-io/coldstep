@@ -54,14 +54,16 @@ type ExecEvent struct {
 
 // ProcForkEvent is one JSONL record for sched_process_fork (parent/child ids are kernel-reported; best-effort TGID on typical kernels).
 type ProcForkEvent struct {
-	Type       string `json:"type"` // "proc_fork"
-	TS         string `json:"ts"`
-	Seq        uint64 `json:"seq"`
-	ParentPID  uint32 `json:"parent_pid"`
-	ChildPID   uint32 `json:"child_pid"`
-	ParentComm string `json:"parent_comm"`
-	ChildComm  string `json:"child_comm"`
-	Note       string `json:"note,omitempty"`
+	Type          string `json:"type"` // "proc_fork"
+	TS            string `json:"ts"`
+	Seq           uint64 `json:"seq"`
+	ParentPID     uint32 `json:"parent_pid"`
+	ChildPID      uint32 `json:"child_pid"`
+	ParentComm    string `json:"parent_comm"`
+	ChildComm     string `json:"child_comm"`
+	ChildSID      uint32 `json:"child_sid,omitempty"`       // v0.3: session leader PID
+	ChildPidnsNum uint32 `json:"child_pidns_inum,omitempty"` // v0.3: PID namespace inode
+	Note          string `json:"note,omitempty"`
 }
 
 // TCPEvent is one JSONL record for an observed IPv4 connect attempt.
@@ -160,6 +162,29 @@ type DenyEvent struct {
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
 	Mode     string `json:"mode"` // "enforce"
+}
+
+// BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
+type BPFAuditEvent struct {
+	Type     string `json:"type"` // "bpf_audit"
+	TS       string `json:"ts"`
+	Seq      uint64 `json:"seq"`
+	PID      uint32 `json:"pid"`
+	TGID     uint32 `json:"tgid"`
+	ThreadID uint32 `json:"thread_id"`
+	Comm     string `json:"comm"`
+	Cmd      uint32 `json:"cmd"` // BPF_PROG_LOAD, BPF_MAP_CREATE, etc.
+}
+
+// BPFTamperEvent is one JSONL record for a detected BPF map or program tampering event.
+type BPFTamperEvent struct {
+	Type     string `json:"type"` // "bpf_tamper"
+	TS       string `json:"ts"`
+	Seq      uint64 `json:"seq"`
+	Asset    string `json:"asset"` // e.g. "map:enforce_cfg"
+	Error    string `json:"error"`
+	Expected string `json:"expected,omitempty"`
+	Actual   string `json:"actual,omitempty"`
 }
 
 // SeqGen assigns monotonic per-run sequence numbers in userspace.

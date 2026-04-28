@@ -162,12 +162,24 @@ type DigestInput struct {
 	// the BPF dispatch arm but not fully sniffed for HTTP/TLS payload (PR-E).
 	// Non-zero indicates Coldstep's observability has a real-workload gap.
 	UnobservedEgressSyscalls int
+	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
+	// dispatch arm. Any non-zero value is a critical security signal: io_uring
+	// operations bypass all syscall-based BPF hooks entirely.
+	IoUringSetupObserved int
+	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
+	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
+	CanaryPipelineOK bool
+	CanaryFailCount  int
 	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
 	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
 	// PR-E did not ship. The symbol exists so userspace surfaces the gap
 	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
 	TCPDNSResponsesObserved int
-	DroppedCounts           map[string]int
+	BPFHeartbeatFailures           int
+	BPFAuditTotal                  int
+	BPFMapIntegrityFailures        int
+	BPFAuditRingbufReserveFailures int
+	DroppedCounts                  map[string]int
 }
 
 // hotEgressAgg aggregates digest rows by destination for the triage table.
@@ -313,6 +325,15 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.UnobservedEgressSyscalls > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
 	}
+	if in.IoUringSetupObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup detected=%d", in.IoUringSetupObserved))
+	}
+	if in.BPFAuditRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("bpf audit ringbuf reserve=%d", in.BPFAuditRingbufReserveFailures))
+	}
+	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
+	}
 	if len(gapParts) == 0 {
 		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
 	} else {
@@ -366,6 +387,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	b.WriteString("### KPI\n\n")
 	b.WriteString("| Signal | Count |\n|:--|--:|\n")
 	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
+	if in.BPFAuditTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))
+	}
+	if in.BPFMapIntegrityFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_map_integrity_failures** | <font color=\"red\">%d</font> |\n", in.BPFMapIntegrityFailures))
+	}
 	if procForkKPIVisible(in) {
 		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
 	}
@@ -387,6 +414,26 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UnobservedEgressSyscalls > 0 {
 		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+	}
+	if in.IoUringSetupObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup detected (bypass risk)** | %d |\n", in.IoUringSetupObserved))
+	}
+	if in.BPFAuditRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures))
+	}
+	if in.CanaryFailCount > 0 {
+		status := "✅ OK"
+		if !in.CanaryPipelineOK {
+			status = "🚨 FAILED"
+		}
+		b.WriteString(fmt.Sprintf("| **Telemetry integrity canary** | %s (failures=%d) |\n", status, in.CanaryFailCount))
+	} else {
+		b.WriteString("| **Telemetry integrity canary** | ✅ OK |\n")
+	}
+	if in.BPFHeartbeatFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **🚨 BPF Self-protection Heartbeat Failures** | %d |\n", in.BPFHeartbeatFailures))
+	} else {
+		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
 	if in.TCPDNSResponsesObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
@@ -430,6 +477,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UnobservedEgressSyscalls > 0 {
 		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer (BPF connect/policy enforcement still applied to the underlying TCP/UDP socket).")
+	}
+	if in.IoUringSetupObserved > 0 {
+		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring operations completely bypass syscall-based eBPF hooks (raw_tp/sys_enter, cgroup/connect4). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter means something attempted it. If io-uring-disable was false, traffic may have been invisible to Coldstep.")
 	}
 	b.WriteString("</sub>\n\n")
 

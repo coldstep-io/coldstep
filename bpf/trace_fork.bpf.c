@@ -10,9 +10,16 @@ struct fork_event {
 	__u32 child_pid;
 	__u8 parent_comm[16];
 	__u8 child_comm[16];
+	/* v0.3: session leader PID — identifies which login/CI session
+	 * spawned the subtree. Read from child's task_struct→group_leader→
+	 * signal_struct→leader_pid→numbers[0].nr at fork time. */
+	__u32 child_sid;
+	/* v0.3: PID namespace inode number — identifies container boundary.
+	 * Different pidns_inum values mean different containers or namespaces. */
+	__u32 child_pidns_inum;
 };
-_Static_assert(sizeof(struct fork_event) == 40,
-	       "fork_event wire size must match forkEventWireSize=40 in agent_linux.go");
+_Static_assert(sizeof(struct fork_event) == 48,
+	       "fork_event wire size must match forkEventWireSize=48 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -74,6 +81,22 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 		__builtin_memset(ev->parent_comm, 0, sizeof(ev->parent_comm));
 	if (bpf_probe_read_kernel_str(ev->child_comm, sizeof(ev->child_comm), &child->comm))
 		__builtin_memset(ev->child_comm, 0, sizeof(ev->child_comm));
+
+	/* v0.3: session leader PID — best-effort via CO-RE. Zero on failure. */
+	{
+		pid_t sid = 0;
+		struct pid *spid;
+
+		spid = BPF_CORE_READ(child, group_leader, signal, pids[PIDTYPE_SID]);
+		if (spid)
+			sid = BPF_CORE_READ(spid, numbers[0].nr);
+		ev->child_sid = (__u32)sid;
+	}
+
+	/* v0.3: PID namespace inode — container boundary detection. */
+	ev->child_pidns_inum = (__u32)BPF_CORE_READ(child, nsproxy,
+						     pid_ns_for_children,
+						     ns.inum);
 
 	bpf_ringbuf_submit(ev, 0);
 	return 0;

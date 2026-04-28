@@ -33,6 +33,10 @@
 #define COLDSTEP_NR_PWRITEV2 287
 #define COLDSTEP_NR_SENDFILE 71
 #define COLDSTEP_NR_SPLICE 76
+/* io_uring_setup detection: NR 425 on both x86_64 and aarch64 (unified since kernel 5.1). */
+#define COLDSTEP_NR_IO_URING_SETUP 425
+/* bpf syscall audit: 280 on arm64 */
+#define COLDSTEP_NR_BPF 280
 /* aarch64 has no legacy NR_OPEN: only openat/openat2 (handled in trace_fs.bpf.c). */
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
@@ -50,6 +54,10 @@
 #define COLDSTEP_NR_PWRITEV2 328
 #define COLDSTEP_NR_SENDFILE 40
 #define COLDSTEP_NR_SPLICE 275
+/* io_uring_setup detection: NR 425 on both x86_64 and aarch64 (unified since kernel 5.1). */
+#define COLDSTEP_NR_IO_URING_SETUP 425
+/* bpf syscall audit: 321 on x86_64 */
+#define COLDSTEP_NR_BPF 321
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif
