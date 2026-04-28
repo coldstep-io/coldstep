@@ -1,6 +1,7 @@
 package safepath
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -31,15 +32,48 @@ func TestWorkspaceRejectsPathOutsideTrustedRoots(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(tmp), "outside.json")
 	if _, err := Workspace(outside, "OUT"); err == nil {
 		t.Fatal("Workspace: expected error for path outside trusted roots")
+	} else if !errors.Is(err, SentinelInvalidPath) {
+		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
 	}
 }
 
 func TestWorkspaceRejectsDisallowedCharacters(t *testing.T) {
 	if _, err := Workspace("with space.json", "X"); err == nil {
 		t.Fatal("Workspace: expected error for disallowed characters")
+	} else if !errors.Is(err, SentinelInvalidPath) {
+		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
 	}
 	if _, err := Workspace("with;semicolon.json", "X"); err == nil {
 		t.Fatal("Workspace: expected error for disallowed characters")
+	} else if !errors.Is(err, SentinelInvalidPath) {
+		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
+	}
+}
+
+func TestWorkspaceAcceptsNonExistentPathUnderSymlinkedWorkspace(t *testing.T) {
+	tmp := t.TempDir()
+	realWorkspace := filepath.Join(tmp, "real-workspace")
+	if err := os.Mkdir(realWorkspace, 0o755); err != nil {
+		t.Fatalf("setup real workspace: %v", err)
+	}
+	linkWorkspace := filepath.Join(tmp, "workspace-link")
+	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+		t.Fatalf("setup workspace symlink: %v", err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", linkWorkspace)
+	t.Setenv("RUNNER_TEMP", "")
+	t.Setenv("TMPDIR", realWorkspace)
+
+	target := filepath.Join(linkWorkspace, "nested", "out.json")
+	got, err := Workspace(target, "OUT")
+	if err != nil {
+		t.Fatalf("Workspace: unexpected error: %v", err)
+	}
+
+	want := filepath.Join(realWorkspace, "nested", "out.json")
+	if got != want {
+		t.Fatalf("Workspace = %q; want %q", got, want)
 	}
 }
 

@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 )
 
 var safePathRE = regexp.MustCompile(`^[A-Za-z0-9_./\\:-]+$`)
@@ -21,22 +22,20 @@ var safePathRE = regexp.MustCompile(`^[A-Za-z0-9_./\\:-]+$`)
 // to make CI logs actionable.
 func Workspace(raw, varName string) (string, error) {
 	if !safePathRE.MatchString(raw) {
-		return "", fmt.Errorf("%s contains disallowed characters", varName)
+		return "", fmt.Errorf("%w: %s contains disallowed characters", SentinelInvalidPath, varName)
 	}
 	resolved, err := filepath.Abs(raw)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", varName, err)
 	}
-	if real, err := filepath.EvalSymlinks(resolved); err == nil {
-		resolved = real
-	}
+	resolved = resolveWithExistingAncestor(resolved)
 	roots := trustedRoots()
 	for _, r := range roots {
 		if hasPrefix(resolved, r) {
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("%s resolves outside trusted roots: %q", varName, resolved)
+	return "", fmt.Errorf("%w: %s resolves outside trusted roots: %q", SentinelInvalidPath, varName, resolved)
 }
 
 func trustedRoots() []string {
@@ -78,10 +77,34 @@ func hasPrefix(path, root string) bool {
 	if rel == "." {
 		return true
 	}
-	if len(rel) >= 2 && rel[:2] == ".." {
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
 	return !filepath.IsAbs(rel)
+}
+
+func resolveWithExistingAncestor(path string) string {
+	if real, err := filepath.EvalSymlinks(path); err == nil {
+		return real
+	}
+
+	var suffix []string
+	cur := path
+	for {
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return path
+		}
+		suffix = append(suffix, filepath.Base(cur))
+		if realParent, err := filepath.EvalSymlinks(parent); err == nil {
+			resolved := realParent
+			for i := len(suffix) - 1; i >= 0; i-- {
+				resolved = filepath.Join(resolved, suffix[i])
+			}
+			return resolved
+		}
+		cur = parent
+	}
 }
 
 // SentinelInvalidPath is returned when a path fails validation.
