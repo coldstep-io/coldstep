@@ -300,7 +300,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 
 	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 
-	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state)
+	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected deny to fail fast with error")
 	}
