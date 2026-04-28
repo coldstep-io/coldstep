@@ -5,7 +5,7 @@ Run these **in order** when cutting a new **tag** so the **Marketplace / `uses: 
 ## 1. Land the release on `main`
 
 - Open a **PR** (e.g. `release/v0.1.x`) with version bumps: `README`, `QUICK_START`, `CONTRIBUTING`, `website/index.html`, `public_scripts/check_workflow_action_pins.py` → `MARKETPLACE_COLDSTEP_TAG`, demo workflows → `COLDSTEP_AGENT_VERSION`, and **`CHANGELOG.md`**.
-- Wait for **CI green** on the PR (`coldstep-ci`, CodeQL, Snyk, etc.), then **merge to `main`**.  
+- Wait for **CI green** on the PR (`coldstep-ci`, CodeQL, etc.), then **merge to `main`**.  
 - **Do not** tag until the release commit is on `main`.
 
 ## 2. Bug readiness gate (before tagging)
