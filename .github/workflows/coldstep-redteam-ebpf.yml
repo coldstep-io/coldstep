@@ -1,0 +1,135 @@
+# Red-team eBPF audit and integrity validation.
+# This workflow intentionally triggers sensitive events (BPF map access, 
+# network probes, etc.) and asserts that Coldstep captures them with 
+# high integrity.
+#
+# Anti-blindness gating: fails if integrity score is zero (mandatory canaries missing).
+
+name: coldstep-redteam-ebpf
+
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+    inputs:
+      fail_on_blindness:
+        description: Fail the job if telemetry integrity/canaries are missing
+        type: boolean
+        default: true
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+  COLDSTEP_AGENT_VERSION: v0.1.7
+
+jobs:
+  audit-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      NS_RUNNER_LABEL: ubuntu-latest-redteam
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download coldstep agent (GitHub Release)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin
+          gh release download "${COLDSTEP_AGENT_VERSION}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --pattern 'coldstep-linux-amd64' \
+            --dir bin
+          mv bin/coldstep-linux-amd64 bin/coldstep
+          chmod +x bin/coldstep
+
+      - name: Start Coldstep (detect mode with full audit gates)
+        uses: ./
+        with:
+          mode: detect
+          log-level: info
+          report-job-summary: 'false'
+          allowed-hosts: theclouddj.com, *.ubuntu.com
+          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          release-path: bin/coldstep
+
+      - name: Install runtime tools
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils linux-tools-common linux-tools-$(uname -r)
+
+      - name: Red-team probes (Generate Telemetry)
+        run: |
+          set -euo pipefail
+          
+          echo "--- EXEC CANARY ---"
+          # Standard exec activity
+          ls /etc/passwd >/dev/null
+          
+          echo "--- UDP/DNS CANARY ---"
+          # Trigger the DNS canary (8.8.8.8)
+          dig @8.8.8.8 google.com +short >/dev/null || true
+          
+          echo "--- BPF AUDIT PROBE ---"
+          # Trigger BPF audit events (if supported by runner kernel)
+          sudo bpftool map show || echo "bpftool failed; best effort audit signal"
+          
+          echo "--- NETWORK EGRESS PROBE (TLS) ---"
+          # TLS connect (SNI: theclouddj.com)
+          curl -s -I --max-time 5 https://theclouddj.com >/dev/null || true
+          
+          echo "--- FS EVENT PROBE ---"
+          # Filesystem events
+          TMP_F=$(mktemp)
+          echo "redteam" > "${TMP_F}"
+          chmod 400 "${TMP_F}"
+          rm "${TMP_F}"
+
+      - name: Stop agent (flush digest)
+        run: |
+          set -euo pipefail
+          ap="${GITHUB_ACTION_PATH:-}"
+          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
+          pf="${ap}/.coldstep.pid"
+          if [[ -f "${pf}" ]]; then
+            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
+            sleep 3
+          fi
+
+      - name: Build report model
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+
+      - name: Enforce Anti-Blindness Gating
+        if: github.event_name != 'workflow_dispatch' || inputs.fail_on_blindness == true
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/assert_integrity.py
+
+      - name: Render step summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
+
+      - name: Render HTML report
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-redteam-report.html
+        run: python3 public_scripts/coldstep_detect_report/render_html_report.py
+
+      - name: Upload Redteam Report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coldstep-redteam-report
+          path: ${{ github.workspace }}/coldstep-redteam-report.html
+          retention-days: 7
+          overwrite: true

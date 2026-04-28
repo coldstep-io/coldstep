@@ -155,6 +155,18 @@ func (p *Policy) IgnoredIPv4Nets() []*net.IPNet {
 	return p.ignored
 }
 
+// AllowedDomains returns the exact allowed hostnames from the policy.
+func (p *Policy) AllowedDomains() []string {
+	if p == nil {
+		return nil
+	}
+	out := make([]string, 0, len(p.exactHosts))
+	for h := range p.exactHosts {
+		out = append(out, h)
+	}
+	return out
+}
+
 // MergeLiteralAllowedIPv4Keys adds IPv4 addresses from COLDSTEP_ALLOWED_IPS-style policy entries
 // into keys (used with domain-resolved IPs for enforce-mode BPF allowed_ipv4).
 func (p *Policy) MergeLiteralAllowedIPv4Keys(keys map[[4]byte]struct{}) {

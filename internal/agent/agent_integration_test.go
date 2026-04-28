@@ -550,3 +550,58 @@ func TestRun_FSEventJSONLWhenFeatureGate(t *testing.T) {
 		t.Fatalf("expected at least one fs_event JSONL line; got:\n%s", string(data))
 	}
 }
+
+func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	detect := filepath.Join(dir, "detect.md")
+
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
+	t.Setenv("COLDSTEP_ALLOWED_IPS", "")
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_EVENTS_LOG", events)
+	t.Setenv("COLDSTEP_DETECT_LOG", detect)
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(ctx, cfg) }()
+
+	time.Sleep(500 * time.Millisecond)
+
+	// bpftool map list triggers BPF_MAP_GET_NEXT_ID (12).
+	if _, err := exec.LookPath("bpftool"); err == nil {
+		_ = exec.Command("bpftool", "map", "list").Run()
+	}
+
+	time.Sleep(500 * time.Millisecond)
+	cancel()
+	err = <-errCh
+	if err != nil && err != context.Canceled {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
+		// Even if bpftool is missing, some other process on a busy CI runner might trigger BPF syscalls.
+		// But for a local test, we might skip if no events found and no bpftool.
+		if _, err := exec.LookPath("bpftool"); err != nil {
+			t.Skip("no bpf_audit events and no bpftool to trigger them")
+		}
+		t.Fatalf("expected bpf_audit in jsonl:\n%s", string(b))
+	}
+}

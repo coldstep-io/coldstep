@@ -7,6 +7,8 @@
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
+#include <bpf/bpf_core_read.h>
+#include "dns_cache.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -122,16 +124,26 @@ static __always_inline int dst_is_allowlisted(__be32 addr)
 {
 	struct ns_lpm4_key k = {};
 
-	/*
-	 * LPM lookup: prefixlen=32 means "match the longest prefix in the trie
-	 * that covers this exact /32 destination". Returns the value pointer of
-	 * the most-specific matching entry, or NULL if no prefix covers `addr`.
-	 */
+	/* Check IP/CIDR allowlist first (fast path) */
 	k.prefixlen = 32;
 	k.addr = addr;
 	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv4, &k);
+	if (ok)
+		return 1;
 
-	return ok != 0;
+	/* 
+	 * Check domain-based allowlist (late binding).
+	 * Lookup IP in dns_cache map (populated by Go agent).
+	 */
+	char *domain = bpf_map_lookup_elem(&dns_cache, &addr);
+	if (domain) {
+		/* If IP matches a known domain, check if that domain is allowed. */
+		__u8 *dom_ok = bpf_map_lookup_elem(&allowed_domains, domain);
+		if (dom_ok)
+			return 1;
+	}
+
+	return 0;
 }
 
 static __always_inline int dst_in_ignored(__be32 daddr)

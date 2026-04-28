@@ -191,6 +191,8 @@ jobs:
           curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           bash -c 'echo "coldstep-demo" >/dev/null'
+          # BPF Audit (if supported)
+          sudo bpftool map show >/dev/null 2>&1 || true
           TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
           TMP_A="${TMP_FS_DIR}/a.txt"
           TMP_B="${TMP_FS_DIR}/b.txt"
@@ -215,41 +217,19 @@ jobs:
             sleep 2
           fi
 
-      - name: Verify detect capabilities and write visual summary
-        run: |
-          set -euo pipefail
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
-          test -f "$j"
-          grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
-          grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
-          grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
-          grep -q '"type":"udp"' "$j" || { echo "expected udp JSONL"; exit 1; }
-          grep -q '"type":"http"' "$j" || { echo "expected http JSONL"; exit 1; }
-          grep -q '"type":"tls"' "$j" || { echo "expected tls JSONL with tls_sni gate"; exit 1; }
-          grep -q '"type":"proc_fork"' "$j" || { echo "expected proc_fork JSONL with proc_tree gate"; exit 1; }
-          grep -q '"type":"fs_event"' "$j" || { echo "expected fs_event JSONL with fs_events gate"; exit 1; }
-          grep -Eq '"type":"fs_event".*"op":"create"' "$j" || { echo "expected fs_event create"; exit 1; }
-          if ! grep -Eq '"type":"fs_event".*"op":"unlink"' "$j"; then
-            echo "::warning::fs_event unlink not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
-            echo "::warning::fs_event rename not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
-            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          grep -q 'TLS ClientHello' "$f" || { echo "expected TLS section in digest"; exit 1; }
-          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
-          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
-          grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
-          grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
-          {
-            echo "## Detect verification"
-            echo ""
-            echo "- **Result:** pass — required JSONL types and digest sections present (\`${NS_RUNNER_LABEL}\`). Inspect \`.coldstep-detect.md\` / JSONL for detail."
-          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Build report model
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+
+      - name: Enforce Anti-Blindness Gating
+        if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/assert_integrity.py
+
+
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -329,6 +309,18 @@ jobs:
           if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
+
+          # Re-build the report model now that the baseline JSONL is on disk.
+          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
+          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
+          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
+            python3 "${GITHUB_WORKSPACE}/public_scripts/coldstep_detect_report/build_report_model.py"
+
+      - name: Render detect summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
       - name: Persist detect JSONL baseline artifact
         if: always()
         uses: actions/upload-artifact@v7

@@ -8,6 +8,7 @@
 #include <bpf/bpf_tracing.h>
 
 #include "trace_connect_obs.h"
+#include "dns_cache.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -121,6 +122,16 @@ static __always_inline void note_dns_recvfrom_buf_update_failed(void)
 	__sync_fetch_and_add(v, 1);
 }
 
+static __always_inline void note_tcp_dns_response(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&tcp_dns_responses_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 SEC("raw_tp/sys_enter")
 int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -133,15 +144,21 @@ int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (!regs)
 		return 0;
 
-	if (id != (long)COLDSTEP_NR_RECVFROM)
+	if (id == (long)COLDSTEP_NR_RECVFROM) {
+		if (ns_read_syscall_arg(regs, 1, &buf_user))
+			return 0;
+		if (ns_read_syscall_arg(regs, 2, &max_len_u))
+			return 0;
+	} else if (id == (long)COLDSTEP_NR_READ) {
+		if (ns_read_syscall_arg(regs, 1, &buf_user))
+			return 0;
+		if (ns_read_syscall_arg(regs, 2, &max_len_u))
+			return 0;
+	} else {
 		return 0;
+	}
 
-	if (ns_read_syscall_arg(regs, 1, &buf_user))
-		return 0;
 	if (!buf_user)
-		return 0;
-
-	if (ns_read_syscall_arg(regs, 2, &max_len_u))
 		return 0;
 
 	val.buf_user = buf_user;
@@ -172,7 +189,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 
 	if (coldstep_read_orig_syscall_nr(regs, &orig_nr))
 		return 0;
-	if (orig_nr != (unsigned long)COLDSTEP_NR_RECVFROM)
+	if (orig_nr != (unsigned long)COLDSTEP_NR_RECVFROM && orig_nr != (unsigned long)COLDSTEP_NR_READ)
 		return 0;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
@@ -180,6 +197,23 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (!pending)
 		return 0;
 	bpf_map_delete_elem(&recvfrom_buf, &pid_tgid);
+
+	if (orig_nr == (unsigned long)COLDSTEP_NR_RECVFROM) {
+		if (bpf_probe_read_user(hdr, sizeof(hdr), (void *)pending->buf_user))
+			return 0;
+		/* QR bit must be 1 (response) */
+		if ((hdr[2] & 0x80) == 0)
+			return 0;
+	} else {
+		/* TCP DNS has a 2-byte length prefix. Header starts at offset 2. */
+		__u8 tcp_hdr[5];
+		if (bpf_probe_read_user(tcp_hdr, sizeof(tcp_hdr), (void *)pending->buf_user))
+			return 0;
+		/* QR bit (byte 2 of DNS header) is at offset 4 */
+		if ((tcp_hdr[4] & 0x80) == 0)
+			return 0;
+		note_tcp_dns_response();
+	}
 
 	if (ret < 12 || ret > DNS_SNIFF_MAX)
 		return 0;
@@ -199,12 +233,6 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	 */
 	if (copy_len > DNS_SNIFF_MAX)
 		copy_len = DNS_SNIFF_MAX;
-
-	if (bpf_probe_read_user(hdr, sizeof(hdr), (void *)pending->buf_user))
-		return 0;
-	/* QR bit must be 1 (response) */
-	if ((hdr[2] & 0x80) == 0)
-		return 0;
 
 	ev = bpf_ringbuf_reserve(&dns_events, sizeof(*ev), 0);
 	if (!ev) {

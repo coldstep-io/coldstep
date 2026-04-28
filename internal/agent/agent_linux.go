@@ -1258,7 +1258,7 @@ func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, lin
 }
 
 func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
-	rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+	rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1296,7 +1296,7 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				PID: ev.TGID, TGID: ev.TGID, ThreadID: ev.TID, Comm: comm,
 				Exe: exe,
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, evOut, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("exec_jsonl")
@@ -1316,7 +1316,7 @@ type forkEventWire struct {
 }
 
 func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
-	forkBuf *forkEdgeBuffer, forkState *forkSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+	forkBuf *forkEdgeBuffer, forkState *forkSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1365,7 +1365,7 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				ChildPidnsNum: ev.ChildPidnsNum,
 				Note: "best-effort pid namespace; parent/child are kernel fork trace ids",
 			}
-			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut, signer)
 			jsonlMu.Unlock()
 			if werr != nil {
 				stats.addDropped("proc_fork_jsonl")
@@ -1407,7 +1407,7 @@ type fsEventWire struct {
 const maxFSEventsTotal = 5000
 
 func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
-	fsRows *fsRowBuffer, fsState *fsSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+	fsRows *fsRowBuffer, fsState *fsSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	count := 0
 	for {
 		rec, err := rd.Read()
@@ -1461,7 +1461,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 				PID: ev.TGID, TGID: ev.TGID, ThreadID: ev.TID,
 				Comm: comm, Op: op, Path: path,
 			}
-			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut)
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, evOut, signer)
 			jsonlMu.Unlock()
 			if werr != nil {
 				stats.addDropped("fs_jsonl")
@@ -1472,7 +1472,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 }
 
 func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
-	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, canary *canaryState) error {
+	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, canary *canaryState, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1548,7 +1548,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 				Direction: "egress",
 				Policy:    string(cl),
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("tcp_jsonl")
@@ -1561,7 +1561,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 }
 
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
-	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState) error {
+	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1619,7 +1619,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				Policy: string(cl),
 				Note:   "ClientHello SNI from first write(2) buffer; fragmented handshakes may be missed",
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("tls_jsonl")
@@ -1630,7 +1630,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 }
 
 func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
-	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState) error {
+	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1688,7 +1688,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 				Direction: "egress",
 				Policy:    string(cl),
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("udp_jsonl")
@@ -1699,7 +1699,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 }
 
 func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
-	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState) error {
+	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1757,7 +1757,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 				Dst: ip.String(), Dport: port,
 				Policy: string(cl),
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("http_jsonl")
@@ -1789,7 +1789,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 	}
 }
 
-func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1824,7 +1824,7 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, Cmd: cmd,
 			}
-			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
 			if err != nil {
 				stats.addDropped("bpf_audit_jsonl")
@@ -1834,7 +1834,7 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 	}
 }
 
-func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) error {
+func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -1843,12 +1843,12 @@ func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allow
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, enforceState, seq, jsonlMu)
+			checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, enforceState, seq, jsonlMu, signer)
 		}
 	}
 }
 
-func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex) {
+func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) {
 	if enforceCfg == nil || allowedIpv4 == nil || ignoredIpv4 == nil {
 		return
 	}
@@ -1857,9 +1857,9 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 	var key uint32 = 0
 	var val uint32
 	if err := enforceCfg.Lookup(&key, &val); err != nil {
-		logMapIntegrityFailure(cfg, "map:enforce_cfg", "lookup error", "", "", stats, seq, jsonlMu, enforceState)
+		logMapIntegrityFailure(cfg, "map:enforce_cfg", "lookup error", "", "", stats, seq, jsonlMu, enforceState, signer)
 	} else if val != 1 {
-		logMapIntegrityFailure(cfg, "map:enforce_cfg", "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState)
+		logMapIntegrityFailure(cfg, "map:enforce_cfg", "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState, signer)
 		// Revert tampering
 		modeEnforce := uint32(1)
 		_ = enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny)
@@ -1874,13 +1874,13 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		count++
 	}
 	if err := iter.Err(); err != nil {
-		logMapIntegrityFailure(cfg, "map:allowed_ipv4", "iterate error", "", "", stats, seq, jsonlMu, enforceState)
+		logMapIntegrityFailure(cfg, "map:allowed_ipv4", "iterate error", "", "", stats, seq, jsonlMu, enforceState, signer)
 	} else {
 		enforceState.mu.Lock()
 		expected := enforceState.expectedEntries
 		enforceState.mu.Unlock()
 		if count != expected {
-			logMapIntegrityFailure(cfg, "map:allowed_ipv4", "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, enforceState)
+			logMapIntegrityFailure(cfg, "map:allowed_ipv4", "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, enforceState, signer)
 		}
 	}
 
@@ -1891,18 +1891,18 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		countIgnored++
 	}
 	if err := iterIgnored.Err(); err != nil {
-		logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "iterate error", "", "", stats, seq, jsonlMu, enforceState)
+		logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "iterate error", "", "", stats, seq, jsonlMu, enforceState, signer)
 	} else {
 		enforceState.mu.Lock()
 		expectedIgnored := enforceState.expectedIgnoredEntries
 		enforceState.mu.Unlock()
 		if countIgnored != expectedIgnored {
-			logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, enforceState)
+			logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, enforceState, signer)
 		}
 	}
 }
 
-func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, enforceState *enforcementState) {
+func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, enforceState *enforcementState, signer *telemetry.Signer) {
 	stats.addBPFMapIntegrityFailure()
 	if enforceState != nil {
 		enforceState.addMapIntegrityFailure()
@@ -1922,7 +1922,7 @@ func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual s
 			Expected: expected,
 			Actual:   actual,
 		}
-		_ = telemetry.AppendJSONL(cfg.EventsLogPath, ev)
+		_ = telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 	}
 }
 
@@ -2243,6 +2243,10 @@ func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled p
 		return 0, 0, err
 	}
 
+	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
+		return 0, 0, err
+	}
+
 	return totalEntries, ignoredCount, nil
 }
 
@@ -2290,6 +2294,10 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 	}
 
 	if err := loadAllowedLPMMap(objs.AllowedIpv4, v4keys, literalNets); err != nil {
+		return 0, 0, err
+	}
+
+	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
 		return 0, 0, err
 	}
 
@@ -2350,7 +2358,7 @@ func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPN
 	return nil
 }
 
-func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) (telemetry.DenyEvent, error) {
+func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
 		return telemetry.DenyEvent{}, fmt.Errorf("decode deny event")
@@ -2384,7 +2392,7 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
-		err := telemetry.AppendJSONL(cfg.EventsLogPath, deny)
+		err := telemetry.AppendJSONL(cfg.EventsLogPath, deny, signer)
 		jsonlMu.Unlock()
 		if err != nil {
 			return telemetry.DenyEvent{}, fmt.Errorf("append deny jsonl: %w", err)
@@ -2399,15 +2407,15 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 // testAppendDenySample exercises appendDenyFromRaw JSONL emission and returns a sentinel error
 // for unit tests. Production readDenyRing logs and skips decode/JSONL failures so enforcement
 // keeps running; successful denies still flow through appendDenyFromRaw unchanged.
-func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) error {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state)
+func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
 	if err != nil {
 		return err
 	}
 	return newEnforceDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) error {
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
 	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
@@ -2426,7 +2434,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			continue
 		}
 
-		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state); err != nil {
+		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer); err != nil {
 			slog.Warn("deny ring sample skipped", "err", err)
 			continue
 		}
@@ -2451,7 +2459,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 				slog.Warn("ringbuf read (deny drain)", "err", err2)
 				continue
 			}
-			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state); err3 != nil {
+			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
 			}
 			n++
@@ -2462,8 +2470,8 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 
 // processDenyRingSample handles one deny ringbuf payload. Decode or JSONL failures are logged and
 // dropped so readDenyRing never returns a fatal error (enforcement stays attached).
-func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState) {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state)
+func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
 	if err != nil {
 		slog.Warn("deny ring sample skipped", "err", err, "raw_len", len(raw))
 		return
@@ -2633,6 +2641,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var forkState *forkSectionState
 	var fsRowBuf *fsRowBuffer
 	var fsSt *fsSectionState
+	signer, err := telemetry.NewSigner(cfg.SigningKey)
+	if err != nil {
+		return fmt.Errorf("setup telemetry signer: %w", err)
+	}
 
 	bpfSt := []telemetry.BPFStatus{
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
@@ -2647,7 +2659,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
-		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum); err != nil {
+		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum, signer); err != nil {
 			slog.Warn("telemetry summary", "err", err)
 		}
 		if detectDest != "" {
@@ -2879,6 +2891,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: false, Detail: bpfDetail(err)}
 	} else {
 		dnsRd, dnsObjs, dnsLnkEnter, dnsLnkExit = rd, objs, le, lx
+		dnsCache.SetBPFMaps([]*ebpf.Map{dnsObjs.DnsCache})
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
 		slog.Info("tracing DNS replies (recvfrom)")
 		defer dnsLnkExit.Close()
@@ -3058,7 +3071,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				}
 				meta.Capabilities["fs_events"] = true
 			}
-			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta); err != nil {
+			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
 			}
 		}
@@ -3134,14 +3147,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errCh <- readExecRing(runCtx, cfg, execRd, stats, rows, &seq, &jsonlMu)
+		errCh <- readExecRing(runCtx, cfg, execRd, stats, rows, &seq, &jsonlMu, signer)
 	}()
 
 	if forkRd != nil && forkBuf != nil && forkState != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readForkRing(runCtx, cfg, forkRd, stats, forkBuf, forkState, &seq, &jsonlMu)
+			errCh <- readForkRing(runCtx, cfg, forkRd, stats, forkBuf, forkState, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -3149,7 +3162,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readFSRing(runCtx, cfg, fsRd, stats, fsRowBuf, fsSt, &seq, &jsonlMu)
+			errCh <- readFSRing(runCtx, cfg, fsRd, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -3157,7 +3170,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readConnectRing(runCtx, cfg, connRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary)
+			errCh <- readConnectRing(runCtx, cfg, connRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer)
 		}()
 	}
 
@@ -3236,28 +3249,28 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readUDPRing(runCtx, cfg, udpRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState)
+			errCh <- readUDPRing(runCtx, cfg, udpRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
 	if httpRd != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readHTTPRing(runCtx, cfg, httpRd, pol, stats, rows, &seq, &jsonlMu, sectionState)
+			errCh <- readHTTPRing(runCtx, cfg, httpRd, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
 	if tlsRd != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readTLSRing(runCtx, cfg, tlsRd, pol, stats, rows, &seq, &jsonlMu, sectionState)
+			errCh <- readTLSRing(runCtx, cfg, tlsRd, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
 	if denyRd != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer)
 		}()
 	}
 	if dnsRd != nil {
@@ -3271,7 +3284,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd, stats, &seq, &jsonlMu)
+			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd, stats, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -3279,14 +3292,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, enforceObjs.EnforceCfg, enforceObjs.AllowedIpv4, enforceObjs.IgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu)
+			errCh <- watchMapIntegrity(runCtx, cfg, enforceObjs.EnforceCfg, enforceObjs.AllowedIpv4, enforceObjs.IgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu, signer)
 		}()
 	}
 	if hasLSM {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmEnforceCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu)
+			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmEnforceCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -3313,6 +3326,20 @@ func Main() error {
 
 	if err := Run(ctx, cfg); err != nil && !errors.Is(err, context.Canceled) {
 		return err
+	}
+	return nil
+}
+
+func loadAllowedDomainsMap(m *ebpf.Map, pol *policy.Policy) error {
+	domains := pol.AllowedDomains()
+	for _, domain := range domains {
+		// Key is [256]byte (fixed size in BPF)
+		var key [256]byte
+		copy(key[:], domain)
+		val := uint8(1)
+		if err := m.Update(&key, &val, ebpf.UpdateAny); err != nil {
+			return fmt.Errorf("update allowed_domains map for %s: %w", domain, err)
+		}
 	}
 	return nil
 }

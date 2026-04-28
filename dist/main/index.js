@@ -19241,6 +19241,17 @@ async function run() {
   const logLevel = getInput("log-level") || "info";
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
   const smokeTestEgress = inputBoolDefault("smoke-test-egress", false);
+  const ioUringDisable = inputBoolDefault("io-uring-disable", true);
+  if (ioUringDisable) {
+    try {
+      (0, import_child_process.execFileSync)("sudo", ["sysctl", "-w", "io_uring_disabled=2"], { stdio: "inherit" });
+      info("io_uring disabled via sysctl (io_uring_disabled=2) \u2014 closes io_uring eBPF bypass vector");
+    } catch (e) {
+      warning(
+        `io-uring-disable: sysctl io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); io_uring-based syscall bypasses may not be blocked on this runner`
+      );
+    }
+  }
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path.join(baseDir, ".coldstep-detect.md");

@@ -98,6 +98,8 @@ jobs:
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           # Process activity (proc_tree feature gate)
           bash -c 'echo "coldstep-demo" >/dev/null'
+          # BPF Audit (if supported)
+          sudo bpftool map show >/dev/null 2>&1 || true
           # Filesystem events: create -> rename -> chmod -> unlink
           TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
           TMP_A="${TMP_FS_DIR}/a.txt"
@@ -162,6 +164,12 @@ jobs:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
         run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+
+      - name: Enforce Anti-Blindness Gating
+        if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: python3 public_scripts/coldstep_detect_report/assert_integrity.py
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'

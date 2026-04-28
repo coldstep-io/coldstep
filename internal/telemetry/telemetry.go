@@ -1,20 +1,46 @@
 package telemetry
 
 import (
+	"crypto/ed25519"
+	"encoding/base64"
 	"encoding/json"
 	"os"
 	"time"
 )
 
 // AppendJSONL appends one JSON object line to path (create if missing).
-func AppendJSONL(path string, v any) error {
+// If s is non-nil, it signs the object and adds a "sig" field before writing.
+func AppendJSONL(path string, v any, s *Signer) error {
 	if path == "" {
 		return nil
+	}
+	if s != nil {
+		// We need to inject the signature. Since v is any, we can't easily set a field.
+		// We'll marshal to map, sign, inject, and re-marshal.
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		var m map[string]any
+		if err := json.Unmarshal(b, &m); err != nil {
+			return err
+		}
+		sig := ed25519.Sign(s.priv, b)
+		m["sig"] = base64.StdEncoding.EncodeToString(sig)
+		b, err = json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		return appendLine(path, b)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
+	return appendLine(path, b)
+}
+
+func appendLine(path string, b []byte) error {
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -60,10 +86,13 @@ type Summary struct {
 	DroppedCounts                 map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                  map[string]int `json:"policy_counts"`
 	BPF                           []BPFStatus    `json:"bpf,omitempty"`
+	Signature                     string         `json:"signature,omitempty"`
+	PublicKey                     string         `json:"public_key,omitempty"`
 }
 
 // WriteSummary writes telemetry summary JSON (overwrites).
-func WriteSummary(path string, s Summary) error {
+// If s is non-nil, it signs the summary and embeds the signature.
+func WriteSummary(path string, s Summary, signer *Signer) error {
 	if path == "" {
 		return nil
 	}
@@ -78,6 +107,17 @@ func WriteSummary(path string, s Summary) error {
 	}
 	if s.PolicyCounts == nil {
 		s.PolicyCounts = map[string]int{}
+	}
+	if signer != nil {
+		s.PublicKey = signer.PublicKey()
+		// Clear signature for hashing
+		s.Signature = ""
+		b, err := json.Marshal(s)
+		if err != nil {
+			return err
+		}
+		sig := ed25519.Sign(signer.priv, b)
+		s.Signature = base64.StdEncoding.EncodeToString(sig)
 	}
 	b, err := json.MarshalIndent(s, "", "  ")
 	if err != nil {

@@ -25,6 +25,8 @@
 /* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 57
 #define COLDSTEP_NR_RECVFROM 207
+#define COLDSTEP_NR_RECVMSG 212
+#define COLDSTEP_NR_READ 63
 #define COLDSTEP_NR_WRITEV 66
 /* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
 #define COLDSTEP_NR_SENDMMSG 269
@@ -46,6 +48,8 @@
 /* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 3
 #define COLDSTEP_NR_RECVFROM 45
+#define COLDSTEP_NR_RECVMSG 47
+#define COLDSTEP_NR_READ 0
 #define COLDSTEP_NR_WRITEV 20
 /* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
 #define COLDSTEP_NR_SENDMMSG 307

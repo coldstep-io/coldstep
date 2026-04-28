@@ -97,6 +97,14 @@ type DenyDigestRow struct {
 	Reason   string
 }
 
+// BPFAuditDigestRow is one bpf() syscall audit line in the markdown digest.
+type BPFAuditDigestRow struct {
+	TS   string
+	PID  uint32
+	Comm string
+	Cmd  uint32 // BPF_PROG_LOAD, etc.
+}
+
 // DigestInput feeds the Job Summary–oriented detect markdown builder.
 type DigestInput struct {
 	BPF []telemetry.BPFStatus
@@ -177,6 +185,10 @@ type DigestInput struct {
 	TCPDNSResponsesObserved int
 	BPFHeartbeatFailures           int
 	BPFAuditTotal                  int
+	BPFAuditRows                   []BPFAuditDigestRow
+	TruncatedBPFAudit              bool
+	BPFAuditDegradedHook           bool
+	BPFAuditReaderErrors           int
 	BPFMapIntegrityFailures        int
 	BPFAuditRingbufReserveFailures int
 	DroppedCounts                  map[string]int
@@ -708,8 +720,35 @@ func BuildDetectMarkdown(in DigestInput) string {
 		}
 		b.WriteString("\n</details>\n\n")
 	}
+	writeBPFAudit := func() {
+		if in.BPFAuditTotal == 0 && !in.BPFAuditDegradedHook && in.BPFAuditReaderErrors == 0 {
+			return
+		}
+		b.WriteString("<details>\n<summary><strong>BPF audit (recent)</strong></summary>\n\n")
+		b.WriteString("| Time (UTC) | PID | Comm | Command |\n|:--|--:|:-|:-|\n")
+		if len(in.BPFAuditRows) == 0 {
+			reason := "no events"
+			if in.BPFAuditDegradedHook {
+				reason = "degraded hook"
+			} else if in.BPFAuditReaderErrors > 0 {
+				reason = fmt.Sprintf("reader errors (%d)", in.BPFAuditReaderErrors)
+			}
+			b.WriteString(fmt.Sprintf("| — | — | — | %s |\n", reason))
+		} else {
+			for _, r := range in.BPFAuditRows {
+				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` (%d) |\n",
+					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(BPFCmdName(r.Cmd)), r.Cmd))
+			}
+			if in.TruncatedBPFAudit {
+				b.WriteString(fmt.Sprintf("\n*Showing last %d of %d — full stream in JSONL.*\n",
+					len(in.BPFAuditRows), in.BPFAuditTotal))
+			}
+		}
+		b.WriteString("\n</details>\n\n")
+	}
 
 	writeExec()
+	writeBPFAudit()
 	writeProcessTree()
 	writeTCP()
 	writeUDP()
@@ -835,6 +874,85 @@ func TruncateUTF8ToMaxBytes(s string, maxBytes int) string {
 		b = b[:len(b)-1]
 	}
 	return string(b)
+}
+
+func BPFCmdName(cmd uint32) string {
+	switch cmd {
+	case 0:
+		return "BPF_MAP_CREATE"
+	case 1:
+		return "BPF_MAP_LOOKUP_ELEM"
+	case 2:
+		return "BPF_MAP_UPDATE_ELEM"
+	case 3:
+		return "BPF_MAP_DELETE_ELEM"
+	case 4:
+		return "BPF_MAP_GET_NEXT_KEY"
+	case 5:
+		return "BPF_PROG_LOAD"
+	case 6:
+		return "BPF_OBJ_PIN"
+	case 7:
+		return "BPF_OBJ_GET"
+	case 8:
+		return "BPF_PROG_ATTACH"
+	case 9:
+		return "BPF_PROG_DETACH"
+	case 10:
+		return "BPF_PROG_TEST_RUN"
+	case 11:
+		return "BPF_PROG_GET_NEXT_ID"
+	case 12:
+		return "BPF_MAP_GET_NEXT_ID"
+	case 13:
+		return "BPF_PROG_GET_FD_BY_ID"
+	case 14:
+		return "BPF_MAP_GET_FD_BY_ID"
+	case 15:
+		return "BPF_OBJ_GET_INFO_BY_FD"
+	case 16:
+		return "BPF_PROG_QUERY"
+	case 17:
+		return "BPF_RAW_TRACEPOINT_OPEN"
+	case 18:
+		return "BPF_BTF_LOAD"
+	case 19:
+		return "BPF_BTF_GET_FD_BY_ID"
+	case 20:
+		return "BPF_TASK_FD_QUERY"
+	case 21:
+		return "BPF_MAP_LOOKUP_AND_DELETE_ELEM"
+	case 22:
+		return "BPF_MAP_FREEZE"
+	case 23:
+		return "BPF_BTF_GET_NEXT_ID"
+	case 24:
+		return "BPF_MAP_LOOKUP_BATCH"
+	case 25:
+		return "BPF_MAP_LOOKUP_AND_DELETE_BATCH"
+	case 26:
+		return "BPF_MAP_UPDATE_BATCH"
+	case 27:
+		return "BPF_MAP_DELETE_BATCH"
+	case 28:
+		return "BPF_LINK_CREATE"
+	case 29:
+		return "BPF_LINK_UPDATE"
+	case 30:
+		return "BPF_LINK_GET_FD_BY_ID"
+	case 31:
+		return "BPF_LINK_GET_NEXT_ID"
+	case 32:
+		return "BPF_ENABLE_STATS"
+	case 33:
+		return "BPF_ITER_CREATE"
+	case 34:
+		return "BPF_LINK_DETACH"
+	case 35:
+		return "BPF_PROG_BIND_MAP"
+	default:
+		return "unknown"
+	}
 }
 
 // WriteDetectDigest overwrites the detect markdown path used by the action post step.

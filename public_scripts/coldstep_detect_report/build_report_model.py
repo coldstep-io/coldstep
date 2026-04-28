@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional
 
-SCHEMA_VERSION = "2.1"
+SCHEMA_VERSION = "2.2"  # Incrementing schema version for evaluation payloads
 
 
 def _ensure_repo_root_on_sys_path() -> None:
@@ -62,6 +62,7 @@ REQUIRED_CAPABILITIES = (
     ("tls", "TLS ClientHello/SNI hint"),
     ("proc_fork", "Process tree (fork)"),
     ("fs_event", "Filesystem events"),
+    ("bpf_audit", "BPF Syscall Auditing"),
 )
 
 EGRESS_TYPES = ("tcp", "udp", "http", "tls")
@@ -209,6 +210,49 @@ def build(
     baseline = _load_jsonl(baseline_jsonl) if baseline_jsonl else None
     meta = next((ev for ev in current if ev.get("type") == "meta"), {})
     _ensure_repo_root_on_sys_path()
+    
+    # Capability Evaluation (Integrity + Coverage)
+    from public_scripts.coldstep_detect_report.integrity_evaluator import evaluate_integrity
+    from public_scripts.coldstep_detect_report.coverage_matrix_evaluator import evaluate_coverage
+    from public_scripts.coldstep_detect_report.balanced_score import compute_balanced_score
+
+    # Integrity configuration
+    required_types = {"meta", "exec", "tcp"}
+    # Canaries: looking for activity we expect in the demo/CI runs
+    canary_rules = [
+        {"id": "canary_demo_exec", "predicate": {"type": "exec", "comm": "bash"}},
+        {"id": "canary_dns_lookup", "predicate": {"type": "udp", "dst": "8.8.8.8"}},
+        {"id": "canary_bpftool_audit", "predicate": {"type": "bpf_audit", "comm": "bpftool"}},
+        {"id": "canary_fs_chmod", "predicate": {"type": "fs_event", "op": "chmod"}},
+        {"id": "canary_tls_egress", "predicate": {"type": "tls", "sni": "theclouddj.com"}},
+    ]
+    
+    integrity_res = evaluate_integrity(current, required_types, canary_rules)
+    
+    # Coverage configuration
+    matrix_cfg = {
+        "syscalls": [id for id, _ in REQUIRED_CAPABILITIES]
+    }
+    coverage_res = evaluate_coverage(current, matrix_cfg)
+    
+    # Balanced Score
+    eval_res = compute_balanced_score(
+        integrity_score=integrity_res["score"],
+        coverage_score=coverage_res["score"],
+        correlation_score=100,  # Placeholder
+        weights={"integrity": 0.5, "coverage": 0.4, "correlation": 0.1},
+        fail_threshold=60,
+        pass_threshold=80,
+        hard_fail_reasons=integrity_res["reasons"],
+    )
+    
+    capability_eval = {
+        "score": eval_res["score"],
+        "verdict": eval_res["verdict"],
+        "integrity": integrity_res,
+        "coverage": coverage_res,
+    }
+
     # Lazy import: keeps this module loadable even if the IP helper changes.
     from public_scripts.coldstep_detect_report.build_ip_classification_model import (
         build as build_ip_classification,
@@ -231,6 +275,7 @@ def build(
         "egress_sankey": _egress_sankey(current),
         "diff": _diff(current, baseline),
         "ip_classification": ip_payload.get("ip_classification") or [],
+        "capability_eval": capability_eval,
         "otx": None,
     }
 
