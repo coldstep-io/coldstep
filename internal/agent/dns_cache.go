@@ -101,7 +101,7 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 		if len(c.bpfMaps) > 0 {
 			var bpfKey [4]byte
 			copy(bpfKey[:], ip[:])
-			var bpfVal [64]byte
+			var bpfVal [256]byte
 			copy(bpfVal[:], ans.name)
 			for _, bpfMap := range c.bpfMaps {
 				if bpfMap != nil {

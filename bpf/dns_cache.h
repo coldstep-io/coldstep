@@ -13,7 +13,7 @@ struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 8192);
 	__type(key, __be32);
-	__type(value, char[64]);
+	__type(value, char[256]);
 } dns_cache SEC(".maps");
 
 /*
@@ -23,7 +23,7 @@ struct {
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__uint(max_entries, 1024);
-	__type(key, char[64]);
+	__type(key, char[256]);
 	__type(value, __u8);
 } allowed_domains SEC(".maps");
 
