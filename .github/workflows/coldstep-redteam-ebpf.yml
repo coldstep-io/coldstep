@@ -33,16 +33,28 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - name: Assert tracked text is UTF-8
+        run: python3 public_scripts/assert_utf8_text.py
+
       - name: Download coldstep agent (GitHub Release)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p bin
-          gh release download "${COLDSTEP_AGENT_VERSION}" \
-            --repo "${GITHUB_REPOSITORY}" \
-            --pattern 'coldstep-linux-amd64' \
-            --dir bin
+          for attempt in 1 2 3; do
+            if gh release download "${COLDSTEP_AGENT_VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'coldstep-linux-amd64' \
+              --dir bin; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "failed to download coldstep release artifact after ${attempt} attempts"
+              exit 1
+            fi
+            sleep $((attempt * 5))
+          done
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 

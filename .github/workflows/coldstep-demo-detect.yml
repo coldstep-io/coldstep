@@ -164,7 +164,6 @@ jobs:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
         run: python3 public_scripts/coldstep_detect_report/build_report_model.py
-
       - name: Enforce Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
         env:
