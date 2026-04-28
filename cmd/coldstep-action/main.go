@@ -275,7 +275,10 @@ func runStop(cfg stopConfig) error {
 			}
 		}
 	}
-	_ = os.Remove(detectLog)
+	// Intentionally keep .coldstep-detect.md on disk: it is the agent's primary
+	// digest artifact and several workflows (`Verify detect capabilities`,
+	// `List workspace outputs`, `coldstep-report build-model`, etc.) read it
+	// after Stop. The runner is ephemeral, so cleanup is not needed.
 
 	if cfg.ReportPRSummary && strings.TrimSpace(body) != "" {
 		token := strings.TrimSpace(cfg.GithubToken)
