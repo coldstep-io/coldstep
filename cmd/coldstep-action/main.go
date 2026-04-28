@@ -1,0 +1,506 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+)
+
+type startConfig struct {
+	Mode                 string
+	AllowedDomains       string
+	AllowedHosts         string
+	AllowedIPs           string
+	IgnoredIPNets        string
+	NoDefaultIgnoredNets bool
+	LogLevel             string
+	FeatureGates         string
+	ReleasePath          string
+	FailOnError          bool
+	ReadyTimeoutSeconds  int
+	SmokeTestEgress      bool
+	IoUringDisable       bool
+	SigningKey           string
+	ReportJobSummary     bool
+}
+
+type stopConfig struct {
+	FailOnError      bool
+	ReportJobSummary bool
+	ReportPRSummary  bool
+	GithubToken      string
+	SlackWebhook     string
+}
+
+type readyFile struct {
+	OK bool `json:"ok"`
+}
+
+func main() {
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: coldstep-action <start|stop> [flags]")
+		os.Exit(2)
+	}
+
+	switch os.Args[1] {
+	case "start":
+		cfg, err := parseStartFlags(os.Args[2:])
+		if err != nil {
+			fatal(err)
+		}
+		fatal(runStart(cfg))
+	case "stop":
+		cfg, err := parseStopFlags(os.Args[2:])
+		if err != nil {
+			fatal(err)
+		}
+		fatal(runStop(cfg))
+	default:
+		fatal(fmt.Errorf("unknown command %q", os.Args[1]))
+	}
+}
+
+func parseStartFlags(args []string) (startConfig, error) {
+	fs := flag.NewFlagSet("start", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfg := startConfig{}
+	fs.StringVar(&cfg.Mode, "mode", "detect", "")
+	fs.StringVar(&cfg.AllowedDomains, "allowed-domains", "", "")
+	fs.StringVar(&cfg.AllowedHosts, "allowed-hosts", "", "")
+	fs.StringVar(&cfg.AllowedIPs, "allowed-ips", "", "")
+	fs.StringVar(&cfg.IgnoredIPNets, "ignored-ip-nets", "", "")
+	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
+	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
+	fs.StringVar(&cfg.FeatureGates, "feature-gates", "", "")
+	fs.StringVar(&cfg.ReleasePath, "release-path", "", "")
+	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
+	fs.IntVar(&cfg.ReadyTimeoutSeconds, "ready-timeout-seconds", 1500, "")
+	fs.BoolVar(&cfg.SmokeTestEgress, "smoke-test-egress", false, "")
+	fs.BoolVar(&cfg.IoUringDisable, "io-uring-disable", true, "")
+	fs.StringVar(&cfg.SigningKey, "signing-key", "", "")
+	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
+	if err := fs.Parse(args); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func parseStopFlags(args []string) (stopConfig, error) {
+	fs := flag.NewFlagSet("stop", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	cfg := stopConfig{}
+	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
+	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
+	fs.BoolVar(&cfg.ReportPRSummary, "report-pr-summary", false, "")
+	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
+	fs.StringVar(&cfg.SlackWebhook, "slack-webhook-endpoint", "", "")
+	if err := fs.Parse(args); err != nil {
+		return cfg, err
+	}
+	return cfg, nil
+}
+
+func runStart(cfg startConfig) error {
+	if runtimeOS() != "linux" {
+		return errors.New("coldstep requires a Linux runner (use runs-on: ubuntu-latest)")
+	}
+
+	actionPath := getenvDefault("GITHUB_ACTION_PATH", mustGetwd())
+	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
+	binPath := filepath.Join(actionPath, "bin", "coldstep")
+	buildScript := filepath.Join(actionPath, "public_scripts", "build-agent-linux.sh")
+	pidFile := filepath.Join(actionPath, ".coldstep.pid")
+	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
+	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
+	stderrLog := filepath.Join(baseDir, ".coldstep-agent.stderr.log")
+	readyMarker := filepath.Join(actionPath, ".coldstep.ready.ok")
+
+	if err := os.MkdirAll(filepath.Join(actionPath, "bin"), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(detectLog, []byte{}, 0o644); err != nil {
+		return err
+	}
+	_ = os.Remove(agentStatus)
+	_ = os.Remove(readyMarker)
+	if cfg.FailOnError {
+		_ = os.Remove(stderrLog)
+	}
+
+	if cfg.IoUringDisable {
+		_ = exec.Command("sudo", "sysctl", "-w", "io_uring_disabled=2").Run()
+	}
+
+	if cfg.ReleasePath != "" {
+		src := cfg.ReleasePath
+		if !filepath.IsAbs(src) {
+			src = filepath.Join(baseDir, src)
+		}
+		if _, err := os.Stat(src); err != nil {
+			return fmt.Errorf("release-path not found: %w", err)
+		}
+		raw, err := os.ReadFile(src)
+		if err != nil {
+			return err
+		}
+		if err := os.WriteFile(binPath, raw, 0o755); err != nil {
+			return err
+		}
+	} else {
+		cmd := exec.Command("bash", buildScript, actionPath)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		if err := cmd.Run(); err != nil {
+			return err
+		}
+	}
+
+	mode := strings.TrimSpace(strings.ToLower(cfg.Mode))
+	if mode == "" {
+		mode = "detect"
+	}
+	if mode != "detect" && mode != "enforce" {
+		return fmt.Errorf("invalid mode %q", mode)
+	}
+
+	childEnv := os.Environ()
+	childEnv = append(childEnv,
+		"GITHUB_WORKSPACE="+baseDir,
+		"COLDSTEP_DETECT_LOG="+detectLog,
+		"COLDSTEP_ALLOWED_DOMAINS="+cfg.AllowedDomains,
+		"COLDSTEP_ALLOWED_HOSTS="+cfg.AllowedHosts,
+		"COLDSTEP_ALLOWED_IPS="+cfg.AllowedIPs,
+		"COLDSTEP_IGNORED_IP_NETS="+cfg.IgnoredIPNets,
+		"COLDSTEP_NO_DEFAULT_IGNORED_NETS="+boolString(cfg.NoDefaultIgnoredNets),
+		"COLDSTEP_FEATURE_GATES="+cfg.FeatureGates,
+		"CI_GUARD_MODE="+mode,
+		"COLDSTEP_LOG_LEVEL="+cfg.LogLevel,
+		"COLDSTEP_AGENT_STATUS="+agentStatus,
+		"COLDSTEP_SIGNING_KEY="+cfg.SigningKey,
+		"COLDSTEP_REPORT_JOB_SUMMARY="+boolString(cfg.ReportJobSummary),
+	)
+
+	cmd := exec.Command("sudo", "-E", binPath, "run")
+	cmd.Env = childEnv
+	cmd.Dir = actionPath
+	stderr, err := os.OpenFile(stderrLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer stderr.Close()
+	cmd.Stdout = io.Discard
+	cmd.Stderr = stderr
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		return err
+	}
+
+	if cfg.SmokeTestEgress {
+		_ = exec.Command("bash", "-c", "sleep 1; timeout 10 bash -c 'printf \"x\" >/dev/udp/1.1.1.1/53' >/dev/null 2>&1 || true; timeout 10 bash -c 'printf \"GET / HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n\" >/dev/tcp/example.com/80' >/dev/null 2>&1 || true").Start()
+	}
+
+	if cfg.FailOnError {
+		seconds := clamp(cfg.ReadyTimeoutSeconds, 60, 2700)
+		outcome := waitForReady(agentStatus, time.Duration(seconds)*time.Second, cmd.Process.Pid)
+		if outcome != "ready" {
+			return fmt.Errorf("coldstep agent did not report ready (%s)", outcome)
+		}
+		if err := os.WriteFile(readyMarker, []byte("true"), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func runStop(cfg stopConfig) error {
+	actionPath := getenvDefault("GITHUB_ACTION_PATH", mustGetwd())
+	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
+	pidFile := filepath.Join(actionPath, ".coldstep.pid")
+	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
+	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
+	readyMarker := filepath.Join(actionPath, ".coldstep.ready.ok")
+
+	if cfg.FailOnError {
+		if _, err := os.Stat(readyMarker); err != nil {
+			ok, _ := readReady(agentStatus)
+			if !ok {
+				return errors.New("coldstep agent did not report ready (operational fail-on-error)")
+			}
+		}
+	}
+
+	if raw, err := os.ReadFile(pidFile); err == nil {
+		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+		if err == nil && pid > 0 {
+			if p, perr := os.FindProcess(pid); perr == nil {
+				_ = p.Signal(syscall.SIGTERM)
+			}
+		}
+	}
+	time.Sleep(400 * time.Millisecond)
+
+	body := ""
+	if raw, err := os.ReadFile(detectLog); err == nil {
+		body = string(raw)
+	}
+
+	if cfg.ReportJobSummary {
+		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
+			safe := sanitizeDigestForMarkdown(body)
+			block := "## Coldstep · digest (exec / network / enforcement)\n\n" + safe
+			if !strings.HasSuffix(block, "\n") {
+				block += "\n"
+			}
+			f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+			if err == nil {
+				_, _ = f.WriteString(block)
+				_ = f.Close()
+			}
+		}
+	}
+	// Intentionally keep .coldstep-detect.md on disk: it is the agent's primary
+	// digest artifact and several workflows (`Verify detect capabilities`,
+	// `List workspace outputs`, `coldstep-report build-model`, etc.) read it
+	// after Stop. The runner is ephemeral, so cleanup is not needed.
+
+	if cfg.ReportPRSummary && strings.TrimSpace(body) != "" {
+		token := strings.TrimSpace(cfg.GithubToken)
+		if token == "" {
+			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
+		}
+		if token != "" {
+			_ = postPRComment(token, sanitizeDigestForMarkdown(body))
+		}
+	}
+	if strings.TrimSpace(cfg.SlackWebhook) != "" && strings.TrimSpace(body) != "" {
+		if u := parseSlackIncomingWebhookURL(cfg.SlackWebhook); u != nil {
+			_ = postSlack(*u, body)
+		}
+	}
+	return nil
+}
+
+func postPRComment(token, body string) error {
+	repo := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY"))
+	if repo == "" {
+		return nil
+	}
+	parts := strings.SplitN(repo, "/", 2)
+	if len(parts) != 2 {
+		return nil
+	}
+	eventPath := strings.TrimSpace(os.Getenv("GITHUB_EVENT_PATH"))
+	if eventPath == "" {
+		return nil
+	}
+	raw, err := os.ReadFile(eventPath)
+	if err != nil {
+		return err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		return err
+	}
+	pr, ok := payload["pull_request"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	number, ok := pr["number"].(float64)
+	if !ok {
+		return nil
+	}
+	comment := map[string]string{"body": "## Coldstep digest\n\n" + truncate(body, 65000)}
+	b, _ := json.Marshal(comment)
+	urlStr := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", parts[0], parts[1], int(number))
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("github comment failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func parseSlackIncomingWebhookURL(raw string) *url.URL {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return nil
+	}
+	if u.Scheme != "https" || strings.ToLower(u.Hostname()) != "hooks.slack.com" {
+		return nil
+	}
+	if !strings.HasPrefix(strings.ToLower(u.Path), "/services/") {
+		return nil
+	}
+	if u.User != nil {
+		return nil
+	}
+	return u
+}
+
+func postSlack(u url.URL, body string) error {
+	text := body
+	if len(text) > 35000 {
+		text = text[:35000] + "\n…(truncated for Slack)"
+	}
+	payload := map[string]string{"text": "Coldstep digest\n\n" + text}
+	b, _ := json.Marshal(payload)
+	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return fmt.Errorf("slack webhook failed: %s", resp.Status)
+	}
+	return nil
+}
+
+func waitForReady(statusPath string, timeout time.Duration, pid int) string {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		ok, known := readReady(statusPath)
+		if known && ok {
+			return "ready"
+		}
+		if known && !ok {
+			return "explicit_not_ready"
+		}
+		if !pidAlive(pid) {
+			return "child_exit"
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return "timeout"
+}
+
+func readReady(path string) (ok bool, known bool) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return false, false
+	}
+	var st readyFile
+	if err := json.Unmarshal(raw, &st); err != nil {
+		return false, false
+	}
+	return st.OK, true
+}
+
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	err = p.Signal(syscall.Signal(0))
+	return err == nil
+}
+
+func sanitizeDigestForMarkdown(body string) string {
+	if body == "" {
+		return body
+	}
+	body = strings.TrimPrefix(body, "\uFEFF")
+	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n")
+	lines := strings.Split(body, "\n")
+	backticks := regexp.MustCompile("`{3,}")
+	tildes := regexp.MustCompile("~{3,}")
+	for i := range lines {
+		line := lines[i]
+		if len(line) > 4096 {
+			line = line[:4096] + " …(truncated)"
+		}
+		line = strings.ReplaceAll(line, "\\", "\\\\")
+		line = strings.ReplaceAll(line, "<", "&lt;")
+		line = backticks.ReplaceAllStringFunc(line, func(m string) string {
+			return strings.Repeat("\\`", len(m))
+		})
+		line = tildes.ReplaceAllStringFunc(line, func(m string) string {
+			return strings.Repeat("\\~", len(m))
+		})
+		lines[i] = line
+	}
+	return strings.Join(lines, "\n")
+}
+
+func boolString(v bool) string {
+	if v {
+		return "true"
+	}
+	return "false"
+}
+
+func truncate(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "\n\n_(truncated)_\n"
+}
+
+func clamp(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func getenvDefault(k, def string) string {
+	v := strings.TrimSpace(os.Getenv(k))
+	if v == "" {
+		return def
+	}
+	return v
+}
+
+func runtimeOS() string {
+	if v := strings.ToLower(strings.TrimSpace(os.Getenv("RUNNER_OS"))); v != "" {
+		return v
+	}
+	return strings.ToLower(runtime.GOOS)
+}
+
+func mustGetwd() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
+}
+
+func fatal(err error) {
+	if err == nil {
+		return
+	}
+	fmt.Fprintln(os.Stderr, err.Error())
+	os.Exit(1)
+}

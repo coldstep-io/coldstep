@@ -98,6 +98,7 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 		nil,
 		fsSectionSnapshot{},
 		false,
+		canarySnapshot{},
 	)
 
 	if !in.UDPDegradedHook {
@@ -166,6 +167,7 @@ func TestRun_DroppedKinds_PropagateToDigestInput(t *testing.T) {
 		nil,
 		fsSectionSnapshot{},
 		false,
+		canarySnapshot{},
 	)
 
 	for _, k := range stableRingDropKinds() {
@@ -199,6 +201,7 @@ func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
 		nil,
 		fsSectionSnapshot{},
 		false,
+		canarySnapshot{},
 	)
 
 	if in.UDPDegradedHook || in.HTTPDegradedHook || in.TLSDegradedHook {
@@ -228,6 +231,7 @@ func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 		nil,
 		fsSectionSnapshot{},
 		false,
+		canarySnapshot{},
 	)
 	if !in.UDPDegradedHook || !in.HTTPDegradedHook || !in.TLSDegradedHook {
 		t.Fatal("expected degraded flags true when raw_tp hook status is missing")
@@ -296,7 +300,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 
 	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 
-	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state)
+	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected deny to fail fast with error")
 	}
@@ -349,10 +353,10 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 	rawUDP := fillTestDenyRawV6(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("2001:db8::53"), 53)
 
-	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append tcp: %v", err)
 	}
-	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append udp: %v", err)
 	}
 
@@ -379,7 +383,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state)
+	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -399,7 +403,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 
 	raw := fillTestDenyRawV4(1, 1, "", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 
-	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state)
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected append deny jsonl error")
 	}
@@ -417,7 +421,7 @@ func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state)
+	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("decode failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -440,7 +444,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 
 	raw := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state)
+	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state, nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("JSONL failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -543,7 +547,7 @@ func TestLoadIgnoredLPMMap_NilMapIncludesCIDRCount(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse cidr: %v", err)
 	}
-	err = loadIgnoredLPMMap(nil, []*net.IPNet{n})
+	_, err = loadIgnoredLPMMap(nil, []*net.IPNet{n})
 	if err == nil {
 		t.Fatal("expected nil-map error")
 	}
@@ -554,10 +558,10 @@ func TestLoadIgnoredLPMMap_NilMapIncludesCIDRCount(t *testing.T) {
 }
 
 func TestLoadIgnoredLPMMap_EmptyNetsNoop(t *testing.T) {
-	if err := loadIgnoredLPMMap(nil, nil); err != nil {
+	if _, err := loadIgnoredLPMMap(nil, nil); err != nil {
 		t.Fatalf("expected nil error for empty net list, got %v", err)
 	}
-	if err := loadIgnoredLPMMap(nil, []*net.IPNet{}); err != nil {
+	if _, err := loadIgnoredLPMMap(nil, []*net.IPNet{}); err != nil {
 		t.Fatalf("expected nil error for empty net slice, got %v", err)
 	}
 }
@@ -580,7 +584,7 @@ func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = loadIgnoredLPMMap(m, []*net.IPNet{ipv6Net})
+	_, err = loadIgnoredLPMMap(m, []*net.IPNet{ipv6Net})
 	if err == nil {
 		t.Fatal("expected error when no IPv4 entries could be programmed")
 	}
@@ -610,7 +614,7 @@ func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = loadIgnoredLPMMap(m, []*net.IPNet{n})
+	_, err = loadIgnoredLPMMap(m, []*net.IPNet{n})
 	if err == nil {
 		t.Fatal("expected error programming closed map")
 	}
@@ -672,6 +676,7 @@ func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
 		[]report.FSDigestRow{{TS: "t", PID: 1, Comm: "bash", Op: "create", Path: "/tmp/x"}},
 		fsSectionSnapshot{readErrors: 1},
 		true,
+		canarySnapshot{},
 	)
 
 	if !in.FSGate {
@@ -688,6 +693,95 @@ func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
 	}
 	if len(in.FSRows) != 1 || in.FSRows[0].Path != "/tmp/x" {
 		t.Fatalf("FSRows unexpected: %+v", in.FSRows)
+	}
+}
+
+// Regression: composite action polls .coldstep-ready.json as the runner user while coldstep runs
+// under sudo — root-only 0600 caused EACCES; payload is intentionally world-readable.
+func TestCheckMapIntegrity(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{
+		Mode:          config.ModeEnforce,
+		EventsLogPath: events,
+	}
+
+	// Create mock maps
+	enforceSpec := &ebpf.MapSpec{Name: "enforce_cfg", Type: ebpf.Array, KeySize: 4, ValueSize: 4, MaxEntries: 1}
+	enforceCfg, err := ebpf.NewMap(enforceSpec)
+	if err != nil {
+		t.Skipf("skipping BPF map test: %v (likely missing CAP_BPF/CAP_SYS_ADMIN)", err)
+	}
+	defer enforceCfg.Close()
+
+	allowedSpec := &ebpf.MapSpec{Name: "allowed_ipv4", Type: ebpf.LPMTrie, KeySize: 8, ValueSize: 1, MaxEntries: 10, Flags: 1}
+	allowedIpv4, err := ebpf.NewMap(allowedSpec)
+	if err != nil {
+		t.Skipf("skipping BPF map test: %v", err)
+	}
+	defer allowedIpv4.Close()
+
+	ignoredSpec := &ebpf.MapSpec{Name: "ignored_ipv4_lpm", Type: ebpf.LPMTrie, KeySize: 8, ValueSize: 1, MaxEntries: 10, Flags: 1}
+	ignoredIpv4, err := ebpf.NewMap(ignoredSpec)
+	if err != nil {
+		t.Skipf("skipping BPF map test: %v", err)
+	}
+	defer ignoredIpv4.Close()
+
+	// Initial state
+	key0 := uint32(0)
+	val1 := uint32(1)
+	_ = enforceCfg.Update(&key0, &val1, ebpf.UpdateAny)
+
+	stats := newRunStats()
+	state := newEnforcementState()
+	state.setModeAndAllowlist("enforce", 2, 1) // Expected: 2 allowed, 1 ignored
+
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+
+	// 1. Initial check (mismatch expected)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	if state.mapIntegrityFailureCount() != 2 {
+		t.Fatalf("expected 2 failures (allowed=0, ignored=0), got %d", state.mapIntegrityFailureCount())
+	}
+
+	// 2. Fix counts
+	kAllowed1 := [8]byte{32, 0, 0, 0, 1, 1, 1, 1}
+	kAllowed2 := [8]byte{32, 0, 0, 0, 1, 1, 1, 2}
+	v := uint8(1)
+	_ = allowedIpv4.Update(&kAllowed1, &v, ebpf.UpdateAny)
+	_ = allowedIpv4.Update(&kAllowed2, &v, ebpf.UpdateAny)
+
+	kIgnored := [8]byte{24, 0, 0, 0, 10, 0, 0, 0}
+	_ = ignoredIpv4.Update(&kIgnored, &v, ebpf.UpdateAny)
+
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	if state.mapIntegrityFailureCount() != 2 {
+		t.Fatalf("expected failures to remain at 2 after clean check, got %d", state.mapIntegrityFailureCount())
+	}
+
+	// 3. Tamper with enforce_cfg
+	val0 := uint32(0)
+	_ = enforceCfg.Update(&key0, &val0, ebpf.UpdateAny)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	if state.mapIntegrityFailureCount() != 3 {
+		t.Fatalf("expected 3 failures after enforce_cfg tampering, got %d", state.mapIntegrityFailureCount())
+	}
+
+	// Verify revert
+	var valCheck uint32
+	_ = enforceCfg.Lookup(&key0, &valCheck)
+	if valCheck != 1 {
+		t.Fatalf("expected enforce_cfg to be reverted to 1, got %d", valCheck)
+	}
+
+	// Verify JSONL
+	b, _ := os.ReadFile(events)
+	s := string(b)
+	if !strings.Contains(s, `"type":"BPFTamperEvent"`) || !strings.Contains(s, `"map_name":"map:enforce_cfg"`) {
+		t.Fatalf("expected BPFTamperEvent in JSONL, got:\n%s", s)
 	}
 }
 

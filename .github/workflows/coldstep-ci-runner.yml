@@ -11,9 +11,6 @@ on:
         type: boolean
         default: true
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 # Default to least-privilege for every job in this reusable workflow.
 # Jobs that legitimately need more (e.g. `actions: read` to download a
 # previous-run baseline artifact for JSONL diff) override this block at the
@@ -132,15 +129,17 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-go@v6
         with:
-          node-version: '24'
-          cache: npm
-      - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
-      - name: Verify composite dist parses (Node)
-        run: node --check dist/main/index.js && node --check dist/post/index.js
+          go-version: '1.25.x'
+      - name: Build action binaries
+        run: bash public_scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+      - name: Verify action binaries exist
+        run: |
+          set -euo pipefail
+          test -x bin/coldstep
+          test -x bin/coldstep-action
+          test -x bin/coldstep-report
 
   detect-mode:
     runs-on: ubuntu-latest
@@ -155,9 +154,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
-
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
@@ -165,6 +161,7 @@ jobs:
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
+          phase: start
           mode: detect
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
@@ -173,7 +170,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl linux-tools-common linux-tools-generic linux-tools-azure
 
       - name: Assert required tools are present
         run: |
@@ -187,69 +184,41 @@ jobs:
         run: |
           set -euo pipefail
           nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
-          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
-          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://theclouddj.com/ >/dev/null || true
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null || true
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           bash -c 'echo "coldstep-demo" >/dev/null'
+          # BPF Audit (if supported)
+          sudo bpftool map show >/dev/null 2>&1 || true
           TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
           TMP_A="${TMP_FS_DIR}/a.txt"
           TMP_B="${TMP_FS_DIR}/b.txt"
           printf 'demo\n' > "${TMP_A}"
           mv "${TMP_A}" "${TMP_B}"
           chmod 600 "${TMP_B}"
-          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
-          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
-            rm -f "${TMP_B}" || true
-          fi
-          unset _NS_DEMO_UNLINK_TARGET || true
+          rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop agent (flush digest to workspace)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest to workspace)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'false'
 
-      - name: Verify detect capabilities and write visual summary
-        run: |
-          set -euo pipefail
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
-          test -f "$j"
-          grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
-          grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
-          grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
-          grep -q '"type":"udp"' "$j" || { echo "expected udp JSONL"; exit 1; }
-          grep -q '"type":"http"' "$j" || { echo "expected http JSONL"; exit 1; }
-          grep -q '"type":"tls"' "$j" || { echo "expected tls JSONL with tls_sni gate"; exit 1; }
-          grep -q '"type":"proc_fork"' "$j" || { echo "expected proc_fork JSONL with proc_tree gate"; exit 1; }
-          grep -q '"type":"fs_event"' "$j" || { echo "expected fs_event JSONL with fs_events gate"; exit 1; }
-          grep -Eq '"type":"fs_event".*"op":"create"' "$j" || { echo "expected fs_event create"; exit 1; }
-          if ! grep -Eq '"type":"fs_event".*"op":"unlink"' "$j"; then
-            echo "::warning::fs_event unlink not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
-            echo "::warning::fs_event rename not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
-            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ${NS_RUNNER_LABEL})"
-          fi
-          grep -q 'TLS ClientHello' "$f" || { echo "expected TLS section in digest"; exit 1; }
-          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
-          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
-          grep -qi 'process tree' "$f" || { echo "expected process tree section in digest"; exit 1; }
-          grep -qi 'Filesystem' "$f" || { echo "expected Filesystem section in digest"; exit 1; }
-          {
-            echo "## Detect verification"
-            echo ""
-            echo "- **Result:** pass — required JSONL types and digest sections present (\`${NS_RUNNER_LABEL}\`). Inspect \`.coldstep-detect.md\` / JSONL for detail."
-          } >> "${GITHUB_STEP_SUMMARY}"
+      - name: Build report model
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+        run: ./bin/coldstep-report build-model
+
+      - name: Enforce Anti-Blindness Gating
+        if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: ./bin/coldstep-report assert-integrity
+
+
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -321,14 +290,18 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          export NS_SUMMARY="${summary}"
-          export NS_BASELINE="${baseline_file}"
-          export NS_CURRENT="${current_file}"
-          export NS_MARKER="${marker_prefix}"
-          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
+
+          # Re-build the report model now that the baseline JSONL is on disk.
+          ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
+
+      - name: Render detect summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: ./bin/coldstep-report render-summary
       - name: Persist detect JSONL baseline artifact
         if: always()
         uses: actions/upload-artifact@v7
@@ -352,9 +325,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
-
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
@@ -375,7 +345,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl linux-tools-common linux-tools-generic linux-tools-azure
 
       - name: Assert required tools are present
         run: |
@@ -395,6 +365,7 @@ jobs:
       - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
+          phase: start
           mode: enforce
           fail-on-error: 'true'
           release-path: bin/coldstep
@@ -436,16 +407,12 @@ jobs:
             exit 1
           fi
 
-      - name: Stop agent (flush digest to workspace)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest to workspace)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |

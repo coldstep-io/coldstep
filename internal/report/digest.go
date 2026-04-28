@@ -97,6 +97,14 @@ type DenyDigestRow struct {
 	Reason   string
 }
 
+// BPFAuditDigestRow is one bpf() syscall audit line in the markdown digest.
+type BPFAuditDigestRow struct {
+	TS   string
+	PID  uint32
+	Comm string
+	Cmd  uint32 // BPF_PROG_LOAD, etc.
+}
+
 // DigestInput feeds the Job Summary–oriented detect markdown builder.
 type DigestInput struct {
 	BPF []telemetry.BPFStatus
@@ -162,12 +170,28 @@ type DigestInput struct {
 	// the BPF dispatch arm but not fully sniffed for HTTP/TLS payload (PR-E).
 	// Non-zero indicates Coldstep's observability has a real-workload gap.
 	UnobservedEgressSyscalls int
+	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
+	// dispatch arm. Any non-zero value is a critical security signal: io_uring
+	// operations bypass all syscall-based BPF hooks entirely.
+	IoUringSetupObserved int
+	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
+	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
+	CanaryPipelineOK bool
+	CanaryFailCount  int
 	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
 	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
 	// PR-E did not ship. The symbol exists so userspace surfaces the gap
 	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
-	TCPDNSResponsesObserved int
-	DroppedCounts           map[string]int
+	TCPDNSResponsesObserved        int
+	BPFHeartbeatFailures           int
+	BPFAuditTotal                  int
+	BPFAuditRows                   []BPFAuditDigestRow
+	TruncatedBPFAudit              bool
+	BPFAuditDegradedHook           bool
+	BPFAuditReaderErrors           int
+	BPFMapIntegrityFailures        int
+	BPFAuditRingbufReserveFailures int
+	DroppedCounts                  map[string]int
 }
 
 // hotEgressAgg aggregates digest rows by destination for the triage table.
@@ -313,6 +337,15 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.UnobservedEgressSyscalls > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
 	}
+	if in.IoUringSetupObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup detected=%d", in.IoUringSetupObserved))
+	}
+	if in.BPFAuditRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("bpf audit ringbuf reserve=%d", in.BPFAuditRingbufReserveFailures))
+	}
+	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
+	}
 	if len(gapParts) == 0 {
 		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
 	} else {
@@ -366,6 +399,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	b.WriteString("### KPI\n\n")
 	b.WriteString("| Signal | Count |\n|:--|--:|\n")
 	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
+	if in.BPFAuditTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))
+	}
+	if in.BPFMapIntegrityFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_map_integrity_failures** | <font color=\"red\">%d</font> |\n", in.BPFMapIntegrityFailures))
+	}
 	if procForkKPIVisible(in) {
 		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
 	}
@@ -387,6 +426,26 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UnobservedEgressSyscalls > 0 {
 		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+	}
+	if in.IoUringSetupObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup detected (bypass risk)** | %d |\n", in.IoUringSetupObserved))
+	}
+	if in.BPFAuditRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures))
+	}
+	if in.CanaryFailCount > 0 {
+		status := "✅ OK"
+		if !in.CanaryPipelineOK {
+			status = "🚨 FAILED"
+		}
+		b.WriteString(fmt.Sprintf("| **Telemetry integrity canary** | %s (failures=%d) |\n", status, in.CanaryFailCount))
+	} else {
+		b.WriteString("| **Telemetry integrity canary** | ✅ OK |\n")
+	}
+	if in.BPFHeartbeatFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **🚨 BPF Self-protection Heartbeat Failures** | %d |\n", in.BPFHeartbeatFailures))
+	} else {
+		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
 	if in.TCPDNSResponsesObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
@@ -430,6 +489,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UnobservedEgressSyscalls > 0 {
 		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer (BPF connect/policy enforcement still applied to the underlying TCP/UDP socket).")
+	}
+	if in.IoUringSetupObserved > 0 {
+		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring operations completely bypass syscall-based eBPF hooks (raw_tp/sys_enter, cgroup/connect4). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter means something attempted it. If io-uring-disable was false, traffic may have been invisible to Coldstep.")
 	}
 	b.WriteString("</sub>\n\n")
 
@@ -658,8 +720,35 @@ func BuildDetectMarkdown(in DigestInput) string {
 		}
 		b.WriteString("\n</details>\n\n")
 	}
+	writeBPFAudit := func() {
+		if in.BPFAuditTotal == 0 && !in.BPFAuditDegradedHook && in.BPFAuditReaderErrors == 0 {
+			return
+		}
+		b.WriteString("<details>\n<summary><strong>BPF audit (recent)</strong></summary>\n\n")
+		b.WriteString("| Time (UTC) | PID | Comm | Command |\n|:--|--:|:-|:-|\n")
+		if len(in.BPFAuditRows) == 0 {
+			reason := "no events"
+			if in.BPFAuditDegradedHook {
+				reason = "degraded hook"
+			} else if in.BPFAuditReaderErrors > 0 {
+				reason = fmt.Sprintf("reader errors (%d)", in.BPFAuditReaderErrors)
+			}
+			b.WriteString(fmt.Sprintf("| — | — | — | %s |\n", reason))
+		} else {
+			for _, r := range in.BPFAuditRows {
+				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` (%d) |\n",
+					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(BPFCmdName(r.Cmd)), r.Cmd))
+			}
+			if in.TruncatedBPFAudit {
+				b.WriteString(fmt.Sprintf("\n*Showing last %d of %d — full stream in JSONL.*\n",
+					len(in.BPFAuditRows), in.BPFAuditTotal))
+			}
+		}
+		b.WriteString("\n</details>\n\n")
+	}
 
 	writeExec()
+	writeBPFAudit()
 	writeProcessTree()
 	writeTCP()
 	writeUDP()
@@ -785,6 +874,85 @@ func TruncateUTF8ToMaxBytes(s string, maxBytes int) string {
 		b = b[:len(b)-1]
 	}
 	return string(b)
+}
+
+func BPFCmdName(cmd uint32) string {
+	switch cmd {
+	case 0:
+		return "BPF_MAP_CREATE"
+	case 1:
+		return "BPF_MAP_LOOKUP_ELEM"
+	case 2:
+		return "BPF_MAP_UPDATE_ELEM"
+	case 3:
+		return "BPF_MAP_DELETE_ELEM"
+	case 4:
+		return "BPF_MAP_GET_NEXT_KEY"
+	case 5:
+		return "BPF_PROG_LOAD"
+	case 6:
+		return "BPF_OBJ_PIN"
+	case 7:
+		return "BPF_OBJ_GET"
+	case 8:
+		return "BPF_PROG_ATTACH"
+	case 9:
+		return "BPF_PROG_DETACH"
+	case 10:
+		return "BPF_PROG_TEST_RUN"
+	case 11:
+		return "BPF_PROG_GET_NEXT_ID"
+	case 12:
+		return "BPF_MAP_GET_NEXT_ID"
+	case 13:
+		return "BPF_PROG_GET_FD_BY_ID"
+	case 14:
+		return "BPF_MAP_GET_FD_BY_ID"
+	case 15:
+		return "BPF_OBJ_GET_INFO_BY_FD"
+	case 16:
+		return "BPF_PROG_QUERY"
+	case 17:
+		return "BPF_RAW_TRACEPOINT_OPEN"
+	case 18:
+		return "BPF_BTF_LOAD"
+	case 19:
+		return "BPF_BTF_GET_FD_BY_ID"
+	case 20:
+		return "BPF_TASK_FD_QUERY"
+	case 21:
+		return "BPF_MAP_LOOKUP_AND_DELETE_ELEM"
+	case 22:
+		return "BPF_MAP_FREEZE"
+	case 23:
+		return "BPF_BTF_GET_NEXT_ID"
+	case 24:
+		return "BPF_MAP_LOOKUP_BATCH"
+	case 25:
+		return "BPF_MAP_LOOKUP_AND_DELETE_BATCH"
+	case 26:
+		return "BPF_MAP_UPDATE_BATCH"
+	case 27:
+		return "BPF_MAP_DELETE_BATCH"
+	case 28:
+		return "BPF_LINK_CREATE"
+	case 29:
+		return "BPF_LINK_UPDATE"
+	case 30:
+		return "BPF_LINK_GET_FD_BY_ID"
+	case 31:
+		return "BPF_LINK_GET_NEXT_ID"
+	case 32:
+		return "BPF_ENABLE_STATS"
+	case 33:
+		return "BPF_ITER_CREATE"
+	case 34:
+		return "BPF_LINK_DETACH"
+	case 35:
+		return "BPF_PROG_BIND_MAP"
+	default:
+		return "unknown"
+	}
 }
 
 // WriteDetectDigest overwrites the detect markdown path used by the action post step.

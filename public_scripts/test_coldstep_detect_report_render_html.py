@@ -51,7 +51,7 @@ class HtmlReportRendererTests(unittest.TestCase):
         )
         self.assertIsNotNone(m, "missing inline JSON island")
         embedded = json.loads(m.group(1))
-        self.assertEqual(embedded["schema_version"], "2.1")
+        self.assertEqual(embedded["schema_version"], "2.2")
 
     def test_html_loads_observable_plot_with_sri(self):
         html = self._render()
@@ -195,7 +195,7 @@ class HtmlReportRendererTests(unittest.TestCase):
 
     def test_otx_template_js_groups_indicators_by_confidence_tier(self):
         # write_html does not execute the inline module; tier <details> are built
-        # client-side. Assert the template wires confidence tiers + schema v2.1 mount.
+        # client-side. Assert the template wires confidence tiers + schema v2.2 mount.
         tpl = (PKG_DIR / "templates" / "report.html").read_text(encoding="utf-8")
         self.assertIn("confidenceTier", tpl)
         self.assertIn('setAttribute("data-tier"', tpl)

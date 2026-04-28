@@ -201,6 +201,20 @@ async function run(): Promise<void> {
   const logLevel = core.getInput('log-level') || 'info';
   const reportJobSummary = inputBoolDefault('report-job-summary', true);
   const smokeTestEgress = inputBoolDefault('smoke-test-egress', false);
+  const ioUringDisable = inputBoolDefault('io-uring-disable', true);
+  const signingKey = core.getInput('signing-key') || '';
+
+  if (ioUringDisable) {
+    try {
+      execFileSync('sudo', ['sysctl', '-w', 'io_uring_disabled=2'], { stdio: 'inherit' });
+      core.info('io_uring disabled via sysctl (io_uring_disabled=2) — closes io_uring eBPF bypass vector');
+    } catch (e) {
+      core.warning(
+        `io-uring-disable: sysctl io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); ` +
+          'io_uring-based syscall bypasses may not be blocked on this runner',
+      );
+    }
+  }
 
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
@@ -250,6 +264,7 @@ async function run(): Promise<void> {
     COLDSTEP_LOG_LEVEL: logLevel,
     COLDSTEP_AGENT_STATUS: agentStatus,
     COLDSTEP_REPORT_JOB_SUMMARY: reportJobSummary ? 'true' : 'false',
+    COLDSTEP_SIGNING_KEY: signingKey,
   };
   if (smokeTestEgress) {
     childEnv.COLDSTEP_EVENTS_LOG = eventsLog;

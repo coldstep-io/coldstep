@@ -6,10 +6,12 @@ import (
 )
 
 type Edge struct {
-	ParentTGID uint32
-	ChildTGID  uint32
-	ParentComm string
-	ChildComm  string
+	ParentTGID    uint32
+	ChildTGID     uint32
+	ParentComm    string
+	ChildComm     string
+	ChildSID      uint32 // v0.3: session leader PID (0 = unknown)
+	ChildPidnsNum uint32 // v0.3: PID namespace inode (container boundary)
 }
 
 type ExecIdentity struct {

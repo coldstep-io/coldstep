@@ -4,6 +4,8 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"github.com/cilium/ebpf"
 )
 
 // dnsNow is wall clock for TTL expiry (tests may replace).
@@ -27,6 +29,7 @@ type DNSCache struct {
 	mu         sync.RWMutex
 	entries    map[[4]byte]dnsEntry
 	maxEntries int
+	bpfMaps    []*ebpf.Map
 }
 
 func NewDNSCache() *DNSCache {
@@ -34,6 +37,12 @@ func NewDNSCache() *DNSCache {
 		entries:    make(map[[4]byte]dnsEntry),
 		maxEntries: dnsMaxEntries,
 	}
+}
+
+func (c *DNSCache) SetBPFMaps(maps []*ebpf.Map) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.bpfMaps = maps
 }
 
 func ttlToExpiry(ttl uint32, now time.Time) int64 {
@@ -87,6 +96,19 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 			continue
 		}
 		c.entries[ip] = dnsEntry{name: ans.name, expires: exp}
+
+		// Update BPF maps for in-kernel enrichment/enforcement.
+		if len(c.bpfMaps) > 0 {
+			var bpfKey [4]byte
+			copy(bpfKey[:], ip[:])
+			var bpfVal [256]byte
+			copy(bpfVal[:], ans.name)
+			for _, bpfMap := range c.bpfMaps {
+				if bpfMap != nil {
+					_ = bpfMap.Update(&bpfKey, &bpfVal, ebpf.UpdateAny)
+				}
+			}
+		}
 	}
 	c.trimLocked(now)
 }

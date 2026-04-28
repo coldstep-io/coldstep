@@ -19,10 +19,10 @@ func TestAppendJSONL(t *testing.T) {
 		PID: 3, TGID: 3, ThreadID: 3, Comm: "curl",
 		Dst: "1.1.1.1", Dport: 443, Direction: "egress", Policy: "unknown",
 	}
-	if err := AppendJSONL(p, ev); err != nil {
+	if err := AppendJSONL(p, ev, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := AppendJSONL(p, ev); err != nil {
+	if err := AppendJSONL(p, ev, nil); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p)
@@ -52,7 +52,7 @@ func TestWriteSummary(t *testing.T) {
 		ExecEvents: 1, TCPEvents: 2, UDPEvents: 0, HTTPEvents: 0,
 		PolicyCounts: map[string]int{"monitor": 2},
 	}
-	if err := WriteSummary(p, s); err != nil {
+	if err := WriteSummary(p, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p)
@@ -74,7 +74,7 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 		DNSRingbufReserveFailures: 3,
 		PolicyCounts:              map[string]int{"monitor": 1},
 	}
-	if err := WriteSummary(p, s); err != nil {
+	if err := WriteSummary(p, s, nil); err != nil {
 		t.Fatal(err)
 	}
 	b, err := os.ReadFile(p)
@@ -86,5 +86,32 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"dns_ringbuf_reserve_failures": 3`)) {
 		t.Fatalf("missing dns reserve count: %s", b)
+	}
+}
+
+func TestSigning(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "e.jsonl")
+	signer, err := NewSigner("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=") // 32 bytes of zeros in base64
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ev := ExecEvent{
+		Type: "exec", TS: "2026-04-28T12:00:00Z", Seq: 1,
+		PID: 100, Comm: "ls", Exe: "/bin/ls",
+	}
+
+	if err := AppendJSONL(p, ev, signer); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !bytes.Contains(b, []byte(`"sig":`)) {
+		t.Fatalf("missing signature in output: %s", b)
 	}
 }

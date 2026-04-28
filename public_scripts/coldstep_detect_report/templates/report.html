@@ -15,7 +15,7 @@
   <nav class="report-toc" aria-label="On this page">
     <h2 class="toc-title">On this page</h2>
     <ul>
-      <li><a href="#triage-first">What to look at first</a></li>
+      <li><a href="#triage-first">Triage Score</a></li>
       <li><a href="#capabilities">Capabilities</a></li>
       <li><a href="#events">Events by type</a></li>
       <li><a href="#egress">Egress flow</a></li>
@@ -26,8 +26,8 @@
 
   <main>
     <section id="triage-first" class="report-triage report-triage--ok" aria-labelledby="triage-first-title">
-      <h2 id="triage-first-title" class="triage-heading">What to look at first</h2>
-      <p class="triage-lead">Three cards match the Job Summary pulses (capabilities → diff → threat intel). Anything marked <strong class="triage-strong-bad">needs attention</strong> is worth opening below.</p>
+      <h2 id="triage-first-title" class="triage-heading">Triage Score</h2>
+      <p class="triage-lead">Balanced telemetry health score. Anything marked <strong class="triage-strong-bad">needs attention</strong> is worth opening below.</p>
       <div class="triage-cards" data-mount="triage-first"></div>
     </section>
 
@@ -127,6 +127,17 @@
       const grid = document.createElement("div");
       grid.className = "triage-grid";
 
+      const ceval = model.capability_eval || {};
+      const score = ceval.score ?? 0;
+      const verdict = ceval.verdict ?? "fail";
+      const triageTone = verdict === "pass" ? "ok" : (verdict === "warn" ? "warn" : "bad");
+      grid.appendChild(makeCard("Score", "Triage Score", "#triage-first", triageTone, `Overall: ${score}/100 (${verdict})`));
+
+      const integrity = ceval.integrity || {};
+      let integrityTone = integrity.status === "pass" ? "ok" : "bad";
+      let integrityText = integrity.status === "pass" ? "All health checks pass." : `${integrity.reasons?.length || 0} integrity failure(s).`;
+      grid.appendChild(makeCard("1", "Integrity", "#triage-first", integrityTone, integrityText));
+
       const matrix = model.capability_matrix || [];
       let nFail = 0;
       let nWarn = 0;
@@ -148,7 +159,7 @@
         capTone = "warn";
         capText = String(nWarn) + " capability row(s) in warn state.";
       }
-      grid.appendChild(makeCard("1", "Capabilities", "#capabilities", capTone, capText));
+      grid.appendChild(makeCard("2", "Capabilities", "#capabilities", capTone, capText));
 
       const d = model.diff || {};
       let diffTone = "ok";
@@ -165,7 +176,7 @@
           (d.reason != null && String(d.reason).length ? String(d.reason) : "unknown") +
           ".";
       }
-      grid.appendChild(makeCard("2", "Baseline diff", "#diff", diffTone, diffText));
+      grid.appendChild(makeCard("3", "Baseline diff", "#diff", diffTone, diffText));
 
       const otx = model.otx;
       let otxTone = "ok";
@@ -191,12 +202,13 @@
           attention = true;
         }
       }
-      grid.appendChild(makeCard("3", "Threat intel (OTX)", "#otx", otxTone, otxText));
+      grid.appendChild(makeCard("4", "Threat intel (OTX)", "#otx", otxTone, otxText));
 
       mount.appendChild(grid);
       if (strip) {
         strip.classList.remove("report-triage--ok", "report-triage--attention");
-        strip.classList.add(attention ? "report-triage--attention" : "report-triage--ok");
+        const isAttention = attention || verdict === "fail" || verdict === "warn";
+        strip.classList.add(isAttention ? "report-triage--attention" : "report-triage--ok");
       }
     }
 

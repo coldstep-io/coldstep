@@ -25,6 +25,7 @@ type MetaEvent struct {
 	GitHub        MetaGitHub      `json:"github"`
 	BPF           []BPFStatus     `json:"bpf"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
+	Sig           string          `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.
@@ -50,18 +51,22 @@ type ExecEvent struct {
 	Comm     string `json:"comm"`
 	// Exe is the executable path from the tracepoint (BPF-capped; may be truncated vs kernel path).
 	Exe string `json:"exe,omitempty"`
+	Sig string `json:"sig,omitempty"`
 }
 
 // ProcForkEvent is one JSONL record for sched_process_fork (parent/child ids are kernel-reported; best-effort TGID on typical kernels).
 type ProcForkEvent struct {
-	Type       string `json:"type"` // "proc_fork"
-	TS         string `json:"ts"`
-	Seq        uint64 `json:"seq"`
-	ParentPID  uint32 `json:"parent_pid"`
-	ChildPID   uint32 `json:"child_pid"`
-	ParentComm string `json:"parent_comm"`
-	ChildComm  string `json:"child_comm"`
-	Note       string `json:"note,omitempty"`
+	Type          string `json:"type"` // "proc_fork"
+	TS            string `json:"ts"`
+	Seq           uint64 `json:"seq"`
+	ParentPID     uint32 `json:"parent_pid"`
+	ChildPID      uint32 `json:"child_pid"`
+	ParentComm    string `json:"parent_comm"`
+	ChildComm     string `json:"child_comm"`
+	ChildSID      uint32 `json:"child_sid,omitempty"`        // v0.3: session leader PID
+	ChildPidnsNum uint32 `json:"child_pidns_inum,omitempty"` // v0.3: PID namespace inode
+	Note          string `json:"note,omitempty"`
+	Sig           string `json:"sig,omitempty"`
 }
 
 // TCPEvent is one JSONL record for an observed IPv4 connect attempt.
@@ -79,6 +84,7 @@ type TCPEvent struct {
 	FQDNProvenance string `json:"fqdn_provenance,omitempty"`
 	Direction      string `json:"direction"`
 	Policy         string `json:"policy"`
+	Sig            string `json:"sig,omitempty"`
 }
 
 // UDPEvent is one JSONL record for IPv4 sendto egress.
@@ -97,6 +103,7 @@ type UDPEvent struct {
 	FQDNProvenance string `json:"fqdn_provenance,omitempty"`
 	Direction      string `json:"direction"`
 	Policy         string `json:"policy"`
+	Sig            string `json:"sig,omitempty"`
 }
 
 // HTTPEvent is one JSONL record for cleartext HTTP/1.x request prefix (BPF-capped).
@@ -114,6 +121,7 @@ type HTTPEvent struct {
 	Dst      string `json:"dst"`
 	Dport    uint16 `json:"dport"`
 	Policy   string `json:"policy"`
+	Sig      string `json:"sig,omitempty"`
 }
 
 // TLSEvent is one JSONL record for TLS ClientHello SNI observed on egress (detect).
@@ -130,6 +138,7 @@ type TLSEvent struct {
 	Dport    uint16 `json:"dport"`
 	Policy   string `json:"policy"`
 	Note     string `json:"note,omitempty"`
+	Sig      string `json:"sig,omitempty"`
 }
 
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).
@@ -144,6 +153,7 @@ type FSEvent struct {
 	Op       string `json:"op"`   // "create" | "unlink" | "rename" | "chmod"
 	Path     string `json:"path"` // from userspace buffer (BPF-capped 256 bytes)
 	Note     string `json:"note,omitempty"`
+	Sig      string `json:"sig,omitempty"`
 }
 
 // DenyEvent is one JSONL record for an enforcement-mode blocked egress attempt.
@@ -160,6 +170,32 @@ type DenyEvent struct {
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
 	Mode     string `json:"mode"` // "enforce"
+	Sig      string `json:"sig,omitempty"`
+}
+
+// BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
+type BPFAuditEvent struct {
+	Type     string `json:"type"` // "bpf_audit"
+	TS       string `json:"ts"`
+	Seq      uint64 `json:"seq"`
+	PID      uint32 `json:"pid"`
+	TGID     uint32 `json:"tgid"`
+	ThreadID uint32 `json:"thread_id"`
+	Comm     string `json:"comm"`
+	Cmd      uint32 `json:"cmd"` // BPF_PROG_LOAD, BPF_MAP_CREATE, etc.
+	Sig      string `json:"sig,omitempty"`
+}
+
+// BPFTamperEvent is one JSONL record for a detected BPF map or program tampering event.
+type BPFTamperEvent struct {
+	Type     string `json:"type"` // "bpf_tamper"
+	TS       string `json:"ts"`
+	Seq      uint64 `json:"seq"`
+	Asset    string `json:"asset"` // e.g. "map:enforce_cfg"
+	Error    string `json:"error"`
+	Expected string `json:"expected,omitempty"`
+	Actual   string `json:"actual,omitempty"`
+	Sig      string `json:"sig,omitempty"`
 }
 
 // SeqGen assigns monotonic per-run sequence numbers in userspace.

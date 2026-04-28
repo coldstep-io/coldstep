@@ -23,7 +23,7 @@ class BuildReportModelTests(unittest.TestCase):
                   "events_by_type", "timeline", "egress_sankey", "diff",
                   "ip_classification", "otx"):
             self.assertIn(k, model, f"missing key: {k}")
-        self.assertEqual(model["schema_version"], "2.1")
+        self.assertEqual(model["schema_version"], "2.2")
         self.assertIsInstance(model["schema_version"], str)
 
     def test_otx_slot_is_None_by_default(self):
@@ -63,7 +63,7 @@ class BuildReportModelTests(unittest.TestCase):
     def test_capability_matrix_marks_each_required_capability_pass(self):
         model = MOD.build(current_jsonl=str(CURR), baseline_jsonl=str(BASE))
         rows = {row["id"]: row for row in model["capability_matrix"]}
-        for cap in ("exec", "tcp", "udp", "http", "tls", "proc_fork", "fs_event"):
+        for cap in ("exec", "tcp", "udp", "http", "tls", "proc_fork", "fs_event", "bpf_audit"):
             self.assertEqual(rows[cap]["status"], "pass", f"{cap} should pass on the sample")
 
     def test_events_by_type_counts_match_jsonl(self):

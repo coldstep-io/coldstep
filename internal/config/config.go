@@ -38,6 +38,7 @@ type Config struct {
 	FeatureGates map[string]string
 	// CgroupAttachPath is the unified cgroup2 path for link.AttachCgroup (from COLDSTEP_CGROUP_PATH or /proc/self/cgroup).
 	CgroupAttachPath string
+	SigningKey       string
 }
 
 func normalizeDomains(raw string) []string {
@@ -139,6 +140,7 @@ func LoadFromEnv() (Config, error) {
 		AgentStatusPath:      agentStatus,
 		FeatureGates:         gates,
 		CgroupAttachPath:     cgPath,
+		SigningKey:           os.Getenv("COLDSTEP_SIGNING_KEY"),
 	}, nil
 }
 

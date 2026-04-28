@@ -9,9 +9,6 @@ name: coldstep-demo-marketplace
 on:
   workflow_dispatch:
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
 # Minimal consumer workflow — no artifact download, no API writes, just
 # checkout + run the published composite + print the result.
 permissions:
@@ -24,8 +21,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - uses: coldstep-io/coldstep@v0.1.7
+      - uses: coldstep-io/coldstep@v1.2.0
         with:
+          phase: start
           mode: detect
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           smoke-test-egress: 'true'
@@ -43,3 +41,8 @@ jobs:
           curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
           curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
+
+      - uses: coldstep-io/coldstep@v1.2.0
+        if: always()
+        with:
+          phase: stop

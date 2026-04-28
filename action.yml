@@ -6,6 +6,11 @@ branding:
   icon: shield
   color: blue
 inputs:
+  phase:
+    description: >-
+      Composite action phase. Use `start` before workload steps and `stop` near job end to flush digest and optional notifications.
+    required: false
+    default: start
   mode:
     description: >-
       Runtime mode: detect logs telemetry only; enforce requires an allowlist and rejects non-allowlisted egress.
@@ -95,7 +100,65 @@ inputs:
       so the digest and workspace JSONL commonly show udp/http rows on ubuntu-latest (opt-in extra egress).
     required: false
     default: 'false'
+  io-uring-disable:
+    description: >-
+      When true (default), disables io_uring on the runner via sysctl (io_uring_disabled=2) before
+      the agent starts. io_uring operations bypass syscall-based eBPF hooks entirely; disabling it
+      closes the single largest evasion vector for CI workloads that do not need io_uring.
+    required: false
+    default: 'true'
+  signing-key:
+    description: >-
+      Optional base64-encoded Ed25519 seed (32 bytes) or private key (64 bytes) for telemetry signing.
+      When set, every emitted JSONL event is signed.
+    required: false
+    default: ''
 runs:
-  using: node24
-  main: dist/main/index.js
-  post: dist/post/index.js
+  using: composite
+  steps:
+    - name: Coldstep start
+      if: ${{ inputs.phase == 'start' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        AP="${GITHUB_ACTION_PATH:-$PWD}"
+        BIN="${AP}/bin/coldstep-action"
+        if [[ ! -x "${BIN}" ]]; then
+          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+        fi
+        cmd=("${BIN}" start
+          --mode "${{ inputs.mode }}"
+          --allowed-domains "${{ inputs.allowed-domains }}"
+          --allowed-hosts "${{ inputs.allowed-hosts }}"
+          --allowed-ips "${{ inputs.allowed-ips }}"
+          --ignored-ip-nets "${{ inputs.ignored-ip-nets }}"
+          --no-default-ignored-nets "${{ inputs.no-default-ignored-nets }}"
+          --log-level "${{ inputs.log-level }}"
+          --feature-gates "${{ inputs.feature-gates }}"
+          --release-path "${{ inputs.release-path }}"
+          --fail-on-error "${{ inputs.fail-on-error }}"
+          --smoke-test-egress "${{ inputs.smoke-test-egress }}"
+          --io-uring-disable "${{ inputs.io-uring-disable }}"
+          --signing-key "${{ inputs.signing-key }}"
+          --report-job-summary "${{ inputs.report-job-summary }}")
+        if [[ -n "${{ inputs.ready-timeout-seconds }}" ]]; then
+          cmd+=(--ready-timeout-seconds "${{ inputs.ready-timeout-seconds }}")
+        fi
+        "${cmd[@]}"
+
+    - name: Coldstep stop
+      if: ${{ inputs.phase == 'stop' }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        AP="${GITHUB_ACTION_PATH:-$PWD}"
+        BIN="${AP}/bin/coldstep-action"
+        if [[ ! -x "${BIN}" ]]; then
+          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+        fi
+        "${BIN}" stop \
+          --fail-on-error "${{ inputs.fail-on-error }}" \
+          --report-job-summary "${{ inputs.report-job-summary }}" \
+          --report-pr-summary "${{ inputs.report-pr-summary }}" \
+          --github-token "${{ inputs.github-token }}" \
+          --slack-webhook-endpoint "${{ inputs.slack-webhook-endpoint }}"

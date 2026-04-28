@@ -148,6 +148,48 @@ struct {
 	__type(value, __u32);
 } unobserved_egress_syscalls_observed SEC(".maps");
 
+/*
+ * io_uring_setup(2) detection counter. Any invocation of io_uring_setup is a
+ * security-relevant signal: io_uring operations bypass all syscall-based BPF
+ * hooks (raw_tp/sys_enter, cgroup/connect4). The sysctl disable in the
+ * composite action (io-uring-disable input) blocks setup outright, but this
+ * counter catches cases where the sysctl is off or was not applied.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} io_uring_setup_observed SEC(".maps");
+
+/*
+ * Telemetry integrity canary (red-team B3). Userspace writes a monotonic
+ * sequence number into canary_trigger[0]. The next sys_enter invocation
+ * picks it up, emits a canary_event into connect_events, and clears the
+ * trigger. If the canary event never arrives in userspace, the ringbuf
+ * pipeline is compromised (buffer exhaustion, attacker suppression, etc.).
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u64);
+} canary_trigger SEC(".maps");
+
+/*
+ * Canary event emitted through connect_events ringbuf. Wire size = 16
+ * (4 magic + 4 pad + 8 seq_nr). The magic prefix 0xCA1A1210 ("canary")
+ * lets the Go reader distinguish canary events from connect_event records
+ * by checking the first 4 bytes (connect_event starts with tgid which is
+ * always a small PID, never this value).
+ */
+struct canary_event {
+	__u32 magic;   /* 0xCA1A1210 */
+	__u32 _pad;
+	__u64 seq_nr;
+};
+#define CANARY_MAGIC 0xCA1A1210u
+
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 24);
@@ -234,11 +276,51 @@ static __always_inline void note_unobserved_egress_syscall(void)
 	__sync_fetch_and_add(v, 1);
 }
 
+static __always_inline void note_io_uring_setup_observed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&io_uring_setup_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
 #include "trace_tcp_obs.inc"
 #include "trace_udp_obs.inc"
 #include "trace_udp_sendmsg.inc"
 #include "trace_http_obs.inc"
 #include "trace_tls_write.inc"
+
+/*
+ * Canary emit helper: reads canary_trigger[0]; if non-zero, reserves a
+ * canary_event in connect_events ringbuf, writes the sequence, and clears
+ * the trigger. Cost: one map lookup per sys_enter (negligible).
+ */
+static __always_inline void maybe_emit_canary(void)
+{
+	__u32 k = 0;
+	__u64 *seq = bpf_map_lookup_elem(&canary_trigger, &k);
+
+	if (!seq || *seq == 0)
+		return;
+
+	struct canary_event *ev = bpf_ringbuf_reserve(&connect_events,
+						      sizeof(struct canary_event), 0);
+	if (!ev) {
+		/* ringbuf full — the failure itself is the signal userspace
+		 * detects (canary timeout). */
+		return;
+	}
+	ev->magic = CANARY_MAGIC;
+	ev->_pad = 0;
+	ev->seq_nr = *seq;
+	bpf_ringbuf_submit(ev, 0);
+
+	/* Clear trigger so we don't re-emit on every subsequent syscall. */
+	__u64 zero = 0;
+	bpf_map_update_elem(&canary_trigger, &k, &zero, BPF_ANY);
+}
 
 SEC("raw_tp/sys_enter")
 int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
@@ -248,6 +330,10 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 	if (!regs)
 		return 0;
+
+	/* Telemetry integrity canary: check on every syscall entry (one map
+	 * lookup, ~50ns). Fires only when userspace has armed a sequence. */
+	maybe_emit_canary();
 
 	if (id == (long)COLDSTEP_NR_CONNECT) {
 		unsigned long di_ul = 0, si_ul = 0;
@@ -338,19 +424,102 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return handle_tls_obs_sys_enter(id, di_ul, si_ul, dx_ul);
 	}
 
+	if (id == (long)COLDSTEP_NR_SENDMMSG) {
+		unsigned long di_ul = 0, msgvec_ptr = 0, vlen_ul = 0;
+
+		if (ns_read_syscall_arg(regs, 0, &di_ul))
+			return 0;
+		if (ns_read_syscall_arg(regs, 1, &msgvec_ptr))
+			return 0;
+		if (ns_read_syscall_arg(regs, 2, &vlen_ul))
+			return 0;
+		
+		if (vlen_ul > 1) {
+			note_udp_sendmsg_multi_iovec();
+		}
+		/* struct mmsghdr starts with struct msghdr */
+		return handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
+	}
+
+	if (id == (long)COLDSTEP_NR_SENDFILE) {
+		unsigned long di_ul = 0, count_ul = 0;
+		
+		/* arg0 = out_fd */
+		if (ns_read_syscall_arg(regs, 0, &di_ul))
+			return 0;
+		/* arg3 = count */
+		if (ns_read_syscall_arg(regs, 3, &count_ul))
+			return 0;
+			
+		__u64 pt = bpf_get_current_pid_tgid();
+		__u32 tgid = (__u32)(pt >> 32);
+		__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)di_ul;
+		struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
+
+		if (tup && tup->in_use) {
+			__be16 sin_port;
+			__be32 sin_addr;
+			__u32 len = coldstep_syscall_len_u32(count_ul);
+			if (len > 0x00100000)
+				len = 0x00100000;
+			
+			__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
+			__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
+			handle_udp_obs_emit(sin_port, sin_addr, len);
+		}
+		return 0;
+	}
+
+	if (id == (long)COLDSTEP_NR_SPLICE) {
+		unsigned long fd_out_ul = 0, len_ul = 0;
+		
+		/* arg2 = fd_out */
+		if (ns_read_syscall_arg(regs, 2, &fd_out_ul))
+			return 0;
+		/* arg4 = len */
+		if (ns_read_syscall_arg(regs, 4, &len_ul))
+			return 0;
+			
+		__u64 pt = bpf_get_current_pid_tgid();
+		__u32 tgid = (__u32)(pt >> 32);
+		__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)fd_out_ul;
+		struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
+
+		if (tup && tup->in_use) {
+			__be16 sin_port;
+			__be32 sin_addr;
+			__u32 len = coldstep_syscall_len_u32(len_ul);
+			if (len > 0x00100000)
+				len = 0x00100000;
+			
+			__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
+			__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
+			handle_udp_obs_emit(sin_port, sin_addr, len);
+		}
+		return 0;
+	}
+
 	/*
 	 * PR-E: visibility-only counter for IPv4 egress / fd-write syscalls
 	 * that have no full-emission arm above. We only bump a single global
 	 * counter (no per-syscall breakdown, no payload sniff) so the verifier
 	 * sees this as a constant-cost branch. See unobserved_egress_syscalls_observed.
 	 */
-	if (id == (long)COLDSTEP_NR_SENDMMSG ||
-	    id == (long)COLDSTEP_NR_PWRITE64 ||
+	if (id == (long)COLDSTEP_NR_PWRITE64 ||
 	    id == (long)COLDSTEP_NR_PWRITEV ||
-	    id == (long)COLDSTEP_NR_PWRITEV2 ||
-	    id == (long)COLDSTEP_NR_SENDFILE ||
-	    id == (long)COLDSTEP_NR_SPLICE) {
+	    id == (long)COLDSTEP_NR_PWRITEV2) {
 		note_unobserved_egress_syscall();
+		return 0;
+	}
+
+	/*
+	 * io_uring_setup(2) detection: any call is a security signal because
+	 * io_uring operations bypass syscall-based BPF hooks entirely.
+	 * Counter-only — the sysctl disable (io-uring-disable action input)
+	 * is the enforcement mechanism; this is the detection fallback.
+	 */
+	if (id == (long)COLDSTEP_NR_IO_URING_SETUP) {
+		note_io_uring_setup_observed();
 		return 0;
 	}
 

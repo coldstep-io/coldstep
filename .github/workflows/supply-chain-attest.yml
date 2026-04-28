@@ -1,5 +1,5 @@
-# Builds and attests release-grade artifacts: Go agent binary, composite action tarball,
-# and CycloneDX SBOMs (Go + npm). Triggers on version tags and manual dispatch.
+# Builds and attests release-grade artifacts: Go agent/action binaries, composite action bundle,
+# and CycloneDX SBOMs. Triggers on version tags and manual dispatch.
 name: supply-chain-attest
 
 on:
@@ -31,29 +31,17 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      - name: Setup Node
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: npm
-
       - name: Build Go agent (BPF + binary)
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
-
-      - name: Build action bundle (esbuild)
-        run: |
-          set -euo pipefail
-          npm ci
-          npm run typecheck
-          npm run build
 
       - name: Create composite action bundle archive
         run: |
           set -euo pipefail
           test -f action.yml
-          test -f dist/main/index.js
-          test -f dist/post/index.js
-          tar -czf coldstep-action-bundle.tar.gz action.yml dist/main dist/post
+          test -x bin/coldstep
+          test -x bin/coldstep-action
+          test -x bin/coldstep-report
+          tar -czf coldstep-action-bundle.tar.gz action.yml bin/coldstep bin/coldstep-action bin/coldstep-report public_scripts/build-agent-linux.sh
 
       - name: Install Syft (pinned)
         env:
@@ -70,9 +58,9 @@ jobs:
           set -euo pipefail
           syft scan "file:${GITHUB_WORKSPACE}/go.mod" \
             -o "cyclonedx-json=${GITHUB_WORKSPACE}/sbom-go.cdx.json"
-          syft scan "file:${GITHUB_WORKSPACE}/package-lock.json" \
-            -o "cyclonedx-json=${GITHUB_WORKSPACE}/sbom-js.cdx.json"
-          ls -la sbom-go.cdx.json sbom-js.cdx.json
+          syft scan "file:${GITHUB_WORKSPACE}/coldstep-action-bundle.tar.gz" \
+            -o "cyclonedx-json=${GITHUB_WORKSPACE}/sbom-action.cdx.json"
+          ls -la sbom-go.cdx.json sbom-action.cdx.json
 
       - name: Attest — build provenance (Go binary)
         uses: actions/attest@v4
@@ -94,7 +82,7 @@ jobs:
         uses: actions/attest@v4
         with:
           subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
-          sbom-path: '${{ github.workspace }}/sbom-js.cdx.json'
+          sbom-path: '${{ github.workspace }}/sbom-action.cdx.json'
 
       # One published binary per tag; demo workflows download this instead of compiling on every run.
       # GitHub can mark a release as immutable — uploads (even --clobber) then return HTTP 422; warn and succeed so attest/SBOM still publish.
@@ -133,5 +121,5 @@ jobs:
             bin/coldstep
             coldstep-action-bundle.tar.gz
             sbom-go.cdx.json
-            sbom-js.cdx.json
+            sbom-action.cdx.json
           if-no-files-found: error

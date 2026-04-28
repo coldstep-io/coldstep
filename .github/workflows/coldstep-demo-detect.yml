@@ -17,8 +17,7 @@ on:
         default: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
+  COLDSTEP_AGENT_VERSION: v1.2.0
 
 jobs:
   demo:
@@ -33,9 +32,6 @@ jobs:
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -62,6 +58,7 @@ jobs:
       - name: coldstep-io/coldstep (detect)
         uses: ./
         with:
+          phase: start
           mode: detect
           log-level: info
           fail-on-error: 'false'
@@ -98,6 +95,8 @@ jobs:
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           # Process activity (proc_tree feature gate)
           bash -c 'echo "coldstep-demo" >/dev/null'
+          # BPF Audit (if supported)
+          sudo bpftool map show >/dev/null 2>&1 || true
           # Filesystem events: create -> rename -> chmod -> unlink
           TMP_FS_DIR="$(mktemp -d /tmp/coldstep-nmap-demo-XXXXXX)"
           TMP_A="${TMP_FS_DIR}/a.txt"
@@ -105,23 +104,15 @@ jobs:
           printf 'demo\n' > "${TMP_A}"
           mv "${TMP_A}" "${TMP_B}"
           chmod 600 "${TMP_B}"
-          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
-          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
-            rm -f "${TMP_B}" || true
-          fi
-          unset _NS_DEMO_UNLINK_TARGET || true
+          rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop agent (flush digest)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'false'
 
       - name: Verify detect capabilities
         run: |
@@ -161,7 +152,12 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/build_report_model.py
+        run: ./bin/coldstep-report build-model
+      - name: Enforce Anti-Blindness Gating
+        if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: ./bin/coldstep-report assert-integrity
 
       - name: Compare detect output with previous successful run (opt-in)
         if: env.COLDSTEP_DIFF_PREV_RUN == '1'
@@ -222,12 +218,7 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          export NS_SUMMARY="${summary}"
-          export NS_BASELINE="${baseline_file}"
-          export NS_CURRENT="${current_file}"
-          export NS_MARKER="${marker_prefix}"
-          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 
@@ -235,15 +226,12 @@ jobs:
           # downstream HTML artifact carries the diff section too. Without this, the
           # earlier "Build report model" step ran without baseline_jsonl and emitted
           # diff.status="unavailable".
-          COLDSTEP_REPORT_CURRENT_JSONL="${current_file}" \
-          COLDSTEP_REPORT_BASELINE_JSONL="${baseline_file}" \
-          COLDSTEP_REPORT_MODEL_OUT="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
-            python3 "${GITHUB_WORKSPACE}/public_scripts/coldstep_detect_report/build_report_model.py"
+          ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
 
       - name: Render step summary (markdown + mermaid)
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: python3 public_scripts/coldstep_detect_report/render_step_summary.py
+        run: ./bin/coldstep-report render-summary
 
       # rDNS enrichment runs first (no API key needed) so OTX renderers and the
       # egress sankey can show "8.8.8.8 (dns.google)" instead of just the IP.
@@ -257,7 +245,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_dns.enrich_rdns
+            ./bin/coldstep-report rdns-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping rDNS enrichment"
           fi
@@ -276,7 +264,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 -m scripts.coldstep_otx.enrich
+            ./bin/coldstep-report otx-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping OTX enrichment"
           fi
@@ -288,7 +276,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 public_scripts/coldstep_detect_report/render_step_summary.py
+            ./bin/coldstep-report render-summary --in "${COLDSTEP_REPORT_MODEL_IN}"
           else
             echo "::warning::report model missing, skipping step summary render"
           fi
@@ -301,7 +289,7 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            python3 public_scripts/coldstep_detect_report/render_html_report.py
+            ./bin/coldstep-report render-html --in "${COLDSTEP_REPORT_MODEL_IN}" --out "${COLDSTEP_REPORT_HTML_OUT}"
           else
             echo "::warning::report model missing, skipping HTML render"
           fi

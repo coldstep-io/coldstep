@@ -124,6 +124,14 @@ def _capabilities_bluf_line(model: dict) -> str:
     return "- **Capabilities:** all pass."
 
 
+def _capability_score_bluf_line(model: dict) -> str:
+    ceval = model.get("capability_eval") or {}
+    score = ceval.get("score", 0)
+    verdict = ceval.get("verdict", "fail")
+    pill = STATUS_PILL.get(verdict, "❔")
+    return f"- **Capability Score:** {pill} **{score}**/100 ({verdict})"
+
+
 def _diff_bluf_line(model: dict) -> str:
     d = model.get("diff") or {}
     if d.get("status") != "ok":
@@ -196,9 +204,13 @@ def _triage_alert_md(model: dict) -> str | None:
     reasons: list[str] = []
     for row in model.get("capability_matrix") or []:
         if row.get("status") == "fail":
-            label = _md_cell(row.get("label") or row.get("id") or "capability")
+            label = row.get("label") or "unknown"
             reasons.append(f"Capability **fail**: {label}")
             break
+            
+    ceval = model.get("capability_eval") or {}
+    for r in ceval.get("integrity", {}).get("reasons", []):
+        reasons.append(f"Integrity **fail**: {r}")
     otx = model.get("otx")
     if isinstance(otx, dict) and not otx.get("skipped"):
         mal = int((otx.get("summary") or {}).get("malicious") or 0)
@@ -228,6 +240,7 @@ def _bluf_summary_md(model: dict) -> str:
     if alert:
         chunks.extend([alert, ""])
     chunks.append(_capabilities_bluf_line(model))
+    chunks.append(_capability_score_bluf_line(model))
     chunks.append(_diff_bluf_line(model))
     chunks.extend(_otx_bluf_lines(model))
     chunks.extend(["", _artifact_footer_md(), ""])

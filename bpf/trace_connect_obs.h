@@ -25,6 +25,8 @@
 /* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 57
 #define COLDSTEP_NR_RECVFROM 207
+#define COLDSTEP_NR_RECVMSG 212
+#define COLDSTEP_NR_READ 63
 #define COLDSTEP_NR_WRITEV 66
 /* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
 #define COLDSTEP_NR_SENDMMSG 269
@@ -33,6 +35,10 @@
 #define COLDSTEP_NR_PWRITEV2 287
 #define COLDSTEP_NR_SENDFILE 71
 #define COLDSTEP_NR_SPLICE 76
+/* io_uring_setup detection: NR 425 on both x86_64 and aarch64 (unified since kernel 5.1). */
+#define COLDSTEP_NR_IO_URING_SETUP 425
+/* bpf syscall audit: 280 on arm64 */
+#define COLDSTEP_NR_BPF 280
 /* aarch64 has no legacy NR_OPEN: only openat/openat2 (handled in trace_fs.bpf.c). */
 #elif defined(bpf_target_x86)
 #define COLDSTEP_NR_CONNECT 42
@@ -42,6 +48,8 @@
 /* COLDSTEP_NR_CLOSE retained for reference; close(2) FD cleanup removed — LRU eviction handles stale entries. */
 #define COLDSTEP_NR_CLOSE 3
 #define COLDSTEP_NR_RECVFROM 45
+#define COLDSTEP_NR_RECVMSG 47
+#define COLDSTEP_NR_READ 0
 #define COLDSTEP_NR_WRITEV 20
 /* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
 #define COLDSTEP_NR_SENDMMSG 307
@@ -50,6 +58,10 @@
 #define COLDSTEP_NR_PWRITEV2 328
 #define COLDSTEP_NR_SENDFILE 40
 #define COLDSTEP_NR_SPLICE 275
+/* io_uring_setup detection: NR 425 on both x86_64 and aarch64 (unified since kernel 5.1). */
+#define COLDSTEP_NR_IO_URING_SETUP 425
+/* bpf syscall audit: 321 on x86_64 */
+#define COLDSTEP_NR_BPF 321
 #else
 #error "coldstep trace_connect: unsupported BPF arch (need bpf_target_x86/arm64 or __TARGET_ARCH_* from go generate)"
 #endif

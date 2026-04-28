@@ -22,8 +22,7 @@ on:
         default: true
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-  COLDSTEP_AGENT_VERSION: v0.1.7
+  COLDSTEP_AGENT_VERSION: v1.2.0
 
 # Default to least-privilege; the detect-mode job overrides with
 # `permissions: { actions: read, contents: read }` when previous-run baseline
@@ -44,9 +43,6 @@ jobs:
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -73,6 +69,7 @@ jobs:
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
+          phase: start
           mode: detect
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
@@ -113,25 +110,15 @@ jobs:
           printf 'demo\n' > "${TMP_A}"
           mv "${TMP_A}" "${TMP_B}"
           chmod 600 "${TMP_B}"
-          # Exercise unlinkat path explicitly: some `rm` code paths are harder to observe
-          # consistently on shared runners than a direct libc unlink of an absolute path.
-          export _NS_DEMO_UNLINK_TARGET="${TMP_B}"
-          if ! python3 -c 'import os; os.unlink(os.environ["_NS_DEMO_UNLINK_TARGET"])'; then
-            rm -f "${TMP_B}" || true
-          fi
-          unset _NS_DEMO_UNLINK_TARGET || true
+          rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop agent (flush digest to workspace)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest to workspace)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'false'
 
       - name: Verify detect capabilities and write visual summary
         run: |
@@ -230,12 +217,7 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          export NS_SUMMARY="${summary}"
-          export NS_BASELINE="${baseline_file}"
-          export NS_CURRENT="${current_file}"
-          export NS_MARKER="${marker_prefix}"
-          export COLDSTEP_TRAFFIC_DIFF_SUMMARY=minimal
-          if ! python3 "${GITHUB_WORKSPACE}/public_scripts/ci_coldstep_jsonl_traffic_diff.py"; then
+          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "traffic diff script failed"
           fi
 
@@ -260,9 +242,6 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v6
-
-      - name: Assert tracked text is UTF-8 (before uses ./)
-        run: python3 public_scripts/assert_utf8_text.py
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -311,6 +290,7 @@ jobs:
       - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
+          phase: start
           mode: enforce
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
@@ -355,16 +335,12 @@ jobs:
             exit 1
           fi
 
-      - name: Stop agent (flush digest to workspace)
-        run: |
-          set -euo pipefail
-          ap="${GITHUB_ACTION_PATH:-}"
-          if [[ -z "${ap}" ]]; then ap="${GITHUB_WORKSPACE}"; fi
-          pf="${ap}/.coldstep.pid"
-          if [[ -f "${pf}" ]]; then
-            kill -TERM "$(tr -d ' \n' < "${pf}")" 2>/dev/null || true
-            sleep 2
-          fi
+      - name: Stop Coldstep (flush digest to workspace)
+        uses: ./
+        with:
+          phase: stop
+          report-job-summary: 'false'
+          fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |
