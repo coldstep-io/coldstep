@@ -1,10 +1,8 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 )
 
@@ -18,28 +16,19 @@ func main() {
 	case "assert-integrity":
 		exitIf(assertIntegrity(os.Args[2:]))
 	case "render-summary":
-		exitIf(notYet("render-summary"))
+		exitIf(renderSummary(os.Args[2:]))
 	case "render-html":
-		exitIf(notYet("render-html"))
+		exitIf(renderHTML(os.Args[2:]))
 	case "diff":
-		exitIf(notYet("diff"))
+		exitIf(diffSummary(os.Args[2:]))
 	case "rdns-enrich":
-		exitIf(notYet("rdns-enrich"))
+		exitIf(rdnsEnrich(os.Args[2:]))
 	case "otx-enrich":
-		exitIf(notYet("otx-enrich"))
+		exitIf(otxEnrich(os.Args[2:]))
 	case "render-ip-summary":
-		exitIf(notYet("render-ip-summary"))
+		exitIf(renderIPSummary(os.Args[2:]))
 	default:
 		exitf("unknown subcommand %q", os.Args[1])
-	}
-}
-
-func asString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return strings.TrimSpace(t)
-	default:
-		return ""
 	}
 }
 
@@ -50,31 +39,10 @@ func envOr(k, def string) string {
 	return def
 }
 
-func mapKeys(m map[string]int) []string {
-	out := make([]string, 0, len(m))
-	for k := range m {
-		out = append(out, k)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func sumMap(m map[string]int) int {
-	n := 0
-	for _, v := range m {
-		n += v
-	}
-	return n
-}
-
 func sanitize(s string) string {
 	s = strings.ReplaceAll(s, "`", "'")
 	s = strings.ReplaceAll(s, "|", "·")
 	return strings.TrimSpace(s)
-}
-
-func notYet(name string) error {
-	return errors.New("subcommand " + name + " not yet implemented in this plan stage")
 }
 
 func exitIf(err error) {

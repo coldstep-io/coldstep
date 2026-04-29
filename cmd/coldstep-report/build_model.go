@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/coldstep-io/coldstep/internal/report/integrity"
@@ -90,11 +91,11 @@ func workflowFileFromRef(ref string) string {
 	if ref == "" {
 		return ""
 	}
-	at := indexAt(ref, '@')
+	at := strings.IndexByte(ref, '@')
 	if at >= 0 {
 		ref = ref[:at]
 	}
-	slash := lastIndex(ref, '/')
+	slash := strings.LastIndexByte(ref, '/')
 	if slash >= 0 {
 		return ref[slash+1:]
 	}
@@ -108,22 +109,4 @@ func firstNonEmptyEnv(keys ...string) string {
 		}
 	}
 	return ""
-}
-
-func indexAt(s string, c byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
-}
-
-func lastIndex(s string, c byte) int {
-	for i := len(s) - 1; i >= 0; i-- {
-		if s[i] == c {
-			return i
-		}
-	}
-	return -1
 }
