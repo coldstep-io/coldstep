@@ -27,7 +27,7 @@ This document is the **honest contract** between documentation and **automated c
 | ---------- | -------------- | ---------------- |
 | **Egress observation (IPv4-focused telemetry)** | Yes — observe and record. | Yes — plus **block** non-allowlisted IPv4 egress per design. |
 | **Allowlist required** | No. | Yes — non-empty effective policy (domains → IPv4 **A** records + literals / CIDR policy); invalid/empty effective allowlist **fails startup**. |
-| **`.coldstep-events.jsonl`** | Yes. | Yes. |
+| **`.coldstep-events.jsonl`** | Yes. | Yes — **`deny`** rows include **`"mode":"defend"`** for blocking runs (legacy **`enforce`** may appear in older logs). |
 | **Digest / shutdown markdown** | Yes (when enabled). | Yes. |
 | **`fail-on-error` on start/stop** | Fails step if **operational readiness** (e.g. `.coldstep-ready.json` **ok:true**) is not achieved within the wait — **not** “fail because an attacker tried bad egress.” | Same readiness semantics; **blocking** is separate from step exit code (see [`action.yml`](action.yml) descriptions). |
 

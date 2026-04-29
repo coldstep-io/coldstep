@@ -29,6 +29,7 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 
 ### Changed
 
+- **Telemetry / digest:** JSONL **`deny`** rows and the markdown digest now report **`mode":"defend`** / **Defend mode** for blocking runs (legacy **`enforce`** strings remain accepted when parsing digest inputs).
 - **Composite blocking mode:** **`mode: defend`** is the product name for cgroup egress blocking; **`mode: enforce`** remains an alias (both normalize to the same agent path). **`CI_GUARD_MODE`** accepts **`defend`** or **`enforce`**.
 - **CI — defend mode naming + optional strict deny JSONL telemetry:** integration jobs are **`defend-mode`**. **`workflow_dispatch`** input **`defend_deny_jsonl_strict`** (default **false**) and env **`COLDSTEP_DEFEND_DENY_JSONL_STRICT`** pass through **`coldstep-ci-runner`** so **`defend-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only).
 - **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`defend-mode`** strict option.

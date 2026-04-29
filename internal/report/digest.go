@@ -263,6 +263,22 @@ func buildHotEgressList(in DigestInput) []hotEgressAgg {
 	return out
 }
 
+func isBlockingDigestMode(m string) bool {
+	m = strings.TrimSpace(m)
+	return strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend")
+}
+
+func digestModeCell(m string) string {
+	m = strings.TrimSpace(m)
+	if m == "" {
+		return "detect"
+	}
+	if strings.EqualFold(m, "enforce") {
+		return "defend"
+	}
+	return m
+}
+
 func hotKindTags(kinds map[string]struct{}) string {
 	order := []string{"tcp", "udp", "http", "tls"}
 	var tags []string
@@ -279,11 +295,11 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	b.WriteString("| Question | Answer |\n|:--|:--|\n")
 
 	mode := "detect"
-	if strings.EqualFold(in.EnforcementMode, "enforce") {
-		mode = "enforce"
+	if isBlockingDigestMode(in.EnforcementMode) {
+		mode = "defend"
 	}
 	b.WriteString(fmt.Sprintf("| **Mode** | `%s`", sanitizeCell(mode)))
-	if strings.EqualFold(in.EnforcementMode, "enforce") {
+	if isBlockingDigestMode(in.EnforcementMode) {
 		b.WriteString(fmt.Sprintf(" — **deny events:** %d", in.EnforcementDenyCount))
 		if in.EnforcementDenyReserveFailures > 0 {
 			b.WriteString(fmt.Sprintf(" (**+%d** deny reserve failures)", in.EnforcementDenyReserveFailures))
@@ -385,10 +401,10 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 
 	var b strings.Builder
-	if strings.EqualFold(in.EnforcementMode, "enforce") {
-		b.WriteString("## Coldstep · enforce\n\n")
+	if isBlockingDigestMode(in.EnforcementMode) {
+		b.WriteString("## Coldstep · defend\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Enforce mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
+		b.WriteString("<sub>Defend mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
 	} else {
 		b.WriteString("## Coldstep · detect\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
@@ -568,10 +584,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.EnforcementMode != "" || in.EnforcementAllowlistSize > 0 || in.EnforcementDenyCount > 0 || in.EnforcementDenyReserveFailures > 0 || in.EnforcementFirstDeny != nil {
 		b.WriteString("### Enforcement\n\n")
 		b.WriteString("| Field | Value |\n|:--|:--|\n")
-		mode := in.EnforcementMode
-		if mode == "" {
-			mode = "detect"
-		}
+		mode := digestModeCell(in.EnforcementMode)
 		b.WriteString(fmt.Sprintf("| Mode | `%s` |\n", sanitizeCell(mode)))
 		b.WriteString(fmt.Sprintf("| Allowlist size | %d |\n", in.EnforcementAllowlistSize))
 		b.WriteString(fmt.Sprintf("| Deny count | %d |\n", in.EnforcementDenyCount))

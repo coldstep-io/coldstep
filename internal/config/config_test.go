@@ -174,6 +174,15 @@ func TestLoadFromEnv_NoDefaultIgnoredNets(t *testing.T) {
 	}
 }
 
+func TestPublicMode(t *testing.T) {
+	if got := (Config{Mode: ModeDetect}).PublicMode(); got != "detect" {
+		t.Fatalf("detect PublicMode: got %q", got)
+	}
+	if got := (Config{Mode: ModeEnforce}).PublicMode(); got != "defend" {
+		t.Fatalf("enforce PublicMode: got %q want defend", got)
+	}
+}
+
 func TestLoadFromEnv_ModeDefaultsToDetect(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "")

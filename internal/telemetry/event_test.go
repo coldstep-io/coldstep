@@ -97,7 +97,7 @@ func TestDenyEventJSON(t *testing.T) {
 		Dst:      "1.2.3.4",
 		Dport:    443,
 		Reason:   "dst_not_allowlisted",
-		Mode:     "enforce",
+		Mode:     "defend",
 	}
 	b, err := json.Marshal(ev)
 	if err != nil {
@@ -115,7 +115,7 @@ func TestDenyEventJSON(t *testing.T) {
 		`"dst":"1.2.3.4"`,
 		`"dport":443`,
 		`"reason":"dst_not_allowlisted"`,
-		`"mode":"enforce"`,
+		`"mode":"defend"`,
 	} {
 		if !bytes.Contains(b, []byte(needle)) {
 			t.Fatalf("missing %s in %s", needle, string(b))

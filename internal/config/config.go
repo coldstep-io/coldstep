@@ -156,3 +156,12 @@ func envBoolTrue(key string) bool {
 func (c Config) Policy() (*policy.Policy, error) {
 	return policy.BuildPolicyEx(c.AllowedHosts, c.AllowedIPs, c.IgnoredIPNets, !c.NoDefaultIgnoredNets)
 }
+
+// PublicMode returns the user-facing mode label for JSONL and digest ("detect" | "defend").
+// Blocking behavior still uses [ModeEnforce] internally.
+func (c Config) PublicMode() string {
+	if c.Mode == ModeEnforce {
+		return "defend"
+	}
+	return string(c.Mode)
+}

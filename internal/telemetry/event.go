@@ -169,7 +169,7 @@ type DenyEvent struct {
 	Dst      string `json:"dst"`
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
-	Mode     string `json:"mode"` // "enforce"
+	Mode     string `json:"mode"` // "defend" (blocking; legacy rows may say "enforce")
 	Sig      string `json:"sig,omitempty"`
 }
 

@@ -75,6 +75,7 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	state.addHTTPDecodeError()
 
 	in := buildDigestInput(
+		config.Config{Mode: config.ModeDetect},
 		stats,
 		[]telemetry.BPFStatus{
 			{Name: "sched_process_exec", OK: true},
@@ -147,6 +148,7 @@ func TestRun_DroppedKinds_PropagateToDigestInput(t *testing.T) {
 	}
 
 	in := buildDigestInput(
+		config.Config{Mode: config.ModeDetect},
 		stats,
 		[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
 		nil,
@@ -183,6 +185,7 @@ func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
 	stats.addHTTP(policy.ClassMonitor)
 
 	in := buildDigestInput(
+		config.Config{Mode: config.ModeDetect},
 		stats,
 		[]telemetry.BPFStatus{
 			{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true},
@@ -215,6 +218,7 @@ func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
 func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 	stats := newRunStats()
 	in := buildDigestInput(
+		config.Config{Mode: config.ModeDetect},
 		stats,
 		[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
 		nil, nil, nil, nil, nil,
@@ -319,7 +323,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 		`"dst":"1.2.3.4"`,
 		`"dport":443`,
 		`"reason":"dst_not_allowlisted"`,
-		`"mode":"enforce"`,
+		`"mode":"defend"`,
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("events log missing %q:\n%s", want, line)
@@ -658,6 +662,7 @@ func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
 	stats.addFS()
 
 	in := buildDigestInput(
+		config.Config{Mode: config.ModeDetect},
 		stats,
 		[]telemetry.BPFStatus{
 			{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: "disabled"},
