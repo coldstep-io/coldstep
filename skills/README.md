@@ -22,4 +22,4 @@ Plans (executable backlog):
 | Detect track | [../plans/2026-04-29-coldstep-detect-track.md](../plans/2026-04-29-coldstep-detect-track.md) |
 | Defend track | [../plans/2026-04-29-coldstep-defend-track.md](../plans/2026-04-29-coldstep-defend-track.md) |
 
-Knowledge vault (local second brain): hub [**track-skills-research-loop**](wiki/track-skills-research-loop.md) — not committed to Git.
+Knowledge vault (local second brain): hub [**track-skills-research-loop**](../knowledge/wiki/track-skills-research-loop.md) — not committed to Git.

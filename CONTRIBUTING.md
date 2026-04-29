@@ -4,14 +4,14 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 
 ## What to expect
 
-- **CI is the gate:** meaningful validation (BPF generation, `go test`, integration tests, and **`public_scripts`** Python guardrails) runs on **GitHub-hosted Linux** via **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** and **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. See **[VALIDATION.md](VALIDATION.md)** for what each layer proves (detect vs enforce, workflow jobs, limits). There is no supported path to reproduce the full Linux/eBPF matrix purely on Windows or macOS dev machines.
+- **CI is the gate:** meaningful validation (BPF generation, `go test`, integration tests, and **`public_scripts`** Python guardrails) runs on **GitHub-hosted Linux** via **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** and **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. See **[VALIDATION.md](VALIDATION.md)** for what each layer proves (detect vs defend, workflow jobs, limits). There is no supported path to reproduce the full Linux/eBPF matrix purely on Windows or macOS dev machines.
 - **Composite action runtime:** **`action.yml`** is a **composite** action. **`phase: start`** / **`phase: stop`** run **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when the binary is missing). Coldstep does **not** use Node **`main`/`post`** entrypoints. Optional **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`** at the **job** level only affects **other** JavaScript actions in the same job; it is **not** required for Coldstep itself.
 - **Composite manifest name:** GitHub only loads a repo-root composite from **`action.yml`** or **`action.yaml`** (`uses: ./`, marketplace). Renaming it (for example to `coldstep-action.yml`) breaks **`uses: ./`** with “Can't find `action.yml`”.
 - **Generated artifacts:** `bpf/vmlinux.h` and bpf2go outputs under `internal/bpf/**` are **gitignored**; CI builds them with **`public_scripts/build-agent-linux.sh`**. Do not commit generated BPF headers or `*_bpfel.go` / `*_bpfeb.go` stubs.
 
 ## Before you open a PR
 
-1. **Describe the change** — behavior, risk (especially for **enforce** mode and BPF), and how you validated it (e.g. link to a fork run or `workflow_dispatch` on **`coldstep-ci`** / **`coldstep-demo`**).
+1. **Describe the change** — behavior, risk (especially for **defend** (blocking) mode and BPF), and how you validated it (e.g. link to a fork run or `workflow_dispatch` on **`coldstep-ci`** / **`coldstep-demo`**).
 2. **Go** — CI uses **`setup-go`** with **`go-version: 1.25.x`** (see **`.github/workflows/coldstep-ci-runner.yml`**), matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
 3. **Legacy TypeScript bundles (`src/`, `dist/`)** — the published composite path is Go-only. **`package.json`** labels the esbuild output as **legacy** (CodeQL / maintenance). If you still touch **`src/main.ts`** or **`src/post.ts`**, run **`npm run typecheck`** and **`npm run build`** so committed **`dist/`** stays in sync with sources.
 4. **Allowlist ergonomics** — changing **`allowed-*-file`** / **`bootstrap-allowlist`** behavior or defaults requires updating **QUICK_START**, **`VALIDATION.md`**, and **`action.yml`** input descriptions together.

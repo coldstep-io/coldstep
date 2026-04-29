@@ -2,7 +2,7 @@
 
 ## Scope
 
-coldstep loads **eBPF** programs with elevated privileges (**`sudo`**) on Linux runners, observes syscalls and network behavior, and can **block egress** in **enforce** mode. Treat issues in those areas as security-relevant, especially if they could affect **confidentiality, integrity, or availability** of the runner or adjacent workloads.
+coldstep loads **eBPF** programs with elevated privileges (**`sudo`**) on Linux runners, observes syscalls and network behavior, and can **block egress** in **defend** (blocking) mode. Treat issues in those areas as security-relevant, especially if they could affect **confidentiality, integrity, or availability** of the runner or adjacent workloads.
 
 ## Reporting a vulnerability
 
@@ -19,11 +19,11 @@ Security fixes are applied to the **default development branch** (`main`) first.
 
 ## GitHub Actions: threat model and mitigations
 
-Coldstep is commonly used in **GitHub-hosted Ubuntu** jobs. This section summarizes **what the composite action can and cannot guarantee** for consumers hardening CI egress visibility or **enforce** mode.
+Coldstep is commonly used in **GitHub-hosted Ubuntu** jobs. This section summarizes **what the composite action can and cannot guarantee** for consumers hardening CI egress visibility or **defend** (blocking) mode.
 
 ### What a job adversary can do
 
-Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep’s **v1 enforce** path is **IPv4-only** for cgroup **connect** / **sendmsg** hooks; **IPv6** and other syscall surfaces are **explicitly out of scope** for v1 — see **README** → Requirements.
+Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep’s **v1 defend** (blocking) path is **IPv4-only** for cgroup **connect** / **sendmsg** hooks; **IPv6** and other syscall surfaces are **explicitly out of scope** for v1 — see **README** → Requirements.
 
 ### Mitigations consumers should apply
 

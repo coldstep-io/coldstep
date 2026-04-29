@@ -10,7 +10,7 @@ This document is the **honest contract** between documentation and **automated c
 
 | Topic | Position |
 | ----- | -------- |
-| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **`defend-mode`** runs the composite with **`mode: defend`** (blocking egress); **`enforce`** remains an alias for the same mode in `with:` and **`CI_GUARD_MODE`**. |
+| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **`defend-mode`** runs **`mode: defend`** (blocking egress). **`enforce`** in `with:` / **`CI_GUARD_MODE`** is a **legacy alias** for **`defend`**, not a separate named product mode. |
 | **Multi-distro matrix** | **`unit`**, **`unit-arm64`**, **`integration`** run on additional Ubuntu LTS / arm64 labels to stress **build + Go tests**, not a second full egress integration matrix for every OS. |
 | **IPv6 egress enforcement** | **Out of scope for v1** — do not infer IPv6 guarantees from this repo’s BPF surfaces. |
 | **Self-hosted / custom kernels** | **Not covered** by the same CI guarantees; treat as integration work in **your** environment. |

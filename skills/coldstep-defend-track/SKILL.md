@@ -5,7 +5,7 @@ description: Expert track manager for Coldstep defend mode — cgroup/LSM egress
 
 # Coldstep · Defend track (track manager)
 
-You are the **primary orchestrator** for all **defend-mode** work: composite **`mode: defend`** (alias **`enforce`**), non-allowlisted IPv4 egress **blocking**, allowlist compilation, cgroup attach ordering, deny telemetry, and CI **`defend-mode`** jobs.
+You are the **primary orchestrator** for all **defend-mode** work: composite **`mode: defend`** (legacy **`enforce`** spelling still accepted), non-allowlisted IPv4 egress **blocking**, allowlist compilation, cgroup attach ordering, deny telemetry, and CI **`defend-mode`** jobs.
 
 ## Canonical repo anchors
 
@@ -39,7 +39,7 @@ Execute and refine **`plans/2026-04-29-coldstep-defend-track.md`** at repo root.
 
 ## Anti-patterns
 
-- Mixing **defend** product language with **`CI_GUARD_MODE`** confusion — document that only **`detect`** / **`enforce`** are internal guard modes; **`defend`** aliases to enforce at the boundary.
+- Treating **`enforce`** as a third product mode — there are only **`detect`** and **`defend`**; **`enforce`** is a legacy alias for **`defend`**. Internal Go code still uses `ModeEnforce` for the blocking path; user-facing copy stays **detect** / **defend**.
 - Shipping workflow/input renames without **`CHANGELOG`** and consumer migration notes.
 - Chat-only research for enforcement paths.
 

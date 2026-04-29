@@ -1,6 +1,6 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally run in **defend** mode to block non-allowlisted egress (allowlist required). Legacy `with: mode: enforce` is still accepted as an alias for **defend**. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
 **Pin workflows to** **`coldstep-io/coldstep@v0.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
@@ -48,7 +48,7 @@ jobs:
 
 For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
 
-For **which behaviors are covered by unit tests, integration tests, and CI jobs** (detect vs enforce, limitations, `fail-on-error` semantics), see **[VALIDATION.md](VALIDATION.md)**.
+For **which behaviors are covered by unit tests, integration tests, and CI jobs** (detect vs defend, limitations, `fail-on-error` semantics), see **[VALIDATION.md](VALIDATION.md)**.
 
 ---
 
@@ -95,8 +95,8 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 
 | Input | Purpose |
 | :---- | :------ |
-| `mode` | `detect` or `enforce`. |
-| `allowed-domains` | Enforce-mode domain allowlist (required for enforce). |
+| `mode` | **`detect`** or **`defend`** (blocking); **`enforce`** is a legacy alias for **`defend`**. |
+| `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
