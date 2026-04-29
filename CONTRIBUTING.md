@@ -4,8 +4,8 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 
 ## What to expect
 
-- **CI is the gate:** meaningful validation (BPF generation, `go test`, integration tests, TypeScript bundle) runs on **GitHub-hosted `ubuntu-latest`** via **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** and **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. There is no supported path to reproduce the full Linux/eBPF matrix purely on Windows or macOS dev machines.
-- **Composite action runtime:** the action declares **`node24`**; workflows in this repo set **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`** so behavior matches hosted runner defaults. Keep that in mind when copying workflow snippets.
+- **CI is the gate:** meaningful validation (BPF generation, `go test`, integration tests, and **`public_scripts`** Python guardrails) runs on **GitHub-hosted Linux** via **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** and **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. There is no supported path to reproduce the full Linux/eBPF matrix purely on Windows or macOS dev machines.
+- **Composite action runtime:** **`action.yml`** is a **composite** action. **`phase: start`** / **`phase: stop`** run **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when the binary is missing). Coldstep does **not** use Node **`main`/`post`** entrypoints. Optional **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true`** at the **job** level only affects **other** JavaScript actions in the same job; it is **not** required for Coldstep itself.
 - **Composite manifest name:** GitHub only loads a repo-root composite from **`action.yml`** or **`action.yaml`** (`uses: ./`, marketplace). Renaming it (for example to `coldstep-action.yml`) breaks **`uses: ./`** with “Can't find `action.yml`”.
 - **Generated artifacts:** `bpf/vmlinux.h` and bpf2go outputs under `internal/bpf/**` are **gitignored**; CI builds them with **`public_scripts/build-agent-linux.sh`**. Do not commit generated BPF headers or `*_bpfel.go` / `*_bpfeb.go` stubs.
 
@@ -13,7 +13,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 
 1. **Describe the change** — behavior, risk (especially for **enforce** mode and BPF), and how you validated it (e.g. link to a fork run or `workflow_dispatch` on **`coldstep-ci`** / **`coldstep-demo`**).
 2. **Go** — CI uses **`setup-go`** with **`go-version: 1.25.x`** (see **`.github/workflows/coldstep-ci-runner.yml`**), matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
-3. **TypeScript** — if you edit `src/main.ts` or `src/post.ts`, run `npm run typecheck` and **`npm run build`** (**`ncc`** writes **`dist/main`** and **`dist/post`**) so committed **`dist/`** stays in sync with sources.
+3. **Legacy TypeScript bundles (`src/`, `dist/`)** — the published composite path is Go-only. If you still touch **`src/main.ts`** or **`src/post.ts`** (for example CodeQL or archival bundles), run **`npm run typecheck`** and **`npm run build`** so committed **`dist/`** stays in sync with sources.
 4. **Docs** — if you change workflow pins or action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
 5. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.2.0`**), not **`@main`**, unless they intentionally track head.
 

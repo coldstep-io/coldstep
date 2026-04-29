@@ -6,17 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-**Consumer / workflow pin target (next tag after `v0.1.7`):** `v0.2.0` — documentation, demo workflows, and the pin checker align on this version until the tag is published (then ship via **`RELEASE_PROCESS.md`**).
+**Consumer / workflow pin target (next tag after `v0.1.7`):** `v0.2.0` — documentation, demo workflows, and the pin checker align on this version until the tag is published (then ship via **`RELEASE_PROCESS.md`**). Until **`v0.2.0`** exists on GitHub, **`gh release download v0.2.0`** and **`uses: coldstep-io/coldstep@v0.2.0`** in manually dispatched workflows will fail; use **`v0.1.7`** for soak runs until the release is cut.
 
-### Planned for `v0.2.0` (breaking)
+### `v0.2.0` track (implemented on `dev`; tag pending)
 
-- Action runtime migrates from JavaScript (`node24` + `dist/main|post`) to a composite action that invokes Go binaries (`bin/coldstep-action`, `bin/coldstep-report`).
-- Action lifecycle becomes explicit two-phase orchestration:
-  - `phase: start` before workload steps
-  - `phase: stop` at job tail (`if: always()`) to flush digest and optional notifications
-- Runtime detect/enforce/report/diff/enrichment workflows remove Python execution paths and use Go CLIs.
-- Supply-chain bundle moves from JS dist assets to composite + Go binaries archive.
-- `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is no longer required for Coldstep action execution.
+- **Composite + Go:** `action.yml` runs **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when needed); no Node **`main`/`post`** for the published path.
+- **Two-phase lifecycle:** `phase: start` before workload steps; `phase: stop` at job tail (`if: always()`) to flush digest and optional notifications.
+- **Detect reporting on demo workflows:** **`coldstep-demo-detect`** (and related paths) invoke **`bin/coldstep-report`** subcommands instead of Python entrypoints.
+- **Supply-chain release bundle:** **`supply-chain-attest`** ships **`action.yml`**, Go binaries, and **`build-agent-linux.sh`** (not JS **`dist/`** as the primary artifact).
+- **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`:** not required for Coldstep; optional only for other JavaScript actions in the same job.
+- **CI maintenance scripts:** **`coldstep-ci`** still runs **`public_scripts`** Python (UTF-8 assert, workflow pin checker, unit tests for diff/pins). That is guardrail coverage for tracked helpers, not the composite runtime.
 
 ### Migration note
 
