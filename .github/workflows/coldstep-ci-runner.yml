@@ -122,7 +122,7 @@ jobs:
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
           staticcheck ./...
       - name: Integration tests (root)
-        run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1
+        run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1 -parallel 1
 
   action_bundle:
     runs-on: ubuntu-latest
