@@ -28,6 +28,12 @@ scripts/**/__pycache__/
 *.crt
 *.kubeconfig
 
+# Local HTML mocks / brainstorming wireframes (open in browser; not shipped).
+# Naming: *mockup*.html, *.mock.html, or place assets under /mocks/
+**/*mockup*.html
+**/*.mock.html
+/mocks/
+
 # Editor / machine-local (not published), including Cursor rules
 /.cursor/
 /.vscode/
