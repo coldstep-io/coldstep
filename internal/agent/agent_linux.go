@@ -3097,6 +3097,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		if dnsRd != nil {
 			_ = dnsRd.Close()
 		}
+		if bpfAuditRd != nil {
+			_ = bpfAuditRd.Close()
+		}
 		if forkRd != nil {
 			_ = forkRd.Close()
 		}
