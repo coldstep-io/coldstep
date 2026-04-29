@@ -34,6 +34,9 @@ scripts/**/__pycache__/
 **/*.mock.html
 /mocks/
 
+# Superpowers Visual Companion session state (public_scripts/brainstorm_visual_companion/start-server.sh)
+.superpowers/
+
 # Editor / machine-local (not published), including Cursor rules
 /.cursor/
 /.vscode/
