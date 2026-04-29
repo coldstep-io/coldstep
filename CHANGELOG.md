@@ -21,6 +21,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 Existing single-step workflows that relied on JS `post` hooks must add an explicit second `uses:` invocation with `phase: stop`.
 
+### Added
+
+- **`VALIDATION.md`** — Honest matrix of detect vs enforce capabilities, CI job coverage (**`detect-mode`**, **`prevent-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
+
 ---
 
 ## [0.1.7] — 2026-04-20
