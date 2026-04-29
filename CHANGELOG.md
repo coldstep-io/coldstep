@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 **Consumer / workflow pin target (next tag after `v0.1.7`):** `v0.2.0` — documentation, demo workflows, and the pin checker align on this version until the tag is published (then ship via **`RELEASE_PROCESS.md`**). Until **`v0.2.0`** exists on GitHub, **`gh release download v0.2.0`** and **`uses: coldstep-io/coldstep@v0.2.0`** in manually dispatched workflows will fail; use **`v0.1.7`** for soak runs until the release is cut.
 
+### Breaking
+
+- **`mode: enforce`** and **`CI_GUARD_MODE=enforce`** are **removed**. Use **`defend`** for blocking egress. Historical JSONL/digest rows may still contain legacy **`"mode":"enforce"`** strings; readers remain tolerant for old artifacts.
+
 ### `v0.2.0` track (implemented on `dev`; tag pending)
 
 - **Composite + Go:** `action.yml` runs **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when needed); no Node **`main`/`post`** for the published path.
@@ -31,7 +35,7 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 ### Changed
 
 - **Telemetry / digest:** JSONL **`deny`** rows and the markdown digest now report **`mode":"defend`** / **Defend mode** for blocking runs (legacy **`enforce`** strings remain accepted when parsing digest inputs).
-- **Composite blocking mode:** Product modes are **`detect`** and **`defend`** only. **`mode: enforce`** and **`CI_GUARD_MODE=enforce`** remain **legacy aliases** for **defend** / blocking (same agent path; internal `ModeEnforce`).
+- **Composite blocking mode:** Product modes are **`detect`** and **`defend`** only. **`enforce`** is no longer accepted as an input spelling (use **`defend`**).
 - **CI — defend mode naming + optional strict deny JSONL telemetry:** integration jobs are **`defend-mode`**. **`workflow_dispatch`** input **`defend_deny_jsonl_strict`** (default **false**) and env **`COLDSTEP_DEFEND_DENY_JSONL_STRICT`** pass through **`coldstep-ci-runner`** so **`defend-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only).
 - **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`defend-mode`** strict option.
 

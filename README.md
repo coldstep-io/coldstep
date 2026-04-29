@@ -1,6 +1,6 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally run in **defend** mode to block non-allowlisted egress (allowlist required). Legacy `with: mode: enforce` is still accepted as an alias for **defend**. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally run in **defend** mode to block non-allowlisted egress (allowlist required). **`mode: enforce` is not supported** — use **`defend`**. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
 
 **Pin workflows to** **`coldstep-io/coldstep@v0.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
@@ -69,7 +69,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Enforcement uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
+| **`defend`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -95,14 +95,14 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 
 | Input | Purpose |
 | :---- | :------ |
-| `mode` | **`detect`** or **`defend`** (blocking); **`enforce`** is a legacy alias for **`defend`**. |
+| `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
 | `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
 | `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated Python summary (full BLUF + HTML **or** IP classification on `dev`). |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
-| `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
+| `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
 | `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
 
 ### Optional threat intel (AlienVault OTX)
@@ -189,7 +189,7 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 ## Minimal deploy path
 
 1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) — see **[QUICK_START](QUICK_START.md)**.
-2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist (**`enforce`** is still accepted as an alias).
+2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
 3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
 
 What CI demonstrates versus out-of-scope: **[VALIDATION.md](VALIDATION.md)**.

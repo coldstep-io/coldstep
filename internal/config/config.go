@@ -72,15 +72,19 @@ func defaultUnderWorkspace(rel string) string {
 // LoadFromEnv reads coldstep configuration from the environment.
 func LoadFromEnv() (Config, error) {
 	raw := strings.TrimSpace(os.Getenv("CI_GUARD_MODE"))
-	if raw == "" {
-		raw = string(ModeDetect)
+	rawLower := strings.ToLower(raw)
+	if rawLower == "" {
+		rawLower = string(ModeDetect)
 	}
-	mode := Mode(strings.ToLower(raw))
+	if rawLower == "enforce" {
+		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
+	}
+	mode := Mode(rawLower)
 	if mode == "defend" {
 		mode = ModeEnforce
 	}
 	if mode != ModeDetect && mode != ModeEnforce {
-		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend; enforce is a legacy alias for defend)", raw)
+		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
 	}
 
 	summary := os.Getenv("GITHUB_STEP_SUMMARY")
@@ -92,7 +96,7 @@ func LoadFromEnv() (Config, error) {
 	}
 	allowedDomains := normalizeDomains(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
 	if mode == ModeEnforce && len(allowedDomains) == 0 {
-		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend (or legacy enforce) requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
+		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
 	}
 
 	hosts := os.Getenv("COLDSTEP_ALLOWED_HOSTS")

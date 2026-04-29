@@ -145,9 +145,9 @@ func TestNormalizeCompositeMode(t *testing.T) {
 		{"", "detect", false},
 		{"  ", "detect", false},
 		{"Detect", "detect", false},
-		{"defend", "enforce", false},
-		{"DEFEND", "enforce", false},
-		{"enforce", "enforce", false},
+		{"defend", "defend", false},
+		{"DEFEND", "defend", false},
+		{"enforce", "", true},
 		{"nope", "", true},
 	} {
 		got, err := normalizeCompositeMode(tc.raw)
@@ -168,7 +168,7 @@ func TestNormalizeCompositeMode(t *testing.T) {
 
 func TestParseStartFlags_Explicit(t *testing.T) {
 	cfg, err := parseStartFlags([]string{
-		"--mode", "enforce",
+		"--mode", "defend",
 		"--log-level", "debug",
 		"--fail-on-error",
 		"--io-uring-disable=false",
@@ -177,8 +177,8 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "enforce" {
-		t.Errorf("expected enforce, got %q", cfg.Mode)
+	if cfg.Mode != "defend" {
+		t.Errorf("expected defend, got %q", cfg.Mode)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected debug, got %q", cfg.LogLevel)

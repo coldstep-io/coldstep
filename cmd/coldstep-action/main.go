@@ -125,18 +125,17 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	return cfg, nil
 }
 
-// normalizeCompositeMode maps user-facing mode names to the agent's CI_GUARD_MODE vocabulary.
-// "defend" is the product name for cgroup egress blocking; "enforce" remains a supported alias.
+// normalizeCompositeMode maps user-facing mode names to CI_GUARD_MODE (detect or defend).
 func normalizeCompositeMode(raw string) (string, error) {
 	mode := strings.TrimSpace(strings.ToLower(raw))
 	if mode == "" {
 		mode = "detect"
 	}
-	if mode == "defend" {
-		mode = "enforce"
+	if mode == "enforce" {
+		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
 	}
-	if mode != "detect" && mode != "enforce" {
-		return "", fmt.Errorf("invalid mode %q (use detect or defend; enforce is a legacy alias for defend)", strings.TrimSpace(raw))
+	if mode != "detect" && mode != "defend" {
+		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
 	}
 	return mode, nil
 }

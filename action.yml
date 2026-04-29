@@ -13,7 +13,7 @@ inputs:
     default: start
   mode:
     description: >-
-      Runtime mode: detect logs telemetry only; defend requires an allowlist and blocks non-allowlisted IPv4 egress (enforce is a legacy alias for defend).
+      Runtime mode: detect (default) or defend (blocking, requires allowlist). The enforce spelling is not supported; use defend.
     required: false
     default: detect
   allowed-domains:

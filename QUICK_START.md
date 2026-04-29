@@ -85,7 +85,7 @@ jobs:
 
 ## Defend mode (optional)
 
-Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.0`** pin as above, then configure `with:` (**`enforce`** is still accepted as an alias for **`defend`**):
+Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.0`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
 
 ```yaml
 - uses: coldstep-io/coldstep@v0.2.0

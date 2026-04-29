@@ -10,12 +10,12 @@ This document is the **honest contract** between documentation and **automated c
 
 | Topic | Position |
 | ----- | -------- |
-| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **`defend-mode`** runs **`mode: defend`** (blocking egress). **`enforce`** in `with:` / **`CI_GUARD_MODE`** is a **legacy alias** for **`defend`**, not a separate named product mode. |
+| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **`defend-mode`** runs **`mode: defend`** (blocking egress). **`enforce`** in `with:` / **`CI_GUARD_MODE`** is **rejected** — use **`defend`**. |
 | **Multi-distro matrix** | **`unit`**, **`unit-arm64`**, **`integration`** run on additional Ubuntu LTS / arm64 labels to stress **build + Go tests**, not a second full egress integration matrix for every OS. |
 | **IPv6 egress enforcement** | **Out of scope for v1** — do not infer IPv6 guarantees from this repo’s BPF surfaces. |
 | **Self-hosted / custom kernels** | **Not covered** by the same CI guarantees; treat as integration work in **your** environment. |
 
-**Allowlist file inputs** (`allowed-domains-file`, etc.): composite merges workspace text files with inline `with:` strings in **`coldstep-action`**; paths are rejected if they resolve outside **`GITHUB_WORKSPACE`**. Merge behavior is covered by **`go test ./cmd/coldstep-action/...`**; end-to-end enforce with files is the same agent path as inline strings once merged.
+**Allowlist file inputs** (`allowed-domains-file`, etc.): composite merges workspace text files with inline `with:` strings in **`coldstep-action`**; paths are rejected if they resolve outside **`GITHUB_WORKSPACE`**. Merge behavior is covered by **`go test ./cmd/coldstep-action/...`**; end-to-end defend with files is the same agent path as inline strings once merged.
 
 **`bootstrap-allowlist`:** opt-in merge of vendored **`public_scripts/coldstep_bootstrap/*.txt`** (see **QUICK_START**). **Not** a live third-party API in v1.
 
@@ -23,7 +23,7 @@ This document is the **honest contract** between documentation and **automated c
 
 ## Mode capability matrix
 
-| Capability | `mode: detect` | `mode: defend` (`enforce` alias) |
+| Capability | `mode: detect` | `mode: defend` |
 | ---------- | -------------- | ---------------- |
 | **Egress observation (IPv4-focused telemetry)** | Yes — observe and record. | Yes — plus **block** non-allowlisted IPv4 egress per design. |
 | **Allowlist required** | No. | Yes — non-empty effective policy (domains → IPv4 **A** records + literals / CIDR policy); invalid/empty effective allowlist **fails startup**. |

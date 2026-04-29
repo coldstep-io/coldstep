@@ -209,23 +209,22 @@ func TestLoadFromEnv_InvalidModeRejected(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_EnforceRequiresAllowlist(t *testing.T) {
+func TestLoadFromEnv_EnforceStringRejected(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "enforce")
-	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "  ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requires non-empty allowlist") {
+	if !strings.Contains(err.Error(), "invalid CI_GUARD_MODE") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestLoadFromEnv_AllowlistNormalization(t *testing.T) {
 	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "enforce")
+	t.Setenv("CI_GUARD_MODE", "defend")
 	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", " Example.COM,foo.com  example.com\tFOO.com ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	c, err := LoadFromEnv()
