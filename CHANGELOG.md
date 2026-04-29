@@ -23,6 +23,7 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 
 ### Added
 
+- **Track skills + plans (agent harness):** expert manager skills **`skills/coldstep-detect-track`** and **`skills/coldstep-defend-track`**, with living plans **`plans/2026-04-29-coldstep-detect-track.md`** and **`plans/2026-04-29-coldstep-defend-track.md`**; see **`skills/README.md`** to symlink into **`.cursor/skills/`** (default Cursor path; **`.cursor/`** is gitignored).
 - **`VALIDATION.md`** — Honest matrix of detect vs defend capabilities, CI job coverage (**`detect-mode`**, **`defend-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
 - **Allowlist file inputs** — **`action.yml`**: `allowed-domains-file`, `allowed-hosts-file`, `allowed-ips-file`, `ignored-ip-nets-file` (comma-separated paths under **`GITHUB_WORKSPACE`**). **`coldstep-action`** reads files and merges with inline allowlist strings; see **QUICK_START** and **VALIDATION.md**.
 - **`bootstrap-allowlist`** — default **`false`**. When **`true`**, merges vendored **`public_scripts/coldstep_bootstrap/allowlist-{domains,ips}-v1.txt`** after other merges. Included in **`supply-chain-attest`** bundle tarball; **`LICENSE.md`** inventory updated.
