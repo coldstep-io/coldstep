@@ -8,15 +8,15 @@ import (
 
 func TestEvaluatePassesWhenScoresHighAndNoHardFails(t *testing.T) {
 	events := []model.Event{
-		{"type": "meta"}, {"type": "exec"}, {"type": "tcp"},
-		{"type": "udp"}, {"type": "tls"}, {"type": "http"},
-		{"type": "proc_fork"}, {"type": "fs_event"}, {"type": "bpf_audit"},
-		// canary events:
-		{"type": "tcp", "dst": "1.1.1.1"},
+		{"type": "meta"},
+		{"type": "exec", "comm": "bash"},
+		{"type": "tcp"},
 		{"type": "udp", "dst": "8.8.8.8"},
 		{"type": "tls", "sni": "theclouddj.com"},
-		{"type": "fs_event", "op": "chmod", "path": "/tmp/x"},
-		{"type": "bpf_audit", "comm": "bpftool", "cmd": 3},
+		{"type": "http"},
+		{"type": "proc_fork"},
+		{"type": "fs_event", "op": "chmod"},
+		{"type": "bpf_audit", "comm": "bpftool"},
 	}
 	eval := Evaluate(events)
 	if eval.Verdict != VerdictPass {
@@ -56,13 +56,12 @@ func TestEvaluateFailsWhenRequiredTypeMissing(t *testing.T) {
 
 func TestEvaluateWarnsWhenScoreBetweenFailAndPass(t *testing.T) {
 	events := []model.Event{
-		{"type": "meta"}, {"type": "exec"}, {"type": "tcp"},
-		// intentionally sparse to keep coverage low and miss canaries? no hard-fail required/canary must pass
-		{"type": "tcp", "dst": "1.1.1.1"},
+		{"type": "meta"}, {"type": "exec", "comm": "bash"}, {"type": "tcp"},
+		// All canaries satisfied; omit http + proc_fork for ~78% coverage → weighted score in warn band.
 		{"type": "udp", "dst": "8.8.8.8"},
 		{"type": "tls", "sni": "theclouddj.com"},
-		{"type": "fs_event", "op": "chmod", "path": "/tmp/x"},
-		{"type": "bpf_audit", "comm": "bpftool", "cmd": 3},
+		{"type": "fs_event", "op": "chmod"},
+		{"type": "bpf_audit", "comm": "bpftool"},
 	}
 	weights := map[string]float64{"integrity": 0.05, "coverage": 0.95, "correlation": 0.0}
 	eval := EvaluateWithConfig(events, Config{

@@ -183,7 +183,7 @@ jobs:
       - name: Capability probes (detect mode)
         run: |
           set -euo pipefail
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
           curl -4 -fsS --max-time 20 --connect-timeout 8 http://theclouddj.com/ >/dev/null || true
           curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null || true
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
@@ -376,7 +376,7 @@ jobs:
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
       - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |

@@ -8,10 +8,10 @@ import (
 
 func TestEvaluateCanariesAllPresent(t *testing.T) {
 	events := []model.Event{
-		{"type": "tcp", "dst": "1.1.1.1"},
+		{"type": "exec", "comm": "bash"},
 		{"type": "udp", "dst": "8.8.8.8"},
 		{"type": "tls", "sni": "theclouddj.com"},
-		{"type": "fs_event", "op": "chmod", "path": "/tmp/x"},
+		{"type": "fs_event", "op": "chmod", "path": "/tmp/not-important"},
 		{"type": "bpf_audit", "comm": "bpftool", "cmd": 3},
 	}
 	reasons, seen, required := EvaluateCanaries(events, DefaultCanaryRules())
@@ -25,11 +25,11 @@ func TestEvaluateCanariesAllPresent(t *testing.T) {
 
 func TestEvaluateCanariesMissingOne(t *testing.T) {
 	events := []model.Event{
-		{"type": "tcp", "dst": "1.1.1.1"},
+		{"type": "exec", "comm": "bash"},
 		{"type": "udp", "dst": "8.8.8.8"},
 		{"type": "tls", "sni": "theclouddj.com"},
-		{"type": "fs_event", "op": "chmod", "path": "/tmp/x"},
-		// missing bpf_audit/bpftool cmd=3
+		{"type": "fs_event", "op": "chmod"},
+		// missing bpf_audit / bpftool
 	}
 	reasons, _, _ := EvaluateCanaries(events, DefaultCanaryRules())
 	if len(reasons) != 1 {
@@ -37,6 +37,9 @@ func TestEvaluateCanariesMissingOne(t *testing.T) {
 	}
 	if reasons[0].Code != model.ReasonCanaryMissing {
 		t.Errorf("code=%q; want %q", reasons[0].Code, model.ReasonCanaryMissing)
+	}
+	if reasons[0].Rule != "canary_bpftool_audit" {
+		t.Errorf("rule=%q; want canary_bpftool_audit", reasons[0].Rule)
 	}
 	if reasons[0].Severity != model.SeverityFail {
 		t.Errorf("severity=%q; want fail", reasons[0].Severity)

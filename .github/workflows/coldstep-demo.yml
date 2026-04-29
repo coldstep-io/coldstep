@@ -94,7 +94,7 @@ jobs:
         run: |
           set -euo pipefail
           # TCP (nmap)
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
           # HTTP cleartext
           curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
           # TLS ClientHello/SNI (force HTTP/1.1 to avoid QUIC bypassing TCP write sniff)
@@ -302,7 +302,7 @@ jobs:
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
       - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |

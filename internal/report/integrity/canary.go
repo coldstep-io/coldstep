@@ -14,13 +14,15 @@ type CanaryRule struct {
 	All  map[string]string
 }
 
+// DefaultCanaryRules matches public_scripts/coldstep_detect_report/build_report_model.py
+// canary_rules (subset predicates matched against JSONL events).
 func DefaultCanaryRules() []CanaryRule {
 	return []CanaryRule{
-		{Name: "tcp_to_1.1.1.1", Type: "tcp", All: map[string]string{"dst": "1.1.1.1"}},
-		{Name: "udp_to_8.8.8.8", Type: "udp", All: map[string]string{"dst": "8.8.8.8"}},
-		{Name: "tls_sni_theclouddj", Type: "tls", All: map[string]string{"sni": "theclouddj.com"}},
-		{Name: "fs_chmod_tmp", Type: "fs_event", All: map[string]string{"op": "chmod", "path": "/tmp/x"}},
-		{Name: "bpf_bpftool_cmd3", Type: "bpf_audit", All: map[string]string{"comm": "bpftool", "cmd": "3"}},
+		{Name: "canary_demo_exec", Type: "exec", All: map[string]string{"comm": "bash"}},
+		{Name: "canary_dns_lookup", Type: "udp", All: map[string]string{"dst": "8.8.8.8"}},
+		{Name: "canary_bpftool_audit", Type: "bpf_audit", All: map[string]string{"comm": "bpftool"}},
+		{Name: "canary_fs_chmod", Type: "fs_event", All: map[string]string{"op": "chmod"}},
+		{Name: "canary_tls_egress", Type: "tls", All: map[string]string{"sni": "theclouddj.com"}},
 	}
 }
 
