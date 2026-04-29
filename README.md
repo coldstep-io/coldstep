@@ -1,12 +1,32 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally run in **defend** mode to block non-allowlisted egress (allowlist required). **`mode: enforce` is not supported** — use **`defend`**. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
 
 **Pin workflows to** **`coldstep-io/coldstep@v0.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
 **[Quick Start](QUICK_START.md)** · **[Validation](VALIDATION.md)** (what CI proves) · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
+
+---
+
+## At a glance
+
+| Mode | What it does | Allowlist |
+| :--- | :------------- | :-------- |
+| **`detect`** (default) | Observe and log IPv4-focused egress; no blocking. | Optional (policy labels only). |
+| **`defend`** | Block IPv4 egress not on the allowlist (cgroup programs). | **Required** — non-empty effective allowlist. |
+
+**Upgrading from old workflows**
+
+| Before | After |
+| :----- | :---- |
+| `mode: enforce` | `mode: defend` |
+| `CI_GUARD_MODE: enforce` | `CI_GUARD_MODE: defend` |
+
+Older JSONL files may still show `"mode":"enforce"` in archived runs; that is **legacy data**, not a supported input anymore.
+
+Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode-optional)**.
 
 ---
 
@@ -66,6 +86,8 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 
 ## Modes and outputs
 
+Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. This section adds **default artifact paths** and related notes.
+
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
@@ -111,8 +133,6 @@ Detect workflows that build the **report model** (see [`public_scripts/coldstep_
 
 Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`public_scripts/coldstep_otx/enrich.py`**).
 
-Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`scripts/coldstep_otx/enrich.py`**).
-
 ---
 
 ## Limits (read before relying on signals)
@@ -138,49 +158,11 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 - **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-enforce.yml`** (minimal `uses: ./` demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`public_scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
-### Deep-debug escalation guide (legacy scripts path)
-
-Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
-
-- flaky failures (non-deterministic test or workflow behavior),
-- BPF verifier/load or attach instability,
-- cross-layer regressions that involve workflow + agent + report output,
-- failures that reproduce in CI but not in a narrow local/unit loop.
-
-Expected deep-debug output:
-
-- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
-- per-stage logs for fast pinpointing of first failing gate,
-- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
-
-Recommended usage pattern:
-
-1. Run it in a Linux environment aligned with CI toolchains.
-2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
-3. Enable Stage 4 only when sudo/BPF integration checks are required.
-4. Attach report snippets and failing stage logs to the bug or PR discussion.
-
 ### Deep-debug escalation guide
 
-Use **`scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
+Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug — especially flaky failures, BPF verifier/load issues, workflow + agent + report regressions, or failures that only reproduce in CI.
 
-- flaky failures (non-deterministic test or workflow behavior),
-- BPF verifier/load or attach instability,
-- cross-layer regressions that involve workflow + agent + report output,
-- failures that reproduce in CI but not in a narrow local/unit loop.
-
-Expected deep-debug output:
-
-- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
-- per-stage logs for fast pinpointing of first failing gate,
-- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
-
-Recommended usage pattern:
-
-1. Run it in a Linux environment aligned with CI toolchains.
-2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
-3. Enable Stage 4 only when sudo/BPF integration checks are required.
-4. Attach report snippets and failing stage logs to the bug or PR discussion.
+You get a staged report under **`.coldstep-deep-debug/run-<timestamp>/report.md`** with per-stage logs. Run on Linux aligned with CI toolchains; attach snippets to issues or PRs.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
 

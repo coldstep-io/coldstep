@@ -1,6 +1,19 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.0`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`**); there is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.0`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`** — that last workflow file name is historical; it runs **`mode: defend`**). There is no maintained local build path for the Linux agent.
+
+## Two modes (read this first)
+
+Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`detect`** and **`defend`**. There is no **`enforce`** mode string anymore — use **`defend`** for blocking.
+
+| You want… | Set |
+| :-------- | :-- |
+| Observe-only telemetry (default) | `mode: detect` or omit `mode` |
+| Block egress not on the allowlist | `mode: defend` + non-empty **`allowed-domains`** / policy files |
+
+If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`defend`**. See **[CHANGELOG — Breaking](CHANGELOG.md)**.
+
+---
 
 ## TL;DR (copy/paste)
 

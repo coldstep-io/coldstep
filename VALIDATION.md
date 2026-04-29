@@ -2,6 +2,13 @@
 
 This document is the **honest contract** between documentation and **automated checks**. It supports the phased roadmap (validation first, then UX, then hardening): consumers know what **GitHub Actions + Go tests** actually exercise versus what still depends on **your runner**, **your workflow**, or **manual** review.
 
+**How to read this page**
+
+1. **Runner scope** — which **`runs-on`** labels egress agent jobs use.
+2. **Mode matrix** — detect vs defend (blocking needs an allowlist).
+3. **Layers table** — what each CI job or test package proves.
+4. **Limits** — IPv6, self-hosted, and cases where jobs warn instead of fail.
+
 **Primary CI graph:** [`.github/workflows/coldstep-ci.yml`](.github/workflows/coldstep-ci.yml) calls [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml).
 
 ---

@@ -12,6 +12,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **`mode: enforce`** and **`CI_GUARD_MODE=enforce`** are **removed**. Use **`defend`** for blocking egress. Historical JSONL/digest rows may still contain legacy **`"mode":"enforce"`** strings; readers remain tolerant for old artifacts.
 
+**Migration (copy/paste)**
+
+| Location | Change |
+| :------- | :----- |
+| Composite `with:` | `mode: enforce` → **`mode: defend`** |
+| Job `env:` | `CI_GUARD_MODE: enforce` → **`CI_GUARD_MODE: defend`** |
+
+Docs: **[README — At a glance](README.md#at-a-glance)** · **[Quick Start — Two modes](QUICK_START.md#two-modes-read-this-first)**.
+
 ### `v0.2.0` track (implemented on `dev`; tag pending)
 
 - **Composite + Go:** `action.yml` runs **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when needed); no Node **`main`/`post`** for the published path.
