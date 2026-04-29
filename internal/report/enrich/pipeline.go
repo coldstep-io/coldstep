@@ -3,7 +3,6 @@ package enrich
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	"github.com/coldstep-io/coldstep/internal/report/model"
@@ -27,7 +26,7 @@ func runSource(ctx context.Context, m *model.Report, s Source, budget BudgetFunc
 
 	err := s.Enrich(sctx, m)
 	if err != nil {
-		setSlot(m, s.Name(), json.RawMessage(fmt.Sprintf(`{"skipped":"pipeline_error: %s"}`, jsonEscape(err.Error()))))
+		setSlot(m, s.Name(), pipelineErrorRaw(err))
 	}
 }
 
@@ -42,10 +41,12 @@ func setSlot(m *model.Report, name string, raw json.RawMessage) {
 	}
 }
 
-func jsonEscape(s string) string {
-	b, _ := json.Marshal(s)
-	if len(b) >= 2 {
-		return string(b[1 : len(b)-1])
+func pipelineErrorRaw(err error) json.RawMessage {
+	body, marshalErr := json.Marshal(map[string]string{
+		"skipped": "pipeline_error: " + err.Error(),
+	})
+	if marshalErr != nil {
+		return json.RawMessage(`{"skipped":"pipeline_error: marshal_failed"}`)
 	}
-	return ""
+	return json.RawMessage(body)
 }
