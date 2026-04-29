@@ -16,7 +16,7 @@ func main() {
 	case "build-model":
 		exitIf(buildModel(os.Args[2:]))
 	case "assert-integrity":
-		exitIf(notYet("assert-integrity"))
+		exitIf(assertIntegrity(os.Args[2:]))
 	case "render-summary":
 		exitIf(notYet("render-summary"))
 	case "render-html":

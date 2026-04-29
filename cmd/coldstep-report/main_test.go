@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,4 +38,50 @@ func TestBuildModelEmitsSchemaV30AndAllRequiredKeys(t *testing.T) {
 	if _, ok := m["capability_matrix"]; !ok {
 		t.Error("missing capability_matrix")
 	}
+}
+
+func TestAssertIntegrityPassExitsZero(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"pass","score":95,"reasons":[]}}`)
+	if err := assertIntegrity([]string{"--in=" + in}); err != nil {
+		t.Errorf("assertIntegrity(pass) = %v; want nil", err)
+	}
+}
+
+func TestAssertIntegrityWarnExitsZero(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"warn","score":75,"reasons":[{"code":"CANARY_MISSING","rule":"canary_tls_egress","severity":"warn"}]}}`)
+	if err := assertIntegrity([]string{"--in=" + in}); err != nil {
+		t.Errorf("assertIntegrity(warn) = %v; want nil", err)
+	}
+}
+
+func TestAssertIntegrityFailReturnsError(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"fail","score":40,"reasons":[{"code":"REQUIRED_TYPE_MISSING","type":"tcp","severity":"fail"}]}}`)
+	err := assertIntegrity([]string{"--in=" + in})
+	if err == nil {
+		t.Fatal("assertIntegrity(fail) = nil; want non-nil")
+	}
+	if !strings.Contains(err.Error(), "verdict=fail") {
+		t.Errorf("assertIntegrity(fail) error = %q; want verdict=fail marker", err.Error())
+	}
+}
+
+func TestAssertIntegrityUnknownVerdictReturnsError(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"","score":0,"reasons":[]}}`)
+	err := assertIntegrity([]string{"--in=" + in})
+	if err == nil {
+		t.Fatal("assertIntegrity(empty verdict) = nil; want non-nil")
+	}
+	if !strings.Contains(err.Error(), "missing or unsupported") {
+		t.Errorf("assertIntegrity(empty verdict) error = %q; want missing-or-unsupported marker", err.Error())
+	}
+}
+
+func writeModelFixture(t *testing.T, payload string) string {
+	t.Helper()
+	tmp := t.TempDir()
+	in := filepath.Join(tmp, "model.json")
+	if err := os.WriteFile(in, []byte(payload), 0o644); err != nil {
+		t.Fatalf("setup fixture: %v", err)
+	}
+	return in
 }
