@@ -1,7 +1,7 @@
 package integrity
 
 import (
-	"sort"
+	"math"
 
 	"github.com/coldstep-io/coldstep/internal/report/model"
 )
@@ -29,10 +29,11 @@ func EvaluateCoverage(events []model.Event) model.CoverageSection {
 		}
 	}
 	score := 0
-	if len(required) > 0 {
-		score = int((100.0 * float64(observed)) / float64(len(required)))
+	if len(required) == 0 {
+		score = 100
+	} else {
+		score = int(math.Round((100.0 * float64(observed)) / float64(len(required))))
 	}
-	sort.Strings(unobserved)
 	return model.CoverageSection{
 		Score:           score,
 		CoverageCells:   cells,
