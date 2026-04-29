@@ -15,6 +15,8 @@ This document is the **honest contract** between documentation and **automated c
 | **IPv6 egress enforcement** | **Out of scope for v1** — do not infer IPv6 guarantees from this repo’s BPF surfaces. |
 | **Self-hosted / custom kernels** | **Not covered** by the same CI guarantees; treat as integration work in **your** environment. |
 
+**Allowlist file inputs** (`allowed-domains-file`, etc.): composite merges workspace text files with inline `with:` strings in **`coldstep-action`**; paths are rejected if they resolve outside **`GITHUB_WORKSPACE`**. Merge behavior is covered by **`go test ./cmd/coldstep-action/...`**; end-to-end enforce with files is the same agent path as inline strings once merged.
+
 ---
 
 ## Mode capability matrix
@@ -65,7 +67,7 @@ This document is the **honest contract** between documentation and **automated c
 | Phase | Focus |
 | ----- | ----- |
 | **1** | This document + keep CI matrix honest (you are here). |
-| **2** | Human-friendly allowlist configuration and optional off-by-default curated/bootstrap lists — **design before implementation**. |
+| **2** | Human-friendly allowlist configuration (**allowlist file inputs** in `action.yml` + merger in `coldstep-action`) and optional off-by-default curated/bootstrap lists — **latter still TBD**. |
 | **3** | Stronger **fail-closed** and operator guardrails where product chooses strictness; stale-path cleanup; single **simple deploy** narrative in README / QUICK_START. |
 
 Brainstorming artifacts: local HTML mocks (`*mockup*.html`) and optional **Visual Companion** — **`public_scripts/brainstorm_visual_companion/`** (see **`README.md`** there).

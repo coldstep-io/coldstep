@@ -105,6 +105,31 @@ Detect mode is default. For enforce behavior, reuse the same **`env`** / **`chec
 
 Denied egress appears as `"type":"deny"` in JSONL and in the digest.
 
+### Allowlist files (long lists in the repo)
+
+For large allowlists, keep **UTF-8 text files** in the repository and pass **comma-separated paths** relative to **`GITHUB_WORKSPACE`** (no path escape outside the workspace):
+
+| Input | Merged with |
+| ----- | ------------- |
+| **`allowed-domains-file`** | Inline **`allowed-domains`** (inline first, then each file in order) |
+| **`allowed-hosts-file`** | **`allowed-hosts`** |
+| **`allowed-ips-file`** | **`allowed-ips`** |
+| **`ignored-ip-nets-file`** | **`ignored-ip-nets`** |
+
+**File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline list, but reviewable in PRs as a file).
+
+**Example**
+
+```yaml
+- uses: coldstep-io/coldstep@v0.2.0
+  with:
+    phase: start
+    mode: enforce
+    allowed-domains: api.github.com
+    allowed-domains-file: .github/coldstep/egress-domains.txt
+    fail-on-error: true
+```
+
 ---
 
 ## Where to look after a run

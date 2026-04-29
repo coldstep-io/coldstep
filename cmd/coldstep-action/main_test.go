@@ -163,6 +163,22 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	}
 }
 
+func TestParseStartFlags_AllowlistFiles(t *testing.T) {
+	cfg, err := parseStartFlags([]string{
+		"--allowed-domains-file", ".github/coldstep/a.txt,.github/coldstep/b.txt",
+		"--allowed-ips-file", "policy/extra-ips.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AllowedDomainsFile != ".github/coldstep/a.txt,.github/coldstep/b.txt" {
+		t.Errorf("domains file: %q", cfg.AllowedDomainsFile)
+	}
+	if cfg.AllowedIPsFile != "policy/extra-ips.txt" {
+		t.Errorf("ips file: %q", cfg.AllowedIPsFile)
+	}
+}
+
 func TestParseStopFlags_Defaults(t *testing.T) {
 	cfg, err := parseStopFlags([]string{})
 	if err != nil {

@@ -24,9 +24,13 @@ import (
 type startConfig struct {
 	Mode                 string
 	AllowedDomains       string
+	AllowedDomainsFile   string
 	AllowedHosts         string
+	AllowedHostsFile     string
 	AllowedIPs           string
+	AllowedIPsFile       string
 	IgnoredIPNets        string
+	IgnoredIPNetsFile    string
 	NoDefaultIgnoredNets bool
 	LogLevel             string
 	FeatureGates         string
@@ -81,9 +85,13 @@ func parseStartFlags(args []string) (startConfig, error) {
 	cfg := startConfig{}
 	fs.StringVar(&cfg.Mode, "mode", "detect", "")
 	fs.StringVar(&cfg.AllowedDomains, "allowed-domains", "", "")
+	fs.StringVar(&cfg.AllowedDomainsFile, "allowed-domains-file", "", "")
 	fs.StringVar(&cfg.AllowedHosts, "allowed-hosts", "", "")
+	fs.StringVar(&cfg.AllowedHostsFile, "allowed-hosts-file", "", "")
 	fs.StringVar(&cfg.AllowedIPs, "allowed-ips", "", "")
+	fs.StringVar(&cfg.AllowedIPsFile, "allowed-ips-file", "", "")
 	fs.StringVar(&cfg.IgnoredIPNets, "ignored-ip-nets", "", "")
+	fs.StringVar(&cfg.IgnoredIPNetsFile, "ignored-ip-nets-file", "", "")
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
 	fs.StringVar(&cfg.FeatureGates, "feature-gates", "", "")
@@ -178,14 +186,31 @@ func runStart(cfg startConfig) error {
 		return fmt.Errorf("invalid mode %q", mode)
 	}
 
+	domainsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedDomains, cfg.AllowedDomainsFile)
+	if err != nil {
+		return err
+	}
+	hostsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedHosts, cfg.AllowedHostsFile)
+	if err != nil {
+		return err
+	}
+	ipsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedIPs, cfg.AllowedIPsFile)
+	if err != nil {
+		return err
+	}
+	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredIPNets, cfg.IgnoredIPNetsFile)
+	if err != nil {
+		return err
+	}
+
 	childEnv := os.Environ()
 	childEnv = append(childEnv,
 		"GITHUB_WORKSPACE="+baseDir,
 		"COLDSTEP_DETECT_LOG="+detectLog,
-		"COLDSTEP_ALLOWED_DOMAINS="+cfg.AllowedDomains,
-		"COLDSTEP_ALLOWED_HOSTS="+cfg.AllowedHosts,
-		"COLDSTEP_ALLOWED_IPS="+cfg.AllowedIPs,
-		"COLDSTEP_IGNORED_IP_NETS="+cfg.IgnoredIPNets,
+		"COLDSTEP_ALLOWED_DOMAINS="+domainsMerged,
+		"COLDSTEP_ALLOWED_HOSTS="+hostsMerged,
+		"COLDSTEP_ALLOWED_IPS="+ipsMerged,
+		"COLDSTEP_IGNORED_IP_NETS="+ignoredMerged,
 		"COLDSTEP_NO_DEFAULT_IGNORED_NETS="+boolString(cfg.NoDefaultIgnoredNets),
 		"COLDSTEP_FEATURE_GATES="+cfg.FeatureGates,
 		"CI_GUARD_MODE="+mode,

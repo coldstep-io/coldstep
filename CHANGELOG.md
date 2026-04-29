@@ -24,6 +24,7 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 ### Added
 
 - **`VALIDATION.md`** — Honest matrix of detect vs enforce capabilities, CI job coverage (**`detect-mode`**, **`prevent-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
+- **Allowlist file inputs** — **`action.yml`**: `allowed-domains-file`, `allowed-hosts-file`, `allowed-ips-file`, `ignored-ip-nets-file` (comma-separated paths under **`GITHUB_WORKSPACE`**). **`coldstep-action`** reads files and merges with inline allowlist strings; see **QUICK_START** and **VALIDATION.md**.
 
 ---
 

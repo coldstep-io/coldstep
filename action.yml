@@ -21,6 +21,12 @@ inputs:
       Comma- or whitespace-separated egress allowlist domains for enforce mode. Values are trimmed, lowercased, and deduplicated.
     required: false
     default: ''
+  allowed-domains-file:
+    description: >-
+      Optional comma-separated paths relative to GITHUB_WORKSPACE (or absolute paths still inside the workspace) to UTF-8 text files.
+      Each file contributes tokens (one per line or comma-separated); lines starting with # are comments. Merged after inline allowed-domains.
+    required: false
+    default: ''
   github-token:
     description: >-
       Default GitHub token. Used when report-pr-summary is true to post an optional PR comment
@@ -32,16 +38,31 @@ inputs:
       Comma- or whitespace-separated hostnames. Use *.example.com for one-level subdomains (clean-room matcher).
     required: false
     default: ''
+  allowed-hosts-file:
+    description: >-
+      Optional comma-separated workspace text files; tokens merged after inline allowed-hosts (same line/comment rules as allowed-domains-file).
+    required: false
+    default: ''
   allowed-ips:
     description: >-
-      Comma- or whitespace-separated IPv4 literals allowed for egress classification (no CIDR).
+      Comma- or whitespace-separated IPv4 literals and CIDRs for policy (see internal/policy). Merged with allowed-ips-file.
+    required: false
+    default: ''
+  allowed-ips-file:
+    description: >-
+      Optional comma-separated workspace text files for additional IPv4 literals/CIDRs (same line/comment rules).
     required: false
     default: ''
   ignored-ip-nets:
     description: >-
       Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores
       (common private-network / RFC1918 internal traffic), unless no-default-ignored-nets is true. Maximum 128 merged CIDRs total.
-      Affects policy classification and enforce-mode BPF bypass for those destinations.
+      Affects policy classification and enforce-mode BPF bypass for those destinations. Merged with ignored-ip-nets-file.
+    required: false
+    default: ''
+  ignored-ip-nets-file:
+    description: >-
+      Optional comma-separated workspace text files for additional ignored CIDRs (same line/comment rules).
     required: false
     default: ''
   no-default-ignored-nets:
@@ -129,9 +150,13 @@ runs:
         cmd=("${BIN}" start
           --mode "${{ inputs.mode }}"
           --allowed-domains "${{ inputs.allowed-domains }}"
+          --allowed-domains-file "${{ inputs.allowed-domains-file }}"
           --allowed-hosts "${{ inputs.allowed-hosts }}"
+          --allowed-hosts-file "${{ inputs.allowed-hosts-file }}"
           --allowed-ips "${{ inputs.allowed-ips }}"
+          --allowed-ips-file "${{ inputs.allowed-ips-file }}"
           --ignored-ip-nets "${{ inputs.ignored-ip-nets }}"
+          --ignored-ip-nets-file "${{ inputs.ignored-ip-nets-file }}"
           --no-default-ignored-nets "${{ inputs.no-default-ignored-nets }}"
           --log-level "${{ inputs.log-level }}"
           --feature-gates "${{ inputs.feature-gates }}"
