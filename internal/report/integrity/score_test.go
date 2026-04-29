@@ -27,3 +27,20 @@ func TestBalancedScoreClampsLowerBound(t *testing.T) {
 		t.Errorf("score=%d; want 0", got)
 	}
 }
+
+func TestBalancedScoreBankersRoundingHalfEven(t *testing.T) {
+	weights := map[string]float64{"integrity": 0.5, "coverage": 0.5, "correlation": 0}
+	got := BalancedScore(100, 5, 0, weights)
+	// 0.5*100 + 0.5*5 + 0*0 = 52.5 -> half-to-even => 52
+	if got != 52 {
+		t.Errorf("score=%d; want 52", got)
+	}
+}
+
+func TestBalancedScoreNilWeightsUsesDefaults(t *testing.T) {
+	got := BalancedScore(80, 70, 50, nil)
+	// default weights: 0.5*80 + 0.4*70 + 0.1*50 = 73
+	if got != 73 {
+		t.Errorf("score=%d; want 73", got)
+	}
+}
