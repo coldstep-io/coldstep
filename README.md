@@ -186,6 +186,16 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 
 ---
 
+## Minimal deploy path
+
+1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) — see **[QUICK_START](QUICK_START.md)**.
+2. Start in **`mode: detect`** (default); switch to **`mode: enforce`** only when you have a tested allowlist.
+3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
+
+What CI demonstrates versus out-of-scope: **[VALIDATION.md](VALIDATION.md)**.
+
+---
+
 ## Repository
 
 Source: **[github.com/coldstep-io/coldstep](https://github.com/coldstep-io/coldstep)**

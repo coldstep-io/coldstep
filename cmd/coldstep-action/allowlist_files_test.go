@@ -60,6 +60,38 @@ func TestResolvePathUnderWorkspace_RejectsEscape(t *testing.T) {
 	}
 }
 
+func TestTruthyInput(t *testing.T) {
+	for _, s := range []string{"true", "TRUE", "1", "yes"} {
+		if !truthyInput(s) {
+			t.Errorf("expected true for %q", s)
+		}
+	}
+	for _, s := range []string{"", "false", "0", "no", "banana"} {
+		if truthyInput(s) {
+			t.Errorf("expected false for %q", s)
+		}
+	}
+}
+
+func TestAppendBootstrapTokens(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "boot.txt")
+	if err := os.WriteFile(p, []byte("# h\nx.example.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := appendBootstrapTokens("a.org", p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "a.org,x.example.com" {
+		t.Errorf("got %q", got)
+	}
+	got2, err := appendBootstrapTokens("a.org", filepath.Join(dir, "missing.txt"))
+	if err != nil || got2 != "a.org" {
+		t.Errorf("missing file: got %q err %v", got2, err)
+	}
+}
+
 func TestResolvePathUnderWorkspace_AllowsNested(t *testing.T) {
 	dir := t.TempDir()
 	sub := filepath.Join(dir, "sub", "f.txt")

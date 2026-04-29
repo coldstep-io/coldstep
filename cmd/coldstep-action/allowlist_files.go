@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+func truthyInput(s string) bool {
+	v := strings.TrimSpace(strings.ToLower(s))
+	return v == "true" || v == "1" || v == "yes"
+}
+
 // mergeInlineAndAllowlistFiles concatenates comma-separated workspace-relative (or absolute-under-workspace)
 // file paths in filesCSV, reads each text file, parses allowlist tokens (see parseAllowlistFileBody),
 // and joins them with inline using comma separation. Empty filesCSV returns inline unchanged.
@@ -92,6 +97,25 @@ func parseAllowlistFileBody(data []byte) []string {
 		}
 	}
 	return out
+}
+
+// appendBootstrapTokens merges tokens from bootstrapPath into existing comma-separated allowlist.
+// If the file is missing, returns existing unchanged (older bundles may omit the directory).
+func appendBootstrapTokens(existingCSV, bootstrapPath string) (string, error) {
+	body, err := os.ReadFile(bootstrapPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return existingCSV, nil
+		}
+		return "", err
+	}
+	tok := parseAllowlistFileBody(body)
+	if len(tok) == 0 {
+		return existingCSV, nil
+	}
+	prefix := splitAllowInlineTokens(existingCSV)
+	all := append(append([]string{}, prefix...), tok...)
+	return strings.Join(all, ","), nil
 }
 
 func resolvePathUnderWorkspace(workspaceAbs, userPath string) (string, error) {

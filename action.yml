@@ -134,6 +134,13 @@ inputs:
       When set, every emitted JSONL event is signed.
     required: false
     default: ''
+  bootstrap-allowlist:
+    description: >-
+      Default false. When true, merge vendored bootstrap packs from public_scripts/coldstep_bootstrap/
+      (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into allowed-domains and allowed-ips after inline
+      and workspace file merges. Opt-in only — review upgrades when pinning coldstep-io/coldstep tags.
+    required: false
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -165,7 +172,8 @@ runs:
           --smoke-test-egress "${{ inputs.smoke-test-egress }}"
           --io-uring-disable "${{ inputs.io-uring-disable }}"
           --signing-key "${{ inputs.signing-key }}"
-          --report-job-summary "${{ inputs.report-job-summary }}")
+          --report-job-summary "${{ inputs.report-job-summary }}"
+          --bootstrap-allowlist "${{ inputs.bootstrap-allowlist }}")
         if [[ -n "${{ inputs.ready-timeout-seconds }}" ]]; then
           cmd+=(--ready-timeout-seconds "${{ inputs.ready-timeout-seconds }}")
         fi

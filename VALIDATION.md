@@ -67,7 +67,7 @@ This document is the **honest contract** between documentation and **automated c
 | Phase | Focus |
 | ----- | ----- |
 | **1** | This document + keep CI matrix honest (you are here). |
-| **2** | Human-friendly allowlist configuration (**allowlist file inputs** in `action.yml` + merger in `coldstep-action`) and optional off-by-default curated/bootstrap lists — **latter still TBD**. |
+| **2** | Human-friendly allowlist configuration (**allowlist file inputs** + optional **`bootstrap-allowlist`** merging **`public_scripts/coldstep_bootstrap/*.txt`**, default **off**) — external **live APIs** for feeds **not** shipped in v1. |
 | **3** | Stronger **fail-closed** and operator guardrails where product chooses strictness; stale-path cleanup; single **simple deploy** narrative in README / QUICK_START. |
 
 Brainstorming artifacts: local HTML mocks (`*mockup*.html`) and optional **Visual Companion** — **`public_scripts/brainstorm_visual_companion/`** (see **`README.md`** there).

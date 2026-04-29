@@ -41,6 +41,7 @@ type startConfig struct {
 	IoUringDisable       bool
 	SigningKey           string
 	ReportJobSummary     bool
+	BootstrapAllowlist   string
 }
 
 type stopConfig struct {
@@ -102,6 +103,7 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.BoolVar(&cfg.IoUringDisable, "io-uring-disable", true, "")
 	fs.StringVar(&cfg.SigningKey, "signing-key", "", "")
 	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
+	fs.StringVar(&cfg.BootstrapAllowlist, "bootstrap-allowlist", "false", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -201,6 +203,20 @@ func runStart(cfg startConfig) error {
 	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredIPNets, cfg.IgnoredIPNetsFile)
 	if err != nil {
 		return err
+	}
+
+	if truthyInput(cfg.BootstrapAllowlist) {
+		dPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
+		iPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
+		var merr error
+		domainsMerged, merr = appendBootstrapTokens(domainsMerged, dPath)
+		if merr != nil {
+			return merr
+		}
+		ipsMerged, merr = appendBootstrapTokens(ipsMerged, iPath)
+		if merr != nil {
+			return merr
+		}
 	}
 
 	childEnv := os.Environ()

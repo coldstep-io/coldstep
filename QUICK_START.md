@@ -118,6 +118,8 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 
 **File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline list, but reviewable in PRs as a file).
 
+**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`public_scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`public_scripts/coldstep_bootstrap/README.md`** in the repo.
+
 **Example**
 
 ```yaml
