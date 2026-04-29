@@ -17,6 +17,8 @@ This document is the **honest contract** between documentation and **automated c
 
 **Allowlist file inputs** (`allowed-domains-file`, etc.): composite merges workspace text files with inline `with:` strings in **`coldstep-action`**; paths are rejected if they resolve outside **`GITHUB_WORKSPACE`**. Merge behavior is covered by **`go test ./cmd/coldstep-action/...`**; end-to-end enforce with files is the same agent path as inline strings once merged.
 
+**`bootstrap-allowlist`:** opt-in merge of vendored **`public_scripts/coldstep_bootstrap/*.txt`** (see **QUICK_START**). **Not** a live third-party API in v1.
+
 ---
 
 ## Mode capability matrix
@@ -40,7 +42,7 @@ This document is the **honest contract** between documentation and **automated c
 | **`action_manifest`** | UTF-8 gate, workflow pin checker, **`public_scripts`** unittest, shell markers | Repo hygiene and workflow guardrails — **not** the eBPF runtime itself. |
 | **`action_bundle`** | Builds **`bin/coldstep`**, **`coldstep-action`**, **`coldstep-report`** | Shipping composite binaries exist after **`build-agent-linux.sh`**. |
 | **`detect-mode`** job | Real **`uses: ./`** composite **detect**, probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
-| **`prevent-mode`** job | Real composite **enforce**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Enforce blocking** behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow may **warn** instead of failing — see job comments in the workflow file. |
+| **`prevent-mode`** job | Real composite **enforce**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Enforce blocking** behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`prevent_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
 
 **Nightly / manual workflows** (e.g. **`coldstep-ci-nightly`**) add supply-chain and deeper Go checks; they extend confidence in **tooling and tests**, not a duplicate “full egress proof” matrix unless explicitly described there.
 
@@ -66,8 +68,8 @@ This document is the **honest contract** between documentation and **automated c
 
 | Phase | Focus |
 | ----- | ----- |
-| **1** | This document + keep CI matrix honest (you are here). |
-| **2** | Human-friendly allowlist configuration (**allowlist file inputs** + optional **`bootstrap-allowlist`** merging **`public_scripts/coldstep_bootstrap/*.txt`**, default **off**) — external **live APIs** for feeds **not** shipped in v1. |
-| **3** | Stronger **fail-closed** and operator guardrails where product chooses strictness; stale-path cleanup; single **simple deploy** narrative in README / QUICK_START. |
+| **1** | Honest CI matrix (this document). |
+| **2** | **Allowlist file inputs** + optional **`bootstrap-allowlist`** (vendored packs) — no live third-party API in v1. |
+| **3** | **Stricter optional CI** (`prevent_deny_jsonl_strict` on **`coldstep-ci`** `workflow_dispatch`); **README** minimal deploy path; **`package.json`** description for legacy Node bundle; further hardening is incremental. |
 
 Brainstorming artifacts: local HTML mocks (`*mockup*.html`) and optional **Visual Companion** — **`public_scripts/brainstorm_visual_companion/`** (see **`README.md`** there).

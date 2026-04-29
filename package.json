@@ -1,5 +1,6 @@
 {
   "name": "coldstep-action",
+  "description": "Legacy esbuild bundles for CodeQL and optional maintenance; the published composite action uses Go (action.yml, bin/coldstep-action).",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",

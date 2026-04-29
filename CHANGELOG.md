@@ -27,6 +27,11 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 - **Allowlist file inputs** — **`action.yml`**: `allowed-domains-file`, `allowed-hosts-file`, `allowed-ips-file`, `ignored-ip-nets-file` (comma-separated paths under **`GITHUB_WORKSPACE`**). **`coldstep-action`** reads files and merges with inline allowlist strings; see **QUICK_START** and **VALIDATION.md**.
 - **`bootstrap-allowlist`** — default **`false`**. When **`true`**, merges vendored **`public_scripts/coldstep_bootstrap/allowlist-{domains,ips}-v1.txt`** after other merges. Included in **`supply-chain-attest`** bundle tarball; **`LICENSE.md`** inventory updated.
 
+### Changed
+
+- **CI — optional strict enforce telemetry:** **`coldstep-ci`** `workflow_dispatch` input **`prevent_deny_jsonl_strict`** (default **false**) passes through **`coldstep-ci-runner`** so **`prevent-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only).
+- **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`prevent-mode`** strict option.
+
 ---
 
 ## [0.1.7] — 2026-04-20
