@@ -46,7 +46,12 @@ func buildModel(args []string) error {
 	}
 	var baseEvents []model.Event
 	if basePath != "" {
-		baseEvents, _ = model.LoadEvents(basePath)
+		loaded, loadErr := model.LoadEvents(basePath)
+		if loadErr != nil {
+			fmt.Fprintf(os.Stderr, "::warning::baseline load failed for COLDSTEP_REPORT_BASELINE_JSONL (%s): %v; diff will be unavailable\n", basePath, loadErr)
+		} else {
+			baseEvents = loaded
+		}
 	}
 
 	m := &model.Report{

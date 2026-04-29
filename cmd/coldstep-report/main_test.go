@@ -40,6 +40,34 @@ func TestBuildModelEmitsSchemaV30AndAllRequiredKeys(t *testing.T) {
 	}
 }
 
+func TestBuildModelWithUnreadableBaselineDoesNotFail(t *testing.T) {
+	tmp := t.TempDir()
+	current := filepath.Join(tmp, "events.jsonl")
+	baseline := filepath.Join(tmp, "missing-baseline.jsonl")
+	out := filepath.Join(tmp, "model.json")
+	if err := os.WriteFile(current, []byte("{\"type\":\"meta\"}\n{\"type\":\"exec\"}\n{\"type\":\"tcp\"}\n"), 0o644); err != nil {
+		t.Fatalf("setup current: %v", err)
+	}
+	if err := buildModel([]string{"--current=" + current, "--baseline=" + baseline, "--out=" + out}); err != nil {
+		t.Fatalf("buildModel with missing baseline: %v", err)
+	}
+	raw, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatalf("read out: %v", err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(raw, &m); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	diff, ok := m["diff"].(map[string]any)
+	if !ok {
+		t.Fatalf("diff section missing or wrong type: %#v", m["diff"])
+	}
+	if got, want := diff["status"], "unavailable"; got != want {
+		t.Errorf("diff.status = %v; want %s", got, want)
+	}
+}
+
 func TestAssertIntegrityPassExitsZero(t *testing.T) {
 	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"pass","score":95,"reasons":[]}}`)
 	if err := assertIntegrity([]string{"--in=" + in}); err != nil {
