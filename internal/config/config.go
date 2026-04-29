@@ -76,8 +76,11 @@ func LoadFromEnv() (Config, error) {
 		raw = string(ModeDetect)
 	}
 	mode := Mode(strings.ToLower(raw))
+	if mode == "defend" {
+		mode = ModeEnforce
+	}
 	if mode != ModeDetect && mode != ModeEnforce {
-		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (supported: detect|enforce)", raw)
+		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (supported: detect|defend|enforce)", raw)
 	}
 
 	summary := os.Getenv("GITHUB_STEP_SUMMARY")
@@ -89,7 +92,7 @@ func LoadFromEnv() (Config, error) {
 	}
 	allowedDomains := normalizeDomains(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
 	if mode == ModeEnforce && len(allowedDomains) == 0 {
-		return Config{}, fmt.Errorf("CI_GUARD_MODE=enforce requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
+		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend|enforce requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
 	}
 
 	hosts := os.Getenv("COLDSTEP_ALLOWED_HOSTS")

@@ -19236,7 +19236,10 @@ async function run() {
   const allowedDomains = getInput("allowed-domains") || "";
   const featureGates = getInput("feature-gates") || "";
   const releasePath = getInput("release-path").trim();
-  const mode = (getInput("mode") || "detect").trim().toLowerCase();
+  let mode = (getInput("mode") || "detect").trim().toLowerCase();
+  if (mode === "defend") {
+    mode = "enforce";
+  }
   const failOnError = inputBoolDefault("fail-on-error", false);
   const logLevel = getInput("log-level") || "info";
   const reportJobSummary = inputBoolDefault("report-job-summary", true);

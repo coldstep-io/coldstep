@@ -196,7 +196,10 @@ async function run(): Promise<void> {
   const allowedDomains = core.getInput('allowed-domains') || '';
   const featureGates = core.getInput('feature-gates') || '';
   const releasePath = core.getInput('release-path').trim();
-  const mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
+  let mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
+  if (mode === 'defend') {
+    mode = 'enforce';
+  }
   const failOnError = inputBoolDefault('fail-on-error', false);
   const logLevel = core.getInput('log-level') || 'info';
   const reportJobSummary = inputBoolDefault('report-job-summary', true);

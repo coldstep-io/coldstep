@@ -10,7 +10,7 @@ This document is the **honest contract** between documentation and **automated c
 
 | Topic | Position |
 | ----- | -------- |
-| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **Defend mode** is the product name for the CI job that runs composite **`mode: enforce`** (egress block) smoke tests — not a separate `CI_GUARD_MODE` value (only **`detect`** / **`enforce`** are valid). |
+| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **`defend-mode`** runs the composite with **`mode: defend`** (blocking egress); **`enforce`** remains an alias for the same mode in `with:` and **`CI_GUARD_MODE`**. |
 | **Multi-distro matrix** | **`unit`**, **`unit-arm64`**, **`integration`** run on additional Ubuntu LTS / arm64 labels to stress **build + Go tests**, not a second full egress integration matrix for every OS. |
 | **IPv6 egress enforcement** | **Out of scope for v1** — do not infer IPv6 guarantees from this repo’s BPF surfaces. |
 | **Self-hosted / custom kernels** | **Not covered** by the same CI guarantees; treat as integration work in **your** environment. |
@@ -23,7 +23,7 @@ This document is the **honest contract** between documentation and **automated c
 
 ## Mode capability matrix
 
-| Capability | `mode: detect` | `mode: enforce` |
+| Capability | `mode: detect` | `mode: defend` (`enforce` alias) |
 | ---------- | -------------- | ---------------- |
 | **Egress observation (IPv4-focused telemetry)** | Yes — observe and record. | Yes — plus **block** non-allowlisted IPv4 egress per design. |
 | **Allowlist required** | No. | Yes — non-empty effective policy (domains → IPv4 **A** records + literals / CIDR policy); invalid/empty effective allowlist **fails startup**. |
@@ -42,7 +42,7 @@ This document is the **honest contract** between documentation and **automated c
 | **`action_manifest`** | UTF-8 gate, workflow pin checker, **`public_scripts`** unittest, shell markers | Repo hygiene and workflow guardrails — **not** the eBPF runtime itself. |
 | **`action_bundle`** | Builds **`bin/coldstep`**, **`coldstep-action`**, **`coldstep-report`** | Shipping composite binaries exist after **`build-agent-linux.sh`**. |
 | **`detect-mode`** job | Real **`uses: ./`** composite **detect**, probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
-| **`defend-mode`** job (defend mode) | Real composite **enforce**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Enforce blocking** behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`defend_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
+| **`defend-mode`** job (defend mode) | Real composite **`mode: defend`**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Defend** (blocking) behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`defend_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
 
 **Nightly / manual workflows** (e.g. **`coldstep-ci-nightly`**) add supply-chain and deeper Go checks; they extend confidence in **tooling and tests**, not a duplicate “full egress proof” matrix unless explicitly described there.
 

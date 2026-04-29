@@ -1,6 +1,6 @@
 # Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
 #
-# Job `defend-mode` (defend mode — CI enforce smoke): same BPF stack as product `mode: enforce` (cgroup block non-allowlisted egress). apt runs before the
+# Job `defend-mode` (defend mode — CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
 # agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
@@ -287,11 +287,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.

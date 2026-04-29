@@ -15,7 +15,7 @@ on:
         type: boolean
         default: true
       defend_deny_jsonl_strict:
-        description: Fail defend-mode if enforce smoke produces no deny JSONL rows (optional strict gate)
+        description: Fail defend-mode if defend smoke produces no deny JSONL rows (optional strict gate)
         type: boolean
         default: false
 

@@ -11,7 +11,7 @@ on:
         type: boolean
         default: true
       defend_deny_jsonl_strict:
-        description: When true, defend-mode fails if no deny JSONL rows appear after enforce smoke (stricter than default variance-tolerant path)
+        description: When true, defend-mode fails if no deny JSONL rows appear after defend smoke (stricter than default variance-tolerant path)
         type: boolean
         default: false
 
@@ -368,11 +368,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           release-path: bin/coldstep
           allowed-hosts: theclouddj.com, *.ubuntu.com
@@ -441,7 +441,7 @@ jobs:
             fi
           else
             if [[ "${COLDSTEP_DEFEND_DENY_JSONL_STRICT:-0}" == "1" ]]; then
-              echo "::error::no deny JSONL rows observed in enforce smoke (strict mode via defend_deny_jsonl_strict)"
+              echo "::error::no deny JSONL rows observed in defend smoke (strict mode via defend_deny_jsonl_strict)"
               exit 1
             fi
             echo "::warning::no deny JSONL rows observed in this run; keeping defend-mode non-blocking for runner variance"

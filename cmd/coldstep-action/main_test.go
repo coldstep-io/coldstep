@@ -135,6 +135,37 @@ func TestParseStartFlags_Defaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeCompositeMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		raw   string
+		want  string
+		errOK bool
+	}{
+		{"", "detect", false},
+		{"  ", "detect", false},
+		{"Detect", "detect", false},
+		{"defend", "enforce", false},
+		{"DEFEND", "enforce", false},
+		{"enforce", "enforce", false},
+		{"nope", "", true},
+	} {
+		got, err := normalizeCompositeMode(tc.raw)
+		if tc.errOK {
+			if err == nil {
+				t.Errorf("%q: expected error", tc.raw)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%q: %v", tc.raw, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q: got %q want %q", tc.raw, got, tc.want)
+		}
+	}
+}
+
 func TestParseStartFlags_Explicit(t *testing.T) {
 	cfg, err := parseStartFlags([]string{
 		"--mode", "enforce",

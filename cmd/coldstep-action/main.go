@@ -125,6 +125,22 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	return cfg, nil
 }
 
+// normalizeCompositeMode maps user-facing mode names to the agent's CI_GUARD_MODE vocabulary.
+// "defend" is the product name for cgroup egress blocking; "enforce" remains a supported alias.
+func normalizeCompositeMode(raw string) (string, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	if mode == "" {
+		mode = "detect"
+	}
+	if mode == "defend" {
+		mode = "enforce"
+	}
+	if mode != "detect" && mode != "enforce" {
+		return "", fmt.Errorf("invalid mode %q (supported: detect, defend, enforce)", strings.TrimSpace(raw))
+	}
+	return mode, nil
+}
+
 func runStart(cfg startConfig) error {
 	if runtimeOS() != "linux" {
 		return errors.New("coldstep requires a Linux runner (use runs-on: ubuntu-latest)")
@@ -180,12 +196,9 @@ func runStart(cfg startConfig) error {
 		}
 	}
 
-	mode := strings.TrimSpace(strings.ToLower(cfg.Mode))
-	if mode == "" {
-		mode = "detect"
-	}
-	if mode != "detect" && mode != "enforce" {
-		return fmt.Errorf("invalid mode %q", mode)
+	mode, err := normalizeCompositeMode(cfg.Mode)
+	if err != nil {
+		return err
 	}
 
 	domainsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedDomains, cfg.AllowedDomainsFile)

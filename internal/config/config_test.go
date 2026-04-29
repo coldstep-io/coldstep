@@ -93,16 +93,30 @@ func TestLoadFromEnv_DetectLogPath(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_DefendRejected(t *testing.T) {
+func TestLoadFromEnv_DefendNormalizesToEnforce(t *testing.T) {
 	clearColdstepPolicyEnv(t)
-	// "defend" is product language for the CI enforce-smoke job, not a CI_GUARD_MODE value.
 	t.Setenv("CI_GUARD_MODE", "defend")
+	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "example.com")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mode != ModeEnforce {
+		t.Fatalf("mode: got %q want %q", c.Mode, ModeEnforce)
+	}
+}
+
+func TestLoadFromEnv_DefendRequiresAllowlist(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "defend")
+	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "  ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "invalid CI_GUARD_MODE") {
+	if !strings.Contains(err.Error(), "requires non-empty allowlist") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

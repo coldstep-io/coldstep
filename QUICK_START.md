@@ -38,7 +38,7 @@ That is enough to get:
 
 ## Validation (what automation proves)
 
-Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs enforce matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (IPv6, self-hosted, adversarial bypass).
+Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs defend matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (IPv6, self-hosted, adversarial bypass).
 
 ---
 
@@ -83,15 +83,15 @@ jobs:
 
 ---
 
-## Enforce mode (optional)
+## Defend mode (optional)
 
-Detect mode is default. For enforce behavior, reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.0`** pin as above, then configure `with:`:
+Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.0`** pin as above, then configure `with:` (**`enforce`** is still accepted as an alias for **`defend`**):
 
 ```yaml
 - uses: coldstep-io/coldstep@v0.2.0
   with:
     phase: start
-    mode: enforce
+    mode: defend
     allowed-domains: google.com,github.com
     # optional:
     # allowed-hosts: api.example.com,*.svc.example.com
@@ -126,7 +126,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 - uses: coldstep-io/coldstep@v0.2.0
   with:
     phase: start
-    mode: enforce
+    mode: defend
     allowed-domains: api.github.com
     allowed-domains-file: .github/coldstep/egress-domains.txt
     fail-on-error: true

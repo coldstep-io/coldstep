@@ -76,11 +76,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: coldstep-io/coldstep (enforce)
+      - name: coldstep-io/coldstep (defend)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
