@@ -88,3 +88,109 @@ func TestDiffWithoutBaselineReportsUnavailable(t *testing.T) {
 		t.Errorf("diff.reason = %q; want no_baseline_provided", d.Reason)
 	}
 }
+
+func TestDiffWithBaselineIncludesNewGoneChangedAndIndicators(t *testing.T) {
+	current := []Event{
+		{"type": "tcp", "fqdn": "new.example", "dst": "1.1.1.1"},
+		{"type": "tls", "fqdn": "changed.example", "dst": "3.3.3.3"},
+		{"type": "tls", "fqdn": "changed.example", "dst": "3.3.3.3"},
+	}
+	baseline := []Event{
+		{"type": "udp", "fqdn": "gone.example", "dst": "2.2.2.2"},
+		{"type": "tls", "fqdn": "changed.example", "dst": "3.3.3.3"},
+	}
+
+	d := BuildDiff(current, baseline)
+	if got, want := d.Status, "ok"; got != want {
+		t.Fatalf("diff.status = %q; want %q", got, want)
+	}
+	if got, want := len(d.TrafficNew), 1; got != want {
+		t.Fatalf("traffic_new count = %d; want %d", got, want)
+	}
+	if got, want := len(d.TrafficGone), 1; got != want {
+		t.Fatalf("traffic_gone count = %d; want %d", got, want)
+	}
+	if got, want := len(d.TrafficChanged), 1; got != want {
+		t.Fatalf("traffic_changed count = %d; want %d", got, want)
+	}
+
+	newByFP := map[string]DiffEntry{}
+	for _, e := range d.TrafficNew {
+		newByFP[e.Fingerprint] = e
+	}
+	goneByFP := map[string]DiffEntry{}
+	for _, e := range d.TrafficGone {
+		goneByFP[e.Fingerprint] = e
+	}
+	changedByFP := map[string]DiffChanged{}
+	for _, e := range d.TrafficChanged {
+		changedByFP[e.Fingerprint] = e
+	}
+
+	newEntry, ok := newByFP["tcp»new.example"]
+	if !ok {
+		t.Fatal("missing expected new fingerprint tcp»new.example")
+	}
+	if len(newEntry.Indicators) == 0 {
+		t.Fatal("new entry indicators should be non-empty")
+	}
+	if !containsString(newEntry.Indicators, "1.1.1.1") {
+		t.Errorf("new indicators %v missing dst indicator", newEntry.Indicators)
+	}
+	if !containsString(newEntry.Indicators, "new.example") {
+		t.Errorf("new indicators %v missing host indicator", newEntry.Indicators)
+	}
+
+	goneEntry, ok := goneByFP["udp»gone.example"]
+	if !ok {
+		t.Fatal("missing expected gone fingerprint udp»gone.example")
+	}
+	if len(goneEntry.Indicators) == 0 {
+		t.Fatal("gone entry indicators should be non-empty")
+	}
+	if !containsString(goneEntry.Indicators, "2.2.2.2") {
+		t.Errorf("gone indicators %v missing dst indicator", goneEntry.Indicators)
+	}
+	if !containsString(goneEntry.Indicators, "gone.example") {
+		t.Errorf("gone indicators %v missing host indicator", goneEntry.Indicators)
+	}
+
+	changedEntry, ok := changedByFP["tls»changed.example"]
+	if !ok {
+		t.Fatal("missing expected changed fingerprint tls»changed.example")
+	}
+	if len(changedEntry.Indicators) == 0 {
+		t.Fatal("changed entry indicators should be non-empty")
+	}
+	if !containsString(changedEntry.Indicators, "3.3.3.3") {
+		t.Errorf("changed indicators %v missing dst indicator", changedEntry.Indicators)
+	}
+	if !containsString(changedEntry.Indicators, "changed.example") {
+		t.Errorf("changed indicators %v missing host indicator", changedEntry.Indicators)
+	}
+}
+
+func TestEgressSankeyIncludesDstAndHostIndicators(t *testing.T) {
+	events := []Event{
+		{"type": "tls", "dst": "9.9.9.9", "sni": "edge.example", "policy": "allow"},
+	}
+	edges := BuildEgressSankey(events)
+	if got, want := len(edges), 1; got != want {
+		t.Fatalf("edge count = %d; want %d", got, want)
+	}
+	if !containsString(edges[0].Indicators, "9.9.9.9") {
+		t.Errorf("indicators %v missing dst indicator", edges[0].Indicators)
+	}
+	if !containsString(edges[0].Indicators, "edge.example") {
+		t.Errorf("indicators %v missing host indicator", edges[0].Indicators)
+	}
+}
+
+func containsString(items []string, target string) bool {
+	for _, item := range items {
+		if item == target {
+			return true
+		}
+	}
+	return false
+}

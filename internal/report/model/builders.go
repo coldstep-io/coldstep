@@ -81,8 +81,11 @@ func BuildTimeline(events []Event) []TimelineBucket {
 	for _, e := range events {
 		ts := e.AsString("ts")
 		typ := e.AsString("type")
-		if ts == "" || typ == "" {
+		if ts == "" {
 			continue
+		}
+		if typ == "" {
+			typ = "<missing>"
 		}
 		t, err := time.Parse(time.RFC3339Nano, strings.Replace(ts, "Z", "+00:00", 1))
 		if err != nil {
@@ -131,7 +134,9 @@ func BuildEgressSankey(events []Event) []SankeyEdge {
 		if indicators[k] == nil {
 			indicators[k] = map[string]struct{}{}
 		}
-		indicators[k][host] = struct{}{}
+		for _, ind := range trafficIndicators(e) {
+			indicators[k][ind] = struct{}{}
+		}
 	}
 	out := make([]SankeyEdge, 0, len(values))
 	for k, v := range values {
@@ -170,6 +175,25 @@ func BuildDiff(current []Event, baseline []Event) DiffPayload {
 	// extend this to match the Python ci_coldstep_jsonl_traffic_diff fingerprint.
 	cur := fingerprintCounts(current)
 	base := fingerprintCounts(baseline)
+	fpIndicators := map[string]map[string]struct{}{}
+	addFingerprintIndicators := func(events []Event) {
+		for _, e := range events {
+			typ := e.AsString("type")
+			if _, ok := egressTypes[typ]; !ok {
+				continue
+			}
+			host := firstNonEmpty(e.AsString("fqdn"), e.AsString("host"), e.AsString("sni"), e.AsString("dst"))
+			fp := typ + "»" + host
+			if fpIndicators[fp] == nil {
+				fpIndicators[fp] = map[string]struct{}{}
+			}
+			for _, ind := range trafficIndicators(e) {
+				fpIndicators[fp][ind] = struct{}{}
+			}
+		}
+	}
+	addFingerprintIndicators(current)
+	addFingerprintIndicators(baseline)
 	out := DiffPayload{
 		Status:         "ok",
 		TrafficNew:     []DiffEntry{},
@@ -178,24 +202,69 @@ func BuildDiff(current []Event, baseline []Event) DiffPayload {
 	}
 	for fp, n := range cur {
 		if _, ok := base[fp]; !ok {
-			out.TrafficNew = append(out.TrafficNew, DiffEntry{Count: n, Fingerprint: fp, Indicators: []string{}})
+			out.TrafficNew = append(out.TrafficNew, DiffEntry{
+				Count:       n,
+				Fingerprint: fp,
+				Indicators:  sortedIndicators(fpIndicators[fp]),
+			})
 		}
 	}
 	for fp, n := range base {
 		if _, ok := cur[fp]; !ok {
-			out.TrafficGone = append(out.TrafficGone, DiffEntry{Count: n, Fingerprint: fp, Indicators: []string{}})
+			out.TrafficGone = append(out.TrafficGone, DiffEntry{
+				Count:       n,
+				Fingerprint: fp,
+				Indicators:  sortedIndicators(fpIndicators[fp]),
+			})
 		}
 	}
 	for fp, n := range cur {
 		if b, ok := base[fp]; ok && b != n {
 			out.TrafficChanged = append(out.TrafficChanged, DiffChanged{
-				Baseline: b, Current: n, Fingerprint: fp, Indicators: []string{},
+				Baseline:    b,
+				Current:     n,
+				Fingerprint: fp,
+				Indicators:  sortedIndicators(fpIndicators[fp]),
 			})
 		}
 	}
 	sort.Slice(out.TrafficNew, func(i, j int) bool { return out.TrafficNew[i].Fingerprint < out.TrafficNew[j].Fingerprint })
 	sort.Slice(out.TrafficGone, func(i, j int) bool { return out.TrafficGone[i].Fingerprint < out.TrafficGone[j].Fingerprint })
 	sort.Slice(out.TrafficChanged, func(i, j int) bool { return out.TrafficChanged[i].Fingerprint < out.TrafficChanged[j].Fingerprint })
+	return out
+}
+
+func trafficIndicators(e Event) []string {
+	out := []string{}
+	seen := map[string]struct{}{}
+	add := func(v string) {
+		if v == "" {
+			return
+		}
+		if _, ok := seen[v]; ok {
+			return
+		}
+		seen[v] = struct{}{}
+		out = append(out, v)
+	}
+
+	dst := e.AsString("dst")
+	if dst != "" && dst != "0.0.0.0" {
+		add(dst)
+	}
+	add(firstNonEmpty(e.AsString("fqdn"), e.AsString("sni"), e.AsString("host")))
+	return out
+}
+
+func sortedIndicators(set map[string]struct{}) []string {
+	if len(set) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(set))
+	for ind := range set {
+		out = append(out, ind)
+	}
+	sort.Strings(out)
 	return out
 }
 
