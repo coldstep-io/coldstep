@@ -16,7 +16,7 @@
 | Task | Output |
 | ---- | ------ |
 | Trace defend load path | bpf enforce → maps → cgroup/LSM attach → deny ring → JSONL `deny.mode` / digest |
-| Naming | User-facing **defend**; **`enforce`** alias documented |
+| Naming | User-facing **defend** only; consumer **`enforce`** spelling removed (see **CHANGELOG** / **README** At a glance) |
 
 ---
 

@@ -3,7 +3,7 @@
 **Design (vault):** `knowledge/reports/2026-04-29-drop-enforce-alias-design.md`  
 **Implementation checklist (vault):** `knowledge/reports/2026-04-29-drop-enforce-alias-implementation-plan.md`  
 **Date:** 2026-04-29  
-**Status:** Implemented on **`dev`** (Approach 1 — single-release hard cut).
+**Status:** Implemented on **`dev`** (Approach 1 — single-release hard cut). Reader-facing docs iterated through **README / QUICK_START / VALIDATION / CHANGELOG** (see **Documentation delivered** below).
 
 ---
 
@@ -106,10 +106,19 @@ Land in this sequence so no layer expects **`CI_GUARD_MODE=enforce`** after Go s
 
 ## Done criteria
 
-- [ ] No accepted **`enforce`** string at composite / env / wrapper entrypoints.
-- [ ] Tests green per **VALIDATION.md** scope (CI-equivalent locally in Docker where required).
-- [ ] **CHANGELOG** documents breaking change and migration.
-- [ ] Single signed commit on **`dev`** when above holds (**do not commit until completed**).
+- [x] No accepted **`enforce`** string at composite / env / wrapper entrypoints.
+- [x] **CHANGELOG** documents breaking change and migration (plus reader-facing tables).
+- [x] Single signed commit(s) on **`dev`** implementing removal + follow-up **docs** commit (At a glance, QUICK_START two modes, VALIDATION how-to-read).
+- [ ] Full **Go config tests** / Linux CI green (authoritative on **`ubuntu-latest`**; Windows skips `internal/config` tests by build tag).
+
+## Documentation delivered (iteration complete)
+
+| Doc | What readers get |
+| --- | ---------------- |
+| **README** | **At a glance** tables, migration **Before/After**, deduped OTX + deep-debug, **Modes and outputs** cross-link. |
+| **QUICK_START** | **Two modes** section; **`coldstep-demo-enforce.yml`** explained as legacy filename. |
+| **VALIDATION** | **How to read this page** numbered list. |
+| **CHANGELOG** | **Breaking** + **Migration** table + links to README / QUICK_START anchors. |
 
 ---
 

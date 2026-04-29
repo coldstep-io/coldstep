@@ -21,5 +21,6 @@ Plans (executable backlog):
 | ---- | ---- |
 | Detect track | [../plans/2026-04-29-coldstep-detect-track.md](../plans/2026-04-29-coldstep-detect-track.md) |
 | Defend track | [../plans/2026-04-29-coldstep-defend-track.md](../plans/2026-04-29-coldstep-defend-track.md) |
+| Drop `enforce` alias (breaking) | [../plans/2026-04-29-drop-enforce-alias-approach-1.md](../plans/2026-04-29-drop-enforce-alias-approach-1.md) |
 
 Knowledge vault (local second brain): hub [**track-skills-research-loop**](../knowledge/wiki/track-skills-research-loop.md) — not committed to Git.

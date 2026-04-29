@@ -20,7 +20,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 
 ## Security-sensitive areas
 
-Privileged **`sudo`** BPF loading, cgroup enforcement, and parsing of network/process telemetry are high-impact. If your change touches those paths, call that out in the PR and read **[SECURITY.md](SECURITY.md)** for reporting unrelated vulnerabilities.
+Privileged **`sudo`** BPF loading, cgroup egress blocking (**defend**), and parsing of network/process telemetry are high-impact. If your change touches those paths, call that out in the PR and read **[SECURITY.md](SECURITY.md)** for reporting unrelated vulnerabilities.
 
 ## License
 
