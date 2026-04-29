@@ -6,7 +6,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Planned for `v1.2.0` (breaking)
+**Consumer / workflow pin target (next tag after `v0.1.7`):** `v0.2.0` — documentation, demo workflows, and the pin checker align on this version until the tag is published (then ship via **`RELEASE_PROCESS.md`**).
+
+### Planned for `v0.2.0` (breaking)
 
 - Action runtime migrates from JavaScript (`node24` + `dist/main|post`) to a composite action that invokes Go binaries (`bin/coldstep-action`, `bin/coldstep-report`).
 - Action lifecycle becomes explicit two-phase orchestration:

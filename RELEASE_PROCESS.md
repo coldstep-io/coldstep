@@ -65,9 +65,10 @@ When preparing **v0.1.(x+1)**:
 | Location | What to bump |
 | -------- | ------------ |
 | `public_scripts/check_workflow_action_pins.py` | `MARKETPLACE_COLDSTEP_TAG` |
-| `README.md`, `QUICK_START.md`, `CONTRIBUTING.md`, `website/index.html` | `coldstep-io/coldstep@v…` |
+| `README.md`, `QUICK_START.md`, `CONTRIBUTING.md` | `coldstep-io/coldstep@v…` |
 | `.github/workflows/coldstep-demo*.yml` | `COLDSTEP_AGENT_VERSION` and comment examples |
 | `CHANGELOG.md` | New `## [0.1.(x+1)]` section; fix footer compare links |
+| **`website/index.html`** | **After** the tag is on GitHub Releases (published), bump examples to that tag—do not ship website pin changes before the release exists (see **`AGENTS.md`**). **`coldstep-pages`** deploys from `main` after merge. |
 
 ---
 

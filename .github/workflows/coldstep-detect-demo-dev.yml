@@ -2,7 +2,7 @@
 # Tier-1 BLUF, rDNS, OTX, Tier-2 HTML artifact) plus `render_ip_classification_summary.py` for the IP matrix in
 # Job Summary (runs after OTX enrichment, before the BLUF pass, to reduce summary-size truncation risk). Triggers on
 # `push` to `dev` and `workflow_dispatch` so changes can be exercised without `main`.
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
 # (published by `supply-chain-attest.yml` on version tags). The action uses `release-path` and does not compile.
@@ -25,7 +25,7 @@ on:
       - dev
 
 env:
-  COLDSTEP_AGENT_VERSION: v1.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.0
 
 jobs:
   demo:
