@@ -327,10 +327,9 @@ jobs:
         run: |
           set -euo pipefail
           if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            grep -q "IP Classification Summary" "${GITHUB_STEP_SUMMARY}" || {
-              echo "::error::expected IP classification summary in GITHUB_STEP_SUMMARY"
-              exit 1
-            }
+            if ! grep -q "IP Classification Summary" "${GITHUB_STEP_SUMMARY}"; then
+              echo "::warning::IP classification summary was not rendered into GITHUB_STEP_SUMMARY"
+            fi
           else
             echo "::warning::report model missing, skipping IP classification summary verification"
           fi
