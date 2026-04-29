@@ -1,5 +1,5 @@
 # Dev-branch detect demo: matches `coldstep-demo-detect.yml` reporting (report model, baseline diff rebuild,
-# Tier-1 BLUF, rDNS, OTX, Tier-2 HTML artifact) plus `render_ip_classification_summary.py` for the IP matrix in
+# Tier-1 BLUF, rDNS, OTX, Tier-2 HTML artifact) plus `coldstep-report render-ip-summary` for the IP matrix in
 # Job Summary (runs after OTX enrichment, before the BLUF pass, to reduce summary-size truncation risk). Triggers on
 # `push` to `dev` and `workflow_dispatch` so changes can be exercised without `main`.
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
