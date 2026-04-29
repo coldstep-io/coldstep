@@ -22,7 +22,7 @@ var safePathRE = regexp.MustCompile(`^[A-Za-z0-9_./\\:-]+$`)
 // to make CI logs actionable.
 func Workspace(raw, varName string) (string, error) {
 	if !safePathRE.MatchString(raw) {
-		return "", fmt.Errorf("%w: %s contains disallowed characters", SentinelInvalidPath, varName)
+		return "", fmt.Errorf("%w: %s contains disallowed characters", ErrInvalidPath, varName)
 	}
 	resolved, err := filepath.Abs(raw)
 	if err != nil {
@@ -35,7 +35,7 @@ func Workspace(raw, varName string) (string, error) {
 			return resolved, nil
 		}
 	}
-	return "", fmt.Errorf("%w: %s resolves outside trusted roots: %q", SentinelInvalidPath, varName, resolved)
+	return "", fmt.Errorf("%w: %s resolves outside trusted roots: %q", ErrInvalidPath, varName, resolved)
 }
 
 func trustedRoots() []string {
@@ -107,5 +107,5 @@ func resolveWithExistingAncestor(path string) string {
 	}
 }
 
-// SentinelInvalidPath is returned when a path fails validation.
-var SentinelInvalidPath = errors.New("safepath: invalid path")
+// ErrInvalidPath is returned when a path fails validation.
+var ErrInvalidPath = errors.New("safepath: invalid path")

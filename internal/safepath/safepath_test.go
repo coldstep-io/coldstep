@@ -32,21 +32,21 @@ func TestWorkspaceRejectsPathOutsideTrustedRoots(t *testing.T) {
 	outside := filepath.Join(filepath.Dir(tmp), "outside.json")
 	if _, err := Workspace(outside, "OUT"); err == nil {
 		t.Fatal("Workspace: expected error for path outside trusted roots")
-	} else if !errors.Is(err, SentinelInvalidPath) {
-		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
+	} else if !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("Workspace: expected ErrInvalidPath, got %v", err)
 	}
 }
 
 func TestWorkspaceRejectsDisallowedCharacters(t *testing.T) {
 	if _, err := Workspace("with space.json", "X"); err == nil {
 		t.Fatal("Workspace: expected error for disallowed characters")
-	} else if !errors.Is(err, SentinelInvalidPath) {
-		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
+	} else if !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("Workspace: expected ErrInvalidPath, got %v", err)
 	}
 	if _, err := Workspace("with;semicolon.json", "X"); err == nil {
 		t.Fatal("Workspace: expected error for disallowed characters")
-	} else if !errors.Is(err, SentinelInvalidPath) {
-		t.Fatalf("Workspace: expected SentinelInvalidPath, got %v", err)
+	} else if !errors.Is(err, ErrInvalidPath) {
+		t.Fatalf("Workspace: expected ErrInvalidPath, got %v", err)
 	}
 }
 
