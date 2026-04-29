@@ -94,15 +94,15 @@ func otxEnrich(args []string) error {
 	budgetMs := parseBudgetMillis("COLDSTEP_OTX_WALL_BUDGET_MS", 30000)
 	if apiKey == "" {
 		m["otx"] = map[string]any{
-			"skipped":        true,
-			"skipped_reason": "no api key",
-			"queried_at":     queriedAt,
-			"wall_ms":        0,
-			"wall_budget_ms": budgetMs,
+			"skipped":         true,
+			"skipped_reason":  "no api key",
+			"queried_at":      queriedAt,
+			"wall_ms":         0,
+			"wall_budget_ms":  budgetMs,
 			"partial_results": false,
-			"api_calls":      0,
-			"rate_limited":   0,
-			"indicators":     []any{},
+			"api_calls":       0,
+			"rate_limited":    0,
+			"indicators":      []any{},
 			"summary": map[string]any{
 				"malicious":    0,
 				"clean":        0,
@@ -145,9 +145,9 @@ func otxEnrich(args []string) error {
 		}
 
 		row := map[string]any{
-			"indicator": indicator,
-			"type":      indicatorType,
-			"verdict":   verdict,
+			"indicator":   indicator,
+			"type":        indicatorType,
+			"verdict":     verdict,
 			"pulse_count": pulseCount,
 		}
 		if note != "" {
