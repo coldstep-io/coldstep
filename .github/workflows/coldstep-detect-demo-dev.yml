@@ -86,9 +86,9 @@ jobs:
           # TCP (nmap); -4 so connects are IPv4 (JSONL only records IPv4 TCP).
           nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
           # HTTP cleartext
-          curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
+          curl -4 -fsS --max-time 20 --connect-timeout 8 http://theclouddj.com/ >/dev/null || true
           # TLS ClientHello/SNI (force HTTP/1.1 to avoid QUIC bypassing TCP write sniff)
-          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null || true
+          curl -4 --http1.1 -fsS --max-time 20 --connect-timeout 8 https://theclouddj.com/ >/dev/null || true
           # UDP sendto evidence
           timeout 10 bash -c 'printf "x" >/dev/udp/8.8.8.8/53' 2>/dev/null || true
           # Process activity (proc_tree feature gate)

@@ -96,7 +96,6 @@ jobs:
 
           # Give ring readers time to drain telemetry before stop.
           sleep 2
-
       - name: Stop Coldstep (flush digest)
         uses: ./
         with:
