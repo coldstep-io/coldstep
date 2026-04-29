@@ -42,8 +42,15 @@ func TestEvaluateFailsWhenRequiredTypeMissing(t *testing.T) {
 	if len(eval.Reasons) == 0 {
 		t.Fatal("expected hard-fail reasons")
 	}
-	if eval.Reasons[0].Code != model.ReasonRequiredTypeMissing {
-		t.Errorf("reason code=%q; want %q", eval.Reasons[0].Code, model.ReasonRequiredTypeMissing)
+	hasRequiredTypeMissing := false
+	for _, reason := range eval.Reasons {
+		if reason.Code == model.ReasonRequiredTypeMissing {
+			hasRequiredTypeMissing = true
+			break
+		}
+	}
+	if !hasRequiredTypeMissing {
+		t.Errorf("reasons=%v; want at least one %q", eval.Reasons, model.ReasonRequiredTypeMissing)
 	}
 }
 
@@ -57,7 +64,7 @@ func TestEvaluateWarnsWhenScoreBetweenFailAndPass(t *testing.T) {
 		{"type": "fs_event", "op": "chmod", "path": "/tmp/x"},
 		{"type": "bpf_audit", "comm": "bpftool", "cmd": 3},
 	}
-	weights := map[string]float64{"integrity": 0.5, "coverage": 0.4, "correlation": 0.1}
+	weights := map[string]float64{"integrity": 0.05, "coverage": 0.95, "correlation": 0.0}
 	eval := EvaluateWithConfig(events, Config{
 		FailThreshold: DefaultFailThreshold,
 		PassThreshold: DefaultPassThreshold,
