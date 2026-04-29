@@ -76,3 +76,32 @@ func TestEvaluateWarnsWhenScoreBetweenFailAndPass(t *testing.T) {
 		t.Errorf("score=%d; want [%d,%d)", eval.Score, DefaultFailThreshold, DefaultPassThreshold)
 	}
 }
+
+func TestEvaluateWarnsWhenCanaryMissing(t *testing.T) {
+	events := []model.Event{
+		{"type": "meta"},
+		{"type": "exec", "comm": "bash"},
+		{"type": "tcp"},
+		{"type": "udp", "dst": "8.8.8.8"},
+		// missing tls canary
+		{"type": "fs_event", "op": "chmod"},
+		{"type": "bpf_audit", "comm": "bpftool"},
+	}
+	eval := Evaluate(events)
+	if eval.Verdict != VerdictWarn {
+		t.Fatalf("verdict=%q; want warn", eval.Verdict)
+	}
+	hasCanaryMissing := false
+	for _, r := range eval.Reasons {
+		if r.Code == model.ReasonCanaryMissing {
+			hasCanaryMissing = true
+			if r.Severity != model.SeverityWarn {
+				t.Fatalf("canary severity=%q; want warn", r.Severity)
+			}
+			break
+		}
+	}
+	if !hasCanaryMissing {
+		t.Fatalf("reasons=%v; want CANARY_MISSING", eval.Reasons)
+	}
+}

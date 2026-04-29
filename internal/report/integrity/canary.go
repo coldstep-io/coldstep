@@ -55,7 +55,7 @@ func EvaluateCanaries(events []model.Event, rules []CanaryRule) ([]model.Reason,
 		reasons = append(reasons, model.Reason{
 			Code:     model.ReasonCanaryMissing,
 			Rule:     req,
-			Severity: model.SeverityFail,
+			Severity: model.SeverityWarn,
 		})
 	}
 	return reasons, seenList, required

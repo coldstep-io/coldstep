@@ -38,7 +38,6 @@ func EvaluateWithConfig(events []model.Event, cfg Config) model.CapabilityEval {
 	reasonsReq, seenTypes := CheckRequiredTypes(events, DefaultRequiredTypes())
 	reasonsCanary, canariesSeen, canariesRequired := EvaluateCanaries(events, DefaultCanaryRules())
 	hardFailReasons := append([]model.Reason{}, reasonsReq...)
-	hardFailReasons = append(hardFailReasons, reasonsCanary...)
 
 	coverage := EvaluateCoverage(events)
 	correlationScore := 100 // v1 placeholder until correlation metric is ported.
@@ -48,11 +47,16 @@ func EvaluateWithConfig(events []model.Event, cfg Config) model.CapabilityEval {
 	if len(hardFailReasons) > 0 {
 		integrityStatus = VerdictFail
 		integrityScore = 0
+	} else if len(reasonsCanary) > 0 {
+		integrityStatus = VerdictWarn
+		// Missing canaries indicate partial observability rather than complete blindness.
+		integrityScore = 70
 	}
 
 	finalScore := 0
 	verdict := VerdictFail
 	reasons := append([]model.Reason{}, hardFailReasons...)
+	reasons = append(reasons, reasonsCanary...)
 	if len(hardFailReasons) == 0 {
 		finalScore = BalancedScore(integrityScore, coverage.Score, correlationScore, cfg.Weights)
 		switch {

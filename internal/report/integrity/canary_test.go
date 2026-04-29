@@ -41,7 +41,7 @@ func TestEvaluateCanariesMissingOne(t *testing.T) {
 	if reasons[0].Rule != "canary_bpftool_audit" {
 		t.Errorf("rule=%q; want canary_bpftool_audit", reasons[0].Rule)
 	}
-	if reasons[0].Severity != model.SeverityFail {
-		t.Errorf("severity=%q; want fail", reasons[0].Severity)
+	if reasons[0].Severity != model.SeverityWarn {
+		t.Errorf("severity=%q; want warn", reasons[0].Severity)
 	}
 }
