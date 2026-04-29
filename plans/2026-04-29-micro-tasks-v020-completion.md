@@ -5,7 +5,7 @@
 
 ## Micro sprint A — Git / release
 
-- [ ] **`git push origin dev`** — ensure **`main`**-bound doc commits (e.g. release process) are on GitHub.
+- [x] **`git push origin dev`** — ensure **`main`**-bound doc commits (e.g. release process) are on GitHub.
 - [ ] **PR `dev` → `main`** — merge when CI green (`coldstep-ci`, CodeQL).
 - [ ] **Release PR on `main`** — bump pins per checklist (`MARKETPLACE_COLDSTEP_TAG`, README trio, `COLDSTEP_AGENT_VERSION`, **`CHANGELOG.md` `## [0.2.0]`**); **exclude `website/`**.
 - [ ] **`git tag -s v0.2.0`** + push → verify **`supply-chain-attest`**.
