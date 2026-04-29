@@ -10,7 +10,7 @@ This document is the **honest contract** between documentation and **automated c
 
 | Topic | Position |
 | ----- | -------- |
-| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`prevent-mode`** jobs. |
+| **Supported label for egress agent jobs in CI** | **`ubuntu-latest`** (x64) for **`detect-mode`** and **`defend-mode`** jobs. **Defend mode** is the product name for the CI job that runs composite **`mode: enforce`** (egress block) smoke tests — not a separate `CI_GUARD_MODE` value (only **`detect`** / **`enforce`** are valid). |
 | **Multi-distro matrix** | **`unit`**, **`unit-arm64`**, **`integration`** run on additional Ubuntu LTS / arm64 labels to stress **build + Go tests**, not a second full egress integration matrix for every OS. |
 | **IPv6 egress enforcement** | **Out of scope for v1** — do not infer IPv6 guarantees from this repo’s BPF surfaces. |
 | **Self-hosted / custom kernels** | **Not covered** by the same CI guarantees; treat as integration work in **your** environment. |
@@ -42,7 +42,7 @@ This document is the **honest contract** between documentation and **automated c
 | **`action_manifest`** | UTF-8 gate, workflow pin checker, **`public_scripts`** unittest, shell markers | Repo hygiene and workflow guardrails — **not** the eBPF runtime itself. |
 | **`action_bundle`** | Builds **`bin/coldstep`**, **`coldstep-action`**, **`coldstep-report`** | Shipping composite binaries exist after **`build-agent-linux.sh`**. |
 | **`detect-mode`** job | Real **`uses: ./`** composite **detect**, probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
-| **`prevent-mode`** job | Real composite **enforce**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Enforce blocking** behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`prevent_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
+| **`defend-mode`** job (defend mode) | Real composite **enforce**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Enforce blocking** behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`defend_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
 
 **Nightly / manual workflows** (e.g. **`coldstep-ci-nightly`**) add supply-chain and deeper Go checks; they extend confidence in **tooling and tests**, not a duplicate “full egress proof” matrix unless explicitly described there.
 
@@ -70,6 +70,6 @@ This document is the **honest contract** between documentation and **automated c
 | ----- | ----- |
 | **1** | Honest CI matrix (this document). |
 | **2** | **Allowlist file inputs** + optional **`bootstrap-allowlist`** (vendored packs) — no live third-party API in v1. |
-| **3** | **Stricter optional CI** (`prevent_deny_jsonl_strict` on **`coldstep-ci`** `workflow_dispatch`); **README** minimal deploy path; **`package.json`** description for legacy Node bundle; further hardening is incremental. |
+| **3** | **Stricter optional CI** (`defend_deny_jsonl_strict` on **`coldstep-ci`** `workflow_dispatch`); **README** minimal deploy path; **`package.json`** description for legacy Node bundle; further hardening is incremental. |
 
 Brainstorming artifacts: local HTML mocks (`*mockup*.html`) and optional **Visual Companion** — **`public_scripts/brainstorm_visual_companion/`** (see **`README.md`** there).

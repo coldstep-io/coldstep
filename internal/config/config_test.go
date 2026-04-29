@@ -93,9 +93,10 @@ func TestLoadFromEnv_DetectLogPath(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_PreventRejected(t *testing.T) {
+func TestLoadFromEnv_DefendRejected(t *testing.T) {
 	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "prevent")
+	// "defend" is product language for the CI enforce-smoke job, not a CI_GUARD_MODE value.
+	t.Setenv("CI_GUARD_MODE", "defend")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	_, err := LoadFromEnv()
 	if err == nil {

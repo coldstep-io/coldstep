@@ -1,5 +1,5 @@
 # Simplified enforce-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
-# (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` prevent-mode (nmap/nc allow, curl/nc deny).
+# (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` defend-mode (nmap/nc allow, curl/nc deny).
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: same GitHub Release download + `release-path` as `coldstep-demo-detect.yml`.
@@ -68,7 +68,7 @@ jobs:
           command -v nmap
           command -v curl
 
-      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo prevent-mode).
+      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo defend-mode).
       - name: Pin allowlisted demo host in /etc/hosts
         run: |
           set -euo pipefail

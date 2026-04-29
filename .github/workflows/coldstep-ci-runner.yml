@@ -10,8 +10,8 @@ on:
         description: When true, detect-mode fails if previous-run JSONL diff cannot be computed
         type: boolean
         default: true
-      prevent_deny_jsonl_strict:
-        description: When true, prevent-mode fails if no deny JSONL rows appear after enforce smoke (stricter than default variance-tolerant path)
+      defend_deny_jsonl_strict:
+        description: When true, defend-mode fails if no deny JSONL rows appear after enforce smoke (stricter than default variance-tolerant path)
         type: boolean
         default: false
 
@@ -322,12 +322,12 @@ jobs:
           set -euo pipefail
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
-  prevent-mode:
+  defend-mode:
     runs-on: ubuntu-latest
     # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
     timeout-minutes: 45
     env:
-      COLDSTEP_PREVENT_DENY_JSONL_STRICT: ${{ inputs.prevent_deny_jsonl_strict && '1' || '0' }}
+      COLDSTEP_DEFEND_DENY_JSONL_STRICT: ${{ inputs.defend_deny_jsonl_strict && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -341,7 +341,7 @@ jobs:
         id: coldstep-bin-cache
         with:
           path: bin/coldstep
-          key: coldstep-prevent-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
+          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
 
       - name: Build Linux agent (runs on cache miss only)
         if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
@@ -440,11 +440,11 @@ jobs:
               echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
             fi
           else
-            if [[ "${COLDSTEP_PREVENT_DENY_JSONL_STRICT:-0}" == "1" ]]; then
-              echo "::error::no deny JSONL rows observed in enforce smoke (strict mode via prevent_deny_jsonl_strict)"
+            if [[ "${COLDSTEP_DEFEND_DENY_JSONL_STRICT:-0}" == "1" ]]; then
+              echo "::error::no deny JSONL rows observed in enforce smoke (strict mode via defend_deny_jsonl_strict)"
               exit 1
             fi
-            echo "::warning::no deny JSONL rows observed in this run; keeping prevent-mode non-blocking for runner variance"
+            echo "::warning::no deny JSONL rows observed in this run; keeping defend-mode non-blocking for runner variance"
           fi
 
       - name: Quick control matrix (GitHub-native R/Y/G)

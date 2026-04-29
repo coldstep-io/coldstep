@@ -38,7 +38,7 @@ That is enough to get:
 
 ## Validation (what automation proves)
 
-Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs enforce matrix, job names (`detect-mode`, `prevent-mode`, …), and honest limits (IPv6, self-hosted, adversarial bypass).
+Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs enforce matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (IPv6, self-hosted, adversarial bypass).
 
 ---
 

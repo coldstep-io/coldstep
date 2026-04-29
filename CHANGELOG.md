@@ -23,14 +23,14 @@ Existing single-step workflows that relied on JS `post` hooks must add an explic
 
 ### Added
 
-- **`VALIDATION.md`** — Honest matrix of detect vs enforce capabilities, CI job coverage (**`detect-mode`**, **`prevent-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
+- **`VALIDATION.md`** — Honest matrix of detect vs enforce capabilities, CI job coverage (**`detect-mode`**, **`defend-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
 - **Allowlist file inputs** — **`action.yml`**: `allowed-domains-file`, `allowed-hosts-file`, `allowed-ips-file`, `ignored-ip-nets-file` (comma-separated paths under **`GITHUB_WORKSPACE`**). **`coldstep-action`** reads files and merges with inline allowlist strings; see **QUICK_START** and **VALIDATION.md**.
 - **`bootstrap-allowlist`** — default **`false`**. When **`true`**, merges vendored **`public_scripts/coldstep_bootstrap/allowlist-{domains,ips}-v1.txt`** after other merges. Included in **`supply-chain-attest`** bundle tarball; **`LICENSE.md`** inventory updated.
 
 ### Changed
 
-- **CI — optional strict enforce telemetry:** **`coldstep-ci`** `workflow_dispatch` input **`prevent_deny_jsonl_strict`** (default **false**) passes through **`coldstep-ci-runner`** so **`prevent-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only).
-- **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`prevent-mode`** strict option.
+- **CI — defend mode naming + optional strict enforce telemetry:** enforce-smoke jobs are **`defend-mode`** (product language **defend mode**; not **`prevent-mode`**). **`workflow_dispatch`** input **`defend_deny_jsonl_strict`** (default **false**) and env **`COLDSTEP_DEFEND_DENY_JSONL_STRICT`** pass through **`coldstep-ci-runner`** so **`defend-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only). Composite runtime modes stay **`detect`** / **`enforce`** only.
+- **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`defend-mode`** strict option.
 
 ---
 
@@ -91,7 +91,7 @@ Detect-mode reporting matured with a two-tier pipeline (Tier-1 GitHub Actions st
 
 - **Security (path & output):** Sanitized `COLDSTEP_REPORT_MODEL_IN` in rDNS enricher and related helpers (PR #37–#38); broad Snyk/CodeQL-driven fixes across detect/diff helpers, HTML/XSS-oriented hardening in report rendering, `.snyk` policy for vendored **dist** noise (PR #36, #40).
 - **Code review remediation (PR #42):** Escaping/HTML generation fixes (including `{{ GENERATED_AT }}` handling), sanitizer parity, bounded job-related timeouts.
-- **CI / workflows:** JSONL baseline lookup fallback (`coldstep-ci.yml` + `main`); Tier-1 detect summary ordering after baseline diff (#44); demo install probes aligned with runtime preflight; race fixes in prevent-mode tests and BPF wait paths.
+- **CI / workflows:** JSONL baseline lookup fallback (`coldstep-ci.yml` + `main`); Tier-1 detect summary ordering after baseline diff (#44); demo install probes aligned with runtime preflight; race fixes in defend-mode tests and BPF wait paths.
 - **BPF verifier / probes:** Constant-size userspace reads for TLS/DNS/UDP paths across 5.15–6.x kernels used on GitHub runners.
 
 ### Security
