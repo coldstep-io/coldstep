@@ -17,12 +17,17 @@ type BudgetFunc func(name string) time.Duration
 // non-nil itself — the always-exit-0 contract is encoded here.
 func Run(ctx context.Context, m *model.Report, sources []Source, budget BudgetFunc) {
 	for _, s := range sources {
-		sctx, cancel := context.WithTimeout(ctx, budget(s.Name()))
-		err := s.Enrich(sctx, m)
-		cancel()
-		if err != nil {
-			setSlot(m, s.Name(), json.RawMessage(fmt.Sprintf(`{"skipped":"pipeline_error: %s"}`, jsonEscape(err.Error()))))
-		}
+		runSource(ctx, m, s, budget)
+	}
+}
+
+func runSource(ctx context.Context, m *model.Report, s Source, budget BudgetFunc) {
+	sctx, cancel := context.WithTimeout(ctx, budget(s.Name()))
+	defer cancel()
+
+	err := s.Enrich(sctx, m)
+	if err != nil {
+		setSlot(m, s.Name(), json.RawMessage(fmt.Sprintf(`{"skipped":"pipeline_error: %s"}`, jsonEscape(err.Error()))))
 	}
 }
 
@@ -33,21 +38,7 @@ func setSlot(m *model.Report, name string, raw json.RawMessage) {
 	case "rdns":
 		m.RDNS = raw
 	default:
-		// Future sources can add typed slots; for now keep an explicit marker.
-		if m.OTX == nil {
-			m.OTX = json.RawMessage(fmt.Sprintf(`{"unknown_source":%q}`, name))
-		}
-	}
-}
-
-func getSlot(m *model.Report, name string) json.RawMessage {
-	switch name {
-	case "otx":
-		return m.OTX
-	case "rdns":
-		return m.RDNS
-	default:
-		return nil
+		// Unknown source names are a safe no-op for typed slots.
 	}
 }
 

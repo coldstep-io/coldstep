@@ -71,3 +71,22 @@ func TestRunHonoursBudgetTimeout(t *testing.T) {
 		t.Errorf("otx slot = %s; want budget_exhausted", m.OTX)
 	}
 }
+
+func TestRunUnknownSourceDoesNotMutateKnownSlots(t *testing.T) {
+	m := &model.Report{
+		OTX:  json.RawMessage(`{"keep":"otx"}`),
+		RDNS: json.RawMessage(`{"keep":"rdns"}`),
+	}
+	s := &fakeSource{name: "unknown", rawSet: json.RawMessage(`{"new":"value"}`)}
+
+	Run(context.Background(), m, []Source{s}, BudgetFunc(func(string) time.Duration {
+		return 100 * time.Millisecond
+	}))
+
+	if got := string(m.OTX); got != `{"keep":"otx"}` {
+		t.Errorf("otx slot = %s; want unchanged", got)
+	}
+	if got := string(m.RDNS); got != `{"keep":"rdns"}` {
+		t.Errorf("rdns slot = %s; want unchanged", got)
+	}
+}
