@@ -90,7 +90,7 @@ jobs:
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
       - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |

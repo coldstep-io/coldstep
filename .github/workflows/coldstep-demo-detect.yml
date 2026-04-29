@@ -85,8 +85,8 @@ jobs:
       - name: Capability probes (detect mode)
         run: |
           set -euo pipefail
-          # TCP (nmap)
-          nmap -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
+          # TCP (nmap); -4 so connects are IPv4 (JSONL only records IPv4 TCP).
+          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
           # HTTP cleartext
           curl -4 -fsS --max-time 20 --connect-timeout 8 http://example.com/ >/dev/null || true
           # TLS ClientHello/SNI (force HTTP/1.1 to avoid QUIC bypassing TCP write sniff)

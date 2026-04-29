@@ -68,6 +68,8 @@ jobs:
           echo "--- EXEC CANARY ---"
           # Standard exec activity
           ls /etc/passwd >/dev/null
+          # Integrity canary: JSONL exec events must match predicate comm=bash (see build_report_model.py).
+          bash -c 'echo "redteam-bash-canary" >/dev/null'
           
           echo "--- UDP/DNS CANARY ---"
           # Trigger the DNS canary (8.8.8.8)
@@ -75,11 +77,15 @@ jobs:
           
           echo "--- BPF AUDIT PROBE ---"
           # Trigger BPF audit events (if supported by runner kernel)
-          sudo bpftool map show || echo "bpftool failed; best effort audit signal"
+          sudo bpftool map show >/dev/null 2>&1 || echo "bpftool map show failed; best effort audit signal"
+          sudo bpftool prog show >/dev/null 2>&1 || echo "bpftool prog show failed; best effort audit signal"
           
           echo "--- NETWORK EGRESS PROBE (TLS) ---"
-          # TLS connect (SNI: theclouddj.com)
-          curl -s -I --max-time 5 https://theclouddj.com >/dev/null || true
+          # TLS connect (SNI: theclouddj.com); -4 so agent records IPv4 TLS (JSONL filters non-IPv4).
+          for _ in 1 2 3; do
+            curl -4 --http1.1 -s -I --max-time 8 https://theclouddj.com >/dev/null && break || true
+            sleep 1
+          done
           
           echo "--- FS EVENT PROBE ---"
           # Filesystem events
@@ -88,6 +94,8 @@ jobs:
           chmod 400 "${TMP_F}"
           rm "${TMP_F}"
 
+          # Give ring readers time to drain telemetry before stop.
+          sleep 2
       - name: Stop Coldstep (flush digest)
         uses: ./
         with:

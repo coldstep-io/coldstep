@@ -780,8 +780,8 @@ func TestCheckMapIntegrity(t *testing.T) {
 	// Verify JSONL
 	b, _ := os.ReadFile(events)
 	s := string(b)
-	if !strings.Contains(s, `"type":"BPFTamperEvent"`) || !strings.Contains(s, `"map_name":"map:enforce_cfg"`) {
-		t.Fatalf("expected BPFTamperEvent in JSONL, got:\n%s", s)
+	if !strings.Contains(s, `"type":"bpf_tamper"`) || !strings.Contains(s, `"asset":"map:enforce_cfg"`) {
+		t.Fatalf("expected bpf_tamper event in JSONL, got:\n%s", s)
 	}
 }
 

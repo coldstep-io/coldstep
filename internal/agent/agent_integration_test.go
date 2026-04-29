@@ -572,24 +572,43 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	// Detect mode writes .coldstep-ready.json before the bpf-audit raw_tp attaches; a fixed sleep can run
+	// bpftool before the audit ring reader starts. Poll JSONL until bpf_audit appears or timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 22*time.Second)
 	defer cancel()
 
 	errCh := make(chan error, 1)
 	go func() { errCh <- Run(ctx, cfg) }()
 
-	time.Sleep(500 * time.Millisecond)
+	_, bpftoolErr := exec.LookPath("bpftool")
+	hasBpftool := bpftoolErr == nil
 
-	// bpftool map list triggers BPF_MAP_GET_NEXT_ID (12).
-	if _, err := exec.LookPath("bpftool"); err == nil {
-		_ = exec.Command("bpftool", "map", "list").Run()
+	deadline := time.Now().Add(14 * time.Second)
+	found := false
+	for time.Now().Before(deadline) {
+		if hasBpftool {
+			// bpftool map list triggers BPF_MAP_GET_NEXT_ID (12).
+			_ = exec.Command("bpftool", "map", "list").Run()
+		}
+		time.Sleep(150 * time.Millisecond)
+		b, rerr := os.ReadFile(events)
+		if rerr != nil {
+			continue
+		}
+		if bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
+			found = true
+			break
+		}
 	}
 
-	time.Sleep(500 * time.Millisecond)
 	cancel()
 	err = <-errCh
 	if err != nil && err != context.Canceled {
 		t.Fatalf("Run: %v", err)
+	}
+
+	if found {
+		return
 	}
 
 	b, err := os.ReadFile(events)
@@ -597,9 +616,7 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
-		// Even if bpftool is missing, some other process on a busy CI runner might trigger BPF syscalls.
-		// But for a local test, we might skip if no events found and no bpftool.
-		if _, err := exec.LookPath("bpftool"); err != nil {
+		if !hasBpftool {
 			t.Skip("no bpf_audit events and no bpftool to trigger them")
 		}
 		t.Fatalf("expected bpf_audit in jsonl:\n%s", string(b))

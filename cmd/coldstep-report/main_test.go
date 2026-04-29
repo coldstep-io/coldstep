@@ -8,285 +8,108 @@ import (
 	"testing"
 )
 
-func writeTempJSONL(t *testing.T, lines []string) string {
-	t.Helper()
-	f, err := os.CreateTemp(t.TempDir(), "events*.jsonl")
-	if err != nil {
-		t.Fatal(err)
+func TestBuildModelEmitsSchemaV30AndAllRequiredKeys(t *testing.T) {
+	tmp := t.TempDir()
+	jsonl := filepath.Join(tmp, "events.jsonl")
+	if err := os.WriteFile(jsonl, []byte(`{"type":"meta"}
+{"type":"exec","comm":"bash"}
+{"type":"tcp","dst":"1.1.1.1"}
+`), 0o644); err != nil {
+		t.Fatalf("setup jsonl: %v", err)
 	}
-	defer f.Close()
-	for _, l := range lines {
-		f.WriteString(l + "\n")
-	}
-	return f.Name()
-}
-
-func TestParseJSONLCounts_BasicTypes(t *testing.T) {
-	path := writeTempJSONL(t, []string{
-		`{"type":"exec","pid":1,"comm":"bash"}`,
-		`{"type":"tcp","pid":2,"dst":"1.2.3.4"}`,
-		`{"type":"tcp","pid":3,"dst":"5.6.7.8"}`,
-		`{"type":"deny","pid":4}`,
-		`{"type":"exec"}`,
-	})
-	counts, indicators, err := parseJSONLCounts(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts["exec"] != 2 {
-		t.Errorf("exec count=%d want 2", counts["exec"])
-	}
-	if counts["tcp"] != 2 {
-		t.Errorf("tcp count=%d want 2", counts["tcp"])
-	}
-	if counts["deny"] != 1 {
-		t.Errorf("deny count=%d want 1", counts["deny"])
-	}
-	// dst values become indicators
-	found := map[string]bool{}
-	for _, ind := range indicators {
-		found[ind] = true
-	}
-	if !found["1.2.3.4"] || !found["5.6.7.8"] {
-		t.Errorf("indicators missing expected IPs: %v", indicators)
-	}
-}
-
-func TestParseJSONLCounts_MalformedLinesSkipped(t *testing.T) {
-	path := writeTempJSONL(t, []string{
-		`{"type":"exec"}`,
-		`not-json`,
-		``,
-		`{"type":"tcp"}`,
-	})
-	counts, _, err := parseJSONLCounts(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if counts["exec"] != 1 || counts["tcp"] != 1 {
-		t.Errorf("unexpected counts: %v", counts)
-	}
-}
-
-func TestParseJSONLCounts_EmptyFile(t *testing.T) {
-	path := writeTempJSONL(t, nil)
-	counts, indicators, err := parseJSONLCounts(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(counts) != 0 {
-		t.Errorf("expected empty counts, got %v", counts)
-	}
-	if len(indicators) != 0 {
-		t.Errorf("expected empty indicators, got %v", indicators)
-	}
-}
-
-func TestBuildModel_WritesValidJSON(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{
-		`{"type":"exec"}`,
-		`{"type":"tcp","dst":"1.1.1.1"}`,
-	})
-	out := filepath.Join(dir, "model.json")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", out)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
+	out := filepath.Join(tmp, "model.json")
+	if err := buildModel([]string{"--current=" + jsonl, "--out=" + out}); err != nil {
+		t.Fatalf("buildModel: %v", err)
 	}
 	raw, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read out: %v", err)
 	}
-	var m reportModel
+	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatalf("invalid JSON: %v\n%s", err, raw)
+		t.Fatalf("unmarshal: %v", err)
 	}
-	if m.Counts["exec"] != 1 || m.Counts["tcp"] != 1 {
-		t.Errorf("unexpected counts: %v", m.Counts)
+	if m["schema_version"] != "3.0" {
+		t.Errorf("schema_version = %v; want 3.0", m["schema_version"])
 	}
-	if !strings.HasPrefix(m.SchemaVersion, "v") {
-		t.Errorf("unexpected schema version: %q", m.SchemaVersion)
+	if _, ok := m["capability_eval"]; !ok {
+		t.Error("missing capability_eval")
 	}
-}
-
-func TestAssertIntegrity_PassWithEvents(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{`{"type":"exec"}`, `{"type":"tcp"}`})
-	out := filepath.Join(dir, "model.json")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", out)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	os.Setenv("COLDSTEP_REPORT_MODEL_IN", out)
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_IN")
-	if err := assertIntegrity([]string{}); err != nil {
-		t.Errorf("expected integrity pass, got: %v", err)
+	if _, ok := m["capability_matrix"]; !ok {
+		t.Error("missing capability_matrix")
 	}
 }
 
-func TestAssertIntegrity_FailEmpty(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, nil)
-	out := filepath.Join(dir, "model.json")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", out)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
+func TestBuildModelWithUnreadableBaselineDoesNotFail(t *testing.T) {
+	tmp := t.TempDir()
+	current := filepath.Join(tmp, "events.jsonl")
+	baseline := filepath.Join(tmp, "missing-baseline.jsonl")
+	out := filepath.Join(tmp, "model.json")
+	if err := os.WriteFile(current, []byte("{\"type\":\"meta\"}\n{\"type\":\"exec\"}\n{\"type\":\"tcp\"}\n"), 0o644); err != nil {
+		t.Fatalf("setup current: %v", err)
 	}
-	os.Setenv("COLDSTEP_REPORT_MODEL_IN", out)
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_IN")
-	if err := assertIntegrity([]string{}); err == nil {
-		t.Error("expected integrity failure on empty events, got nil")
+	if err := buildModel([]string{"--current=" + current, "--baseline=" + baseline, "--out=" + out}); err != nil {
+		t.Fatalf("buildModel with missing baseline: %v", err)
 	}
-}
-
-func TestSumMap(t *testing.T) {
-	m := map[string]int{"exec": 3, "tcp": 5, "deny": 1}
-	if got := sumMap(m); got != 9 {
-		t.Errorf("sumMap=%d want 9", got)
-	}
-}
-
-func TestSumMap_Empty(t *testing.T) {
-	if got := sumMap(map[string]int{}); got != 0 {
-		t.Errorf("expected 0, got %d", got)
-	}
-}
-
-func TestSanitize(t *testing.T) {
-	if s := sanitize("foo|bar`baz"); s != "foo·bar'baz" {
-		t.Errorf("unexpected: %q", s)
-	}
-}
-
-func TestMapKeys_Sorted(t *testing.T) {
-	m := map[string]int{"z": 1, "a": 2, "m": 3}
-	keys := mapKeys(m)
-	if keys[0] != "a" || keys[1] != "m" || keys[2] != "z" {
-		t.Errorf("keys not sorted: %v", keys)
-	}
-}
-
-func TestRenderSummary_WritesToFile(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{`{"type":"exec"}`, `{"type":"tcp","dst":"8.8.8.8"}`})
-	modelOut := filepath.Join(dir, "model.json")
-	summaryOut := filepath.Join(dir, "summary.md")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", modelOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	os.Setenv("COLDSTEP_REPORT_MODEL_IN", modelOut)
-	os.Setenv("GITHUB_STEP_SUMMARY", summaryOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_IN")
-	defer os.Unsetenv("GITHUB_STEP_SUMMARY")
-	if err := renderSummary([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(summaryOut)
+	raw, err := os.ReadFile(out)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("read out: %v", err)
 	}
-	content := string(raw)
-	if !strings.Contains(content, "Coldstep") {
-		t.Errorf("expected Coldstep heading in summary: %q", content[:200])
-	}
-	if !strings.Contains(content, "exec") {
-		t.Errorf("expected exec row in summary: %q", content)
-	}
-}
-
-func TestRenderHTML_WritesHTMLFile(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{`{"type":"exec"}`, `{"type":"deny"}`})
-	modelOut := filepath.Join(dir, "model.json")
-	htmlOut := filepath.Join(dir, "report.html")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", modelOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	os.Setenv("COLDSTEP_REPORT_MODEL_IN", modelOut)
-	os.Setenv("COLDSTEP_REPORT_HTML_OUT", htmlOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_IN")
-	defer os.Unsetenv("COLDSTEP_REPORT_HTML_OUT")
-	if err := renderHTML([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	raw, err := os.ReadFile(htmlOut)
-	if err != nil {
-		t.Fatal(err)
-	}
-	content := string(raw)
-	if !strings.Contains(content, "<!doctype html>") {
-		t.Error("expected HTML doctype")
-	}
-	if !strings.Contains(content, "exec") {
-		t.Error("expected exec in HTML")
-	}
-}
-
-func TestMarkSkippedEnrichment_WritesSkipField(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{`{"type":"exec"}`})
-	modelOut := filepath.Join(dir, "model.json")
-	os.Setenv("COLDSTEP_REPORT_CURRENT_JSONL", current)
-	os.Setenv("COLDSTEP_REPORT_MODEL_OUT", modelOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_CURRENT_JSONL")
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_OUT")
-	if err := buildModel([]string{}); err != nil {
-		t.Fatal(err)
-	}
-	os.Setenv("COLDSTEP_REPORT_MODEL_IN", modelOut)
-	defer os.Unsetenv("COLDSTEP_REPORT_MODEL_IN")
-	if err := markSkippedEnrichment([]string{}, "otx", "go-otx-skip-v1"); err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := os.ReadFile(modelOut)
-	var m reportModel
+	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
-		t.Fatal(err)
+		t.Fatalf("unmarshal: %v", err)
 	}
-	otx, ok := m.Extras["otx"].(map[string]any)
+	diff, ok := m["diff"].(map[string]any)
 	if !ok {
-		t.Fatalf("expected otx key in extras, got: %v", m.Extras)
+		t.Fatalf("diff section missing or wrong type: %#v", m["diff"])
 	}
-	if otx["skipped"] != "go-otx-skip-v1" {
-		t.Errorf("unexpected skip reason: %v", otx["skipped"])
+	if got, want := diff["status"], "unavailable"; got != want {
+		t.Errorf("diff.status = %v; want %s", got, want)
 	}
 }
 
-func TestDiffSummary_WritesSummaryLine(t *testing.T) {
-	dir := t.TempDir()
-	current := writeTempJSONL(t, []string{`{"type":"exec"}`, `{"type":"tcp"}`})
-	baseline := writeTempJSONL(t, []string{`{"type":"exec"}`})
-	summaryOut := filepath.Join(dir, "summary.md")
-	if err := diffSummary([]string{
-		"--current", current,
-		"--baseline", baseline,
-		"--summary", summaryOut,
-		"--marker", "coldstep-test-diff",
-	}); err != nil {
-		t.Fatal(err)
+func TestAssertIntegrityPassExitsZero(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"pass","score":95,"reasons":[]}}`)
+	if err := assertIntegrity([]string{"--in=" + in}); err != nil {
+		t.Errorf("assertIntegrity(pass) = %v; want nil", err)
 	}
-	raw, err := os.ReadFile(summaryOut)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestAssertIntegrityWarnExitsZero(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"warn","score":75,"reasons":[{"code":"CANARY_MISSING","rule":"canary_tls_egress","severity":"warn"}]}}`)
+	if err := assertIntegrity([]string{"--in=" + in}); err != nil {
+		t.Errorf("assertIntegrity(warn) = %v; want nil", err)
 	}
-	if !strings.Contains(string(raw), "coldstep-test-diff") {
-		t.Errorf("marker not in summary: %q", string(raw))
+}
+
+func TestAssertIntegrityFailReturnsError(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"fail","score":40,"reasons":[{"code":"REQUIRED_TYPE_MISSING","type":"tcp","severity":"fail"}]}}`)
+	err := assertIntegrity([]string{"--in=" + in})
+	if err == nil {
+		t.Fatal("assertIntegrity(fail) = nil; want non-nil")
 	}
+	if !strings.Contains(err.Error(), "verdict=fail") {
+		t.Errorf("assertIntegrity(fail) error = %q; want verdict=fail marker", err.Error())
+	}
+}
+
+func TestAssertIntegrityUnknownVerdictReturnsError(t *testing.T) {
+	in := writeModelFixture(t, `{"schema_version":"3.0","capability_eval":{"verdict":"","score":0,"reasons":[]}}`)
+	err := assertIntegrity([]string{"--in=" + in})
+	if err == nil {
+		t.Fatal("assertIntegrity(empty verdict) = nil; want non-nil")
+	}
+	if !strings.Contains(err.Error(), "missing or unsupported") {
+		t.Errorf("assertIntegrity(empty verdict) error = %q; want missing-or-unsupported marker", err.Error())
+	}
+}
+
+func writeModelFixture(t *testing.T, payload string) string {
+	t.Helper()
+	tmp := t.TempDir()
+	in := filepath.Join(tmp, "model.json")
+	if err := os.WriteFile(in, []byte(payload), 0o644); err != nil {
+		t.Fatalf("setup fixture: %v", err)
+	}
+	return in
 }
