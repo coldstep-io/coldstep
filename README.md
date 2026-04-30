@@ -169,9 +169,9 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 
 ### Deep-debug escalation guide
 
-Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug — especially flaky failures, BPF verifier/load issues, workflow + agent + report regressions, or failures that only reproduce in CI.
+When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
 
-You get a staged report under **`.coldstep-deep-debug/run-<timestamp>/report.md`** with per-stage logs. Run on Linux aligned with CI toolchains; attach snippets to issues or PRs.
+The workflow executes **`public_scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs — there is no supported local reproduction path.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
 
