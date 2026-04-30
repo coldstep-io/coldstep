@@ -38,13 +38,13 @@ func BuildMeta(agentVer string, bpf []BPFStatus, detectProfile string) (MetaEven
 		dp = "standard"
 	}
 	return MetaEvent{
-		Type:           "meta",
-		SchemaVersion:  SchemaVersion,
-		TS:             time.Now().UTC().Format(time.RFC3339Nano),
-		AgentVersion:   strings.TrimSpace(agentVer),
-		KernelRelease:  kernel,
-		GitHub:         gh,
-		BPF:            bpf,
-		DetectProfile:  dp,
+		Type:          "meta",
+		SchemaVersion: SchemaVersion,
+		TS:            time.Now().UTC().Format(time.RFC3339Nano),
+		AgentVersion:  strings.TrimSpace(agentVer),
+		KernelRelease: kernel,
+		GitHub:        gh,
+		BPF:           bpf,
+		DetectProfile: dp,
 	}, nil
 }

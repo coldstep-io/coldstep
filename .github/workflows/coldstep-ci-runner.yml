@@ -23,6 +23,16 @@ permissions:
   contents: read
 
 jobs:
+  # Authoritative gofmt: same Linux + toolchain path as `docker_gofmt_check.sh` on developer machines.
+  gofmt_docker:
+    name: Go format (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: gofmt check (golang Docker image)
+        run: bash public_scripts/docker_gofmt_check.sh
+
   action_manifest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -39,6 +49,7 @@ jobs:
 
   unit:
     name: unit (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -50,8 +61,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF and generated Go
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -70,6 +79,7 @@ jobs:
 
   unit-arm64:
     name: unit-arm64 (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -81,8 +91,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF and generated Go
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -101,6 +109,7 @@ jobs:
 
   integration:
     name: integration (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -112,8 +121,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -129,6 +136,7 @@ jobs:
         run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1 -parallel 1
 
   action_bundle:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -146,6 +154,7 @@ jobs:
           test -x bin/coldstep-report
 
   detect-mode:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -324,6 +333,7 @@ jobs:
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
     timeout-minutes: 45

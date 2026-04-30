@@ -19,11 +19,11 @@ type Report struct {
 }
 
 type RunMeta struct {
-	RunID          string `json:"run_id"`
-	WorkflowFile   string `json:"workflow_file"`
-	Branch         string `json:"branch"`
-	RunnerLabel    string `json:"runner_label"`
-	DetectProfile  string `json:"detect_profile,omitempty"` // standard | enhanced (matches COLDSTEP_DETECT_PROFILE on build-model)
+	RunID         string `json:"run_id"`
+	WorkflowFile  string `json:"workflow_file"`
+	Branch        string `json:"branch"`
+	RunnerLabel   string `json:"runner_label"`
+	DetectProfile string `json:"detect_profile,omitempty"` // standard | enhanced (matches COLDSTEP_DETECT_PROFILE on build-model)
 }
 
 type CapabilityCell struct {
