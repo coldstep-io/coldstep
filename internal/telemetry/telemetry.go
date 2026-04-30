@@ -46,10 +46,8 @@ func appendLine(path string, b []byte) error {
 		return err
 	}
 	defer f.Close()
-	if _, err := f.Write(b); err != nil {
-		return err
-	}
-	_, err = f.WriteString("\n")
+	line := append(append([]byte(nil), b...), '\n')
+	_, err = f.Write(line)
 	return err
 }
 
