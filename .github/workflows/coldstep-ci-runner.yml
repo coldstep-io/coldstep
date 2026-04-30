@@ -167,8 +167,8 @@ jobs:
         with:
           phase: start
           mode: detect
+          detect-profile: enhanced
           allowed-hosts: theclouddj.com, *.ubuntu.com
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
       - name: Install runtime probes
         run: |
@@ -214,6 +214,7 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_DETECT_PROFILE: enhanced
         run: ./bin/coldstep-report build-model
 
       - name: Enforce Anti-Blindness Gating
@@ -295,7 +296,7 @@ jobs:
           fi
 
           if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "traffic diff script failed"
+            fail_diff_unavailable "coldstep-report diff failed"
           fi
 
           # Re-build the report model now that the baseline JSONL is on disk.

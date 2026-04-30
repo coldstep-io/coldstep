@@ -126,3 +126,15 @@ This design **links** these sources; detailed step lists stay there to avoid dri
 - **Consistency:** Phase 1 excludes backlog engineering; Phase 2+ references existing minimal-deps plan.
 - **Scope:** One roadmap document; implementation splits by phase when **`writing-plans`** runs.
 - **Ambiguity resolved:** Website follow-up is Phase 1 **unless** explicitly deferred with dated note in micro-tasks plan.
+
+---
+
+## 11. Execution progress (rolling log)
+
+| Date | Phase | Note |
+| ---- | ----- | ---- |
+| 2026-04-30 | 2 | Workflows use **`coldstep-report diff`** (Go); see **`plans/2026-04-30-minimal-dependencies.md`** Phase 2 status. |
+| 2026-04-30 | 3 | Regression visibility: **`go test -bench=. -benchmem ./internal/report/model`** (see **`builders_bench_test.go`**). |
+| 2026-04-30 | 4 | GitHub **issues #73–#77** exist under milestone **`v0.2.0`** (not sequential milestone numbers); triage/close per board. |
+| 2026-04-30 | 5 | Copy **`plans/knowledge-capture-template-post-v020.md`** into **`knowledge/reports/`** locally after tag (vault stays gitignored). |
+| — | 1 | **PR #78** (`dev` → `main`): merge when checks green; then **`RELEASE_PROCESS.md`** train for **`v0.2.0`**. |
