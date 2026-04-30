@@ -42,6 +42,8 @@ scripts/**/__pycache__/
 /.vscode/
 /specs/
 AGENTS.md
+# Optional local architecture notes at repo root — not part of the shipped doc surface.
+/ARCHITECTURE.md
 
 # Agent runtime artifacts in workspace (detect digest); do not commit
 .coldstep-detect.md

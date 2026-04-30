@@ -24,8 +24,9 @@ type MetaEvent struct {
 	KernelRelease string          `json:"kernel_release"`
 	GitHub        MetaGitHub      `json:"github"`
 	BPF           []BPFStatus     `json:"bpf"`
-	Capabilities  map[string]bool `json:"capabilities,omitempty"`
-	Sig           string          `json:"sig,omitempty"`
+	Capabilities   map[string]bool `json:"capabilities,omitempty"`
+	DetectProfile  string          `json:"detect_profile,omitempty"` // "standard" | "enhanced" (from COLDSTEP_DETECT_PROFILE)
+	Sig            string          `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.

@@ -110,6 +110,11 @@ inputs:
       (e.g. proc_tree=1 for sched_process_fork, tls_sni=1 for TLS ClientHello SNI JSONL/digest).
     required: false
     default: ''
+  detect-profile:
+    description: >-
+      Detect mode only: standard (default) or enhanced. Enhanced merges default feature gates (proc_tree, tls_sni, fs_events) when each key is unset, and sets COLDSTEP_DETECT_PROFILE for the agent. Use the same value when running coldstep-report build-model (COLDSTEP_DETECT_PROFILE) so integrity scoring matches the run.
+    required: false
+    default: standard
   release-path:
     description: >-
       Optional path to a prebuilt coldstep binary (debug). When set and the file exists, skips building from source on the runner.
@@ -156,6 +161,7 @@ runs:
         fi
         cmd=("${BIN}" start
           --mode "${{ inputs.mode }}"
+          --detect-profile "${{ inputs.detect-profile }}"
           --allowed-domains "${{ inputs.allowed-domains }}"
           --allowed-domains-file "${{ inputs.allowed-domains-file }}"
           --allowed-hosts "${{ inputs.allowed-hosts }}"

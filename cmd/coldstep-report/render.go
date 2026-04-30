@@ -107,9 +107,44 @@ func renderSummary(args []string) error {
 		}
 	}
 
+	profileLine := "standard"
+	if run, ok := mapFromAny(m["run"]); ok {
+		if dp, ok := stringFromAny(run["detect_profile"]); ok && dp != "" {
+			profileLine = dp
+		}
+	}
+
+	missingLine := ""
+	if ceval, ok := mapFromAny(m["capability_eval"]); ok {
+		if integ, ok := mapFromAny(ceval["integrity"]); ok {
+			if det, ok := mapFromAny(integ["details"]); ok {
+				if missing, ok := sliceFromAny(det["missing_types"]); ok {
+					parts := make([]string, 0, len(missing))
+					for _, x := range missing {
+						if s, ok := x.(string); ok && s != "" {
+							parts = append(parts, s)
+						}
+					}
+					missingLine = strings.Join(parts, ", ")
+				}
+			}
+		}
+	}
+
+	integrityNote := ""
+	if strings.EqualFold(profileLine, "enhanced") {
+		integrityNote = "\n- **Integrity tier:** enhanced — scoring expects **udp**, **http**, **tls**, **proc_fork**, **fs_event** rows (plus meta/exec/tcp)."
+	}
+	missingBullet := ""
+	if missingLine != "" {
+		missingBullet = "\n- **Missing required event types:** " + sanitize(missingLine)
+	}
+
 	_, err = fmt.Fprintf(
 		f,
-		"\n## Coldstep detect - summary\n\n- **Capabilities:** pass=%d warn=%d fail=%d\n- **Capability Score:** %d/100 (%s)\n- **Baseline diff:** %s\n- **Threat intel (OTX):** %s\n",
+		"\n## Coldstep detect - summary\n\n- **Detect profile:** %s%s\n- **Capabilities:** pass=%d warn=%d fail=%d\n- **Capability score:** %d/100 (%s)\n- **Baseline diff:** %s\n- **Threat intel (OTX):** %s%s\n",
+		sanitize(profileLine),
+		integrityNote,
 		passCount,
 		warnCount,
 		failCount,
@@ -117,6 +152,7 @@ func renderSummary(args []string) error {
 		sanitize(verdict),
 		sanitize(diffLine),
 		sanitize(otxLine),
+		missingBullet,
 	)
 	return err
 }
@@ -241,9 +277,21 @@ func renderHTML(args []string) error {
 		}
 	}
 
+	profileHTML := "standard"
+	if run, ok := mapFromAny(m["run"]); ok {
+		if dp, ok := stringFromAny(run["detect_profile"]); ok && dp != "" {
+			profileHTML = dp
+		}
+	}
+	profilePara := "<p><strong>Detect profile:</strong> " + html.EscapeString(profileHTML) + "</p>"
+	if strings.EqualFold(profileHTML, "enhanced") {
+		profilePara += "<p><em>Enhanced integrity expects udp, http, tls, proc_fork, and fs_event event types in JSONL.</em></p>"
+	}
+
 	htmlBody := "<!doctype html><html><head><meta charset=\"utf-8\"><title>Coldstep Detect Report</title></head><body>" +
 		"<h1>Coldstep Detect Report</h1>" +
-		"<p><strong>Capability Score:</strong> " + html.EscapeString(fmt.Sprintf("%d (%s)", score, verdict)) + "</p>" +
+		profilePara +
+		"<p><strong>Capability score:</strong> " + html.EscapeString(fmt.Sprintf("%d (%s)", score, verdict)) + "</p>" +
 		"<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\"><thead><tr><th>Type</th><th>Count</th></tr></thead><tbody>" +
 		rows.String() +
 		"</tbody></table></body></html>"

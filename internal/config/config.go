@@ -36,6 +36,8 @@ type Config struct {
 	AgentStatusPath      string
 	// FeatureGates holds parsed COLDSTEP_FEATURE_GATES (lowercase keys).
 	FeatureGates map[string]string
+	// DetectProfile is COLDSTEP_DETECT_PROFILE: "standard" (default) or "enhanced" (merges default feature gates in detect; stricter report integrity when build-model reads the env).
+	DetectProfile string
 	// CgroupAttachPath is the unified cgroup2 path for link.AttachCgroup (from COLDSTEP_CGROUP_PATH or /proc/self/cgroup).
 	CgroupAttachPath string
 	SigningKey       string
@@ -126,7 +128,17 @@ func LoadFromEnv() (Config, error) {
 		agentStatus = defaultUnderWorkspace(".coldstep-ready.json")
 	}
 
+	profile := strings.ToLower(strings.TrimSpace(os.Getenv("COLDSTEP_DETECT_PROFILE")))
+	if profile == "" {
+		profile = "standard"
+	}
+	if profile != "standard" && profile != "enhanced" {
+		return Config{}, fmt.Errorf("invalid COLDSTEP_DETECT_PROFILE %q (use standard or enhanced)", os.Getenv("COLDSTEP_DETECT_PROFILE"))
+	}
+
 	gates := ParseFeatureGates(os.Getenv("COLDSTEP_FEATURE_GATES"))
+	gates = mergeEnhancedFeatureGates(profile, gates)
+
 	cgPath, err := cgroup.AttachPath(os.Getenv("COLDSTEP_CGROUP_PATH"))
 	if err != nil {
 		return Config{}, err
@@ -146,9 +158,30 @@ func LoadFromEnv() (Config, error) {
 		TelemetrySummaryPath: telemetrySummary,
 		AgentStatusPath:      agentStatus,
 		FeatureGates:         gates,
+		DetectProfile:        profile,
 		CgroupAttachPath:     cgPath,
 		SigningKey:           os.Getenv("COLDSTEP_SIGNING_KEY"),
 	}, nil
+}
+
+// mergeEnhancedFeatureGates adds proc_tree, tls_sni, fs_events when profile is enhanced and the key is absent (explicit user gates win).
+func mergeEnhancedFeatureGates(profile string, gates map[string]string) map[string]string {
+	p := strings.ToLower(strings.TrimSpace(profile))
+	if p != "enhanced" {
+		if gates == nil {
+			return map[string]string{}
+		}
+		return gates
+	}
+	if gates == nil {
+		gates = map[string]string{}
+	}
+	for _, key := range []string{"proc_tree", "tls_sni", "fs_events"} {
+		if _, ok := gates[key]; !ok {
+			gates[key] = "1"
+		}
+	}
+	return gates
 }
 
 func envBoolTrue(key string) bool {

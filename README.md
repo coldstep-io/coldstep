@@ -8,6 +8,12 @@
 
 **[Quick Start](QUICK_START.md)** · **[Validation](VALIDATION.md)** (what CI proves) · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
 
+### Runtime vs this repository’s CI
+
+Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** for Coldstep’s own steps — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
+
+The **coldstep-io/coldstep** repository’s **CI** on **`dev`** (and integration branches) continues to use **`python3`** for maintenance scripts under **`public_scripts/`** (UTF-8 checks, workflow pin checks, `unittest`, etc.). That is **maintainer automation**, not a runtime dependency of the published Action.
+
 ---
 
 ## At a glance
@@ -121,7 +127,8 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
-| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
+| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
+| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
 | `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated Python summary (full BLUF + HTML **or** IP classification on `dev`). |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |

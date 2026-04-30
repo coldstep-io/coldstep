@@ -8,6 +8,17 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+func TestBuildDetectMarkdown_DetectProfileKPI(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{DetectProfile: "enhanced", ExecTotal: 1, TCPTotal: 1})
+	if !strings.Contains(md, "**detect profile**") || !strings.Contains(md, "enhanced") {
+		t.Fatalf("expected enhanced detect profile KPI row; got:\n%s", md)
+	}
+	mdStd := BuildDetectMarkdown(DigestInput{DetectProfile: "standard", ExecTotal: 1})
+	if !strings.Contains(mdStd, "| **detect profile** | standard |") {
+		t.Fatalf("expected standard detect profile KPI row")
+	}
+}
+
 func TestBuildDetectMarkdown_TriageRibbon_Detect(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},

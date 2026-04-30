@@ -34,6 +34,7 @@ type startConfig struct {
 	NoDefaultIgnoredNets bool
 	LogLevel             string
 	FeatureGates         string
+	DetectProfile        string
 	ReleasePath          string
 	FailOnError          bool
 	ReadyTimeoutSeconds  int
@@ -96,6 +97,7 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
 	fs.StringVar(&cfg.FeatureGates, "feature-gates", "", "")
+	fs.StringVar(&cfg.DetectProfile, "detect-profile", "standard", "")
 	fs.StringVar(&cfg.ReleasePath, "release-path", "", "")
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
 	fs.IntVar(&cfg.ReadyTimeoutSeconds, "ready-timeout-seconds", 1500, "")
@@ -241,6 +243,7 @@ func runStart(cfg startConfig) error {
 		"COLDSTEP_IGNORED_IP_NETS="+ignoredMerged,
 		"COLDSTEP_NO_DEFAULT_IGNORED_NETS="+boolString(cfg.NoDefaultIgnoredNets),
 		"COLDSTEP_FEATURE_GATES="+cfg.FeatureGates,
+		"COLDSTEP_DETECT_PROFILE="+strings.TrimSpace(cfg.DetectProfile),
 		"CI_GUARD_MODE="+mode,
 		"COLDSTEP_LOG_LEVEL="+cfg.LogLevel,
 		"COLDSTEP_AGENT_STATUS="+agentStatus,

@@ -107,7 +107,8 @@ type BPFAuditDigestRow struct {
 
 // DigestInput feeds the Job Summary–oriented detect markdown builder.
 type DigestInput struct {
-	BPF []telemetry.BPFStatus
+	DetectProfile string // standard | enhanced (from COLDSTEP_DETECT_PROFILE)
+	BPF           []telemetry.BPFStatus
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
 	TLSSNIGate                                         bool
@@ -393,6 +394,18 @@ func writeHotEgressTable(b *strings.Builder, in DigestInput) {
 	b.WriteString("\n")
 }
 
+func writeDetectProfileKPI(b *strings.Builder, in DigestInput) {
+	dp := strings.ToLower(strings.TrimSpace(in.DetectProfile))
+	if dp == "" {
+		dp = "standard"
+	}
+	if dp == "enhanced" {
+		b.WriteString("| **detect profile** | **enhanced** — default gates `proc_tree` · `tls_sni` · `fs_events`; stricter report integrity |\n")
+		return
+	}
+	b.WriteString("| **detect profile** | standard |\n")
+}
+
 // BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
 func BuildDetectMarkdown(in DigestInput) string {
 	max := in.MaxRowsPerSection
@@ -414,6 +427,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	writeHotEgressTable(&b, in)
 	b.WriteString("### KPI\n\n")
 	b.WriteString("| Signal | Count |\n|:--|--:|\n")
+	writeDetectProfileKPI(&b, in)
 	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
 	if in.BPFAuditTotal > 0 {
 		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))

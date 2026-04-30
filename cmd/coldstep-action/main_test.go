@@ -133,6 +133,9 @@ func TestParseStartFlags_Defaults(t *testing.T) {
 	if cfg.FailOnError {
 		t.Error("expected fail-on-error default=false")
 	}
+	if cfg.DetectProfile != "standard" {
+		t.Errorf("expected default detect-profile=standard, got %q", cfg.DetectProfile)
+	}
 }
 
 func TestNormalizeCompositeMode(t *testing.T) {

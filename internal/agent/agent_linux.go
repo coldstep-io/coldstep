@@ -2549,6 +2549,7 @@ func buildDigestInput(
 	execN, tcpN, udpN, httpN, tlsN, fsN := stats.counts()
 	rawTPName := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 	in := report.DigestInput{
+		DetectProfile:                  cfg.DetectProfile,
 		BPF:                            bpfSt,
 		ExecTotal:                      execN,
 		TCPTotal:                       tcpN,
@@ -3054,7 +3055,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	if cfg.EventsLogPath != "" {
-		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt)
+		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile)
 		if err != nil {
 			slog.Warn("build meta", "err", err)
 		} else {

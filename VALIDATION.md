@@ -11,6 +11,8 @@ This document is the **honest contract** between documentation and **automated c
 
 **Primary CI graph:** [`.github/workflows/coldstep-ci.yml`](.github/workflows/coldstep-ci.yml) calls [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml).
 
+**Consumers vs this repo:** The **published composite** does **not** require **Python** for Coldstep’s start/stop/report path. Downstream workflows may **`pip install`** or use any package manager for **their** steps — Coldstep does **not** block or forbid that. **This repository’s CI** (e.g. **`coldstep-ci-runner`** on **`dev`**) **does** run **`python3`** for **`public_scripts/`** gates and unit tests; that is **not** a requirement for Marketplace users.
+
 ---
 
 ## Runner and version scope (v1)
@@ -35,6 +37,7 @@ This document is the **honest contract** between documentation and **automated c
 | **Egress observation (IPv4-focused telemetry)** | Yes — observe and record. | Yes — plus **block** non-allowlisted IPv4 egress per design. |
 | **Allowlist required** | No. | Yes — non-empty effective policy (domains → IPv4 **A** records + literals / CIDR policy); invalid/empty effective allowlist **fails startup**. |
 | **`.coldstep-events.jsonl`** | Yes. | Yes — **`deny`** rows include **`"mode":"defend"`** for blocking runs (legacy **`enforce`** may appear in older logs). |
+| **`detect-profile`** (`standard` / **`enhanced`**) | Optional **`enhanced`** merges default feature gates and tighter **`coldstep-report`** integrity when **`COLDSTEP_DETECT_PROFILE`** matches on **`build-model`. | Same — applies to observation stacks used with defend runs too (gates only). |
 | **Digest / shutdown markdown** | Yes (when enabled). | Yes. |
 | **`fail-on-error` on start/stop** | Fails step if **operational readiness** (e.g. `.coldstep-ready.json` **ok:true**) is not achieved within the wait — **not** “fail because an attacker tried bad egress.” | Same readiness semantics; **blocking** is separate from step exit code (see [`action.yml`](action.yml) descriptions). |
 
@@ -48,7 +51,7 @@ This document is the **honest contract** between documentation and **automated c
 | **Agent (Linux)** | **`go test ./...`**, **`go test -tags=integration ./internal/agent/...`** (with **`sudo`** in CI) | Large classes of agent behavior and BPF attach paths **on CI Linux**, subject to each test’s assertions. |
 | **`action_manifest`** | UTF-8 gate, workflow pin checker, **`public_scripts`** unittest, shell markers | Repo hygiene and workflow guardrails — **not** the eBPF runtime itself. |
 | **`action_bundle`** | Builds **`bin/coldstep`**, **`coldstep-action`**, **`coldstep-report`** | Shipping composite binaries exist after **`build-agent-linux.sh`**. |
-| **`detect-mode`** job | Real **`uses: ./`** composite **detect**, probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
+| **`detect-mode`** job | Real **`uses: ./`** composite **detect** (**`detect-profile: enhanced`** on **`coldstep-ci-runner`**), probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`** with **`COLDSTEP_DETECT_PROFILE`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
 | **`defend-mode`** job (defend mode) | Real composite **`mode: defend`**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Defend** (blocking) behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`defend_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
 
 **Nightly / manual workflows** (e.g. **`coldstep-ci-nightly`**) add supply-chain and deeper Go checks; they extend confidence in **tooling and tests**, not a duplicate “full egress proof” matrix unless explicitly described there.
@@ -78,5 +81,6 @@ This document is the **honest contract** between documentation and **automated c
 | **1** | Honest CI matrix (this document). |
 | **2** | **Allowlist file inputs** + optional **`bootstrap-allowlist`** (vendored packs) — no live third-party API in v1. |
 | **3** | **Stricter optional CI** (`defend_deny_jsonl_strict` on **`coldstep-ci`** `workflow_dispatch`); **README** minimal deploy path; **`package.json`** description for legacy Node bundle; further hardening is incremental. |
+| **4** (planned) | **Enhanced detect** — richer observe-only profile (gates + integrity/reporting); **no** blocking and **no** application deny lists — see **[plans/2026-04-30-enhanced-detect-method.md](plans/2026-04-30-enhanced-detect-method.md)**. |
 
 Brainstorming artifacts: local HTML mocks (`*mockup*.html`) and optional **Visual Companion** — **`public_scripts/brainstorm_visual_companion/`** (see **`README.md`** there).
