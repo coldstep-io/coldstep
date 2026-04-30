@@ -288,11 +288,15 @@ async function run(): Promise<void> {
     stderrFd = fs.openSync(stderrLog, 'w', 0o600);
     stdio = ['ignore', 'ignore', stderrFd];
   }
+  let spawnErr: Error | undefined;
   const child = spawn('sudo', ['-E', binPath, 'run'], {
     cwd: actionPath,
     env: childEnv,
     detached: true,
     stdio,
+  });
+  child.once('error', (err: Error) => {
+    spawnErr = err;
   });
   if (stderrFd !== undefined) {
     try {
@@ -301,17 +305,25 @@ async function run(): Promise<void> {
       /* ignore */
     }
   }
-  child.on('error', (err) => {
-    core.error(`coldstep: failed to spawn agent (${err.message})`);
-  });
   if (child.pid === undefined) {
     // `spawn` can fail asynchronously (e.g. missing sudo); avoid writing `undefined` into the pid file.
     core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
     return;
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (spawnErr !== undefined) {
+    core.setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+    return;
+  }
   child.unref();
   fs.writeFileSync(pidFile, String(child.pid), 'utf8');
   core.info(`coldstep started pid=${child.pid} mode=${mode}`);
+
+  if (!failOnError) {
+    core.warning(
+      'fail-on-error is false: workflow steps run immediately without waiting for .coldstep-ready.json — short jobs may observe incomplete BPF attach.',
+    );
+  }
 
   if (smokeTestEgress) {
     const probeScript = [

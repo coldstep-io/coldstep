@@ -166,12 +166,28 @@ async function maybePostPRSummary(body: string): Promise<void> {
   const safe = sanitizeDigestForMarkdown(body);
   const snippet = safe.length > max ? safe.slice(0, max) + '\n\n_(truncated)_\n' : safe;
   const octokit = github.getOctokit(token);
-  await octokit.rest.issues.createComment({
-    owner: ctx.repo.owner,
-    repo: ctx.repo.repo,
-    issue_number: pr.number,
-    body: '## Coldstep digest\n\n' + snippet,
-  });
+  const ghMs = 60_000;
+  let ghTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      octokit.rest.issues.createComment({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        issue_number: pr.number,
+        body: '## Coldstep digest\n\n' + snippet,
+      }),
+      new Promise<never>((_, reject) => {
+        ghTimeoutId = setTimeout(
+          () => reject(new Error(`GitHub API timeout after ${ghMs / 1000}s`)),
+          ghMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (ghTimeoutId !== undefined) {
+      clearTimeout(ghTimeoutId);
+    }
+  }
 }
 
 async function maybeSlackWebhook(body: string): Promise<void> {

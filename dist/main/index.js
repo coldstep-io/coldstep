@@ -19319,11 +19319,15 @@ async function run() {
     stderrFd = fs3.openSync(stderrLog, "w", 384);
     stdio = ["ignore", "ignore", stderrFd];
   }
+  let spawnErr;
   const child = (0, import_child_process.spawn)("sudo", ["-E", binPath, "run"], {
     cwd: actionPath,
     env: childEnv,
     detached: true,
     stdio
+  });
+  child.once("error", (err) => {
+    spawnErr = err;
   });
   if (stderrFd !== void 0) {
     try {
@@ -19331,16 +19335,23 @@ async function run() {
     } catch {
     }
   }
-  child.on("error", (err) => {
-    error(`coldstep: failed to spawn agent (${err.message})`);
-  });
   if (child.pid === void 0) {
     setFailed("coldstep: failed to spawn agent (no pid \u2014 check sudo and that the binary exists)");
+    return;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  if (spawnErr !== void 0) {
+    setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
     return;
   }
   child.unref();
   fs3.writeFileSync(pidFile, String(child.pid), "utf8");
   info(`coldstep started pid=${child.pid} mode=${mode}`);
+  if (!failOnError) {
+    warning(
+      "fail-on-error is false: workflow steps run immediately without waiting for .coldstep-ready.json \u2014 short jobs may observe incomplete BPF attach."
+    );
+  }
   if (smokeTestEgress) {
     const probeScript = [
       "set +e",
