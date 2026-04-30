@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"os"
 	"time"
+
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 )
 
 // AppendJSONL appends one JSON object line to path (create if missing).
@@ -121,5 +123,5 @@ func WriteSummary(path string, s Summary, signer *Signer) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, b, 0o644)
+	return atomicwrite.Bytes(path, b, 0o644)
 }

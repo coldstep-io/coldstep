@@ -4,7 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
+
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 )
 
 // Loose upper bound so a hostile or corrupted artifact cannot exhaust memory in-process.
@@ -33,39 +34,5 @@ func writeModelMap(path string, m map[string]any) error {
 	if err != nil {
 		return err
 	}
-	return atomicWriteBytes(path, raw, 0o644)
-}
-
-func atomicWriteBytes(path string, data []byte, perm os.FileMode) error {
-	dir := filepath.Dir(path)
-	f, err := os.CreateTemp(dir, ".coldstep-atomic.*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpPath := f.Name()
-	keepTmp := true
-	defer func() {
-		if keepTmp {
-			_ = os.Remove(tmpPath)
-		}
-	}()
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpPath, path); err != nil {
-		return err
-	}
-	keepTmp = false
-	if perm != 0 {
-		_ = os.Chmod(path, perm)
-	}
-	return nil
+	return atomicwrite.Bytes(path, raw, 0o644)
 }

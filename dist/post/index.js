@@ -23678,6 +23678,50 @@ function inputBoolDefault(name, defaultVal) {
   }
   return ["true", "1", "yes", "on"].includes(v.toLowerCase());
 }
+var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+var MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
+function readAgentReadyOk(statusPath) {
+  try {
+    if (!fs2.existsSync(statusPath)) {
+      return false;
+    }
+    const buf = fs2.readFileSync(statusPath);
+    if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+      return false;
+    }
+    const j = JSON.parse(buf.toString("utf8"));
+    return j.ok === true;
+  } catch {
+    return false;
+  }
+}
+async function drainWebResponseBody(r, maxBytes) {
+  if (!r.body) {
+    return;
+  }
+  const reader = r.body.getReader();
+  let total = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        total += value.byteLength;
+      }
+      if (total >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+    }
+  }
+}
 function parseSlackIncomingWebhookURL(raw) {
   let u;
   try {
@@ -23811,6 +23855,15 @@ async function maybeSlackWebhook(body) {
   }
   const max = 35e3;
   const text = body.length > max ? body.slice(0, max) + "\n\u2026(truncated for Slack)" : body;
+  let payload;
+  try {
+    payload = JSON.stringify({ text: "Coldstep digest\n\n" + text });
+  } catch (e) {
+    warning(
+      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`
+    );
+    return;
+  }
   const abortMs = 6e4;
   const ctrl = new AbortController();
   const deadline = setTimeout(() => ctrl.abort(), abortMs);
@@ -23819,11 +23872,15 @@ async function maybeSlackWebhook(body) {
     r = await fetch(urlParsed, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ text: "Coldstep digest\n\n" + text }),
+      body: payload,
       signal: ctrl.signal
     });
   } finally {
     clearTimeout(deadline);
+  }
+  try {
+    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
+  } catch {
   }
   if (!r.ok) {
     warning(`slack-webhook-endpoint: POST failed (${r.status})`);
@@ -23834,16 +23891,7 @@ async function post() {
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
   if (failOnError && getState("coldstep_wait_ready_ok") !== "true") {
     const st = agentStatusPath();
-    let ok = false;
-    try {
-      if (fs2.existsSync(st)) {
-        const j = JSON.parse(fs2.readFileSync(st, "utf8"));
-        ok = j.ok === true;
-      }
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
+    if (!readAgentReadyOk(st)) {
       setFailed("coldstep agent did not report ready (operational fail-on-error)");
     }
   }

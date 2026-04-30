@@ -2,11 +2,11 @@ package report
 
 import (
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -987,5 +987,5 @@ func WriteDetectDigest(path string, in DigestInput) error {
 	if path == "" {
 		return fmt.Errorf("detect log path is empty")
 	}
-	return os.WriteFile(path, []byte(BuildDetectMarkdown(in)), 0o644)
+	return atomicwrite.Bytes(path, []byte(BuildDetectMarkdown(in)), 0o644)
 }

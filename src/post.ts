@@ -24,6 +24,56 @@ function inputBoolDefault(name: string, defaultVal: boolean): boolean {
 }
 
 /** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
+/** Same cap as Go cmd/coldstep-action and composite main.ts readiness polling. */
+const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+
+const MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
+
+function readAgentReadyOk(statusPath: string): boolean {
+  try {
+    if (!fs.existsSync(statusPath)) {
+      return false;
+    }
+    const buf = fs.readFileSync(statusPath);
+    if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+      return false;
+    }
+    const j = JSON.parse(buf.toString('utf8')) as { ok?: boolean };
+    return j.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function drainWebResponseBody(r: Response, maxBytes: number): Promise<void> {
+  if (!r.body) {
+    return;
+  }
+  const reader = r.body.getReader();
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        total += value.byteLength;
+      }
+      if (total >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 function parseSlackIncomingWebhookURL(raw: string): URL | null {
   let u: URL;
   try {
@@ -207,6 +257,15 @@ async function maybeSlackWebhook(body: string): Promise<void> {
     body.length > max
       ? body.slice(0, max) + '\n…(truncated for Slack)'
       : body;
+  let payload: string;
+  try {
+    payload = JSON.stringify({ text: 'Coldstep digest\n\n' + text });
+  } catch (e) {
+    core.warning(
+      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`,
+    );
+    return;
+  }
   const abortMs = 60_000;
   const ctrl = new AbortController();
   const deadline = setTimeout(() => ctrl.abort(), abortMs);
@@ -215,11 +274,16 @@ async function maybeSlackWebhook(body: string): Promise<void> {
     r = await fetch(urlParsed, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ text: 'Coldstep digest\n\n' + text }),
+      body: payload,
       signal: ctrl.signal,
     });
   } finally {
     clearTimeout(deadline);
+  }
+  try {
+    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
+  } catch {
+    /* ignore drain errors */
   }
   if (!r.ok) {
     core.warning(`slack-webhook-endpoint: POST failed (${r.status})`);
@@ -232,16 +296,7 @@ async function post(): Promise<void> {
 
   if (failOnError && core.getState('coldstep_wait_ready_ok') !== 'true') {
     const st = agentStatusPath();
-    let ok = false;
-    try {
-      if (fs.existsSync(st)) {
-        const j = JSON.parse(fs.readFileSync(st, 'utf8')) as { ok?: boolean };
-        ok = j.ok === true;
-      }
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
+    if (!readAgentReadyOk(st)) {
       core.setFailed('coldstep agent did not report ready (operational fail-on-error)');
     }
   }

@@ -25,6 +25,7 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
@@ -945,7 +946,7 @@ func writeAgentStatus(path string, ok bool) error {
 	// GitHub Actions polls this path as the runner user while the agent runs under sudo; 0o600
 	// root-owned files are unreadable (EACCES). Payload is non-secret (ok + version only).
 	// #nosec G306 -- readiness file intentionally world-readable for runner polling semantics.
-	if err := os.WriteFile(path, b, 0o644); err != nil {
+	if err := atomicwrite.Bytes(path, b, 0o644); err != nil {
 		return err
 	}
 	slog.Info("agent ready status written", "component", "ready", "path", path, "ok", ok)
