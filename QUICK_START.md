@@ -104,7 +104,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 
 ## Validation (what automation proves)
 
-Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs defend matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (IPv6, self-hosted, adversarial bypass).
+Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs defend matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (self-hosted, adversarial bypass, …).
 
 ---
 
@@ -260,9 +260,6 @@ You can, but **`main` moves**; prefer a **release tag** per **[README](README.md
 
 **Does Coldstep support Windows or macOS runners?**  
 **No** for this **v1** quick path — use **`ubuntu-latest`** only.
-
-**What about IPv6 egress?**  
-Out of project scope for **v1**; see **[VALIDATION.md](VALIDATION.md)** and **[README — Requirements](README.md)**.
 
 **How do I get a PR comment with the digest?**  
 Set **`report-pr-summary: true`** on the **`stop`** step (and ensure the workflow is a **`pull_request`** event). **`github-token`** defaults to **`github.token`**.
