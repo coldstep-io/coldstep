@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 # Bump when publishing a new consumer-facing tag (same as README marketplace pin).
-MARKETPLACE_COLDSTEP_TAG = "v1.2.0"
+MARKETPLACE_COLDSTEP_TAG = "v0.2.0"
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"

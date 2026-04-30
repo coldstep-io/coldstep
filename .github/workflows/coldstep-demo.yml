@@ -1,6 +1,6 @@
 # Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
 #
-# Job `prevent-mode`: same BPF stack as product `mode: enforce` (cgroup block non-allowlisted egress). apt runs before the
+# Job `defend-mode` (defend mode — CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
 # agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
@@ -10,7 +10,7 @@
 name: coldstep-demo
 
 # Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
-# from the workflow ref. Published tags (e.g. v0.1.7) must also ship `action.yml` at the root
+# from the workflow ref. Published tags (e.g. v0.2.0) must also ship `action.yml` at the root
 # for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
 
 on:
@@ -22,7 +22,7 @@ on:
         default: true
 
 env:
-  COLDSTEP_AGENT_VERSION: v1.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.0
 
 # Default to least-privilege; the detect-mode job overrides with
 # `permissions: { actions: read, contents: read }` when previous-run baseline
@@ -218,7 +218,7 @@ jobs:
           fi
 
           if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "traffic diff script failed"
+            fail_diff_unavailable "coldstep-report diff failed"
           fi
 
       - name: Persist detect JSONL baseline artifact
@@ -237,7 +237,7 @@ jobs:
           set -euo pipefail
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
-  prevent-mode:
+  defend-mode:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
@@ -287,11 +287,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.

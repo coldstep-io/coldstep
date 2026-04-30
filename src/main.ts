@@ -85,7 +85,7 @@ async function waitForAgentReady(
     const deadline = waitStart + timeoutMs;
     let lastProgressLog = waitStart;
     while (Date.now() < deadline) {
-      // Readiness must be checked before exit status: enforce mode can write ok:true then hit a
+      // Readiness must be checked before exit status: defend mode can write ok:true then hit a
       // kernel deny event immediately; fail-fast deny handling used to exit the process while the
       // status file still contained ok:true, and checking exitedEarly first made us miss it.
       if (fs.existsSync(statusPath)) {
@@ -196,7 +196,17 @@ async function run(): Promise<void> {
   const allowedDomains = core.getInput('allowed-domains') || '';
   const featureGates = core.getInput('feature-gates') || '';
   const releasePath = core.getInput('release-path').trim();
-  const mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
+  let mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
+  if (mode === 'enforce') {
+    core.setFailed(
+      'coldstep: input mode "enforce" is not supported; use "defend" for blocking egress (see README / action.yml).',
+    );
+    return;
+  }
+  if (mode !== 'detect' && mode !== 'defend') {
+    core.setFailed(`coldstep: invalid mode "${mode}"; use "detect" or "defend".`);
+    return;
+  }
   const failOnError = inputBoolDefault('fail-on-error', false);
   const logLevel = core.getInput('log-level') || 'info';
   const reportJobSummary = inputBoolDefault('report-job-summary', true);
@@ -336,7 +346,7 @@ async function run(): Promise<void> {
   }
 
   if (failOnError) {
-    // Hosted runners: allowlist DNS (bounded), then BPF loads. Enforce mode writes ready only after
+    // Hosted runners: allowlist DNS (bounded), then BPF loads. Defend mode writes ready only after
     // traceenforce + cgroup attach; verifier can be slow. If the status file exists with ok:false,
     // fail immediately (do not burn runner minutes until max wait).
     const readyBudgetMs = parseReadyTimeoutMs();
@@ -362,7 +372,7 @@ async function run(): Promise<void> {
       }
       if (outcome === 'explicit_not_ready') {
         core.setFailed(
-          'coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape — enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README.',
+          'coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape — defend mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README.',
         );
       } else if (outcome === 'malformed_status') {
         core.setFailed(

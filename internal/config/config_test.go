@@ -21,6 +21,7 @@ func clearColdstepPolicyEnv(t *testing.T) {
 	t.Setenv("COLDSTEP_IGNORED_IP_NETS", "")
 	t.Setenv("COLDSTEP_NO_DEFAULT_IGNORED_NETS", "")
 	t.Setenv("COLDSTEP_FEATURE_GATES", "")
+	t.Setenv("COLDSTEP_DETECT_PROFILE", "")
 }
 
 func TestLoadFromEnv_DetectDefault(t *testing.T) {
@@ -33,6 +34,58 @@ func TestLoadFromEnv_DetectDefault(t *testing.T) {
 	}
 	if c.Mode != ModeDetect {
 		t.Fatalf("mode: got %q want detect", c.Mode)
+	}
+	if c.DetectProfile != "standard" {
+		t.Fatalf("detect profile: got %q want standard", c.DetectProfile)
+	}
+}
+
+func TestLoadFromEnv_EnhancedMergesFeatureGates(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_DETECT_PROFILE", "enhanced")
+	t.Setenv("COLDSTEP_FEATURE_GATES", "")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.DetectProfile != "enhanced" {
+		t.Fatalf("detect profile: got %q want enhanced", c.DetectProfile)
+	}
+	for _, k := range []string{"proc_tree", "tls_sni", "fs_events"} {
+		if !FeatureGateEnabled(c.FeatureGates, k) {
+			t.Fatalf("expected feature gate %s enabled", k)
+		}
+	}
+}
+
+func TestLoadFromEnv_InvalidDetectProfile(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_DETECT_PROFILE", "nosuch")
+	_, err := LoadFromEnv()
+	if err == nil {
+		t.Fatal("expected error for invalid COLDSTEP_DETECT_PROFILE")
+	}
+}
+
+func TestLoadFromEnv_EnhancedPreservesExplicitGate(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_DETECT_PROFILE", "enhanced")
+	t.Setenv("COLDSTEP_FEATURE_GATES", "proc_tree=0")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if FeatureGateEnabled(c.FeatureGates, "proc_tree") {
+		t.Fatal("expected explicit proc_tree=0 to disable gate")
+	}
+	if !FeatureGateEnabled(c.FeatureGates, "tls_sni") || !FeatureGateEnabled(c.FeatureGates, "fs_events") {
+		t.Fatal("expected tls_sni and fs_events merged by enhanced profile")
 	}
 }
 
@@ -93,15 +146,30 @@ func TestLoadFromEnv_DetectLogPath(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_PreventRejected(t *testing.T) {
+func TestLoadFromEnv_DefendNormalizesToEnforce(t *testing.T) {
 	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "prevent")
+	t.Setenv("CI_GUARD_MODE", "defend")
+	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "example.com")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Mode != ModeEnforce {
+		t.Fatalf("mode: got %q want %q", c.Mode, ModeEnforce)
+	}
+}
+
+func TestLoadFromEnv_DefendRequiresAllowlist(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "defend")
+	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "  ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "invalid CI_GUARD_MODE") {
+	if !strings.Contains(err.Error(), "requires non-empty allowlist") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -159,6 +227,15 @@ func TestLoadFromEnv_NoDefaultIgnoredNets(t *testing.T) {
 	}
 }
 
+func TestPublicMode(t *testing.T) {
+	if got := (Config{Mode: ModeDetect}).PublicMode(); got != "detect" {
+		t.Fatalf("detect PublicMode: got %q", got)
+	}
+	if got := (Config{Mode: ModeEnforce}).PublicMode(); got != "defend" {
+		t.Fatalf("enforce PublicMode: got %q want defend", got)
+	}
+}
+
 func TestLoadFromEnv_ModeDefaultsToDetect(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "")
@@ -185,23 +262,22 @@ func TestLoadFromEnv_InvalidModeRejected(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_EnforceRequiresAllowlist(t *testing.T) {
+func TestLoadFromEnv_EnforceStringRejected(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "enforce")
-	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "  ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	_, err := LoadFromEnv()
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), "requires non-empty allowlist") {
+	if !strings.Contains(err.Error(), "invalid CI_GUARD_MODE") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestLoadFromEnv_AllowlistNormalization(t *testing.T) {
 	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "enforce")
+	t.Setenv("CI_GUARD_MODE", "defend")
 	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", " Example.COM,foo.com  example.com\tFOO.com ")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
 	c, err := LoadFromEnv()

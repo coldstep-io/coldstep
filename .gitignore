@@ -28,11 +28,22 @@ scripts/**/__pycache__/
 *.crt
 *.kubeconfig
 
+# Local HTML mocks / brainstorming wireframes (open in browser; not shipped).
+# Naming: *mockup*.html, *.mock.html, or place assets under /mocks/
+**/*mockup*.html
+**/*.mock.html
+/mocks/
+
+# Superpowers Visual Companion session state (public_scripts/brainstorm_visual_companion/start-server.sh)
+.superpowers/
+
 # Editor / machine-local (not published), including Cursor rules
 /.cursor/
 /.vscode/
 /specs/
 AGENTS.md
+# Optional local architecture notes at repo root — not part of the shipped doc surface.
+/ARCHITECTURE.md
 
 # Agent runtime artifacts in workspace (detect digest); do not commit
 .coldstep-detect.md

@@ -25,6 +25,7 @@ type MetaEvent struct {
 	GitHub        MetaGitHub      `json:"github"`
 	BPF           []BPFStatus     `json:"bpf"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
+	DetectProfile string          `json:"detect_profile,omitempty"` // "standard" | "enhanced" (from COLDSTEP_DETECT_PROFILE)
 	Sig           string          `json:"sig,omitempty"`
 }
 
@@ -169,7 +170,7 @@ type DenyEvent struct {
 	Dst      string `json:"dst"`
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
-	Mode     string `json:"mode"` // "enforce"
+	Mode     string `json:"mode"` // "defend" (blocking; legacy rows may say "enforce")
 	Sig      string `json:"sig,omitempty"`
 }
 

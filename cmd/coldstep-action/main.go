@@ -24,12 +24,17 @@ import (
 type startConfig struct {
 	Mode                 string
 	AllowedDomains       string
+	AllowedDomainsFile   string
 	AllowedHosts         string
+	AllowedHostsFile     string
 	AllowedIPs           string
+	AllowedIPsFile       string
 	IgnoredIPNets        string
+	IgnoredIPNetsFile    string
 	NoDefaultIgnoredNets bool
 	LogLevel             string
 	FeatureGates         string
+	DetectProfile        string
 	ReleasePath          string
 	FailOnError          bool
 	ReadyTimeoutSeconds  int
@@ -37,6 +42,7 @@ type startConfig struct {
 	IoUringDisable       bool
 	SigningKey           string
 	ReportJobSummary     bool
+	BootstrapAllowlist   string
 }
 
 type stopConfig struct {
@@ -81,12 +87,17 @@ func parseStartFlags(args []string) (startConfig, error) {
 	cfg := startConfig{}
 	fs.StringVar(&cfg.Mode, "mode", "detect", "")
 	fs.StringVar(&cfg.AllowedDomains, "allowed-domains", "", "")
+	fs.StringVar(&cfg.AllowedDomainsFile, "allowed-domains-file", "", "")
 	fs.StringVar(&cfg.AllowedHosts, "allowed-hosts", "", "")
+	fs.StringVar(&cfg.AllowedHostsFile, "allowed-hosts-file", "", "")
 	fs.StringVar(&cfg.AllowedIPs, "allowed-ips", "", "")
+	fs.StringVar(&cfg.AllowedIPsFile, "allowed-ips-file", "", "")
 	fs.StringVar(&cfg.IgnoredIPNets, "ignored-ip-nets", "", "")
+	fs.StringVar(&cfg.IgnoredIPNetsFile, "ignored-ip-nets-file", "", "")
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
 	fs.StringVar(&cfg.FeatureGates, "feature-gates", "", "")
+	fs.StringVar(&cfg.DetectProfile, "detect-profile", "standard", "")
 	fs.StringVar(&cfg.ReleasePath, "release-path", "", "")
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
 	fs.IntVar(&cfg.ReadyTimeoutSeconds, "ready-timeout-seconds", 1500, "")
@@ -94,6 +105,7 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.BoolVar(&cfg.IoUringDisable, "io-uring-disable", true, "")
 	fs.StringVar(&cfg.SigningKey, "signing-key", "", "")
 	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
+	fs.StringVar(&cfg.BootstrapAllowlist, "bootstrap-allowlist", "false", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -113,6 +125,21 @@ func parseStopFlags(args []string) (stopConfig, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// normalizeCompositeMode maps user-facing mode names to CI_GUARD_MODE (detect or defend).
+func normalizeCompositeMode(raw string) (string, error) {
+	mode := strings.TrimSpace(strings.ToLower(raw))
+	if mode == "" {
+		mode = "detect"
+	}
+	if mode == "enforce" {
+		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
+	}
+	if mode != "detect" && mode != "defend" {
+		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
+	}
+	return mode, nil
 }
 
 func runStart(cfg startConfig) error {
@@ -170,24 +197,53 @@ func runStart(cfg startConfig) error {
 		}
 	}
 
-	mode := strings.TrimSpace(strings.ToLower(cfg.Mode))
-	if mode == "" {
-		mode = "detect"
+	mode, err := normalizeCompositeMode(cfg.Mode)
+	if err != nil {
+		return err
 	}
-	if mode != "detect" && mode != "enforce" {
-		return fmt.Errorf("invalid mode %q", mode)
+
+	domainsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedDomains, cfg.AllowedDomainsFile)
+	if err != nil {
+		return err
+	}
+	hostsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedHosts, cfg.AllowedHostsFile)
+	if err != nil {
+		return err
+	}
+	ipsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedIPs, cfg.AllowedIPsFile)
+	if err != nil {
+		return err
+	}
+	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredIPNets, cfg.IgnoredIPNetsFile)
+	if err != nil {
+		return err
+	}
+
+	if truthyInput(cfg.BootstrapAllowlist) {
+		dPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
+		iPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
+		var merr error
+		domainsMerged, merr = appendBootstrapTokens(domainsMerged, dPath)
+		if merr != nil {
+			return merr
+		}
+		ipsMerged, merr = appendBootstrapTokens(ipsMerged, iPath)
+		if merr != nil {
+			return merr
+		}
 	}
 
 	childEnv := os.Environ()
 	childEnv = append(childEnv,
 		"GITHUB_WORKSPACE="+baseDir,
 		"COLDSTEP_DETECT_LOG="+detectLog,
-		"COLDSTEP_ALLOWED_DOMAINS="+cfg.AllowedDomains,
-		"COLDSTEP_ALLOWED_HOSTS="+cfg.AllowedHosts,
-		"COLDSTEP_ALLOWED_IPS="+cfg.AllowedIPs,
-		"COLDSTEP_IGNORED_IP_NETS="+cfg.IgnoredIPNets,
+		"COLDSTEP_ALLOWED_DOMAINS="+domainsMerged,
+		"COLDSTEP_ALLOWED_HOSTS="+hostsMerged,
+		"COLDSTEP_ALLOWED_IPS="+ipsMerged,
+		"COLDSTEP_IGNORED_IP_NETS="+ignoredMerged,
 		"COLDSTEP_NO_DEFAULT_IGNORED_NETS="+boolString(cfg.NoDefaultIgnoredNets),
 		"COLDSTEP_FEATURE_GATES="+cfg.FeatureGates,
+		"COLDSTEP_DETECT_PROFILE="+strings.TrimSpace(cfg.DetectProfile),
 		"CI_GUARD_MODE="+mode,
 		"COLDSTEP_LOG_LEVEL="+cfg.LogLevel,
 		"COLDSTEP_AGENT_STATUS="+agentStatus,

@@ -13,12 +13,18 @@ inputs:
     default: start
   mode:
     description: >-
-      Runtime mode: detect logs telemetry only; enforce requires an allowlist and rejects non-allowlisted egress.
+      Runtime mode: detect (default) or defend (blocking, requires allowlist). The enforce spelling is not supported; use defend.
     required: false
     default: detect
   allowed-domains:
     description: >-
-      Comma- or whitespace-separated egress allowlist domains for enforce mode. Values are trimmed, lowercased, and deduplicated.
+      Comma- or whitespace-separated egress allowlist domains for defend mode. Values are trimmed, lowercased, and deduplicated.
+    required: false
+    default: ''
+  allowed-domains-file:
+    description: >-
+      Optional comma-separated paths relative to GITHUB_WORKSPACE (or absolute paths still inside the workspace) to UTF-8 text files.
+      Each file contributes tokens (one per line or comma-separated); lines starting with # are comments. Merged after inline allowed-domains.
     required: false
     default: ''
   github-token:
@@ -32,16 +38,31 @@ inputs:
       Comma- or whitespace-separated hostnames. Use *.example.com for one-level subdomains (clean-room matcher).
     required: false
     default: ''
+  allowed-hosts-file:
+    description: >-
+      Optional comma-separated workspace text files; tokens merged after inline allowed-hosts (same line/comment rules as allowed-domains-file).
+    required: false
+    default: ''
   allowed-ips:
     description: >-
-      Comma- or whitespace-separated IPv4 literals allowed for egress classification (no CIDR).
+      Comma- or whitespace-separated IPv4 literals and CIDRs for policy (see internal/policy). Merged with allowed-ips-file.
+    required: false
+    default: ''
+  allowed-ips-file:
+    description: >-
+      Optional comma-separated workspace text files for additional IPv4 literals/CIDRs (same line/comment rules).
     required: false
     default: ''
   ignored-ip-nets:
     description: >-
       Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores
       (common private-network / RFC1918 internal traffic), unless no-default-ignored-nets is true. Maximum 128 merged CIDRs total.
-      Affects policy classification and enforce-mode BPF bypass for those destinations.
+      Affects policy classification and defend-mode BPF bypass for those destinations. Merged with ignored-ip-nets-file.
+    required: false
+    default: ''
+  ignored-ip-nets-file:
+    description: >-
+      Optional comma-separated workspace text files for additional ignored CIDRs (same line/comment rules).
     required: false
     default: ''
   no-default-ignored-nets:
@@ -53,7 +74,7 @@ inputs:
     description: >-
       If true, fail when the agent never reports operational readiness after startup attach succeeds for the
       selected mode: detect requires sched_process_exec; connect/sendto/HTTP sniff and DNS recvfrom sniff are
-      best-effort and may be skipped (see digest BPF status). Enforce additionally requires syscall tracing and cgroup
+      best-effort and may be skipped (see digest BPF status). Defend additionally requires syscall tracing and cgroup
       programs. Does not fail on egress policy violations (v1).
     required: false
     default: 'false'
@@ -89,6 +110,11 @@ inputs:
       (e.g. proc_tree=1 for sched_process_fork, tls_sni=1 for TLS ClientHello SNI JSONL/digest).
     required: false
     default: ''
+  detect-profile:
+    description: >-
+      Detect mode only: standard (default) or enhanced. Enhanced merges default feature gates (proc_tree, tls_sni, fs_events) when each key is unset, and sets COLDSTEP_DETECT_PROFILE for the agent. Use the same value when running coldstep-report build-model (COLDSTEP_DETECT_PROFILE) so integrity scoring matches the run.
+    required: false
+    default: standard
   release-path:
     description: >-
       Optional path to a prebuilt coldstep binary (debug). When set and the file exists, skips building from source on the runner.
@@ -113,6 +139,13 @@ inputs:
       When set, every emitted JSONL event is signed.
     required: false
     default: ''
+  bootstrap-allowlist:
+    description: >-
+      Default false. When true, merge vendored bootstrap packs from public_scripts/coldstep_bootstrap/
+      (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into allowed-domains and allowed-ips after inline
+      and workspace file merges. Opt-in only — review upgrades when pinning coldstep-io/coldstep tags.
+    required: false
+    default: 'false'
 runs:
   using: composite
   steps:
@@ -128,10 +161,15 @@ runs:
         fi
         cmd=("${BIN}" start
           --mode "${{ inputs.mode }}"
+          --detect-profile "${{ inputs.detect-profile }}"
           --allowed-domains "${{ inputs.allowed-domains }}"
+          --allowed-domains-file "${{ inputs.allowed-domains-file }}"
           --allowed-hosts "${{ inputs.allowed-hosts }}"
+          --allowed-hosts-file "${{ inputs.allowed-hosts-file }}"
           --allowed-ips "${{ inputs.allowed-ips }}"
+          --allowed-ips-file "${{ inputs.allowed-ips-file }}"
           --ignored-ip-nets "${{ inputs.ignored-ip-nets }}"
+          --ignored-ip-nets-file "${{ inputs.ignored-ip-nets-file }}"
           --no-default-ignored-nets "${{ inputs.no-default-ignored-nets }}"
           --log-level "${{ inputs.log-level }}"
           --feature-gates "${{ inputs.feature-gates }}"
@@ -140,7 +178,8 @@ runs:
           --smoke-test-egress "${{ inputs.smoke-test-egress }}"
           --io-uring-disable "${{ inputs.io-uring-disable }}"
           --signing-key "${{ inputs.signing-key }}"
-          --report-job-summary "${{ inputs.report-job-summary }}")
+          --report-job-summary "${{ inputs.report-job-summary }}"
+          --bootstrap-allowlist "${{ inputs.bootstrap-allowlist }}")
         if [[ -n "${{ inputs.ready-timeout-seconds }}" ]]; then
           cmd+=(--ready-timeout-seconds "${{ inputs.ready-timeout-seconds }}")
         fi

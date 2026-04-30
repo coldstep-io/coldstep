@@ -2384,7 +2384,7 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 		Dst:      dst,
 		Dport:    dport,
 		Reason:   reason,
-		Mode:     "enforce",
+		Mode:     cfg.PublicMode(),
 	}
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
@@ -2514,7 +2514,16 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 	return gate && !hookDegraded(bpf, hookName)
 }
 
+// digestEnforcementLabel maps internal enforcement snapshot + config to the digest/JSONL-facing mode name.
+func digestEnforcementLabel(cfg config.Config, snap enforcementSnapshot) string {
+	if cfg.Mode != config.ModeEnforce {
+		return snap.mode
+	}
+	return "defend"
+}
+
 func buildDigestInput(
+	cfg config.Config,
 	stats *runStats,
 	bpfSt []telemetry.BPFStatus,
 	execRows []report.ExecDigestRow,
@@ -2540,6 +2549,7 @@ func buildDigestInput(
 	execN, tcpN, udpN, httpN, tlsN, fsN := stats.counts()
 	rawTPName := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 	in := report.DigestInput{
+		DetectProfile:                  cfg.DetectProfile,
 		BPF:                            bpfSt,
 		ExecTotal:                      execN,
 		TCPTotal:                       tcpN,
@@ -2570,7 +2580,7 @@ func buildDigestInput(
 		HTTPReaderErrors:               sectionState.httpReadErrors + sectionState.httpDecodeErrors,
 		TLSDegradedHook:                hookDegraded(bpfSt, rawTPName),
 		TLSReaderErrors:                sectionState.tlsReadErrors + sectionState.tlsDecodeErrors,
-		EnforcementMode:                enforceState.mode,
+		EnforcementMode:                digestEnforcementLabel(cfg, enforceState),
 		EnforcementAllowlistSize:       enforceState.allowlistSize,
 		EnforcementDenyCount:           enforceState.denyCount,
 		EnforcementDenyReserveFailures: enforceState.denyReserveFailures,
@@ -2678,7 +2688,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if fsSt != nil {
 				fsSnap = fsSt.snapshot()
 			}
-			in := buildDigestInput(stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), enforceState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
+			in := buildDigestInput(cfg, stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), enforceState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
 			in.PolicyCounts = sum.PolicyCounts
 			if err := report.WriteDetectDigest(detectDest, in); err != nil {
 				slog.Warn("detect digest", "err", err)
@@ -3045,7 +3055,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	if cfg.EventsLogPath != "" {
-		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt)
+		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile)
 		if err != nil {
 			slog.Warn("build meta", "err", err)
 		} else {

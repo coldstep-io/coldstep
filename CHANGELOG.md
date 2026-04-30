@@ -6,19 +6,47 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Planned for `v1.2.0` (breaking)
+**Consumer / workflow pin target (next tag after `v0.1.7`):** `v0.2.0` — documentation, demo workflows, and the pin checker align on this version until the tag is published (then ship via **`RELEASE_PROCESS.md`**). Until **`v0.2.0`** exists on GitHub, **`gh release download v0.2.0`** and **`uses: coldstep-io/coldstep@v0.2.0`** in manually dispatched workflows will fail; use **`v0.1.7`** for soak runs until the release is cut.
 
-- Action runtime migrates from JavaScript (`node24` + `dist/main|post`) to a composite action that invokes Go binaries (`bin/coldstep-action`, `bin/coldstep-report`).
-- Action lifecycle becomes explicit two-phase orchestration:
-  - `phase: start` before workload steps
-  - `phase: stop` at job tail (`if: always()`) to flush digest and optional notifications
-- Runtime detect/enforce/report/diff/enrichment workflows remove Python execution paths and use Go CLIs.
-- Supply-chain bundle moves from JS dist assets to composite + Go binaries archive.
-- `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24` is no longer required for Coldstep action execution.
+### Breaking
+
+- **`mode: enforce`** and **`CI_GUARD_MODE=enforce`** are **removed**. Use **`defend`** for blocking egress. Historical JSONL/digest rows may still contain legacy **`"mode":"enforce"`** strings; readers remain tolerant for old artifacts.
+
+**Migration (copy/paste)**
+
+| Location | Change |
+| :------- | :----- |
+| Composite `with:` | `mode: enforce` → **`mode: defend`** |
+| Job `env:` | `CI_GUARD_MODE: enforce` → **`CI_GUARD_MODE: defend`** |
+
+Docs: **[README — At a glance](README.md#at-a-glance)** · **[Quick Start — Two modes](QUICK_START.md#two-modes-read-this-first)**.
+
+### `v0.2.0` track (implemented on `dev`; tag pending)
+
+- **Composite + Go:** `action.yml` runs **`bin/coldstep-action`** (built by **`public_scripts/build-agent-linux.sh`** when needed); no Node **`main`/`post`** for the published path.
+- **Two-phase lifecycle:** `phase: start` before workload steps; `phase: stop` at job tail (`if: always()`) to flush digest and optional notifications.
+- **Detect reporting on demo workflows:** **`coldstep-demo-detect`** (and related paths) invoke **`bin/coldstep-report`** subcommands instead of Python entrypoints.
+- **Supply-chain release bundle:** **`supply-chain-attest`** ships **`action.yml`**, Go binaries, and **`build-agent-linux.sh`** (not JS **`dist/`** as the primary artifact).
+- **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`:** not required for Coldstep; optional only for other JavaScript actions in the same job.
+- **CI maintenance scripts:** **`coldstep-ci`** still runs **`public_scripts`** Python (UTF-8 assert, workflow pin checker, unit tests for diff/pins). That is guardrail coverage for tracked helpers, not the composite runtime.
 
 ### Migration note
 
 Existing single-step workflows that relied on JS `post` hooks must add an explicit second `uses:` invocation with `phase: stop`.
+
+### Added
+
+- **Track skills + plans (agent harness):** expert manager skills **`skills/coldstep-detect-track`** and **`skills/coldstep-defend-track`**, with living plans **`plans/2026-04-29-coldstep-detect-track.md`** and **`plans/2026-04-29-coldstep-defend-track.md`**; see **`skills/README.md`** to symlink into **`.cursor/skills/`** (default Cursor path; **`.cursor/`** is gitignored).
+- **`VALIDATION.md`** — Honest matrix of detect vs defend capabilities, CI job coverage (**`detect-mode`**, **`defend-mode`**, unit/integration), and explicit non-goals; linked from **README**, **QUICK_START**, and **CONTRIBUTING**.
+- **Allowlist file inputs** — **`action.yml`**: `allowed-domains-file`, `allowed-hosts-file`, `allowed-ips-file`, `ignored-ip-nets-file` (comma-separated paths under **`GITHUB_WORKSPACE`**). **`coldstep-action`** reads files and merges with inline allowlist strings; see **QUICK_START** and **VALIDATION.md**.
+- **`bootstrap-allowlist`** — default **`false`**. When **`true`**, merges vendored **`public_scripts/coldstep_bootstrap/allowlist-{domains,ips}-v1.txt`** after other merges. Included in **`supply-chain-attest`** bundle tarball; **`LICENSE.md`** inventory updated.
+
+### Changed
+
+- **Telemetry / digest:** JSONL **`deny`** rows and the markdown digest now report **`mode":"defend`** / **Defend mode** for blocking runs (legacy **`enforce`** strings remain accepted when parsing digest inputs).
+- **Composite blocking mode:** Product modes are **`detect`** and **`defend`** only. **`enforce`** is no longer accepted as an input spelling (use **`defend`**).
+- **CI — defend mode naming + optional strict deny JSONL telemetry:** integration jobs are **`defend-mode`**. **`workflow_dispatch`** input **`defend_deny_jsonl_strict`** (default **false**) and env **`COLDSTEP_DEFEND_DENY_JSONL_STRICT`** pass through **`coldstep-ci-runner`** so **`defend-mode`** can **fail** when no **`deny`** JSONL rows appear (default remains variance-tolerant warn-only).
+- **Documentation / hygiene (Phase 3):** **`package.json`** `description` for legacy Node bundle; **CONTRIBUTING** allowlist + **`package.json`** notes; **VALIDATION.md** roadmap and **`defend-mode`** strict option.
 
 ---
 
@@ -79,7 +107,7 @@ Detect-mode reporting matured with a two-tier pipeline (Tier-1 GitHub Actions st
 
 - **Security (path & output):** Sanitized `COLDSTEP_REPORT_MODEL_IN` in rDNS enricher and related helpers (PR #37–#38); broad Snyk/CodeQL-driven fixes across detect/diff helpers, HTML/XSS-oriented hardening in report rendering, `.snyk` policy for vendored **dist** noise (PR #36, #40).
 - **Code review remediation (PR #42):** Escaping/HTML generation fixes (including `{{ GENERATED_AT }}` handling), sanitizer parity, bounded job-related timeouts.
-- **CI / workflows:** JSONL baseline lookup fallback (`coldstep-ci.yml` + `main`); Tier-1 detect summary ordering after baseline diff (#44); demo install probes aligned with runtime preflight; race fixes in prevent-mode tests and BPF wait paths.
+- **CI / workflows:** JSONL baseline lookup fallback (`coldstep-ci.yml` + `main`); Tier-1 detect summary ordering after baseline diff (#44); demo install probes aligned with runtime preflight; race fixes in defend-mode tests and BPF wait paths.
 - **BPF verifier / probes:** Constant-size userspace reads for TLS/DNS/UDP paths across 5.15–6.x kernels used on GitHub runners.
 
 ### Security

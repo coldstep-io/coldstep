@@ -10,6 +10,10 @@ on:
         description: When true, detect-mode fails if previous-run JSONL diff cannot be computed
         type: boolean
         default: true
+      defend_deny_jsonl_strict:
+        description: When true, defend-mode fails if no deny JSONL rows appear after defend smoke (stricter than default variance-tolerant path)
+        type: boolean
+        default: false
 
 # Default to least-privilege for every job in this reusable workflow.
 # Jobs that legitimately need more (e.g. `actions: read` to download a
@@ -19,6 +23,16 @@ permissions:
   contents: read
 
 jobs:
+  # Authoritative gofmt: same Linux + toolchain path as `docker_gofmt_check.sh` on developer machines.
+  gofmt_docker:
+    name: Go format (Docker)
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v6
+      - name: gofmt check (golang Docker image)
+        run: bash public_scripts/docker_gofmt_check.sh
+
   action_manifest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -35,6 +49,7 @@ jobs:
 
   unit:
     name: unit (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -46,8 +61,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF and generated Go
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -66,6 +79,7 @@ jobs:
 
   unit-arm64:
     name: unit-arm64 (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -77,8 +91,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF and generated Go
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -97,6 +109,7 @@ jobs:
 
   integration:
     name: integration (${{ matrix.os }})
+    needs: [gofmt_docker]
     strategy:
       fail-fast: false
       matrix:
@@ -108,8 +121,6 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
-      - name: Go format (gofmt)
-        run: bash public_scripts/check-gofmt.sh
       - name: Prepare BPF
         run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -125,6 +136,7 @@ jobs:
         run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1 -parallel 1
 
   action_bundle:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -142,6 +154,7 @@ jobs:
           test -x bin/coldstep-report
 
   detect-mode:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -163,8 +176,8 @@ jobs:
         with:
           phase: start
           mode: detect
+          detect-profile: enhanced
           allowed-hosts: theclouddj.com, *.ubuntu.com
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
 
       - name: Install runtime probes
         run: |
@@ -210,6 +223,7 @@ jobs:
         env:
           COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_DETECT_PROFILE: enhanced
         run: ./bin/coldstep-report build-model
 
       - name: Enforce Anti-Blindness Gating
@@ -291,7 +305,7 @@ jobs:
           fi
 
           if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "traffic diff script failed"
+            fail_diff_unavailable "coldstep-report diff failed"
           fi
 
           # Re-build the report model now that the baseline JSONL is on disk.
@@ -318,10 +332,13 @@ jobs:
           set -euo pipefail
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
-  prevent-mode:
+  defend-mode:
+    needs: [gofmt_docker]
     runs-on: ubuntu-latest
     # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
     timeout-minutes: 45
+    env:
+      COLDSTEP_DEFEND_DENY_JSONL_STRICT: ${{ inputs.defend_deny_jsonl_strict && '1' || '0' }}
     steps:
       - uses: actions/checkout@v6
 
@@ -335,7 +352,7 @@ jobs:
         id: coldstep-bin-cache
         with:
           path: bin/coldstep
-          key: coldstep-prevent-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
+          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
 
       - name: Build Linux agent (runs on cache miss only)
         if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
@@ -362,11 +379,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (enforce — blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           release-path: bin/coldstep
           allowed-hosts: theclouddj.com, *.ubuntu.com
@@ -434,7 +451,11 @@ jobs:
               echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
             fi
           else
-            echo "::warning::no deny JSONL rows observed in this run; keeping prevent-mode non-blocking for runner variance"
+            if [[ "${COLDSTEP_DEFEND_DENY_JSONL_STRICT:-0}" == "1" ]]; then
+              echo "::error::no deny JSONL rows observed in defend smoke (strict mode via defend_deny_jsonl_strict)"
+              exit 1
+            fi
+            echo "::warning::no deny JSONL rows observed in this run; keeping defend-mode non-blocking for runner variance"
           fi
 
       - name: Quick control matrix (GitHub-native R/Y/G)

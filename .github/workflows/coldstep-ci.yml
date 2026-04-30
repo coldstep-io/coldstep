@@ -14,12 +14,16 @@ on:
         description: Fail detect-mode if previous-run JSONL diff baseline is unavailable (hosted-linux job)
         type: boolean
         default: true
+      defend_deny_jsonl_strict:
+        description: Fail defend-mode if defend smoke produces no deny JSONL rows (optional strict gate)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
   actions: read
 
-# Do not cancel in-flight runs: prevent-mode can spend 20+ minutes in BPF verifier/load before the
+# Do not cancel in-flight runs: defend-mode can spend 20+ minutes in BPF verifier/load before the
 # composite action sees .coldstep-ready.json; a new push would cancel mid-wait and look like a timeout.
 concurrency:
   group: coldstep-ci-${{ github.ref }}
@@ -30,4 +34,5 @@ jobs:
     uses: ./.github/workflows/coldstep-ci-runner.yml
     with:
       coldstep_diff_strict: ${{ github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict }}
+      defend_deny_jsonl_strict: ${{ github.event_name == 'workflow_dispatch' && inputs.defend_deny_jsonl_strict || false }}
     secrets: inherit

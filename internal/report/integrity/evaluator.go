@@ -21,10 +21,19 @@ func defaultConfig() Config {
 }
 
 func Evaluate(events []model.Event) model.CapabilityEval {
-	return EvaluateWithConfig(events, defaultConfig())
+	return EvaluateWithRequired(events, DefaultRequiredTypes(), defaultConfig())
+}
+
+// EvaluateForDetectProfile uses stricter required event types when profile is "enhanced".
+func EvaluateForDetectProfile(events []model.Event, detectProfile string) model.CapabilityEval {
+	return EvaluateWithRequired(events, RequiredTypesForDetectProfile(detectProfile), defaultConfig())
 }
 
 func EvaluateWithConfig(events []model.Event, cfg Config) model.CapabilityEval {
+	return EvaluateWithRequired(events, DefaultRequiredTypes(), cfg)
+}
+
+func EvaluateWithRequired(events []model.Event, required []string, cfg Config) model.CapabilityEval {
 	if cfg.FailThreshold == 0 {
 		cfg.FailThreshold = DefaultFailThreshold
 	}
@@ -35,7 +44,7 @@ func EvaluateWithConfig(events []model.Event, cfg Config) model.CapabilityEval {
 		cfg.Weights = DefaultWeights()
 	}
 
-	reasonsReq, seenTypes := CheckRequiredTypes(events, DefaultRequiredTypes())
+	reasonsReq, seenTypes := CheckRequiredTypes(events, required)
 	reasonsCanary, canariesSeen, canariesRequired := EvaluateCanaries(events, DefaultCanaryRules())
 	hardFailReasons := append([]model.Reason{}, reasonsReq...)
 

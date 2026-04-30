@@ -2,12 +2,23 @@ package integrity
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/coldstep-io/coldstep/internal/report/model"
 )
 
 func DefaultRequiredTypes() []string {
 	return []string{"meta", "exec", "tcp"}
+}
+
+// RequiredTypesForDetectProfile returns required JSONL event types for integrity scoring.
+// "enhanced" expects broader egress/process/fs signals (observe-only; does not block).
+func RequiredTypesForDetectProfile(profile string) []string {
+	p := strings.ToLower(strings.TrimSpace(profile))
+	if p != "enhanced" {
+		return DefaultRequiredTypes()
+	}
+	return []string{"meta", "exec", "tcp", "udp", "http", "tls", "proc_fork", "fs_event"}
 }
 
 // CheckRequiredTypes returns one Reason per missing required type and the

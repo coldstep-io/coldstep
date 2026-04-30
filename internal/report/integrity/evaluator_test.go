@@ -30,6 +30,14 @@ func TestEvaluatePassesWhenScoresHighAndNoHardFails(t *testing.T) {
 	}
 }
 
+func TestEvaluateForDetectProfileEnhancedRequiresStreams(t *testing.T) {
+	events := []model.Event{{"type": "meta"}, {"type": "exec"}, {"type": "tcp"}}
+	eval := EvaluateForDetectProfile(events, "enhanced")
+	if eval.Verdict != VerdictFail {
+		t.Fatalf("verdict=%q; want fail (missing udp/http/tls/proc_fork/fs_event)", eval.Verdict)
+	}
+}
+
 func TestEvaluateFailsWhenRequiredTypeMissing(t *testing.T) {
 	events := []model.Event{{"type": "meta"}, {"type": "exec"}} // missing tcp
 	eval := Evaluate(events)

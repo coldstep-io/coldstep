@@ -1,7 +1,7 @@
 # Simplified detect-mode demo (observe-only) with previous-run JSONL diff (`COLDSTEP_DIFF_PREV_RUN`).
 # One real probe per detect capability (same probes as `coldstep-demo.yml` detect-mode). For the full integration
 # workflow including enforce, see `.github/workflows/coldstep-demo.yml`.
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
 # (published by `supply-chain-attest.yml` on version tags). The action uses `release-path` and does not compile.
@@ -17,7 +17,7 @@ on:
         default: true
 
 env:
-  COLDSTEP_AGENT_VERSION: v1.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.0
 
 jobs:
   demo:
@@ -219,7 +219,7 @@ jobs:
           fi
 
           if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "traffic diff script failed"
+            fail_diff_unavailable "coldstep-report diff failed"
           fi
 
           # Re-build the report model now that the baseline JSONL is on disk, so the

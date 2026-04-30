@@ -1,6 +1,6 @@
 # Simplified enforce-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
-# (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` prevent-mode (nmap/nc allow, curl/nc deny).
-# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.1.7`
+# (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` defend-mode (nmap/nc allow, curl/nc deny).
+# Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: same GitHub Release download + `release-path` as `coldstep-demo-detect.yml`.
 
@@ -15,7 +15,7 @@ on:
         default: true
 
 env:
-  COLDSTEP_AGENT_VERSION: v1.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.0
 
 jobs:
   demo:
@@ -68,7 +68,7 @@ jobs:
           command -v nmap
           command -v curl
 
-      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo prevent-mode).
+      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo defend-mode).
       - name: Pin allowlisted demo host in /etc/hosts
         run: |
           set -euo pipefail
@@ -76,11 +76,11 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: coldstep-io/coldstep (enforce)
+      - name: coldstep-io/coldstep (defend)
         uses: ./
         with:
           phase: start
-          mode: enforce
+          mode: defend
           fail-on-error: 'true'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
@@ -208,7 +208,7 @@ jobs:
           fi
 
           if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "traffic diff script failed"
+            fail_diff_unavailable "coldstep-report diff failed"
           fi
 
       - name: Persist JSONL baseline artifact

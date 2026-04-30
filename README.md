@@ -1,18 +1,44 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It observes process and network activity in **detect** mode (default) and can optionally **enforce** an egress allowlist. Telemetry is written to **JSONL** in the workspace and summarized as **Markdown** (merged into the job **Summary** when enabled).
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
 
-**Pin workflows to** **`coldstep-io/coldstep@v1.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`coldstep-io/coldstep@v0.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
-**[Quick Start](QUICK_START.md)** · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
+**[Quick Start](QUICK_START.md)** · **[Validation](VALIDATION.md)** (what CI proves) · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
+
+### Runtime vs this repository’s CI
+
+Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** for Coldstep’s own steps — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
+
+The **coldstep-io/coldstep** repository’s **CI** on **`dev`** (and integration branches) continues to use **`python3`** for maintenance scripts under **`public_scripts/`** (UTF-8 checks, workflow pin checks, `unittest`, etc.). That is **maintainer automation**, not a runtime dependency of the published Action.
+
+---
+
+## At a glance
+
+| Mode | What it does | Allowlist |
+| :--- | :------------- | :-------- |
+| **`detect`** (default) | Observe and log IPv4-focused egress; no blocking. | Optional (policy labels only). |
+| **`defend`** | Block IPv4 egress not on the allowlist (cgroup programs). | **Required** — non-empty effective allowlist. |
+
+**Upgrading from old workflows**
+
+| Before | After |
+| :----- | :---- |
+| `mode: enforce` | `mode: defend` |
+| `CI_GUARD_MODE: enforce` | `CI_GUARD_MODE: defend` |
+
+Older JSONL files may still show `"mode":"enforce"` in archived runs; that is **legacy data**, not a supported input anymore.
+
+Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode-optional)**.
 
 ---
 
 ## Add it to a workflow
 
-**v1.2+:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v1.2.0`** (or a newer tag you publish), not **`@main`**.
+**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.2.0`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 jobs:
@@ -20,19 +46,19 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v1.2.0
+      - uses: coldstep-io/coldstep@v0.2.0
         with:
           phase: start
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
-      - uses: coldstep-io/coldstep@v1.2.0
+      - uses: coldstep-io/coldstep@v0.2.0
         if: always()
         with:
           phase: stop
 ```
 
-**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v1.2.0`** (or a newer tag).
+**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.2.0`** (or a newer tag).
 
 ---
 
@@ -47,6 +73,8 @@ jobs:
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
 For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
+
+For **which behaviors are covered by unit tests, integration tests, and CI jobs** (detect vs defend, limitations, `fail-on-error` semantics), see **[VALIDATION.md](VALIDATION.md)**.
 
 ---
 
@@ -64,10 +92,12 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 
 ## Modes and outputs
 
+Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. This section adds **default artifact paths** and related notes.
+
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`enforce`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Enforcement uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
+| **`defend`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -93,14 +123,15 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 
 | Input | Purpose |
 | :---- | :------ |
-| `mode` | `detect` or `enforce`. |
-| `allowed-domains` | Enforce-mode domain allowlist (required for enforce). |
+| `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
+| `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
-| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES`. |
+| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
+| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
 | `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated Python summary (full BLUF + HTML **or** IP classification on `dev`). |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
-| `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and enforce bypass (see `action.yml`). |
+| `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
 | `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
 
 ### Optional threat intel (AlienVault OTX)
@@ -108,8 +139,6 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 Detect workflows that build the **report model** (see [`public_scripts/coldstep_detect_report/README.md`](public_scripts/coldstep_detect_report/README.md)) can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed). Details, env vars, and schema: **`public_scripts/coldstep_detect_report/README.md`**.
 
 Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`public_scripts/coldstep_otx/enrich.py`**).
-
-Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`scripts/coldstep_otx/enrich.py`**).
 
 ---
 
@@ -133,54 +162,28 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). There is no supported local workflow for compiling the agent, reproducing CI, or running the integration suite outside Actions.
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-enforce.yml`** (minimal `uses: ./` demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+**Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
+
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-enforce.yml`** (minimal demos — the latter file name is legacy; it runs **`mode: defend`**), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`public_scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
-
-### Deep-debug escalation guide (legacy scripts path)
-
-Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
-
-- flaky failures (non-deterministic test or workflow behavior),
-- BPF verifier/load or attach instability,
-- cross-layer regressions that involve workflow + agent + report output,
-- failures that reproduce in CI but not in a narrow local/unit loop.
-
-Expected deep-debug output:
-
-- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
-- per-stage logs for fast pinpointing of first failing gate,
-- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
-
-Recommended usage pattern:
-
-1. Run it in a Linux environment aligned with CI toolchains.
-2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
-3. Enable Stage 4 only when sudo/BPF integration checks are required.
-4. Attach report snippets and failing stage logs to the bug or PR discussion.
 
 ### Deep-debug escalation guide
 
-Use **`scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug. Trigger this especially for:
+Use **`public_scripts/deep-debug.sh`** when a normal CI pass is insufficient to isolate a bug — especially flaky failures, BPF verifier/load issues, workflow + agent + report regressions, or failures that only reproduce in CI.
 
-- flaky failures (non-deterministic test or workflow behavior),
-- BPF verifier/load or attach instability,
-- cross-layer regressions that involve workflow + agent + report output,
-- failures that reproduce in CI but not in a narrow local/unit loop.
-
-Expected deep-debug output:
-
-- a staged execution report under `.coldstep-deep-debug/run-<timestamp>/report.md`,
-- per-stage logs for fast pinpointing of first failing gate,
-- explicit status labels for P0 gate, Stage 3a, optional 3b, and optional 4.
-
-Recommended usage pattern:
-
-1. Run it in a Linux environment aligned with CI toolchains.
-2. Keep optional Stage 3b enabled when chasing hard-to-reproduce regressions.
-3. Enable Stage 4 only when sudo/BPF integration checks are required.
-4. Attach report snippets and failing stage logs to the bug or PR discussion.
+You get a staged report under **`.coldstep-deep-debug/run-<timestamp>/report.md`** with per-stage logs. Run on Linux aligned with CI toolchains; attach snippets to issues or PRs.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
+
+---
+
+## Minimal deploy path
+
+1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) — see **[QUICK_START](QUICK_START.md)**.
+2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
+3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
+
+What CI demonstrates versus out-of-scope: **[VALIDATION.md](VALIDATION.md)**.
 
 ---
 

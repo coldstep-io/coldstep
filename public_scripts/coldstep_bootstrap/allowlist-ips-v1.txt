@@ -1,0 +1,2 @@
+# Coldstep bootstrap pack — IPv4 literals / CIDRs (v1)
+# Merged only when bootstrap-allowlist: true. Default pack may be empty.

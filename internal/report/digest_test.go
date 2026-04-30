@@ -8,6 +8,17 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+func TestBuildDetectMarkdown_DetectProfileKPI(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{DetectProfile: "enhanced", ExecTotal: 1, TCPTotal: 1})
+	if !strings.Contains(md, "**detect profile**") || !strings.Contains(md, "enhanced") {
+		t.Fatalf("expected enhanced detect profile KPI row; got:\n%s", md)
+	}
+	mdStd := BuildDetectMarkdown(DigestInput{DetectProfile: "standard", ExecTotal: 1})
+	if !strings.Contains(mdStd, "| **detect profile** | standard |") {
+		t.Fatalf("expected standard detect profile KPI row")
+	}
+}
+
 func TestBuildDetectMarkdown_TriageRibbon_Detect(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
@@ -286,10 +297,10 @@ func TestBuildDetectMarkdown_EnforcementSection(t *testing.T) {
 		},
 	})
 	for _, needle := range []string{
-		"## Coldstep · enforce",
-		"Enforce mode: cgroup-scoped IPv4 egress is allowlisted",
+		"## Coldstep · defend",
+		"Defend mode: cgroup-scoped IPv4 egress is allowlisted",
 		"### Enforcement",
-		"| Mode | `enforce` |",
+		"| Mode | `defend` |",
 		"| Allowlist size | 3 |",
 		"| Deny count | 2 |",
 		"First deny",
@@ -305,7 +316,7 @@ func TestBuildDetectMarkdown_EnforcementSection(t *testing.T) {
 		}
 	}
 	if strings.Contains(md, "Detect-only: observe, do not block.") {
-		t.Fatalf("enforce digest should not use detect-only banner:\n%s", md)
+		t.Fatalf("defend digest should not use detect-only banner:\n%s", md)
 	}
 }
 
@@ -372,7 +383,7 @@ func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
 		EnforcementDenyReserveFailures: 5,
 	})
 	for _, needle := range []string{
-		"## Coldstep · enforce",
+		"## Coldstep · defend",
 		"### Enforcement",
 		"| Deny ringbuf reserve failures (blocked, no JSONL) | 5 |",
 	} {

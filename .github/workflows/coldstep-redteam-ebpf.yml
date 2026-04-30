@@ -18,7 +18,7 @@ on:
         default: true
 
 env:
-  COLDSTEP_AGENT_VERSION: v1.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.0
 
 jobs:
   audit-validation:

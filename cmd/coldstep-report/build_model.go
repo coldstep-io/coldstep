@@ -14,7 +14,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
-const buildVersion = "v1.2.0"
+const buildVersion = "v0.2.0"
 
 func buildModel(args []string) error {
 	fs := flag.NewFlagSet("build-model", flag.ContinueOnError)
@@ -55,15 +55,21 @@ func buildModel(args []string) error {
 		}
 	}
 
+	prof, err := detectProfileForReport()
+	if err != nil {
+		return err
+	}
+
 	m := &model.Report{
 		SchemaVersion: model.SchemaVersion,
 		ProducedBy:    fmt.Sprintf("%s@%s", model.ProducedByPrefix, buildVersion),
 		GeneratedAt:   time.Now().UTC().Format(time.RFC3339),
 		Run: model.RunMeta{
-			RunID:        os.Getenv("GITHUB_RUN_ID"),
-			WorkflowFile: workflowFileFromRef(os.Getenv("GITHUB_WORKFLOW_REF")),
-			Branch:       firstNonEmptyEnv("GITHUB_HEAD_REF", "GITHUB_REF_NAME"),
-			RunnerLabel:  os.Getenv("NS_RUNNER_LABEL"),
+			RunID:         os.Getenv("GITHUB_RUN_ID"),
+			WorkflowFile:  workflowFileFromRef(os.Getenv("GITHUB_WORKFLOW_REF")),
+			Branch:        firstNonEmptyEnv("GITHUB_HEAD_REF", "GITHUB_REF_NAME"),
+			RunnerLabel:   os.Getenv("NS_RUNNER_LABEL"),
+			DetectProfile: prof,
 		},
 		CapabilityMatrix: model.BuildCapabilityMatrix(events),
 		EventsByType:     model.BuildEventsByType(events),
@@ -71,7 +77,7 @@ func buildModel(args []string) error {
 		EgressSankey:     model.BuildEgressSankey(events),
 		Diff:             model.BuildDiff(events, baseEvents),
 		IPClassification: []model.ClassifiedIndicator{}, // populated in Plan 3
-		CapabilityEval:   integrity.Evaluate(events),
+		CapabilityEval:   integrity.EvaluateForDetectProfile(events, prof),
 		OTX:              json.RawMessage(`null`),
 		RDNS:             json.RawMessage(`null`),
 	}
@@ -84,6 +90,18 @@ func buildModel(args []string) error {
 		return err
 	}
 	return os.WriteFile(outPath, raw, 0o644)
+}
+
+func detectProfileForReport() (string, error) {
+	raw := strings.TrimSpace(os.Getenv("COLDSTEP_DETECT_PROFILE"))
+	if raw == "" {
+		return "standard", nil
+	}
+	low := strings.ToLower(raw)
+	if low != "standard" && low != "enhanced" {
+		return "", fmt.Errorf("invalid COLDSTEP_DETECT_PROFILE %q (use standard or enhanced)", raw)
+	}
+	return low, nil
 }
 
 func workflowFileFromRef(ref string) string {

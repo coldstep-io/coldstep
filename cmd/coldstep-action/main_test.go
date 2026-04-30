@@ -133,11 +133,45 @@ func TestParseStartFlags_Defaults(t *testing.T) {
 	if cfg.FailOnError {
 		t.Error("expected fail-on-error default=false")
 	}
+	if cfg.DetectProfile != "standard" {
+		t.Errorf("expected default detect-profile=standard, got %q", cfg.DetectProfile)
+	}
+}
+
+func TestNormalizeCompositeMode(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		raw   string
+		want  string
+		errOK bool
+	}{
+		{"", "detect", false},
+		{"  ", "detect", false},
+		{"Detect", "detect", false},
+		{"defend", "defend", false},
+		{"DEFEND", "defend", false},
+		{"enforce", "", true},
+		{"nope", "", true},
+	} {
+		got, err := normalizeCompositeMode(tc.raw)
+		if tc.errOK {
+			if err == nil {
+				t.Errorf("%q: expected error", tc.raw)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("%q: %v", tc.raw, err)
+		}
+		if got != tc.want {
+			t.Errorf("%q: got %q want %q", tc.raw, got, tc.want)
+		}
+	}
 }
 
 func TestParseStartFlags_Explicit(t *testing.T) {
 	cfg, err := parseStartFlags([]string{
-		"--mode", "enforce",
+		"--mode", "defend",
 		"--log-level", "debug",
 		"--fail-on-error",
 		"--io-uring-disable=false",
@@ -146,8 +180,8 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.Mode != "enforce" {
-		t.Errorf("expected enforce, got %q", cfg.Mode)
+	if cfg.Mode != "defend" {
+		t.Errorf("expected defend, got %q", cfg.Mode)
 	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected debug, got %q", cfg.LogLevel)
@@ -160,6 +194,32 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	}
 	if cfg.ReadyTimeoutSeconds != 120 {
 		t.Errorf("expected 120, got %d", cfg.ReadyTimeoutSeconds)
+	}
+}
+
+func TestParseStartFlags_AllowlistFiles(t *testing.T) {
+	cfg, err := parseStartFlags([]string{
+		"--allowed-domains-file", ".github/coldstep/a.txt,.github/coldstep/b.txt",
+		"--allowed-ips-file", "policy/extra-ips.txt",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AllowedDomainsFile != ".github/coldstep/a.txt,.github/coldstep/b.txt" {
+		t.Errorf("domains file: %q", cfg.AllowedDomainsFile)
+	}
+	if cfg.AllowedIPsFile != "policy/extra-ips.txt" {
+		t.Errorf("ips file: %q", cfg.AllowedIPsFile)
+	}
+}
+
+func TestParseStartFlags_BootstrapAllowlist(t *testing.T) {
+	cfg, err := parseStartFlags([]string{"--bootstrap-allowlist", "true"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.BootstrapAllowlist != "true" {
+		t.Errorf("got %q", cfg.BootstrapAllowlist)
 	}
 }
 

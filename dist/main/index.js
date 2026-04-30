@@ -19236,7 +19236,17 @@ async function run() {
   const allowedDomains = getInput("allowed-domains") || "";
   const featureGates = getInput("feature-gates") || "";
   const releasePath = getInput("release-path").trim();
-  const mode = (getInput("mode") || "detect").trim().toLowerCase();
+  let mode = (getInput("mode") || "detect").trim().toLowerCase();
+  if (mode === "enforce") {
+    setFailed(
+      'coldstep: input mode "enforce" is not supported; use "defend" for blocking egress (see README / action.yml).'
+    );
+    return;
+  }
+  if (mode !== "detect" && mode !== "defend") {
+    setFailed(`coldstep: invalid mode "${mode}"; use "detect" or "defend".`);
+    return;
+  }
   const failOnError = inputBoolDefault("fail-on-error", false);
   const logLevel = getInput("log-level") || "info";
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
@@ -19388,7 +19398,7 @@ ${tail}`);
       }
       if (outcome === "explicit_not_ready") {
         setFailed(
-          "coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape \u2014 enforce mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README."
+          "coldstep agent reported not ready (.coldstep-ready.json ok:false or invalid shape \u2014 defend mode often means syscall egress tracing failed to attach after cgroup programs). See stderr tail and COLDSTEP_BPF_VERBOSE_VERIFY in README."
         );
       } else if (outcome === "malformed_status") {
         setFailed(
