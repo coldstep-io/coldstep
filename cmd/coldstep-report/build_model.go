@@ -89,7 +89,7 @@ func buildModel(args []string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, raw, 0o644)
+	return atomicWriteBytes(outPath, raw, 0o644)
 }
 
 func detectProfileForReport() (string, error) {

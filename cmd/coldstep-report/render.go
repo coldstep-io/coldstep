@@ -295,7 +295,7 @@ func renderHTML(args []string) error {
 		"<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\"><thead><tr><th>Type</th><th>Count</th></tr></thead><tbody>" +
 		rows.String() +
 		"</tbody></table></body></html>"
-	return os.WriteFile(outPath, []byte(htmlBody), 0o644)
+	return atomicWriteBytes(outPath, []byte(htmlBody), 0o644)
 }
 
 func stringFromAny(v any) (string, bool) {

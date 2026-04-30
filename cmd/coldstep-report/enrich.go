@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -16,6 +17,9 @@ import (
 
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
+
+// Bound OTX JSON decode so a pathological HTTP body cannot allocate unbounded memory.
+const otxMaxResponseJSONBytes = 4 << 20
 
 func rdnsEnrich(args []string) error {
 	fs := flag.NewFlagSet("rdns-enrich", flag.ContinueOnError)
@@ -100,9 +104,10 @@ func otxEnrich(args []string) error {
 			"wall_ms":         0,
 			"wall_budget_ms":  budgetMs,
 			"partial_results": false,
-			"api_calls":       0,
-			"rate_limited":    0,
-			"indicators":      []any{},
+			// api_calls counts indicators processed (including failed HTTP/decode), matching summaries that say "queried N indicator(s)".
+			"api_calls":    0,
+			"rate_limited": 0,
+			"indicators":   []any{},
 			"summary": map[string]any{
 				"malicious":    0,
 				"clean":        0,
@@ -176,7 +181,7 @@ func otxEnrich(args []string) error {
 		"wall_ms":         int(time.Since(start).Milliseconds()),
 		"wall_budget_ms":  budgetMs,
 		"partial_results": partial,
-		"api_calls":       apiCalls,
+		"api_calls":       apiCalls, // indicators attempted (each row), not only HTTP 200 successes
 		"rate_limited":    rateLimited,
 		"indicators":      outRows,
 		"summary": map[string]any{
@@ -260,6 +265,15 @@ func gatherModelIndicators(m map[string]any) []string {
 	return out
 }
 
+func decodeOTXGeneralJSON(r io.Reader) (map[string]any, error) {
+	dec := json.NewDecoder(io.LimitReader(r, otxMaxResponseJSONBytes))
+	var body map[string]any
+	if err := dec.Decode(&body); err != nil {
+		return nil, err
+	}
+	return body, nil
+}
+
 func queryOTXIndicator(client *http.Client, apiKey, indicatorType, indicator string, remaining time.Duration) (string, string, int, error) {
 	escapedIndicator := url.PathEscape(indicator)
 	endpoint := fmt.Sprintf("https://otx.alienvault.com/api/v1/indicators/%s/%s/general", indicatorType, escapedIndicator)
@@ -289,8 +303,8 @@ func queryOTXIndicator(client *http.Client, apiKey, indicatorType, indicator str
 	case http.StatusTooManyRequests:
 		return "unidentified", "rate-limited", 0, nil
 	case http.StatusOK:
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		body, err := decodeOTXGeneralJSON(resp.Body)
+		if err != nil {
 			return "unidentified", "", 0, err
 		}
 		pulseCount := extractPulseCount(body)
