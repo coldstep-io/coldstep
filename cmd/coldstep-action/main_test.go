@@ -278,3 +278,26 @@ func TestParseSlackURL_PathPrefix(t *testing.T) {
 		t.Error("expected nil for /workflows/ path")
 	}
 }
+
+func TestClassifyReadyStatus(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		raw                                   string
+		wantReady, wantFail, wantMal, wantInc bool
+	}{
+		{`{"ok":true}`, true, false, false, false},
+		{`{"ok":false}`, false, true, false, false},
+		{`{}`, false, false, false, true},
+		{"", false, false, true, false},
+		{"  \n ", false, false, true, false},
+		{`not-json`, false, false, true, false},
+		{`{"ok":"no"}`, false, true, false, false},
+	}
+	for _, tc := range cases {
+		r, f, m, i := classifyReadyStatus([]byte(tc.raw))
+		if r != tc.wantReady || f != tc.wantFail || m != tc.wantMal || i != tc.wantInc {
+			t.Fatalf("classifyReadyStatus(%q) = (%v,%v,%v,%v) want (%v,%v,%v,%v)",
+				tc.raw, r, f, m, i, tc.wantReady, tc.wantFail, tc.wantMal, tc.wantInc)
+		}
+	}
+}

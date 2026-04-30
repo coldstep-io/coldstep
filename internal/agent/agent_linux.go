@@ -3149,6 +3149,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if bpfAuditRd != nil {
 		readerCount++
 	}
+	if hasEnforce {
+		readerCount++
+	}
+	if hasLSM {
+		readerCount++
+	}
 
 	var wg sync.WaitGroup
 	errCh := make(chan error, readerCount)

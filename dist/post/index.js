@@ -23795,11 +23795,20 @@ async function maybeSlackWebhook(body) {
   }
   const max = 35e3;
   const text = body.length > max ? body.slice(0, max) + "\n\u2026(truncated for Slack)" : body;
-  const r = await fetch(urlParsed, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "Coldstep digest\n\n" + text })
-  });
+  const abortMs = 6e4;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => ctrl.abort(), abortMs);
+  let r;
+  try {
+    r = await fetch(urlParsed, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: "Coldstep digest\n\n" + text }),
+      signal: ctrl.signal
+    });
+  } finally {
+    clearTimeout(deadline);
+  }
   if (!r.ok) {
     warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
