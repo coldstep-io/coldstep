@@ -5,7 +5,7 @@
 # after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (published by `supply-chain-attest.yml` on version tags). Both jobs pass `release-path` and do not compile locally.
+# (`supply-chain-attest.yml`). Both jobs pass `release-path`; report tooling uses `build-coldstep-report-linux.sh`.
 
 name: coldstep-demo
 
@@ -44,6 +44,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+
       - name: Download coldstep agent (GitHub Release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -65,6 +69,9 @@ jobs:
           done
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
+
+      - name: Build coldstep-report (Go only; agent from release)
+        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Start Coldstep (detect mode)
         uses: ./
@@ -243,6 +250,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+
       - name: Download coldstep agent (GitHub Release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -264,6 +275,9 @@ jobs:
           done
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
+
+      - name: Build coldstep-report (Go only; agent from release)
+        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
       - name: Install runtime probes (before enforce so mirrors/DNS still work)

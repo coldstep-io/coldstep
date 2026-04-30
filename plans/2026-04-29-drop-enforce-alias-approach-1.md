@@ -85,7 +85,7 @@ Land in this sequence so no layer expects **`CI_GUARD_MODE=enforce`** after Go s
 | -- | ---- |
 | Y1 | **`action.yml`**: **`mode`** input docs updated. |
 | Y2 | Workflow YAML grep: **`mode: defend`** for blocking demos; fix **`coldstep-ci`**, **`coldstep-demo`**, **`demo-enforce`**, etc. |
-| Y3 | *Optional follow-up:* rename **`coldstep-demo-enforce.yml`** → **`coldstep-demo-defend.yml`** + references (can defer to reduce churn). |
+| Y3 | *Done:* **`coldstep-demo-enforce.yml`** → **`coldstep-demo-defend.yml`** + doc references. |
 
 ### E — Documentation & harness
 
@@ -116,7 +116,7 @@ Land in this sequence so no layer expects **`CI_GUARD_MODE=enforce`** after Go s
 | Doc | What readers get |
 | --- | ---------------- |
 | **README** | **At a glance** tables, migration **Before/After**, deduped OTX + deep-debug, **Modes and outputs** cross-link. |
-| **QUICK_START** | **Two modes** section; **`coldstep-demo-enforce.yml`** explained as legacy filename. |
+| **QUICK_START** | **Two modes** section; **`coldstep-demo-defend.yml`** for minimal defend demo. |
 | **VALIDATION** | **How to read this page** numbered list. |
 | **CHANGELOG** | **Breaking** + **Migration** table + links to README / QUICK_START anchors. |
 

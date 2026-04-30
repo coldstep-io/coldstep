@@ -1,10 +1,12 @@
-# Simplified enforce-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
+# Simplified defend-mode demo (cgroup egress allowlist). Previous-run JSONL diff uses the same opt-in env as detect
 # (`COLDSTEP_DIFF_PREV_RUN`). Control matrix matches `coldstep-demo.yml` defend-mode (nmap/nc allow, curl/nc deny).
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
-# Agent binary: same GitHub Release download + `release-path` as `coldstep-demo-detect.yml`.
+# Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
+# (`supply-chain-attest.yml`). Report CLI is built from source via `public_scripts/build-coldstep-report-linux.sh`
+# (release asset is agent-only).
 
-name: coldstep-demo-enforce
+name: coldstep-demo-defend
 
 on:
   workflow_dispatch:
@@ -31,6 +33,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+
       - name: Download coldstep agent (GitHub Release)
         env:
           GH_TOKEN: ${{ github.token }}
@@ -53,8 +59,11 @@ jobs:
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 
-      # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
-      - name: Install runtime probes (before enforce)
+      - name: Build coldstep-report (Go only; agent from release)
+        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
+
+      # apt and stub-resolver DNS must run before defend: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
+      - name: Install runtime probes (before defend)
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
@@ -68,7 +77,7 @@ jobs:
           command -v nmap
           command -v curl
 
-      # Avoid systemd-resolved stub DNS quirks after enforce attaches (same idea as coldstep-demo defend-mode).
+      # Avoid systemd-resolved stub DNS quirks after defend attaches (same idea as coldstep-demo defend-mode).
       - name: Pin allowlisted demo host in /etc/hosts
         run: |
           set -euo pipefail
@@ -96,12 +105,12 @@ jobs:
         run: |
           set -euo pipefail
           if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
-            echo "expected allowlisted IP connect to succeed under enforce allowlist"
+            echo "expected allowlisted IP connect to succeed under defend allowlist"
             exit 1
           fi
 
       # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
-      # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.
+      # connect is deterministically not allowlisted and cgroup enforcement blocks AF_INET :443.
       - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
         run: |
           set -euo pipefail
@@ -111,7 +120,7 @@ jobs:
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
-            echo "expected curl to example.com to fail under enforce allowlist"
+            echo "expected curl to example.com to fail under defend allowlist"
             exit 1
           fi
 
@@ -119,7 +128,7 @@ jobs:
         run: |
           set -euo pipefail
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
-            echo "expected direct IP connect to be blocked under enforce allowlist"
+            echo "expected direct IP connect to be blocked under defend allowlist"
             exit 1
           fi
 
@@ -225,9 +234,9 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Enforce smoke"
+            echo "## Defend smoke"
             echo ""
-            echo "- **Result:** enforce steps above asserted policy signals on \`${NS_RUNNER_LABEL}\`. See **Show enforcement lines (debug)** for raw \`deny\` JSONL rows."
+            echo "- **Result:** defend steps above asserted policy signals on \`${NS_RUNNER_LABEL}\`. See **Show enforcement lines (debug)** for raw \`deny\` JSONL rows."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Show enforcement lines (debug)

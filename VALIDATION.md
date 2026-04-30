@@ -70,7 +70,7 @@ This document is the **honest contract** between documentation and **automated c
 ## How to reproduce proof yourself
 
 1. Open a PR (or run **`workflow_dispatch`** on **`coldstep-ci`** with ref **`dev`** / your branch) and inspect the **`coldstep-ci`** run.
-2. Run **`workflow_dispatch`** on **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`** (legacy filename; **`mode: defend`**) on a fork for full demo graphs.
+2. Run **`workflow_dispatch`** on **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`** on a fork for full demo graphs.
 3. For release binaries, SBOMs, and **where pins must be bumped**, see **`supply-chain-attest.yml`** and **`RELEASE_PROCESS.md`** (**Consumer pin standard**).
 
 ---
