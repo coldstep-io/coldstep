@@ -28,6 +28,9 @@ func assertIntegrity(args []string) error {
 	if err != nil {
 		return err
 	}
+	if len(raw) > maxReportModelJSONBytes {
+		return fmt.Errorf("report model exceeds max size (%d bytes)", maxReportModelJSONBytes)
+	}
 
 	var m model.Report
 	if err := json.Unmarshal(raw, &m); err != nil {

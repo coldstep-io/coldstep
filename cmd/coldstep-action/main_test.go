@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/url"
 	"strings"
 	"testing"
@@ -292,6 +293,11 @@ func TestClassifyReadyStatus(t *testing.T) {
 		{"  \n ", false, false, true, false},
 		{`not-json`, false, false, true, false},
 		{`{"ok":"no"}`, false, true, false, false},
+	}
+	oversized := bytes.Repeat([]byte("x"), maxReadyStatusJSONBytes+1)
+	r, f, m, i := classifyReadyStatus(oversized)
+	if r || f || i || !m {
+		t.Fatalf("classifyReadyStatus(oversized) = (%v,%v,%v,%v) want (false,false,true,false)", r, f, m, i)
 	}
 	for _, tc := range cases {
 		r, f, m, i := classifyReadyStatus([]byte(tc.raw))

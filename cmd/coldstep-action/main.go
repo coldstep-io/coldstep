@@ -25,6 +25,12 @@ import (
 // cannot hang the composite until the job's global timeout.
 var httpNotifyClient = &http.Client{Timeout: 60 * time.Second}
 
+const (
+	maxReadyStatusJSONBytes = 512 << 10 // agent status should be tiny; bound disk/memory abuse
+	maxGitHubEventJSONBytes = 8 << 20   // $GITHUB_EVENT_PATH payload cap before full json.Unmarshal
+	maxHTTPResponseDrain    = 256 << 10 // discard bodies after POST so connections can reuse
+)
+
 type startConfig struct {
 	Mode                 string
 	AllowedDomains       string
@@ -370,6 +376,9 @@ func postPRComment(token, body string) error {
 	if err != nil {
 		return err
 	}
+	if len(raw) > maxGitHubEventJSONBytes {
+		return fmt.Errorf("GITHUB_EVENT payload exceeds max (%d bytes)", maxGitHubEventJSONBytes)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return err
@@ -383,9 +392,15 @@ func postPRComment(token, body string) error {
 		return nil
 	}
 	comment := map[string]string{"body": "## Coldstep digest\n\n" + truncate(body, 65000)}
-	b, _ := json.Marshal(comment)
+	b, err := json.Marshal(comment)
+	if err != nil {
+		return err
+	}
 	urlStr := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", parts[0], parts[1], int(number))
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
@@ -397,6 +412,7 @@ func postPRComment(token, body string) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github comment failed: %s", resp.Status)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil
 }
 
@@ -423,8 +439,14 @@ func postSlack(u url.URL, body string) error {
 		text = text[:35000] + "\n…(truncated for Slack)"
 	}
 	payload := map[string]string{"text": "Coldstep digest\n\n" + text}
-	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := httpNotifyClient.Do(req)
 	if err != nil {
@@ -434,12 +456,16 @@ func postSlack(u url.URL, body string) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("slack webhook failed: %s", resp.Status)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil
 }
 
 // classifyReadyStatus mirrors composite TypeScript readiness parsing for
 // .coldstep-ready.json (including ok field absence vs false).
 func classifyReadyStatus(raw []byte) (ready, explicitFail, malformed, incomplete bool) {
+	if len(raw) > maxReadyStatusJSONBytes {
+		return false, false, true, false
+	}
 	text := strings.TrimSpace(string(raw))
 	if text == "" {
 		return false, false, true, false
