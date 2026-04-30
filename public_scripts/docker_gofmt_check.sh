@@ -23,9 +23,15 @@ docker run --rm \
 	-e CI="${CI:-}" \
 	-e GITHUB_ACTIONS="${GITHUB_ACTIONS:-}" \
 	"${IMAGE}" \
-	bash -lc '
+	bash -c '
 set -euo pipefail
+# Login shells (-l) can drop /usr/local/go/bin from PATH in this image; gofmt lives next to go.
+export PATH="/usr/local/go/bin:${PATH}"
 cd /workspace
+if ! command -v gofmt >/dev/null 2>&1; then
+	echo "docker_gofmt_check: gofmt not found after PATH=${PATH}" >&2
+	exit 1
+fi
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v git >/dev/null 2>&1; then
 	apt-get update -qq
