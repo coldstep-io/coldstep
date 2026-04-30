@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"runtime"
 )
 
 // Loose upper bound so a hostile or corrupted artifact cannot exhaust memory in-process.
@@ -62,13 +61,7 @@ func atomicWriteBytes(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		if runtime.GOOS == "windows" {
-			_ = os.Remove(path)
-			err = os.Rename(tmpPath, path)
-		}
-		if err != nil {
-			return err
-		}
+		return err
 	}
 	keepTmp = false
 	if perm != 0 {
