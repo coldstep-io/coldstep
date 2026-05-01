@@ -156,14 +156,28 @@ function readDetectDigest(): string {
   if (!fs.existsSync(logPath)) {
     return '';
   }
-  return fs.readFileSync(logPath, 'utf8');
+  try {
+    return fs.readFileSync(logPath, 'utf8');
+  } catch (e) {
+    core.warning(
+      `coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`,
+    );
+    return '';
+  }
 }
 
 /** Remove workspace digest without merging (used when report-job-summary is false). */
 function discardDigestFileIfPresent(): void {
   const logPath = detectLogPath();
-  if (fs.existsSync(logPath)) {
+  if (!fs.existsSync(logPath)) {
+    return;
+  }
+  try {
     fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`,
+    );
   }
 }
 
@@ -190,8 +204,14 @@ function flushDetectLogToJobSummary(body: string): void {
     '## Coldstep · digest (exec / network / enforcement)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
-  fs.appendFileSync(summaryPath, block, 'utf8');
-  fs.unlinkSync(logPath);
+  try {
+    fs.appendFileSync(summaryPath, block, 'utf8');
+    fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`,
+    );
+  }
 }
 
 async function finalizeDigestAndNotifications(reportJobSummary: boolean): Promise<void> {
@@ -290,7 +310,7 @@ async function maybeSlackWebhook(body: string): Promise<void> {
   const deadline = setTimeout(() => ctrl.abort(), abortMs);
   let r: Response | undefined;
   try {
-    r = await fetch(urlParsed, {
+    r = await fetch(urlParsed.href, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: payload,

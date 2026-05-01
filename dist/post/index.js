@@ -23769,12 +23769,26 @@ function readDetectDigest() {
   if (!fs2.existsSync(logPath)) {
     return "";
   }
-  return fs2.readFileSync(logPath, "utf8");
+  try {
+    return fs2.readFileSync(logPath, "utf8");
+  } catch (e) {
+    warning(
+      `coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`
+    );
+    return "";
+  }
 }
 function discardDigestFileIfPresent() {
   const logPath = detectLogPath();
-  if (fs2.existsSync(logPath)) {
+  if (!fs2.existsSync(logPath)) {
+    return;
+  }
+  try {
     fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`
+    );
   }
 }
 function flushDetectLogToJobSummary(body) {
@@ -23793,8 +23807,14 @@ function flushDetectLogToJobSummary(body) {
     return;
   }
   const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
-  fs2.appendFileSync(summaryPath, block, "utf8");
-  fs2.unlinkSync(logPath);
+  try {
+    fs2.appendFileSync(summaryPath, block, "utf8");
+    fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`
+    );
+  }
 }
 async function finalizeDigestAndNotifications(reportJobSummary) {
   const digestBody = readDetectDigest();
@@ -23887,7 +23907,7 @@ async function maybeSlackWebhook(body) {
   const deadline = setTimeout(() => ctrl.abort(), abortMs);
   let r;
   try {
-    r = await fetch(urlParsed, {
+    r = await fetch(urlParsed.href, {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: payload,
