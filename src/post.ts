@@ -23,7 +23,6 @@ function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
 
-/** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
 /** Same cap as Go cmd/coldstep-action and composite main.ts readiness polling. */
 const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 
@@ -74,6 +73,7 @@ async function drainWebResponseBody(r: Response, maxBytes: number): Promise<void
   }
 }
 
+/** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
 function parseSlackIncomingWebhookURL(raw: string): URL | null {
   let u: URL;
   try {
@@ -192,6 +192,25 @@ function flushDetectLogToJobSummary(body: string): void {
     (body.endsWith('\n') ? '' : '\n');
   fs.appendFileSync(summaryPath, block, 'utf8');
   fs.unlinkSync(logPath);
+}
+
+async function finalizeDigestAndNotifications(reportJobSummary: boolean): Promise<void> {
+  const digestBody = readDetectDigest();
+  if (reportJobSummary) {
+    flushDetectLogToJobSummary(digestBody);
+  } else {
+    discardDigestFileIfPresent();
+  }
+  try {
+    await maybePostPRSummary(digestBody);
+  } catch (e) {
+    core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await maybeSlackWebhook(digestBody);
+  } catch (e) {
+    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function maybePostPRSummary(body: string): Promise<void> {
@@ -313,17 +332,18 @@ async function post(): Promise<void> {
   const pidFile = path.join(actionPath, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('pid file missing; agent may not have started');
-    const digestEarly = readDetectDigest();
-    if (reportJobSummary) {
-      flushDetectLogToJobSummary(digestEarly);
-    } else {
-      discardDigestFileIfPresent();
-    }
-    await maybePostPRSummary(digestEarly);
-    await maybeSlackWebhook(digestEarly);
+    await finalizeDigestAndNotifications(reportJobSummary);
     return;
   }
-  const pid = parseAgentPidFromFile(fs.readFileSync(pidFile, 'utf8'));
+  let pidContents = '';
+  try {
+    pidContents = fs.readFileSync(pidFile, 'utf8');
+  } catch {
+    core.warning('pid file disappeared before read; skipping SIGTERM (agent may still be running)');
+    await finalizeDigestAndNotifications(reportJobSummary);
+    return;
+  }
+  const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     core.warning('pid file has invalid contents; skipping SIGTERM (agent may still be running)');
   } else {
@@ -337,22 +357,7 @@ async function post(): Promise<void> {
     }
   }
   await new Promise((r) => setTimeout(r, 400));
-  const digestBody = readDetectDigest();
-  if (reportJobSummary) {
-    flushDetectLogToJobSummary(digestBody);
-  } else {
-    discardDigestFileIfPresent();
-  }
-  try {
-    await maybePostPRSummary(digestBody);
-  } catch (e) {
-    core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  await finalizeDigestAndNotifications(reportJobSummary);
 }
 
 post().catch((e) => {

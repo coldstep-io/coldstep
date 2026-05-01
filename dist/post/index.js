@@ -23796,6 +23796,24 @@ function flushDetectLogToJobSummary(body) {
   fs2.appendFileSync(summaryPath, block, "utf8");
   fs2.unlinkSync(logPath);
 }
+async function finalizeDigestAndNotifications(reportJobSummary) {
+  const digestBody = readDetectDigest();
+  if (reportJobSummary) {
+    flushDetectLogToJobSummary(digestBody);
+  } else {
+    discardDigestFileIfPresent();
+  }
+  try {
+    await maybePostPRSummary(digestBody);
+  } catch (e) {
+    warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await maybeSlackWebhook(digestBody);
+  } catch (e) {
+    warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 async function maybePostPRSummary(body) {
   if (!inputBoolDefault("report-pr-summary", false)) {
     return;
@@ -23907,17 +23925,18 @@ async function post() {
   const pidFile = path.join(actionPath, ".coldstep.pid");
   if (!fs2.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
-    const digestEarly = readDetectDigest();
-    if (reportJobSummary) {
-      flushDetectLogToJobSummary(digestEarly);
-    } else {
-      discardDigestFileIfPresent();
-    }
-    await maybePostPRSummary(digestEarly);
-    await maybeSlackWebhook(digestEarly);
+    await finalizeDigestAndNotifications(reportJobSummary);
     return;
   }
-  const pid = parseAgentPidFromFile(fs2.readFileSync(pidFile, "utf8"));
+  let pidContents = "";
+  try {
+    pidContents = fs2.readFileSync(pidFile, "utf8");
+  } catch {
+    warning("pid file disappeared before read; skipping SIGTERM (agent may still be running)");
+    await finalizeDigestAndNotifications(reportJobSummary);
+    return;
+  }
+  const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     warning("pid file has invalid contents; skipping SIGTERM (agent may still be running)");
   } else {
@@ -23931,22 +23950,7 @@ async function post() {
     }
   }
   await new Promise((r) => setTimeout(r, 400));
-  const digestBody = readDetectDigest();
-  if (reportJobSummary) {
-    flushDetectLogToJobSummary(digestBody);
-  } else {
-    discardDigestFileIfPresent();
-  }
-  try {
-    await maybePostPRSummary(digestBody);
-  } catch (e) {
-    warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  await finalizeDigestAndNotifications(reportJobSummary);
 }
 post().catch((e) => {
   setFailed(e instanceof Error ? e.message : String(e));
