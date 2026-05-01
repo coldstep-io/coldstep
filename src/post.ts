@@ -269,7 +269,7 @@ async function maybeSlackWebhook(body: string): Promise<void> {
   const abortMs = 60_000;
   const ctrl = new AbortController();
   const deadline = setTimeout(() => ctrl.abort(), abortMs);
-  let r: Response;
+  let r: Response | undefined;
   try {
     r = await fetch(urlParsed, {
       method: 'POST',
@@ -277,8 +277,16 @@ async function maybeSlackWebhook(body: string): Promise<void> {
       body: payload,
       signal: ctrl.signal,
     });
+  } catch (e) {
+    core.warning(
+      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`,
+    );
+    r = undefined;
   } finally {
     clearTimeout(deadline);
+  }
+  if (r === undefined) {
+    return;
   }
   try {
     await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);

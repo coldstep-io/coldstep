@@ -23875,8 +23875,16 @@ async function maybeSlackWebhook(body) {
       body: payload,
       signal: ctrl.signal
     });
+  } catch (e) {
+    warning(
+      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`
+    );
+    r = void 0;
   } finally {
     clearTimeout(deadline);
+  }
+  if (r === void 0) {
+    return;
   }
   try {
     await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
