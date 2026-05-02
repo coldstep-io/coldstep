@@ -764,12 +764,6 @@ func (s *runStats) addDNSCacheUpdateFailure() {
 	s.bpfDNSCacheUpdateFailuresN++
 }
 
-func (s *runStats) bpfDNSCacheUpdateFailures() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bpfDNSCacheUpdateFailuresN
-}
-
 func (s *runStats) bpfAuditRingbufReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
