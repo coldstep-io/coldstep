@@ -62,20 +62,20 @@ function parseAgentPidFromFile(contents: string): number | null {
  * code-block breakouts into the GitHub-rendered Markdown surface (F-T1 /
  * F-T3 from the 2026-04-19 review).
  *
- * Strategy (order matters — backslash MUST be escaped first so subsequent
+ * Strategy (order matters ΓÇö backslash MUST be escaped first so subsequent
  * `\`` and `\~` escapes are not defeated by an attacker-supplied `\` prefix;
  * CodeQL js/incomplete-sanitization caught the original ordering bug):
  *   - normalise CRLF/CR -> LF
  *   - strip BOM
  *   - cap each line at 4 KiB to bound rendering work
- *   - escape `\` -> `\\` (FIRST — prevents the markdown parser from eating
+ *   - escape `\` -> `\\` (FIRST ΓÇö prevents the markdown parser from eating
  *     a single backslash as the escape for a following backtick / tilde)
  *   - escape `<` so raw HTML elements can't render
  *   - escape ``` ` ``` runs of >= 3 backticks AND `~` runs of >= 3 tildes so
  *     the digest can't break out of any fenced-code block a caller wraps it in
  *
  * Out of scope (different threat class than F-T1 / F-T3): markdown link /
- * image phishing — `[text](url)` and `![](url)` still render through. Wrap
+ * image phishing ΓÇö `[text](url)` and `![](url)` still render through. Wrap
  * the sanitised body in a fenced code block at the call site if you need
  * that mitigation too; the helper now escapes both fence flavours so the
  * wrap is safe against breakout.
@@ -88,7 +88,7 @@ function sanitizeDigestForMarkdown(body: string): string {
   const normalized = stripped.replace(/\r\n?/g, '\n');
   const cappedLines = normalized
     .split('\n')
-    .map((line) => (line.length > 4096 ? line.slice(0, 4096) + ' …(truncated)' : line));
+    .map((line) => (line.length > 4096 ? line.slice(0, 4096) + ' ΓÇª(truncated)' : line));
   const escaped = cappedLines
     .map((line) => line.replace(/\\/g, '\\\\'))
     .map((line) => line.replace(/</g, '&lt;'))
@@ -143,7 +143,7 @@ function flushDetectLogToJobSummary(body: string): void {
   }
 
   const block =
-    '## Coldstep · digest (exec / network / enforcement)\n\n' +
+    '## Coldstep ┬╖ digest (exec / network / enforcement)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
   try {
@@ -154,7 +154,7 @@ function flushDetectLogToJobSummary(body: string): void {
     );
     return;
   }
-  // Append succeeded — clean up the workspace digest.
+  // Append succeeded ΓÇö clean up the workspace digest.
   try {
     fs.unlinkSync(logPath);
   } catch (e) {

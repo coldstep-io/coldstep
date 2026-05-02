@@ -69,7 +69,7 @@ jobs:
           mode: detect
           log-level: info
           fail-on-error: 'false'
-          # Full digest (exec/tcp/fs paths, …) duplicates Tier-2 HTML + BLUF; keep Summary short.
+          # Full digest (exec/tcp/fs paths, ΓÇª) duplicates Tier-2 HTML + BLUF; keep Summary short.
           report-job-summary: 'false'
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1

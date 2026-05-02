@@ -1,16 +1,16 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only ΓÇö the old **`enforce`** spelling is **not accepted**.
 
 **Pin workflows to** **`coldstep-io/coldstep@v0.2.0`** (or a newer tag). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
-**[Quick Start](QUICK_START.md)** · **[Validation](VALIDATION.md)** (what CI proves) · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
+**[Quick Start](QUICK_START.md)** ┬╖ **[Validation](VALIDATION.md)** (what CI proves) ┬╖ **[`action.yml`](action.yml)** (all inputs) ┬╖ **[`LICENSE.md`](LICENSE.md)** ┬╖ **[Contributing](CONTRIBUTING.md)** ┬╖ **[Security](SECURITY.md)**
 
 ### Runtime
 
-Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
+Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** ΓÇö the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
 
 
 
@@ -21,7 +21,7 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 | Mode | What it does | Allowlist |
 | :--- | :------------- | :-------- |
 | **`detect`** (default) | Observe and log IPv4-focused egress; no blocking. | Optional (policy labels only). |
-| **`defend`** | Block IPv4 egress not on the allowlist (cgroup programs). | **Required** — non-empty effective allowlist. |
+| **`defend`** | Block IPv4 egress not on the allowlist (cgroup programs). | **Required** ΓÇö non-empty effective allowlist. |
 
 **Upgrading from old workflows**
 
@@ -32,7 +32,7 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 
 Older JSONL files may still show `"mode":"enforce"` in archived runs; that is **legacy data**, not a supported input anymore.
 
-Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode-optional)**.
+Defend setup example: **[QUICK_START ΓåÆ Defend mode](QUICK_START.md#defend-mode-optional)**.
 
 ---
 
@@ -68,11 +68,11 @@ jobs:
 | :---- | :----- |
 | **IPv6 scope** | **IPv6 egress enforcement and BPF cgroup programs for IPv6 (`connect6` / `sendmsg6`) are out of scope for v1.** Observability hooks in this repo are IPv4-focused for syscall and cgroup paths that Coldstep ships; GitHub-hosted IPv6 egress is informational only where workflows probe it. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
-| **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
+| **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` ΓåÆ `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** ΓåÆ **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
-For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
+For **GitHub Actions security posture** ΓÇö threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope ΓÇö see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
 
 For **which behaviors are covered by unit tests, integration tests, and CI jobs** (detect vs defend, limitations, `fail-on-error` semantics), see **[VALIDATION.md](VALIDATION.md)**.
 
@@ -126,9 +126,9 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
 | `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
 | `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
-| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
-| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
-| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
+| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy ΓÇ£violationsΓÇ¥ alone. |
+| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** ΓÇö enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
+| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` ΓÇö passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
 | `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated `coldstep-report render-summary` summary. |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
@@ -164,22 +164,22 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 
 **Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** ΓåÆ **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
 ### Deep-debug escalation guide
 
-When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
+When a normal **`coldstep-ci`** pass is insufficient ΓÇö flaky failures, BPF verifier/load issues, workflow + agent + report regressions ΓÇö run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
 
-The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs — there is no supported local reproduction path.
+The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs ΓÇö there is no supported local reproduction path.
 
-Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
+Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repoΓÇÖs acknowledgment section where present.
 
 ---
 
 ## Minimal deploy path
 
-1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) — see **[QUICK_START](QUICK_START.md)**.
+1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) ΓÇö see **[QUICK_START](QUICK_START.md)**.
 2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
 3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
 

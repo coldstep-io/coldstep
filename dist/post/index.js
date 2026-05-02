@@ -23711,7 +23711,7 @@ function sanitizeDigestForMarkdown(body) {
   }
   const stripped = body.replace(/^\uFEFF/, "");
   const normalized = stripped.replace(/\r\n?/g, "\n");
-  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u2026(truncated)" : line);
+  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u0393\xC7\xAA(truncated)" : line);
   const escaped = cappedLines.map((line) => line.replace(/\\/g, "\\\\")).map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "\\`".repeat(m.length))).map((line) => line.replace(/~{3,}/g, (m) => "\\~".repeat(m.length)));
   return escaped.join("\n");
 }
@@ -23753,7 +23753,7 @@ function flushDetectLogToJobSummary(body) {
     discardDigestFileIfPresent();
     return;
   }
-  const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
+  const block = "## Coldstep \u252C\u2556 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
     fs2.appendFileSync(summaryPath, block, "utf8");
   } catch (e) {
