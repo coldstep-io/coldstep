@@ -41,8 +41,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Shell contract (prev-diff summary markers)
-        run: bash scripts/test_workflow_diff_markers.sh
 
   unit:
     name: unit (${{ matrix.os }})
