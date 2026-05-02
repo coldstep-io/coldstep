@@ -3,6 +3,7 @@ package agent
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 // minimalResponseWWWExample builds a valid DNS reply: 1x Q www.example.com A, 1x A 93.184.216.34 TTL 300.
@@ -127,6 +128,40 @@ func TestJoinDNSLabels(t *testing.T) {
 	}
 	if joinDNSLabels(nil) != "" {
 		t.Fatal("empty")
+	}
+}
+
+// TestParseDNSResponseIPv4_hugeCountsBoundedByPacketSize pins M-11: a tiny
+// packet advertising a uint16-max QD/AN count must short-circuit before
+// running the full parse loop. We assert (a) the result is empty (parser
+// rejects the packet) and (b) the total work fits well under what an
+// unbounded ancount=65535 loop with full readDNSName/bounds checks would
+// have done — measured by walltime ceiling.
+func TestParseDNSResponseIPv4_hugeCountsBoundedByPacketSize(t *testing.T) {
+	pkt := []byte{
+		0x00, 0x01, 0x81, 0x80,
+		0xff, 0xff, // QDCOUNT = 65535
+		0xff, 0xff, // ANCOUNT = 65535
+		0x00, 0x00, 0x00, 0x00,
+	}
+	deadline := time.Now().Add(250 * time.Millisecond)
+	out := parseDNSResponseIPv4(pkt)
+	if len(out) != 0 {
+		t.Fatalf("malicious huge-count packet should yield empty map, got %#v", out)
+	}
+	if time.Now().After(deadline) {
+		t.Fatal("parser exceeded 250ms budget on malicious packet — bound is not effective")
+	}
+}
+
+// TestParseDNSResponseIPv4_anCountFitsInPacketStillParses ensures the cap
+// only rejects physically-impossible counts; legitimate small responses
+// where ancount < len(packet)/dnsMinRRSize still parse normally.
+func TestParseDNSResponseIPv4_anCountFitsInPacketStillParses(t *testing.T) {
+	pkt := minimalResponseWWWExample()
+	got := parseDNSResponseIPv4(pkt)
+	if len(got) != 1 {
+		t.Fatalf("expected one A record, got %d", len(got))
 	}
 }
 

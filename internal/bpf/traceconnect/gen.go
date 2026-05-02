@@ -14,7 +14,12 @@
 // (run_bpf2go.go) to build the cflags string at generate time.
 //
 // Sister loaders that use this same pattern (because their .bpf.c also
-// dispatches by syscall NR): tracedns, tracefs.
+// dispatches by syscall NR): tracedns, tracefs, tracebpfaudit.
+// tracebpfaudit belongs to this indirect-loader family because it also
+// includes bpf/trace_connect_obs.h for COLDSTEP_NR_BPF — the bpf(2)
+// syscall NR table is arch-specific (x86_64 vs arm64), so the
+// `-D__TARGET_ARCH_<arch>` define must be derived from `runtime.GOARCH`
+// at generate time.
 //
 // Loaders that do NOT need per-arch flags (no syscall-NR dispatch) use the
 // simpler direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go …`

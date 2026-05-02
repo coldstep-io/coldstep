@@ -46,7 +46,9 @@ func EvaluateWithRequired(events []model.Event, required []string, cfg Config) m
 
 	reasonsReq, seenTypes := CheckRequiredTypes(events, required)
 	reasonsCanary, canariesSeen, canariesRequired := EvaluateCanaries(events, DefaultCanaryRules())
+	reasonsTamper := CheckBPFTamper(events)
 	hardFailReasons := append([]model.Reason{}, reasonsReq...)
+	hardFailReasons = append(hardFailReasons, reasonsTamper...)
 
 	coverage := EvaluateCoverage(events)
 	correlationScore := 100 // v1 placeholder until correlation metric is ported.

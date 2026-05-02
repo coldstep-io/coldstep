@@ -23,6 +23,16 @@ static __always_inline void handle_udp_obs_emit(__be16 sin_port, __be32 sin_addr
 	bpf_get_current_comm(&ue->comm, sizeof(ue->comm));
 	__builtin_memcpy(ue->daddr, &sin_addr, sizeof(ue->daddr));
 	__builtin_memcpy(ue->dport, &sin_port, sizeof(ue->dport));
+	/*
+	 * `_pad[2]` aligns datagram_len; ringbuf_reserve memory is
+	 * uninitialized so explicitly zero the pad before submit to avoid
+	 * leaking stale kernel bytes into telemetry (mirrors trace_http_obs.inc
+	 * which zeroes he->_pad for the same reason). Per-field zeroing keeps
+	 * the verifier happy on strict 6.x kernels — __builtin_memset of the
+	 * whole struct can interact poorly with subsequent field stores.
+	 */
+	ue->_pad[0] = 0;
+	ue->_pad[1] = 0;
 	ue->datagram_len = len;
 	bpf_ringbuf_submit(ue, 0);
 }

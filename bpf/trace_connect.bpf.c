@@ -433,10 +433,31 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 		if (ns_read_syscall_arg(regs, 2, &vlen_ul))
 			return 0;
-		
-		if (vlen_ul > 1) {
-			note_udp_sendmsg_multi_iovec();
-		}
+
+		/*
+		 * M-01 (BPF Deep Audit, 2026-05-01): Do NOT bump
+		 * `udp_sendmsg_multi_iovec_observed` here on `vlen_ul > 1`.
+		 * `vlen_ul` is the number of `struct mmsghdr` entries
+		 * (multi-message count), not the per-message scatter/gather
+		 * `msg_iovlen`. The named counter describes iovec
+		 * fragmentation; conflating it with multi-message count made
+		 * operators misread the metric.
+		 *
+		 * The correct multi-iovec increment still fires from
+		 * `coldstep_udp_len_from_msghdr` in `trace_udp_sendmsg.inc`
+		 * (called below via `handle_udp_obs_sendmsg`) when the first
+		 * message's `msg_iovlen > 1`. Userspace cannot today
+		 * distinguish "multi-message but single-iovec each" because
+		 * adding a new counter slot would also require touching the
+		 * Go agent (out of scope for this BPF-only fix); see
+		 * `internal/agent/agent_linux.go` references to
+		 * `UdpSendmsgMultiIovecObserved`.
+		 *
+		 * Note: we still only inspect the first mmsghdr entry below
+		 * (its embedded `struct msghdr` shares offset 0 with
+		 * `mmsghdr.msg_hdr`); messages 2..N are not introspected.
+		 */
+
 		/* struct mmsghdr starts with struct msghdr */
 		return handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
 	}

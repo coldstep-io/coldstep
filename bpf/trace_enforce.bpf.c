@@ -9,6 +9,7 @@
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 #include "dns_cache.h"
+#include "deny_event.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -33,26 +34,15 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
 
-/* Packed wire format for userspace (see internal/agent decodeDenyEvent). */
-struct deny_event {
-	__u32 tgid;
-	__u32 tid;
-	__u8 comm[16];
-	__u8 protocol;
-	__u8 reason;
-	__u8 af;
-	__u8 _pad;
-	__u8 daddr[16];
-	__u8 dport[2];
-} __attribute__((packed));
-
 /*
- * Verify the packed wire size that internal/agent/agent_linux.go (decodeDenyEvent)
- * hard-codes as denyEventWireSize = 46. A field addition here without updating Go
- * would cause silent data corruption on the Go decoder side.
- * Layout: tgid(4)+tid(4)+comm(16)+protocol(1)+reason(1)+af(1)+_pad(1)+daddr(16)+dport(2) = 46.
+ * `struct deny_event` + the packed-size _Static_assert live in
+ * `bpf/deny_event.h` (shared with `bpf/trace_lsm_enforce.bpf.c`). The
+ * include-site assert below is intentional belt-and-braces: if either object
+ * ever silently drifts (e.g. a stray inline redefinition is reintroduced),
+ * the build still fails here rather than at runtime in Go decode.
  */
-_Static_assert(sizeof(struct deny_event) == 46, "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
+_Static_assert(sizeof(struct deny_event) == 46,
+	       "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
