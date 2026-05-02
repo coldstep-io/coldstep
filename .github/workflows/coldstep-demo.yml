@@ -16,6 +16,14 @@ name: coldstep-demo
 on:
   workflow_dispatch:
     inputs:
+      run_detect:
+        description: Run detect-mode job
+        type: boolean
+        default: true
+      run_defend:
+        description: Run defend-mode job
+        type: boolean
+        default: true
       coldstep_diff_strict:
         description: Fail detect-mode if previous-run JSONL diff cannot be computed
         type: boolean
@@ -32,6 +40,7 @@ permissions:
 
 jobs:
   detect-mode:
+    if: inputs.run_detect
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -245,6 +254,7 @@ jobs:
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
+    if: inputs.run_defend
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
