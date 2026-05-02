@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -104,8 +105,11 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 			var bpfVal [256]byte
 			copy(bpfVal[:], ans.name)
 			for _, bpfMap := range c.bpfMaps {
-				if bpfMap != nil {
-					_ = bpfMap.Update(&bpfKey, &bpfVal, ebpf.UpdateAny)
+				if bpfMap == nil {
+					continue
+				}
+				if err := bpfMap.Update(&bpfKey, &bpfVal, ebpf.UpdateAny); err != nil {
+					slog.Warn("dns_cache: BPF map update failed", "ip", ip, "err", err)
 				}
 			}
 		}

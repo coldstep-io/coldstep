@@ -1863,7 +1863,9 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		logMapIntegrityFailure(cfg, "map:enforce_cfg", "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState, signer)
 		// Revert tampering
 		modeEnforce := uint32(1)
-		_ = enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny)
+		if err := enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny); err != nil {
+			slog.Error("BPF map enforce_cfg revert failed", "err", err)
+		}
 	}
 
 	// 2. Check allowed_ipv4 count
@@ -1923,7 +1925,9 @@ func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual s
 			Expected: expected,
 			Actual:   actual,
 		}
-		_ = telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+		if err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer); err != nil {
+			slog.Warn("bpf_tamper JSONL append failed", "err", err)
+		}
 	}
 }
 
@@ -2462,6 +2466,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			}
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
+				continue
 			}
 			n++
 		}
@@ -2892,8 +2897,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 				return fmt.Errorf("agent ready status: %w", err)
 			}
 		}
-		defer syscallLnk.Close()
 		defer syscallObjs.Close()
+		defer syscallLnk.Close()
 		defer func() {
 			if syscallObjs != nil {
 				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
@@ -2938,9 +2943,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		dnsCache.SetBPFMaps([]*ebpf.Map{dnsObjs.DnsCache})
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
 		slog.Info("tracing DNS replies (recvfrom)")
+		defer dnsObjs.Close()
 		defer dnsLnkExit.Close()
 		defer dnsLnkEnter.Close()
-		defer dnsObjs.Close()
 		defer func() {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
@@ -2968,8 +2973,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
 		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
 		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
-		defer bpfAuditLnk.Close()
 		defer bpfAuditObjs.Close()
+		defer bpfAuditLnk.Close()
 		defer func() {
 			if bpfAuditObjs != nil {
 				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
