@@ -26,8 +26,6 @@ function inputBoolDefault(name: string, defaultVal: boolean): boolean {
 /** Same cap as Go cmd/coldstep-action and composite main.ts readiness polling. */
 const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 
-const MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
-
 function readAgentReadyOk(statusPath: string): boolean {
   try {
     if (!fs.existsSync(statusPath)) {
@@ -42,58 +40,6 @@ function readAgentReadyOk(statusPath: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function drainWebResponseBody(r: Response, maxBytes: number): Promise<void> {
-  if (!r.body) {
-    return;
-  }
-  const reader = r.body.getReader();
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        total += value.byteLength;
-      }
-      if (total >= maxBytes) {
-        await reader.cancel();
-        break;
-      }
-    }
-  } catch {
-    try {
-      await reader.cancel();
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
-function parseSlackIncomingWebhookURL(raw: string): URL | null {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== 'https:') {
-    return null;
-  }
-  if (u.username !== '' || u.password !== '') {
-    return null;
-  }
-  if (u.hostname.toLowerCase() !== 'hooks.slack.com') {
-    return null;
-  }
-  if (!u.pathname.toLowerCase().startsWith('/services/')) {
-    return null;
-  }
-  return u;
 }
 
 function parseAgentPidFromFile(contents: string): number | null {
@@ -116,20 +62,20 @@ function parseAgentPidFromFile(contents: string): number | null {
  * code-block breakouts into the GitHub-rendered Markdown surface (F-T1 /
  * F-T3 from the 2026-04-19 review).
  *
- * Strategy (order matters — backslash MUST be escaped first so subsequent
+ * Strategy (order matters ΓÇö backslash MUST be escaped first so subsequent
  * `\`` and `\~` escapes are not defeated by an attacker-supplied `\` prefix;
  * CodeQL js/incomplete-sanitization caught the original ordering bug):
  *   - normalise CRLF/CR -> LF
  *   - strip BOM
  *   - cap each line at 4 KiB to bound rendering work
- *   - escape `\` -> `\\` (FIRST — prevents the markdown parser from eating
+ *   - escape `\` -> `\\` (FIRST ΓÇö prevents the markdown parser from eating
  *     a single backslash as the escape for a following backtick / tilde)
  *   - escape `<` so raw HTML elements can't render
  *   - escape ``` ` ``` runs of >= 3 backticks AND `~` runs of >= 3 tildes so
  *     the digest can't break out of any fenced-code block a caller wraps it in
  *
  * Out of scope (different threat class than F-T1 / F-T3): markdown link /
- * image phishing — `[text](url)` and `![](url)` still render through. Wrap
+ * image phishing ΓÇö `[text](url)` and `![](url)` still render through. Wrap
  * the sanitised body in a fenced code block at the call site if you need
  * that mitigation too; the helper now escapes both fence flavours so the
  * wrap is safe against breakout.
@@ -142,7 +88,7 @@ function sanitizeDigestForMarkdown(body: string): string {
   const normalized = stripped.replace(/\r\n?/g, '\n');
   const cappedLines = normalized
     .split('\n')
-    .map((line) => (line.length > 4096 ? line.slice(0, 4096) + ' …(truncated)' : line));
+    .map((line) => (line.length > 4096 ? line.slice(0, 4096) + ' ΓÇª(truncated)' : line));
   const escaped = cappedLines
     .map((line) => line.replace(/\\/g, '\\\\'))
     .map((line) => line.replace(/</g, '&lt;'))
@@ -186,30 +132,34 @@ function flushDetectLogToJobSummary(body: string): void {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
 
   if (body.trim() === '') {
-    if (fs.existsSync(logPath)) {
-      fs.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
 
   if (!summaryPath) {
     // No step summary file (non-Actions or misconfigured): still consume digest so it is not left stale.
-    if (fs.existsSync(logPath)) {
-      fs.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
 
   const block =
-    '## Coldstep · digest (exec / network / enforcement)\n\n' +
+    '## Coldstep ┬╖ digest (exec / network / enforcement)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
   try {
     fs.appendFileSync(summaryPath, block, 'utf8');
-    fs.unlinkSync(logPath);
   } catch (e) {
     core.warning(
       `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`,
+    );
+    return;
+  }
+  // Append succeeded ΓÇö clean up the workspace digest.
+  try {
+    fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${logPath}`,
     );
   }
 }
@@ -225,11 +175,6 @@ async function finalizeDigestAndNotifications(reportJobSummary: boolean): Promis
     await maybePostPRSummary(digestBody);
   } catch (e) {
     core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -258,13 +203,19 @@ async function maybePostPRSummary(body: string): Promise<void> {
   const ghMs = 60_000;
   let ghTimeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      octokit.rest.issues.createComment({
+    // Attach a no-op catch to the comment promise so that if the timeout wins
+    // the race and the request subsequently rejects, Node does not surface an
+    // unhandledRejection from the orphaned in-flight promise.
+    const commentPromise = octokit.rest.issues
+      .createComment({
         owner: ctx.repo.owner,
         repo: ctx.repo.repo,
         issue_number: pr.number,
         body: '## Coldstep digest\n\n' + snippet,
-      }),
+      })
+      .catch(() => {});
+    await Promise.race([
+      commentPromise,
       new Promise<never>((_, reject) => {
         ghTimeoutId = setTimeout(
           () => reject(new Error(`GitHub API timeout after ${ghMs / 1000}s`)),
@@ -276,64 +227,6 @@ async function maybePostPRSummary(body: string): Promise<void> {
     if (ghTimeoutId !== undefined) {
       clearTimeout(ghTimeoutId);
     }
-  }
-}
-
-async function maybeSlackWebhook(body: string): Promise<void> {
-  const urlRaw = (core.getInput('slack-webhook-endpoint') || '').trim();
-  if (!urlRaw || body.trim() === '') {
-    return;
-  }
-  const urlParsed = parseSlackIncomingWebhookURL(urlRaw);
-  if (!urlParsed) {
-    core.warning(
-      'slack-webhook-endpoint: must be a Slack Incoming Webhook (https://hooks.slack.com/services/...); skipping send',
-    );
-    return;
-  }
-  const max = 35000;
-  const text =
-    body.length > max
-      ? body.slice(0, max) + '\n…(truncated for Slack)'
-      : body;
-  let payload: string;
-  try {
-    payload = JSON.stringify({ text: 'Coldstep digest\n\n' + text });
-  } catch (e) {
-    core.warning(
-      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`,
-    );
-    return;
-  }
-  const abortMs = 60_000;
-  const ctrl = new AbortController();
-  const deadline = setTimeout(() => ctrl.abort(), abortMs);
-  let r: Response | undefined;
-  try {
-    r = await fetch(urlParsed.href, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: payload,
-      signal: ctrl.signal,
-    });
-  } catch (e) {
-    core.warning(
-      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`,
-    );
-    r = undefined;
-  } finally {
-    clearTimeout(deadline);
-  }
-  if (r === undefined) {
-    return;
-  }
-  try {
-    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
-  } catch {
-    /* ignore drain errors */
-  }
-  if (!r.ok) {
-    core.warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
 }
 

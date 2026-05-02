@@ -92,7 +92,6 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 | **`report-job-summary`** | `true` | If **`true`**, **stop** merges **`.coldstep-detect.md`** into the Job Summary. |
 | **`report-pr-summary`** | `false` | If **`true`**, **stop** posts a PR comment (**`pull_request`** workflows only). |
 | **`github-token`** | `${{ github.token }}` | Token for PR comments when **`report-pr-summary`** is **`true`**. |
-| **`slack-webhook-endpoint`** | *(empty)* | Slack Incoming Webhook URL only (`https://hooks.slack.com/services/...`). **Stop** posts a short digest. |
 | **`smoke-test-egress`** | `false` | If **`true`**, optional IPv4 UDP/HTTP probes after start so JSONL/digest often shows **udp/http** rows. |
 | **`io-uring-disable`** | `true` | If **`true`**, disable **io_uring** via sysctl before start (reduces syscall-hook bypass). |
 | **`signing-key`** | *(empty)* | Optional base64 **Ed25519** seed/key; when set, JSONL events are signed. |
@@ -184,7 +183,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 
 **File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline list, but reviewable in PRs as a file).
 
-**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`public_scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`public_scripts/coldstep_bootstrap/README.md`** in the repo.
+**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`scripts/coldstep_bootstrap/README.md`** in the repo.
 
 **Example**
 
@@ -211,14 +210,14 @@ Start with default **detect**, then add **`feature-gates`** when you need those 
 
 | Workflow | Summary surface | Artifact notes |
 | -------- | ---------------- | -------------- |
-| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`render_step_summary.py`) | Tier-2 **`coldstep-detect-report.html`** artifact |
-| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown (`render_ip_classification_summary.py`) | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
+| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`coldstep-report render-summary`) | Tier-2 **`coldstep-detect-report.html`** artifact |
+| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
 
 Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
 
 ### Optional: OTX enrichment (detect reports)
 
-Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`public_scripts/coldstep_detect_report/README.md`**.
+Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`scripts/coldstep_detect_report/README.md`**.
 
 ---
 
@@ -244,10 +243,10 @@ GitHub Summary rendering is Markdown-first; use short labels or optional emoji i
 ## FAQ
 
 **Why two `uses: coldstep-io/coldstep` steps?**  
-The composite has **`phase: start`** (attach agent before your work) and **`phase: stop`** (flush digest, optional Slack/PR). GitHub does not run a hidden “post” hook for composite actions—you must call **`stop`** explicitly.
+The composite has **`phase: start`** (attach agent before your work) and **`phase: stop`** (flush digest, optional PR comment). GitHub does not run a hidden “post” hook for composite actions—you must call **`stop`** explicitly.
 
 **What if I skip `phase: stop`?**  
-You lose a clean shutdown path: digest/Summary/Slack/PR comment behavior from the stop step may not run, and you may leave the workspace without the usual final artifacts.
+You lose a clean shutdown path: digest/Summary/PR comment behavior from the stop step may not run, and you may leave the workspace without the usual final artifacts.
 
 **Can I use `mode: enforce` or `CI_GUARD_MODE=enforce`?**  
 No. Use **`defend`** for blocking mode. See **[CHANGELOG](CHANGELOG.md)**.
@@ -263,9 +262,6 @@ You can, but **`main` moves**; prefer a **release tag** per **[README](README.md
 
 **How do I get a PR comment with the digest?**  
 Set **`report-pr-summary: true`** on the **`stop`** step (and ensure the workflow is a **`pull_request`** event). **`github-token`** defaults to **`github.token`**.
-
-**What Slack URL is allowed?**  
-Only **`https://hooks.slack.com/services/...`** incoming webhooks. Pass **`slack-webhook-endpoint`** on the **`stop`** step (`inputs` are read there).
 
 **Where is the full honesty matrix for CI?**  
 **[VALIDATION.md](VALIDATION.md)** — what is proven in-repo vs not.

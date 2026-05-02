@@ -47,10 +47,13 @@ func appendLine(path string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	line := append(append([]byte(nil), b...), '\n')
-	_, err = f.Write(line)
-	return err
+	_, werr := f.Write(line)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // Summary is written once at agent shutdown.
@@ -82,6 +85,7 @@ type Summary struct {
 	BPFAuditEvents                 int            `json:"bpf_audit_events,omitempty"`
 	BPFHeartbeatFailures           int            `json:"bpf_heartbeat_failures,omitempty"`
 	BPFMapIntegrityFailures        int            `json:"bpf_map_integrity_failures,omitempty"`
+	BPFDNSCacheUpdateFailures      int            `json:"bpf_dns_cache_update_failures,omitempty"`
 	BPFAuditRingbufReserveFailures int            `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
 	DroppedCounts                  map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                   map[string]int `json:"policy_counts"`

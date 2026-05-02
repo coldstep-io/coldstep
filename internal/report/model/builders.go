@@ -7,7 +7,7 @@ import (
 )
 
 // requiredCapabilities mirrors REQUIRED_CAPABILITIES from
-// public_scripts/coldstep_detect_report/build_report_model.py.
+// scripts/coldstep_detect_report/build_report_model.py.
 var requiredCapabilities = []struct {
 	ID, Label string
 }{

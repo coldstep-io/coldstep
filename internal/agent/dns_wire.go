@@ -7,6 +7,14 @@ import (
 const (
 	dnsNameMaxPointerDepth = 32
 	dnsNameMaxLabelSteps   = 128
+	// dnsMinRRSize is a conservative lower bound for the wire size of a
+	// single resource record. The smallest plausible RR encoding is a
+	// 1-byte name terminator (root) followed by 10 bytes of fixed RR
+	// header (type, class, ttl, rdlength), so any RR consumes at least
+	// 11 bytes. Using 4 here as a safety floor under-counts so the bound
+	// stays generous; the real per-iteration parser still rejects shorter
+	// records via existing bounds checks.
+	dnsMinRRSize = 4
 )
 
 // ipv4DNSAnswer is one A record worth of metadata from a DNS response.
@@ -27,6 +35,14 @@ func parseDNSResponseIPv4(packet []byte) map[[4]byte]ipv4DNSAnswer {
 	qdcount := int(binary.BigEndian.Uint16(packet[4:6]))
 	ancount := int(binary.BigEndian.Uint16(packet[6:8]))
 	if ancount == 0 {
+		return out
+	}
+	// Guard against malicious tiny packets advertising huge QD/AN counts:
+	// no individual RR can be smaller than dnsMinRRSize, so any count that
+	// could not physically fit in the remaining bytes is rejected up front
+	// rather than letting the parse loop walk to its full uint16 bound (M-11).
+	maxRR := len(packet) / dnsMinRRSize
+	if qdcount > maxRR || ancount > maxRR {
 		return out
 	}
 

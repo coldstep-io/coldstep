@@ -3,17 +3,20 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/cilium/ebpf"
@@ -746,8 +749,14 @@ func TestCheckMapIntegrity(t *testing.T) {
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 
+	// Empty snapshot keeps the H-04 re-arm path a no-op for the matched-count
+	// phases below; the dedicated TestRearmAllowedFromSnapshot exercises the
+	// non-empty re-arm path.
+	var snapshot policy.CompileResult
+	backoff := newIntegrityBackoff()
+
 	// 1. Initial check (mismatch expected)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected 2 failures (allowed=0, ignored=0), got %d", state.mapIntegrityFailureCount())
 	}
@@ -762,7 +771,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	kIgnored := [8]byte{24, 0, 0, 0, 10, 0, 0, 0}
 	_ = ignoredIpv4.Update(&kIgnored, &v, ebpf.UpdateAny)
 
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected failures to remain at 2 after clean check, got %d", state.mapIntegrityFailureCount())
 	}
@@ -770,7 +779,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	// 3. Tamper with enforce_cfg
 	val0 := uint32(0)
 	_ = enforceCfg.Update(&key0, &val0, ebpf.UpdateAny)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, state, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 3 {
 		t.Fatalf("expected 3 failures after enforce_cfg tampering, got %d", state.mapIntegrityFailureCount())
 	}
@@ -787,6 +796,108 @@ func TestCheckMapIntegrity(t *testing.T) {
 	s := string(b)
 	if !strings.Contains(s, `"type":"bpf_tamper"`) || !strings.Contains(s, `"asset":"map:enforce_cfg"`) {
 		t.Fatalf("expected bpf_tamper event in JSONL, got:\n%s", s)
+	}
+}
+
+// H-04 regression: a count mismatch on allowed_ipv4 must trigger
+// rearmAllowedFromSnapshot, deleting tampered keys not in the compiled
+// snapshot and re-inserting any missing snapshot keys.
+func TestRearmAllowedFromSnapshot_RemovesTamperedAndRestoresMissing(t *testing.T) {
+	t.Parallel()
+	allowedSpec := &ebpf.MapSpec{Name: "allowed_ipv4", Type: ebpf.LPMTrie, KeySize: 8, ValueSize: 1, MaxEntries: 16, Flags: 1}
+	allowedIpv4, err := ebpf.NewMap(allowedSpec)
+	if err != nil {
+		t.Skipf("skipping BPF map test: %v (likely missing CAP_BPF/CAP_SYS_ADMIN)", err)
+	}
+	defer allowedIpv4.Close()
+
+	// Snapshot says 1.1.1.1 and 1.1.1.2 are the only allowed IPv4 entries.
+	var snapshot policy.CompileResult
+	snapshot.AllowedIPv4.Add(net.IPv4(1, 1, 1, 1))
+	snapshot.AllowedIPv4.Add(net.IPv4(1, 1, 1, 2))
+
+	// Pre-load the map with the legitimate entry 1.1.1.1, a tampered extra
+	// entry 9.9.9.9, and intentionally omit 1.1.1.2 to force the re-arm to
+	// also restore it.
+	v := uint8(1)
+	tamper := [8]byte{32, 0, 0, 0, 9, 9, 9, 9}
+	keep := [8]byte{32, 0, 0, 0, 1, 1, 1, 1}
+	if err := allowedIpv4.Update(&keep, &v, ebpf.UpdateAny); err != nil {
+		t.Fatalf("seed legit key: %v", err)
+	}
+	if err := allowedIpv4.Update(&tamper, &v, ebpf.UpdateAny); err != nil {
+		t.Fatalf("seed tampered key: %v", err)
+	}
+
+	added, removed, err := rearmAllowedFromSnapshot(allowedIpv4, snapshot, nil)
+	if err != nil {
+		t.Fatalf("re-arm: %v", err)
+	}
+	if removed != 1 {
+		t.Fatalf("expected 1 stale key removed (9.9.9.9), got removed=%d", removed)
+	}
+	if added != 2 {
+		t.Fatalf("expected 2 expected keys (re)inserted, got added=%d", added)
+	}
+
+	// Walk the map post-rearm and confirm only the snapshot keys remain.
+	want := map[[8]byte]bool{
+		{32, 0, 0, 0, 1, 1, 1, 1}: true,
+		{32, 0, 0, 0, 1, 1, 1, 2}: true,
+	}
+	got := map[[8]byte]bool{}
+	iter := allowedIpv4.Iterate()
+	var k [8]byte
+	var val uint8
+	for iter.Next(&k, &val) {
+		got[k] = true
+	}
+	if err := iter.Err(); err != nil {
+		t.Fatalf("post-rearm iterate: %v", err)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("post-rearm key count = %d; want %d (got=%v)", len(got), len(want), got)
+	}
+	for k := range want {
+		if !got[k] {
+			t.Errorf("missing expected snapshot key in map: %v", k)
+		}
+	}
+	if got[tamper] {
+		t.Errorf("tampered key 9.9.9.9 still present after re-arm: %v", got)
+	}
+}
+
+// M-13 regression: integrityBackoff must escalate the first failure for an
+// asset (return true) and dedupe subsequent failures inside the backoff
+// window (return false), and a clear() call must re-escalate the next
+// failure.
+func TestIntegrityBackoff_DeduplicatesAndClears(t *testing.T) {
+	t.Parallel()
+	b := newIntegrityBackoff()
+	if !b.noteFailure("map:enforce_cfg") {
+		t.Fatal("first failure should escalate (true)")
+	}
+	if b.noteFailure("map:enforce_cfg") {
+		t.Fatal("immediate repeat should dedupe (false)")
+	}
+	if !b.noteFailure("map:allowed_ipv4") {
+		t.Fatal("first failure for a different asset should escalate independently")
+	}
+
+	// clear() simulates a successful re-arm; the next failure escalates again.
+	b.clear("map:enforce_cfg")
+	if !b.noteFailure("map:enforce_cfg") {
+		t.Fatal("post-clear failure should re-escalate (true)")
+	}
+
+	// Fast-forward the per-asset timestamp past the backoff window and confirm
+	// re-escalation without going through clear().
+	b.mu.Lock()
+	b.lastFail["map:allowed_ipv4"] = time.Now().Add(-2 * integrityBackoffWindow)
+	b.mu.Unlock()
+	if !b.noteFailure("map:allowed_ipv4") {
+		t.Fatal("failure outside backoff window should re-escalate (true)")
 	}
 }
 
@@ -832,5 +943,195 @@ func TestWriteAgentStatus_WorldReadableAndJSON(t *testing.T) {
 	}
 	if m.OK {
 		t.Fatal("expected ok false")
+	}
+}
+
+// TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder is the M-05 regression: every JSONL deny
+// line must carry a strictly increasing seq, matching the order it was appended to the file. With
+// the buggy code (seq.Next() outside jsonlMu) two goroutines could pick (1, 2) but write in the
+// (2, 1) order. Post-fix, seq.Next() is inside jsonlMu so file order is monotonic with seq.
+func TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{
+		Mode:          config.ModeEnforce,
+		EventsLogPath: events,
+	}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	const writers = 32
+	const perWriter = 8
+	var wg sync.WaitGroup
+	wg.Add(writers)
+	errCh := make(chan error, writers*perWriter)
+	for w := 0; w < writers; w++ {
+		w := w
+		go func() {
+			defer wg.Done()
+			for i := 0; i < perWriter; i++ {
+				raw := fillTestDenyRawV4(uint32(w), uint32(i), "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
+				if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil); err != nil {
+					errCh <- fmt.Errorf("worker %d iter %d: %w", w, i, err)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		t.Fatalf("append failure: %v", err)
+	}
+
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	lines := strings.Split(strings.TrimRight(string(b), "\n"), "\n")
+	if got, want := len(lines), writers*perWriter; got != want {
+		t.Fatalf("line count=%d want %d", got, want)
+	}
+	var prevSeq uint64
+	for i, line := range lines {
+		var ev struct {
+			Seq uint64 `json:"seq"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			t.Fatalf("line %d unmarshal: %v\nline=%q", i, err, line)
+		}
+		if ev.Seq == 0 {
+			t.Fatalf("line %d: seq=0 (must be assigned under jsonlMu)", i)
+		}
+		if i > 0 && ev.Seq <= prevSeq {
+			t.Fatalf("line %d: seq=%d not strictly greater than prev=%d (M-05 ordering violated)", i, ev.Seq, prevSeq)
+		}
+		prevSeq = ev.Seq
+	}
+	if prevSeq != uint64(writers*perWriter) {
+		t.Fatalf("last seq=%d want %d", prevSeq, writers*perWriter)
+	}
+}
+
+// TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq is the M-06 regression: when EventsLogPath
+// is empty, decoded denies must NOT advance the shared SeqGen, so digest SeqLast cannot overstate
+// the number of JSONL lines actually written. State.noteDeny still fires regardless.
+func TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{Mode: config.ModeEnforce}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
+	for i := 0; i < 5; i++ {
+		ev, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+		if err != nil {
+			t.Fatalf("append %d: %v", i, err)
+		}
+		if ev.Seq != 0 {
+			t.Fatalf("iter %d: deny.Seq=%d, want 0 when EventsLogPath empty (M-06)", i, ev.Seq)
+		}
+	}
+	if got := seq.Last(); got != 0 {
+		t.Fatalf("seq.Last()=%d, want 0 — seq must not advance when EventsLogPath is empty (M-06)", got)
+	}
+	if state.denyCount() != 5 {
+		t.Fatalf("denyCount=%d want 5 (state must still note denies regardless of JSONL path)", state.denyCount())
+	}
+}
+
+// TestReadUint32CounterMap_KeyNotExistReturnsZeroSilently is the M-07 regression for the legitimate
+// "key not yet written" path: BPF programs use BPF_NOEXIST + ATOMIC update before incrementing, so
+// a never-touched counter map has no key 0 entry. Lookup must return ErrKeyNotExist, the helper
+// must surface 0, and it must NOT log (that case is normal at agent startup).
+func TestReadUint32CounterMap_KeyNotExistReturnsZeroSilently(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_counter_nf",
+		Type:       ebpf.Hash,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v (likely missing CAP_BPF/CAP_SYS_ADMIN)", err)
+	}
+	defer m.Close()
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := readUint32CounterMap(m, "tester"); got != 0 {
+		t.Fatalf("expected 0 on ErrKeyNotExist, got %d", got)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output on ErrKeyNotExist, got: %q", buf.String())
+	}
+
+	var probeKey uint32
+	var probeVal uint32
+	if err := m.Lookup(&probeKey, &probeVal); !errors.Is(err, ebpf.ErrKeyNotExist) {
+		t.Fatalf("test setup invariant: empty Hash map Lookup must return ErrKeyNotExist, got %v", err)
+	}
+}
+
+// TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs is the M-07 regression for the real-error
+// path: a closed (or otherwise unreadable) map yields a non-ErrKeyNotExist error. The helper must
+// log a WARN with helper + err so operators can distinguish "counter is genuinely zero" from "map
+// is broken", and still return 0 so downstream digest paths keep working.
+func TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_counter_closed",
+		Type:       ebpf.Hash,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close map: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := readUint32CounterMap(m, "tester"); got != 0 {
+		t.Fatalf("expected 0 on closed-map error, got %d", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "reserve-failure map lookup failed") {
+		t.Fatalf("expected warn log, got: %q", out)
+	}
+	if !strings.Contains(out, "helper=tester") {
+		t.Fatalf("expected helper=tester attribute in log, got: %q", out)
+	}
+	if !strings.Contains(out, "err=") {
+		t.Fatalf("expected err attribute in log, got: %q", out)
+	}
+}
+
+// TestReadUint32CounterMap_NilMapReturnsZero guards against a nil *ebpf.Map (e.g. a never-loaded
+// optional collection) panicking inside Lookup. Helper must early-return 0 silently.
+func TestReadUint32CounterMap_NilMapReturnsZero(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := readUint32CounterMap(nil, "tester"); got != 0 {
+		t.Fatalf("expected 0 on nil map, got %d", got)
+	}
+	if buf.Len() != 0 {
+		t.Fatalf("expected no log output on nil map, got: %q", buf.String())
 	}
 }

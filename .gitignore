@@ -1,19 +1,15 @@
-# Build outputs (repo root; e.g. public_scripts/build-agent-linux.sh → bin/coldstep)
+# Build outputs (repo root; e.g. scripts/build-agent-linux.sh → bin/coldstep)
 /bin/
 /node_modules/
 
 # Local Windows tooling binaries (not published)
 *.exe
 
-# Generated BPF: public_scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
+# Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
 bpf/vmlinux.h
 internal/bpf/**/*.o
 internal/bpf/**/*_bpfel.go
 internal/bpf/**/*_bpfeb.go
-public_scripts/__pycache__/
-public_scripts/**/__pycache__/
-scripts/__pycache__/
-scripts/**/__pycache__/
 **/__pycache__/
 *.pyc
 
@@ -34,13 +30,14 @@ scripts/**/__pycache__/
 **/*.mock.html
 /mocks/
 
-# Superpowers Visual Companion session state (public_scripts/brainstorm_visual_companion/start-server.sh)
+# Superpowers Visual Companion session state
 .superpowers/
 
 # Editor / machine-local (not published), including Cursor rules
 /.cursor/
 /.vscode/
 /specs/
+# Agent/workspace policy (Cursor + local maintainers). Must stay untracked — never commit, never `git add -f`.
 AGENTS.md
 # Optional local architecture notes at repo root — not part of the shipped doc surface.
 /ARCHITECTURE.md
@@ -49,24 +46,16 @@ AGENTS.md
 .coldstep-detect.md
 .coldstep-agent.stderr.log
 
-# Local deep-debug pass output (public_scripts/deep-debug.sh)
+# Local deep-debug pass output (scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
 # Local-only trees — never staged, never committed (do not `git add` docs/ or knowledge/, never `git add -f`).
+/plans/
+/skills/
 /docs/
 /knowledge/
 /.worktrees/
 # Soft alias junction (mklink /J elon knowledge) — same vault, local-only.
 /elon/
-# Local-only orchestrator package: tooling that operates on the gitignored knowledge/ vault.
-# Lives next to scripts/ but is not part of the shipped product surface.
-/scripts/orchestrator/
-/scripts/test_orchestrator_*.py
-/scripts/**
-!/scripts/docker-mcp-reconnect.ps1.example
-
 # Ignore stray copies under .github only.
 /.github/design/
-
-# Knowledge vault tooling used to live here; keep ignored so it is never committed by mistake.
-/scripts/knowledge_records_backfill.py

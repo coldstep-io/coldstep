@@ -41,7 +41,11 @@ No userland agent can promise **complete** observation of every kernel path on e
 
 ### Optional third-party threat intel (OTX)
 
-When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the detect-report enrichment step, the runner performs **HTTPS requests** to AlienVault Open Threat Exchange (`otx.alienvault.com`) for indicator lookups. When the secret is **absent or empty**, **no such requests** occur. Enrichment is designed not to fail the job on API errors (see **`public_scripts/coldstep_detect_report/README.md`**).
+When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the detect-report enrichment step, the runner performs **HTTPS requests** to AlienVault Open Threat Exchange (`otx.alienvault.com`) for indicator lookups. When the secret is **absent or empty**, **no such requests** occur. Enrichment is designed not to fail the job on API errors (see **`scripts/coldstep_detect_report/README.md`**).
+
+### Code scanning (CodeQL)
+
+The tracked workflow **`.github/workflows/codeql.yml`** runs CodeQL for **Go**, **JavaScript/TypeScript**, **C/C++**, and **GitHub Actions** only — **not Python**, because this repository does not ship Python sources. If **Code scanning “Default setup”** is also enabled in **Settings → Code security**, either **disable Default setup** in favor of that workflow, or **edit Default setup** and **remove the Python language** so analyses stay aligned and redundant jobs do not run.
 
 ### Further reading
 

@@ -85,6 +85,64 @@ func TestEvaluateWarnsWhenScoreBetweenFailAndPass(t *testing.T) {
 	}
 }
 
+// M-12 regression: a single bpf_tamper JSONL event must hard-fail the
+// integrity gate regardless of how complete the rest of the stream is —
+// otherwise the report could show a healthy verdict while kernel-side
+// policy is being eroded (anti-blindness).
+func TestEvaluateFailsWhenBPFTamperEventPresent(t *testing.T) {
+	events := []model.Event{
+		{"type": "meta"},
+		{"type": "exec", "comm": "bash"},
+		{"type": "tcp"},
+		{"type": "udp", "dst": "8.8.8.8"},
+		{"type": "tls", "sni": "theclouddj.com"},
+		{"type": "http"},
+		{"type": "proc_fork"},
+		{"type": "fs_event", "op": "chmod"},
+		{"type": "bpf_audit", "comm": "bpftool"},
+		// A real bpf_tamper event from watchMapIntegrity in agent_linux.go.
+		{"type": "bpf_tamper", "asset": "map:enforce_cfg", "error": "value mismatch", "expected": "1", "actual": "0"},
+	}
+	eval := Evaluate(events)
+	if eval.Verdict != VerdictFail {
+		t.Fatalf("verdict=%q; want fail (bpf_tamper present)", eval.Verdict)
+	}
+	if eval.Score != 0 {
+		t.Errorf("score=%d; want 0 on bpf_tamper hard fail", eval.Score)
+	}
+	if eval.Integrity.Score != 0 {
+		t.Errorf("integrity.score=%d; want 0 on bpf_tamper hard fail", eval.Integrity.Score)
+	}
+	if eval.Integrity.Status != VerdictFail {
+		t.Errorf("integrity.status=%q; want fail on bpf_tamper hard fail", eval.Integrity.Status)
+	}
+	hasTamper := false
+	for _, r := range eval.Reasons {
+		if r.Code == model.ReasonBPFMapTamperDetected {
+			hasTamper = true
+			if r.Severity != model.SeverityFail {
+				t.Errorf("tamper reason severity=%q; want fail", r.Severity)
+			}
+			break
+		}
+	}
+	if !hasTamper {
+		t.Errorf("reasons=%v; want at least one %q", eval.Reasons, model.ReasonBPFMapTamperDetected)
+	}
+}
+
+// CheckBPFTamper alone returns no reasons when the stream is bpf_tamper-free.
+func TestCheckBPFTamper_NoTamperEventsReturnsNil(t *testing.T) {
+	events := []model.Event{
+		{"type": "meta"},
+		{"type": "exec"},
+		{"type": "tcp"},
+	}
+	if got := CheckBPFTamper(events); len(got) != 0 {
+		t.Fatalf("CheckBPFTamper = %v; want nil", got)
+	}
+}
+
 func TestEvaluateWarnsWhenCanaryMissing(t *testing.T) {
 	events := []model.Event{
 		{"type": "meta"},

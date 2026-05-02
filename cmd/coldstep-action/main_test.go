@@ -2,42 +2,9 @@ package main
 
 import (
 	"bytes"
-	"net/url"
 	"strings"
 	"testing"
 )
-
-func TestParseSlackIncomingWebhookURL_Valid(t *testing.T) {
-	cases := []string{
-		"https://hooks.slack.com/services/T123/B456/abc",
-		"https://hooks.slack.com/services/A/B/C",
-	}
-	for _, raw := range cases {
-		u := parseSlackIncomingWebhookURL(raw)
-		if u == nil {
-			t.Errorf("expected valid URL for %q, got nil", raw)
-		}
-	}
-}
-
-func TestParseSlackIncomingWebhookURL_Invalid(t *testing.T) {
-	cases := []string{
-		"",
-		"http://hooks.slack.com/services/T/B/x",
-		"https://evil.com/services/T/B/x",
-		"https://hooks.slack.com/hooks/T/B/x",
-		"https://user:pass@hooks.slack.com/services/T/B/x",
-		"ftp://hooks.slack.com/services/T/B/x",
-		"https://hooks.slack.com/",
-		"not-a-url",
-	}
-	for _, raw := range cases {
-		u := parseSlackIncomingWebhookURL(raw)
-		if u != nil {
-			t.Errorf("expected nil for %q, got %v", raw, u)
-		}
-	}
-}
 
 func TestSanitizeDigestForMarkdown_BOM(t *testing.T) {
 	// BOM must be stripped
@@ -56,7 +23,7 @@ func TestSanitizeDigestForMarkdown_BackslashFirst(t *testing.T) {
 	// If \` is in input, we must get \\` not \\`` which would be wrong
 	input := "\\`test"
 	out := sanitizeDigestForMarkdown(input)
-	// Original \ → \\ and then the ` is a single backtick (not 3), so no fence escaping
+	// Original \ ΓåÆ \\ and then the ` is a single backtick (not 3), so no fence escaping
 	if !strings.Contains(out, "\\\\`") {
 		t.Errorf("backslash-first rule violated: got %q", out)
 	}
@@ -95,10 +62,10 @@ func TestSanitizeDigestForMarkdown_LineLengthCap(t *testing.T) {
 	line := strings.Repeat("x", 5000)
 	out := sanitizeDigestForMarkdown(line)
 	parts := strings.Split(out, "\n")
-	if len(parts[0]) > 4096+len(" …(truncated)") {
+	if len(parts[0]) > 4096+len(" ΓÇª(truncated)") {
 		t.Errorf("line not capped at 4096: len=%d", len(parts[0]))
 	}
-	if !strings.Contains(parts[0], "…(truncated)") {
+	if !strings.Contains(parts[0], "ΓÇª(truncated)") {
 		t.Errorf("truncated marker missing: %q", parts[0][:80])
 	}
 }
@@ -268,15 +235,6 @@ func TestBoolString(t *testing.T) {
 	}
 	if boolString(false) != "false" {
 		t.Error("expected false")
-	}
-}
-
-func TestParseSlackURL_PathPrefix(t *testing.T) {
-	// Must require /services/ prefix
-	u, _ := url.Parse("https://hooks.slack.com/workflows/T/B/x")
-	parsed := parseSlackIncomingWebhookURL(u.String())
-	if parsed != nil {
-		t.Error("expected nil for /workflows/ path")
 	}
 }
 

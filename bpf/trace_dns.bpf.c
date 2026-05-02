@@ -205,7 +205,30 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		if ((hdr[2] & 0x80) == 0)
 			return 0;
 	} else {
-		/* TCP DNS has a 2-byte length prefix. Header starts at offset 2. */
+		/*
+		 * TCP DNS path: RFC 1035 §4.2.2 frames each DNS message with a
+		 * 2-byte length prefix, so the DNS header begins at offset 2
+		 * and the QR bit lives at byte 2 of that header (= offset 4
+		 * of the userspace buffer). We sniff the QR bit only and bump
+		 * `tcp_dns_responses_observed` for visibility.
+		 *
+		 * KNOWN GAP — M-03 (BPF Deep Audit, 2026-05-01): this path
+		 * does NOT reassemble TCP streams. We assume the entire
+		 * `length-prefix + DNS message` fits in a single `read(2)` /
+		 * `recvfrom(2)` call. In practice large responses (DNSSEC,
+		 * AXFR/IXFR, big TXT) split across multiple reads — the
+		 * length prefix may land in one read and the DNS header in
+		 * the next, in which case our offset-4 QR-bit check is
+		 * reading payload bytes and the result is meaningless. Full
+		 * reassembly would need per-(tgid,fd) parser state plus a
+		 * bounded buffer, which is heavy work for the verifier and
+		 * was deliberately deferred. The `tcp_dns_responses_observed`
+		 * counter surfaces "we saw a TCP DNS reply byte sequence" not
+		 * "we successfully decoded one"; userspace digest copy makes
+		 * that distinction explicit. TODO: add a sibling
+		 * `tcp_dns_responses_skipped_multi_read` counter when the
+		 * Go agent is widened (out of scope here).
+		 */
 		__u8 tcp_hdr[5];
 		if (bpf_probe_read_user(tcp_hdr, sizeof(tcp_hdr), (void *)pending->buf_user))
 			return 0;

@@ -109,6 +109,11 @@ const (
 	ReasonCanaryMissing        ReasonCode = "CANARY_MISSING"
 	ReasonScoreBelowFailThresh ReasonCode = "SCORE_BELOW_FAIL_THRESHOLD"
 	ReasonScoreBelowPassThresh ReasonCode = "SCORE_BELOW_PASS_THRESHOLD"
+	// ReasonBPFMapTamperDetected fires when at least one bpf_tamper JSONL
+	// event is present in the input stream. It is a hard-fail that forces
+	// integrityScore to 0 so the report cannot show a healthy verdict while
+	// kernel-side BPF map integrity is being eroded (M-12 anti-blindness).
+	ReasonBPFMapTamperDetected ReasonCode = "BPF_MAP_TAMPER_DETECTED"
 )
 
 type Severity string

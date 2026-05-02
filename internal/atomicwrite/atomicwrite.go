@@ -40,7 +40,9 @@ func Bytes(path string, data []byte, perm os.FileMode) error {
 	}
 	keepTmp = false
 	if perm != 0 {
-		_ = os.Chmod(path, perm)
+		if err := os.Chmod(path, perm); err != nil {
+			return err
+		}
 	}
 	return nil
 }

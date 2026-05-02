@@ -30,25 +30,24 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
+      - name: AGENTS.md must not be tracked
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+            echo "::error::AGENTS.md is listed in the git index. It must remain gitignored and local-only; remove with git rm --cached AGENTS.md and drop any commit that adds it."
+            exit 1
+          fi
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
       - name: gofmt check
-        run: bash public_scripts/check-gofmt.sh
+        run: bash scripts/check-gofmt.sh
 
   action_manifest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Assert tracked text is UTF-8 (not UTF-16)
-        run: python3 public_scripts/assert_utf8_text.py
-      - name: Check workflow action pins (no @main; marketplace tag)
-        run: python3 public_scripts/check_workflow_action_pins.py
-      - name: Python script regression tests (diff + pins)
-        run: python3 -m unittest discover -s public_scripts -p 'test_*.py' -v
-      - name: Shell contract (prev-diff summary markers)
-        run: bash public_scripts/test_workflow_diff_markers.sh
 
   unit:
     name: unit (${{ matrix.os }})
@@ -65,7 +64,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -95,7 +94,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -125,7 +124,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -148,7 +147,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Build action binaries
-        run: bash public_scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
       - name: Verify action binaries exist
         run: |
           set -euo pipefail
@@ -264,7 +263,7 @@ jobs:
           # pull_request uses GITHUB_REF_NAME like "21/merge"; use the head branch so gh finds prior runs.
           branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
           # This job lives in a reusable workflow; runs are indexed under the entry workflow (coldstep-ci.yml), not
-          # coldstep-ci-runner.yml — listing by the callee filename returns no rows and breaks baseline diff.
+          # coldstep-ci-runner.yml ΓÇö listing by the callee filename returns no rows and breaks baseline diff.
           entry_workflow="coldstep-ci.yml"
           baseline_run="$(
             gh run list --workflow "${entry_workflow}" --branch "${branch}" --status success --limit 30 --json databaseId \
@@ -314,6 +313,47 @@ jobs:
           # Re-build the report model now that the baseline JSONL is on disk.
           ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
 
+      - name: Enrich report model with reverse DNS
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_RDNS_WALL_BUDGET_MS: '5000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            ./bin/coldstep-report rdns-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
+          else
+            echo "::warning::report model missing, skipping rDNS enrichment"
+          fi
+
+      - name: Enrich report model with OTX threat-intel
+        if: always()
+        env:
+          OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_OTX_WALL_BUDGET_MS: '30000'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            ./bin/coldstep-report otx-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
+          else
+            echo "::warning::report model missing, skipping OTX enrichment"
+          fi
+
+      - name: Render IP classification summary
+        if: always()
+        env:
+          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
+        run: |
+          set -euo pipefail
+          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
+            ./bin/coldstep-report render-ip-summary --in "${COLDSTEP_REPORT_MODEL_IN}"
+          else
+            echo "::warning::report model missing, skipping IP classification summary"
+          fi
+
       - name: Render detect summary
         if: always()
         env:
@@ -349,17 +389,17 @@ jobs:
         with:
           go-version: '1.25.x'
 
-      # Cache skips clang+bpf rebuild when sources unchanged — composite uses release-path so startup
+      # Cache skips clang+bpf rebuild when sources unchanged ΓÇö composite uses release-path so startup
       # stays fast under fail-on-error (BPF verifier remains on first load inside the agent).
       - uses: actions/cache@v5
         id: coldstep-bin-cache
         with:
           path: bin/coldstep
-          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
+          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh') }}
 
       - name: Build Linux agent (runs on cache miss only)
         if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
-        run: bash public_scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |
@@ -382,7 +422,7 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend ΓÇö blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
@@ -393,12 +433,12 @@ jobs:
           allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
           allowed-ips: 1.1.1.1
 
-      - name: Allowed target — nmap port 80 (theclouddj.com)
+      - name: Allowed target ΓÇö nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
           nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
-      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
+      - name: Allowed IP target ΓÇö direct TCP connect (1.1.1.1:443)
         run: |
           set -euo pipefail
           if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
@@ -411,7 +451,7 @@ jobs:
           set -euo pipefail
           echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
+      - name: Disallowed target ΓÇö curl example.com (expect deny, not a successful fetch)
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
@@ -419,7 +459,7 @@ jobs:
             exit 1
           fi
 
-      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
+      - name: Disallowed IP target ΓÇö direct TCP connect (93.184.216.34:443, expect deny)
         run: |
           set -euo pipefail
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then

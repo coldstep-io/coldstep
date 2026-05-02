@@ -77,6 +77,7 @@ type runStats struct {
 	tcpDNSResponsesObservedN        int
 	bpfAuditN                       int
 	bpfMapIntegrityFailuresN        int
+	bpfDNSCacheUpdateFailuresN      int
 	bpfAuditRingbufReserveFailuresN int
 	bpfHeartbeatFailures            int
 	policyCounts                    map[string]int
@@ -753,6 +754,16 @@ func (s *runStats) bpfMapIntegrityFailures() int {
 	return s.bpfMapIntegrityFailuresN
 }
 
+// addDNSCacheUpdateFailure bumps the per-run counter for failed BPF
+// dns_cache map mutations (Update or non-ErrKeyNotExist Delete). Wired to
+// DNSCache.SetBPFFailureCallback so partial sync between userspace and the
+// kernel-side dns_cache instances is observable in the digest (M-09).
+func (s *runStats) addDNSCacheUpdateFailure() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bpfDNSCacheUpdateFailuresN++
+}
+
 func (s *runStats) bpfAuditRingbufReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -796,6 +807,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		BPFAuditEvents:                 s.bpfAuditN,
 		BPFHeartbeatFailures:           s.bpfHeartbeatFailures,
 		BPFMapIntegrityFailures:        s.bpfMapIntegrityFailuresN,
+		BPFDNSCacheUpdateFailures:      s.bpfDNSCacheUpdateFailuresN,
 		BPFAuditRingbufReserveFailures: s.bpfAuditRingbufReserveFailuresN,
 		DroppedCounts:                  dropped,
 		PolicyCounts:                   pc,
@@ -1831,9 +1843,62 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 	}
 }
 
-func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+// integrityBackoffWindow caps how long a single asset's failures are
+// downgraded to slog.Warn after the first slog.Error. Within this window
+// each fresh failure logs as Warn (deduplicated severity); after the window
+// elapses, or after a successful re-arm clears the asset, the next failure
+// re-escalates to Error. JSONL emission and counter increments are unchanged
+// so M-12's bpf_tamper-based hard-fail keeps signaling.
+const integrityBackoffWindow = 5 * time.Minute
+
+// integrityBackoff tracks per-asset last-failure timestamps so recurring
+// integrity failures within integrityBackoffWindow downgrade their slog
+// level (M-13). Each watchMapIntegrity goroutine owns its own instance —
+// the enforce and LSM watchers run independently and reuse asset names.
+type integrityBackoff struct {
+	mu       sync.Mutex
+	lastFail map[string]time.Time
+}
+
+func newIntegrityBackoff() *integrityBackoff {
+	return &integrityBackoff{lastFail: make(map[string]time.Time)}
+}
+
+// noteFailure records a fresh failure for asset and returns true when the
+// caller should escalate to slog.Error (first failure or first failure
+// after the backoff window expired). Subsequent failures inside the window
+// return false so the caller can degrade to slog.Warn.
+func (b *integrityBackoff) noteFailure(asset string) bool {
+	if b == nil {
+		return true
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	now := time.Now()
+	last, ok := b.lastFail[asset]
+	b.lastFail[asset] = now
+	if !ok {
+		return true
+	}
+	return now.Sub(last) >= integrityBackoffWindow
+}
+
+// clear forgets the backoff state for asset so the next failure re-escalates
+// to slog.Error. Called after a successful revert / re-arm.
+func (b *integrityBackoff) clear(asset string) {
+	if b == nil {
+		return
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	delete(b.lastFail, asset)
+}
+
+func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, enforceCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+
+	backoff := newIntegrityBackoff()
 
 	for {
 		select {
@@ -1844,29 +1909,46 @@ func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allow
 			}
 			return ctx.Err()
 		case <-ticker.C:
-			checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, stats, enforceState, seq, jsonlMu, signer)
+			checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, enforceCompiled, pol, stats, enforceState, backoff, seq, jsonlMu, signer)
 		}
 	}
 }
 
-func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) {
+func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, enforceCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, enforceState *enforcementState, backoff *integrityBackoff, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) {
 	if enforceCfg == nil || allowedIpv4 == nil || ignoredIpv4 == nil {
 		return
 	}
 
 	// 1. Check enforce_cfg
+	const assetEnforceCfg = "map:enforce_cfg"
 	var key uint32 = 0
 	var val uint32
+	modeEnforce := uint32(1)
 	if err := enforceCfg.Lookup(&key, &val); err != nil {
-		logMapIntegrityFailure(cfg, "map:enforce_cfg", "lookup error", "", "", stats, seq, jsonlMu, enforceState, signer)
+		logMapIntegrityFailure(cfg, assetEnforceCfg, "lookup error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
+		// H-05: a missing/unreadable enforce_cfg key behaves like detect mode in
+		// BPF (`enforcement_enabled()` returns false when the key is absent).
+		// Try to restore the enforce mode key on the same path the value-mismatch
+		// branch uses so a transient lookup failure or tamper does not silently
+		// disable enforcement.
+		if updErr := enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny); updErr != nil {
+			slog.Error("BPF map enforce_cfg revert failed (lookup error)", "err", updErr)
+		} else {
+			slog.Error("BPF map enforce_cfg revert succeeded after lookup error")
+			backoff.clear(assetEnforceCfg)
+		}
 	} else if val != 1 {
-		logMapIntegrityFailure(cfg, "map:enforce_cfg", "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState, signer)
-		// Revert tampering
-		modeEnforce := uint32(1)
-		_ = enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny)
+		logMapIntegrityFailure(cfg, assetEnforceCfg, "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState, backoff, signer)
+		// Revert tampering.
+		if err := enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny); err != nil {
+			slog.Error("BPF map enforce_cfg revert failed", "err", err)
+		} else {
+			backoff.clear(assetEnforceCfg)
+		}
 	}
 
 	// 2. Check allowed_ipv4 count
+	const assetAllowed = "map:allowed_ipv4"
 	count := 0
 	iter := allowedIpv4.Iterate()
 	var k [8]byte // LPM key (4 prefixlen + 4 ip)
@@ -1875,40 +1957,71 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		count++
 	}
 	if err := iter.Err(); err != nil {
-		logMapIntegrityFailure(cfg, "map:allowed_ipv4", "iterate error", "", "", stats, seq, jsonlMu, enforceState, signer)
+		logMapIntegrityFailure(cfg, assetAllowed, "iterate error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
 	} else {
 		enforceState.mu.Lock()
 		expected := enforceState.expectedEntries
 		enforceState.mu.Unlock()
 		if count != expected {
-			logMapIntegrityFailure(cfg, "map:allowed_ipv4", "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, enforceState, signer)
+			logMapIntegrityFailure(cfg, assetAllowed, "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, enforceState, backoff, signer)
+			// H-04: re-program the LPM trie from the compiled snapshot so a
+			// tampered widening (extra allowed entries) or count corruption
+			// does not persist until process restart.
+			added, removed, rearmErr := rearmAllowedFromSnapshot(allowedIpv4, enforceCompiled, pol)
+			if rearmErr != nil {
+				slog.Error("BPF allowlist re-arm failed", "asset", assetAllowed, "err", rearmErr)
+			} else {
+				slog.Error("BPF allowlist re-armed after tamper", "asset", assetAllowed, "removed", removed, "added", added)
+				backoff.clear(assetAllowed)
+			}
 		}
 	}
 
 	// 3. Check ignored_ipv4 count
+	const assetIgnored = "map:ignored_ipv4_lpm"
 	countIgnored := 0
 	iterIgnored := ignoredIpv4.Iterate()
 	for iterIgnored.Next(&k, &v) {
 		countIgnored++
 	}
 	if err := iterIgnored.Err(); err != nil {
-		logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "iterate error", "", "", stats, seq, jsonlMu, enforceState, signer)
+		logMapIntegrityFailure(cfg, assetIgnored, "iterate error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
 	} else {
 		enforceState.mu.Lock()
 		expectedIgnored := enforceState.expectedIgnoredEntries
 		enforceState.mu.Unlock()
 		if countIgnored != expectedIgnored {
-			logMapIntegrityFailure(cfg, "map:ignored_ipv4_lpm", "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, enforceState, signer)
+			logMapIntegrityFailure(cfg, assetIgnored, "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, enforceState, backoff, signer)
+			// H-04: same self-heal posture as allowed_ipv4 — restore from
+			// policy.IgnoredIPv4Nets so an attacker cannot widen the
+			// implicit-allow surface by injecting extra ignored CIDRs.
+			added, removed, rearmErr := rearmIgnoredFromPolicy(ignoredIpv4, pol)
+			if rearmErr != nil {
+				slog.Error("BPF allowlist re-arm failed", "asset", assetIgnored, "err", rearmErr)
+			} else {
+				slog.Error("BPF allowlist re-armed after tamper", "asset", assetIgnored, "removed", removed, "added", added)
+				backoff.clear(assetIgnored)
+			}
 		}
 	}
 }
 
-func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, enforceState *enforcementState, signer *telemetry.Signer) {
+func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, enforceState *enforcementState, backoff *integrityBackoff, signer *telemetry.Signer) {
 	stats.addBPFMapIntegrityFailure()
 	if enforceState != nil {
 		enforceState.addMapIntegrityFailure()
 	}
-	slog.Error("BPF map integrity failure", "asset", asset, "error", errStr, "expected", expected, "actual", actual)
+	// M-13: dedupe slog severity per asset within integrityBackoffWindow. The
+	// JSONL bpf_tamper event and counter increments still flow on every tick
+	// so M-12 (anti-blindness gating) keeps a stable signal — only the
+	// operator-facing log level is dampened.
+	if backoff.noteFailure(asset) {
+		slog.Error("BPF map integrity failure", "asset", asset, "error", errStr, "expected", expected, "actual", actual)
+	} else {
+		slog.Warn("BPF map integrity failure (recurring within backoff window)",
+			"asset", asset, "error", errStr, "expected", expected, "actual", actual,
+			"backoff_window", integrityBackoffWindow)
+	}
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
 		defer jsonlMu.Unlock()
@@ -1923,7 +2036,9 @@ func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual s
 			Expected: expected,
 			Actual:   actual,
 		}
-		_ = telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+		if err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer); err != nil {
+			slog.Warn("bpf_tamper JSONL append failed", "err", err)
+		}
 	}
 }
 
@@ -2000,208 +2115,147 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 	return programmed, nil
 }
 
-func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
-	if objs == nil {
+// readUint32CounterMap reads a single-entry uint32-keyed/uint32-valued BPF counter map at key 0.
+//
+// Failure semantics (M-07): "key not found" is the legitimate zero state and is returned silently.
+// Any other Lookup error (map closed, wrong type, EBADF, program unloaded) is logged at WARN and
+// surfaced as zero so digest rendering keeps progressing — losing the distinction between "counter
+// is genuinely zero" and "map is unreadable" was the M-07 anti-pattern. The H-05 instance of this
+// pattern (enforce_cfg) is owned by Group A; this helper deliberately stays scoped to read-only
+// counter maps and never touches enforcement state.
+func readUint32CounterMap(m *ebpf.Map, helperName string) int {
+	if m == nil {
 		return 0
 	}
 	var k uint32
 	var v uint32
-	if err := objs.DenyReserveFailures.Lookup(&k, &v); err != nil {
+	if err := m.Lookup(&k, &v); err != nil {
+		if errors.Is(err, ebpf.ErrKeyNotExist) {
+			return 0
+		}
+		slog.Warn("reserve-failure map lookup failed", "helper", helperName, "err", err)
 		return 0
 	}
 	return int(v)
+}
+
+func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32CounterMap(objs.DenyReserveFailures, "readDenyReserveFailureCount")
 }
 
 func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.Connect4TupleUpdateFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
 }
 
 func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.UdpRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
 }
 
 func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.DnsRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
 }
 
 func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.ConnectRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
 }
 
 func readBPFAuditRingbufReserveFailureCount(objs *tracebpfaudit.TracebpfauditObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.BpfAuditReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
 }
 
 func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.HttpRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
 }
 
 func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.TlsRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
 }
 
 func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.UdpSendmsgMultiIovecObserved.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.UdpSendmsgMultiIovecObserved, "readUDPSendmsgMultiIovecObservedCount")
 }
 
 func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.TlsWritevMultiIovecObserved.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.TlsWritevMultiIovecObserved, "readTLSWritevMultiIovecObservedCount")
 }
 
 func readUnobservedEgressSyscallsCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.UnobservedEgressSyscallsObserved.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.UnobservedEgressSyscallsObserved, "readUnobservedEgressSyscallsCount")
 }
 
 func readIoUringSetupObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.IoUringSetupObserved.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.IoUringSetupObserved, "readIoUringSetupObservedCount")
 }
 
 func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.TcpDnsResponsesObserved.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.TcpDnsResponsesObserved, "readTCPDNSResponsesObservedCount")
 }
 
 func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.ExecRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
 }
 
 func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.ForkRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
 }
 
 func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.FsRingbufReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
 }
 
 func readLSMDenyReserveFailureCount(objs *tracelsmenforce.TracelsmenforceObjects) int {
 	if objs == nil {
 		return 0
 	}
-	var k uint32
-	var v uint32
-	if err := objs.LsmDenyReserveFailures.Lookup(&k, &v); err != nil {
-		return 0
-	}
-	return int(v)
+	return readUint32CounterMap(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
 func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
@@ -2377,10 +2431,13 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer
+	// branch fires, so it stays paired with the actual JSONL line under jsonlMu (M-05) and
+	// avoids burning sequence numbers when EventsLogPath is empty (M-06). Other JSONL writers
+	// follow the same lock-then-Seq.Next() pattern (e.g. exec/tcp paths).
 	deny := telemetry.DenyEvent{
 		Type:     "deny",
 		TS:       ts,
-		Seq:      seq.Next(),
 		PID:      tgid,
 		TGID:     tgid,
 		ThreadID: tid,
@@ -2393,6 +2450,7 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
+		deny.Seq = seq.Next()
 		err := telemetry.AppendJSONL(cfg.EventsLogPath, deny, signer)
 		jsonlMu.Unlock()
 		if err != nil {
@@ -2462,6 +2520,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			}
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
+				continue
 			}
 			n++
 		}
@@ -2709,6 +2768,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	dnsCache := NewDNSCache()
+	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
 
 	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
 	var syscallReadersOnce sync.Once
@@ -2892,8 +2952,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 				return fmt.Errorf("agent ready status: %w", err)
 			}
 		}
-		defer syscallLnk.Close()
 		defer syscallObjs.Close()
+		defer syscallLnk.Close()
 		defer func() {
 			if syscallObjs != nil {
 				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
@@ -2935,12 +2995,25 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: false, Detail: bpfDetail(err)}
 	} else {
 		dnsRd, dnsObjs, dnsLnkEnter, dnsLnkExit = rd, objs, le, lx
-		dnsCache.SetBPFMaps([]*ebpf.Map{dnsObjs.DnsCache})
+		// Register every live dns_cache map so userspace DNS observations
+		// flow into all in-kernel programs that consult dns_cache for
+		// late-binding IP -> FQDN attribution. Enforce/LSM collections each
+		// instantiate their own dns_cache via dns_cache.h, so registering
+		// only the DNS-tracer instance previously left enforce decisions
+		// blind to runtime DNS learning (M-14, paired with H-03's deletes).
+		dnsCacheMaps := []*ebpf.Map{dnsObjs.DnsCache}
+		if hasEnforce && enforceObjs.DnsCache != nil {
+			dnsCacheMaps = append(dnsCacheMaps, enforceObjs.DnsCache)
+		}
+		if hasLSM && lsmObjs != nil && lsmObjs.DnsCache != nil {
+			dnsCacheMaps = append(dnsCacheMaps, lsmObjs.DnsCache)
+		}
+		dnsCache.SetBPFMaps(dnsCacheMaps)
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
 		slog.Info("tracing DNS replies (recvfrom)")
+		defer dnsObjs.Close()
 		defer dnsLnkExit.Close()
 		defer dnsLnkEnter.Close()
-		defer dnsObjs.Close()
 		defer func() {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
@@ -2968,8 +3041,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
 		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
 		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
-		defer bpfAuditLnk.Close()
 		defer bpfAuditObjs.Close()
+		defer bpfAuditLnk.Close()
 		defer func() {
 			if bpfAuditObjs != nil {
 				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
@@ -3346,14 +3419,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, enforceObjs.EnforceCfg, enforceObjs.AllowedIpv4, enforceObjs.IgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu, signer)
+			errCh <- watchMapIntegrity(runCtx, cfg, enforceObjs.EnforceCfg, enforceObjs.AllowedIpv4, enforceObjs.IgnoredIpv4Lpm, enforceCompiled, pol, stats, enforceState, &seq, &jsonlMu, signer)
 		}()
 	}
 	if hasLSM {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmEnforceCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, stats, enforceState, &seq, &jsonlMu, signer)
+			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmEnforceCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, enforceCompiled, pol, stats, enforceState, &seq, &jsonlMu, signer)
 		}()
 	}
 

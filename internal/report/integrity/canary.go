@@ -14,7 +14,7 @@ type CanaryRule struct {
 	All  map[string]string
 }
 
-// DefaultCanaryRules matches public_scripts/coldstep_detect_report/build_report_model.py
+// DefaultCanaryRules matches scripts/coldstep_detect_report/build_report_model.py
 // canary_rules (subset predicates matched against JSONL events).
 func DefaultCanaryRules() []CanaryRule {
 	return []CanaryRule{

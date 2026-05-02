@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // httpNotifyClient bounds post-step webhook/API calls so a stuck egress target
@@ -60,7 +60,6 @@ type stopConfig struct {
 	ReportJobSummary bool
 	ReportPRSummary  bool
 	GithubToken      string
-	SlackWebhook     string
 }
 
 func main() {
@@ -126,7 +125,6 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
 	fs.BoolVar(&cfg.ReportPRSummary, "report-pr-summary", false, "")
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
-	fs.StringVar(&cfg.SlackWebhook, "slack-webhook-endpoint", "", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -156,7 +154,7 @@ func runStart(cfg startConfig) error {
 	actionPath := getenvDefault("GITHUB_ACTION_PATH", mustGetwd())
 	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
 	binPath := filepath.Join(actionPath, "bin", "coldstep")
-	buildScript := filepath.Join(actionPath, "public_scripts", "build-agent-linux.sh")
+	buildScript := filepath.Join(actionPath, "scripts", "build-agent-linux.sh")
 	pidFile := filepath.Join(actionPath, ".coldstep.pid")
 	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
@@ -226,8 +224,8 @@ func runStart(cfg startConfig) error {
 	}
 
 	if truthyInput(cfg.BootstrapAllowlist) {
-		dPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
-		iPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
+		dPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
+		iPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
 		var merr error
 		domainsMerged, merr = appendBootstrapTokens(domainsMerged, dPath)
 		if merr != nil {
@@ -270,7 +268,14 @@ func runStart(cfg startConfig) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// stopAgent terminates the child if we return an error after a successful Start.
+	stopAgent := func() {
+		if p := cmd.Process; p != nil {
+			_ = p.Signal(syscall.SIGTERM)
+		}
+	}
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		stopAgent()
 		return err
 	}
 
@@ -282,9 +287,11 @@ func runStart(cfg startConfig) error {
 		seconds := clamp(cfg.ReadyTimeoutSeconds, 60, 2700)
 		outcome := waitForReady(agentStatus, time.Duration(seconds)*time.Second, cmd.Process.Pid)
 		if outcome != "ready" {
+			stopAgent()
 			return fmt.Errorf("coldstep agent did not report ready (%s)", outcome)
 		}
 		if err := os.WriteFile(readyMarker, []byte("true"), 0o644); err != nil {
+			stopAgent()
 			return err
 		}
 	}
@@ -326,14 +333,20 @@ func runStop(cfg stopConfig) error {
 	if cfg.ReportJobSummary {
 		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
 			safe := sanitizeDigestForMarkdown(body)
-			block := "## Coldstep · digest (exec / network / enforcement)\n\n" + safe
+			block := "## Coldstep ┬╖ digest (exec / network / enforcement)\n\n" + safe
 			if !strings.HasSuffix(block, "\n") {
 				block += "\n"
 			}
 			f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if err == nil {
-				_, _ = f.WriteString(block)
-				_ = f.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: open GITHUB_STEP_SUMMARY: %v\n", err)
+			} else {
+				if _, werr := f.WriteString(block); werr != nil {
+					fmt.Fprintf(os.Stderr, "coldstep: write GITHUB_STEP_SUMMARY: %v\n", werr)
+				}
+				if cerr := f.Close(); cerr != nil {
+					fmt.Fprintf(os.Stderr, "coldstep: close GITHUB_STEP_SUMMARY: %v\n", cerr)
+				}
 			}
 		}
 	}
@@ -348,12 +361,9 @@ func runStop(cfg stopConfig) error {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token != "" {
-			_ = postPRComment(token, sanitizeDigestForMarkdown(body))
-		}
-	}
-	if strings.TrimSpace(cfg.SlackWebhook) != "" && strings.TrimSpace(body) != "" {
-		if u := parseSlackIncomingWebhookURL(cfg.SlackWebhook); u != nil {
-			_ = postSlack(*u, body)
+			if err := postPRComment(token, sanitizeDigestForMarkdown(body)); err != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: report-pr-summary: %v\n", err)
+			}
 		}
 	}
 	return nil
@@ -411,50 +421,6 @@ func postPRComment(token, body string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github comment failed: %s", resp.Status)
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
-	return nil
-}
-
-func parseSlackIncomingWebhookURL(raw string) *url.URL {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil
-	}
-	if u.Scheme != "https" || strings.ToLower(u.Hostname()) != "hooks.slack.com" {
-		return nil
-	}
-	if !strings.HasPrefix(strings.ToLower(u.Path), "/services/") {
-		return nil
-	}
-	if u.User != nil {
-		return nil
-	}
-	return u
-}
-
-func postSlack(u url.URL, body string) error {
-	text := body
-	if len(text) > 35000 {
-		text = text[:35000] + "\n…(truncated for Slack)"
-	}
-	payload := map[string]string{"text": "Coldstep digest\n\n" + text}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpNotifyClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("slack webhook failed: %s", resp.Status)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil
@@ -567,7 +533,12 @@ func sanitizeDigestForMarkdown(body string) string {
 	for i := range lines {
 		line := lines[i]
 		if len(line) > 4096 {
-			line = line[:4096] + " …(truncated)"
+			// Clip at a valid UTF-8 boundary to avoid producing invalid byte sequences.
+			end := 4096
+			for end > 0 && !utf8.ValidString(line[:end]) {
+				end--
+			}
+			line = line[:end] + " ΓÇª(truncated)"
 		}
 		line = strings.ReplaceAll(line, "\\", "\\\\")
 		line = strings.ReplaceAll(line, "<", "&lt;")

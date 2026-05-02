@@ -98,12 +98,6 @@ inputs:
       If true, post step comments the digest on the pull request (pull_request events only). Requires github-token.
     required: false
     default: 'false'
-  slack-webhook-endpoint:
-    description: >-
-      Optional Slack Incoming Webhook URL only (https://hooks.slack.com/services/...). Other hosts are rejected to
-      avoid accidental SSRF from workflow input. When valid, the post step POSTs a short digest after shutdown.
-    required: false
-    default: ''
   feature-gates:
     description: >-
       Optional key=value pairs (comma-separated) passed through to the agent as COLDSTEP_FEATURE_GATES for experiments
@@ -141,7 +135,7 @@ inputs:
     default: ''
   bootstrap-allowlist:
     description: >-
-      Default false. When true, merge vendored bootstrap packs from public_scripts/coldstep_bootstrap/
+      Default false. When true, merge vendored bootstrap packs from scripts/coldstep_bootstrap/
       (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into allowed-domains and allowed-ips after inline
       and workspace file merges. Opt-in only — review upgrades when pinning coldstep-io/coldstep tags.
     required: false
@@ -157,7 +151,7 @@ runs:
         AP="${GITHUB_ACTION_PATH:-$PWD}"
         BIN="${AP}/bin/coldstep-action"
         if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
         fi
         cmd=("${BIN}" start
           --mode "${{ inputs.mode }}"
@@ -193,11 +187,10 @@ runs:
         AP="${GITHUB_ACTION_PATH:-$PWD}"
         BIN="${AP}/bin/coldstep-action"
         if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
         fi
         "${BIN}" stop \
           --fail-on-error "${{ inputs.fail-on-error }}" \
           --report-job-summary "${{ inputs.report-job-summary }}" \
           --report-pr-summary "${{ inputs.report-pr-summary }}" \
-          --github-token "${{ inputs.github-token }}" \
-          --slack-webhook-endpoint "${{ inputs.slack-webhook-endpoint }}"
+          --github-token "${{ inputs.github-token }}"

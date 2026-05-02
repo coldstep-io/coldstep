@@ -13319,7 +13319,7 @@ var require_fetch = __commonJS({
     function handleFetchDone(response) {
       finalizeAndReportTiming(response, "fetch");
     }
-    function fetch3(input, init = void 0) {
+    function fetch2(input, init = void 0) {
       webidl.argumentLengthCheck(arguments, 1, "globalThis.fetch");
       let p = createDeferredPromise();
       let requestObject;
@@ -14276,7 +14276,7 @@ var require_fetch = __commonJS({
       }
     }
     module2.exports = {
-      fetch: fetch3,
+      fetch: fetch2,
       Fetch,
       fetching,
       finalizeAndReportTiming
@@ -18534,7 +18534,7 @@ var require_undici = __commonJS({
     module2.exports.setGlobalDispatcher = setGlobalDispatcher;
     module2.exports.getGlobalDispatcher = getGlobalDispatcher;
     var fetchImpl = require_fetch().fetch;
-    module2.exports.fetch = async function fetch3(init, options = void 0) {
+    module2.exports.fetch = async function fetch2(init, options = void 0) {
       try {
         return await fetchImpl(init, options);
       } catch (err) {
@@ -20626,8 +20626,8 @@ function isPlainObject2(value) {
 }
 var noop = () => "";
 async function fetchWrapper(requestOptions) {
-  const fetch3 = requestOptions.request?.fetch || globalThis.fetch;
-  if (!fetch3) {
+  const fetch2 = requestOptions.request?.fetch || globalThis.fetch;
+  if (!fetch2) {
     throw new Error(
       "fetch is not set. Please pass a fetch implementation as new Octokit({ request: { fetch }}). Learn more at https://github.com/octokit/octokit.js/#fetch-missing"
     );
@@ -20643,7 +20643,7 @@ async function fetchWrapper(requestOptions) {
   );
   let fetchResponse;
   try {
-    fetchResponse = await fetch3(requestOptions.url, {
+    fetchResponse = await fetch2(requestOptions.url, {
       method: requestOptions.method,
       body,
       redirect: requestOptions.request?.redirect,
@@ -23679,7 +23679,6 @@ function inputBoolDefault(name, defaultVal) {
   return ["true", "1", "yes", "on"].includes(v.toLowerCase());
 }
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
 function readAgentReadyOk(statusPath) {
   try {
     if (!fs2.existsSync(statusPath)) {
@@ -23694,54 +23693,6 @@ function readAgentReadyOk(statusPath) {
   } catch {
     return false;
   }
-}
-async function drainWebResponseBody(r, maxBytes) {
-  if (!r.body) {
-    return;
-  }
-  const reader = r.body.getReader();
-  let total = 0;
-  try {
-    for (; ; ) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        total += value.byteLength;
-      }
-      if (total >= maxBytes) {
-        await reader.cancel();
-        break;
-      }
-    }
-  } catch {
-    try {
-      await reader.cancel();
-    } catch {
-    }
-  }
-}
-function parseSlackIncomingWebhookURL(raw) {
-  let u;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== "https:") {
-    return null;
-  }
-  if (u.username !== "" || u.password !== "") {
-    return null;
-  }
-  if (u.hostname.toLowerCase() !== "hooks.slack.com") {
-    return null;
-  }
-  if (!u.pathname.toLowerCase().startsWith("/services/")) {
-    return null;
-  }
-  return u;
 }
 function parseAgentPidFromFile(contents) {
   const trimmed = contents.trim();
@@ -23760,7 +23711,7 @@ function sanitizeDigestForMarkdown(body) {
   }
   const stripped = body.replace(/^\uFEFF/, "");
   const normalized = stripped.replace(/\r\n?/g, "\n");
-  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u2026(truncated)" : line);
+  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u0393\xC7\xAA(truncated)" : line);
   const escaped = cappedLines.map((line) => line.replace(/\\/g, "\\\\")).map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "\\`".repeat(m.length))).map((line) => line.replace(/~{3,}/g, (m) => "\\~".repeat(m.length)));
   return escaped.join("\n");
 }
@@ -23795,24 +23746,27 @@ function flushDetectLogToJobSummary(body) {
   const logPath = detectLogPath();
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (body.trim() === "") {
-    if (fs2.existsSync(logPath)) {
-      fs2.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
   if (!summaryPath) {
-    if (fs2.existsSync(logPath)) {
-      fs2.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
-  const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
+  const block = "## Coldstep \u252C\u2556 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
     fs2.appendFileSync(summaryPath, block, "utf8");
-    fs2.unlinkSync(logPath);
   } catch (e) {
     warning(
       `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`
+    );
+    return;
+  }
+  try {
+    fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${logPath}`
     );
   }
 }
@@ -23827,11 +23781,6 @@ async function finalizeDigestAndNotifications(reportJobSummary) {
     await maybePostPRSummary(digestBody);
   } catch (e) {
     warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 async function maybePostPRSummary(body) {
@@ -23859,13 +23808,15 @@ async function maybePostPRSummary(body) {
   const ghMs = 6e4;
   let ghTimeoutId;
   try {
+    const commentPromise = octokit.rest.issues.createComment({
+      owner: ctx.repo.owner,
+      repo: ctx.repo.repo,
+      issue_number: pr.number,
+      body: "## Coldstep digest\n\n" + snippet
+    }).catch(() => {
+    });
     await Promise.race([
-      octokit.rest.issues.createComment({
-        owner: ctx.repo.owner,
-        repo: ctx.repo.repo,
-        issue_number: pr.number,
-        body: "## Coldstep digest\n\n" + snippet
-      }),
+      commentPromise,
       new Promise((_, reject) => {
         ghTimeoutId = setTimeout(
           () => reject(new Error(`GitHub API timeout after ${ghMs / 1e3}s`)),
@@ -23877,59 +23828,6 @@ async function maybePostPRSummary(body) {
     if (ghTimeoutId !== void 0) {
       clearTimeout(ghTimeoutId);
     }
-  }
-}
-async function maybeSlackWebhook(body) {
-  const urlRaw = (getInput("slack-webhook-endpoint") || "").trim();
-  if (!urlRaw || body.trim() === "") {
-    return;
-  }
-  const urlParsed = parseSlackIncomingWebhookURL(urlRaw);
-  if (!urlParsed) {
-    warning(
-      "slack-webhook-endpoint: must be a Slack Incoming Webhook (https://hooks.slack.com/services/...); skipping send"
-    );
-    return;
-  }
-  const max = 35e3;
-  const text = body.length > max ? body.slice(0, max) + "\n\u2026(truncated for Slack)" : body;
-  let payload;
-  try {
-    payload = JSON.stringify({ text: "Coldstep digest\n\n" + text });
-  } catch (e) {
-    warning(
-      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`
-    );
-    return;
-  }
-  const abortMs = 6e4;
-  const ctrl = new AbortController();
-  const deadline = setTimeout(() => ctrl.abort(), abortMs);
-  let r;
-  try {
-    r = await fetch(urlParsed.href, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: payload,
-      signal: ctrl.signal
-    });
-  } catch (e) {
-    warning(
-      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`
-    );
-    r = void 0;
-  } finally {
-    clearTimeout(deadline);
-  }
-  if (r === void 0) {
-    return;
-  }
-  try {
-    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
-  } catch {
-  }
-  if (!r.ok) {
-    warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
 }
 async function post() {

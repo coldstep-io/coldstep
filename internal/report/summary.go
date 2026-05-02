@@ -13,7 +13,10 @@ func AppendJobSummary(path, markdown string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = f.WriteString(markdown)
-	return err
+	_, werr := f.WriteString(markdown)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
