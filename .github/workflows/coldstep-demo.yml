@@ -1,6 +1,6 @@
-# Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only ΓÇö it does NOT block traffic.
+# Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
 #
-# Job `defend-mode` (defend mode ΓÇö CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
+# Job `defend-mode` (defend mode — CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
 # agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
@@ -169,7 +169,7 @@ jobs:
           {
             echo "## Detect verification"
             echo ""
-            echo "- **Result:** pass ΓÇö required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
+            echo "- **Result:** pass — required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Compare detect output with previous successful run (opt-in)
@@ -311,7 +311,7 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (defend ΓÇö blocks non-allowlisted IPv4 egress)
+      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
         uses: ./
         with:
           phase: start
@@ -323,12 +323,12 @@ jobs:
           allowed-ips: 1.1.1.1
           release-path: bin/coldstep
 
-      - name: Allowed target ΓÇö nmap port 80 (theclouddj.com)
+      - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
           set -euo pipefail
           nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
 
-      - name: Allowed IP target ΓÇö direct TCP connect (1.1.1.1:443)
+      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
         run: |
           set -euo pipefail
           if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
@@ -343,7 +343,7 @@ jobs:
           set -euo pipefail
           echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Disallowed target ΓÇö curl example.com (expect deny, not a successful fetch)
+      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
@@ -351,7 +351,7 @@ jobs:
             exit 1
           fi
 
-      - name: Disallowed IP target ΓÇö direct TCP connect (93.184.216.34:443, expect deny)
+      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
         run: |
           set -euo pipefail
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
