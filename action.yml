@@ -98,12 +98,6 @@ inputs:
       If true, post step comments the digest on the pull request (pull_request events only). Requires github-token.
     required: false
     default: 'false'
-  slack-webhook-endpoint:
-    description: >-
-      Optional Slack Incoming Webhook URL only (https://hooks.slack.com/services/...). Other hosts are rejected to
-      avoid accidental SSRF from workflow input. When valid, the post step POSTs a short digest after shutdown.
-    required: false
-    default: ''
   feature-gates:
     description: >-
       Optional key=value pairs (comma-separated) passed through to the agent as COLDSTEP_FEATURE_GATES for experiments
@@ -199,5 +193,4 @@ runs:
           --fail-on-error "${{ inputs.fail-on-error }}" \
           --report-job-summary "${{ inputs.report-job-summary }}" \
           --report-pr-summary "${{ inputs.report-pr-summary }}" \
-          --github-token "${{ inputs.github-token }}" \
-          --slack-webhook-endpoint "${{ inputs.slack-webhook-endpoint }}"
+          --github-token "${{ inputs.github-token }}"

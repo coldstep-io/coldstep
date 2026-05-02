@@ -2,42 +2,9 @@ package main
 
 import (
 	"bytes"
-	"net/url"
 	"strings"
 	"testing"
 )
-
-func TestParseSlackIncomingWebhookURL_Valid(t *testing.T) {
-	cases := []string{
-		"https://hooks.slack.com/services/T123/B456/abc",
-		"https://hooks.slack.com/services/A/B/C",
-	}
-	for _, raw := range cases {
-		u := parseSlackIncomingWebhookURL(raw)
-		if u == nil {
-			t.Errorf("expected valid URL for %q, got nil", raw)
-		}
-	}
-}
-
-func TestParseSlackIncomingWebhookURL_Invalid(t *testing.T) {
-	cases := []string{
-		"",
-		"http://hooks.slack.com/services/T/B/x",
-		"https://evil.com/services/T/B/x",
-		"https://hooks.slack.com/hooks/T/B/x",
-		"https://user:pass@hooks.slack.com/services/T/B/x",
-		"ftp://hooks.slack.com/services/T/B/x",
-		"https://hooks.slack.com/",
-		"not-a-url",
-	}
-	for _, raw := range cases {
-		u := parseSlackIncomingWebhookURL(raw)
-		if u != nil {
-			t.Errorf("expected nil for %q, got %v", raw, u)
-		}
-	}
-}
 
 func TestSanitizeDigestForMarkdown_BOM(t *testing.T) {
 	// BOM must be stripped
@@ -268,15 +235,6 @@ func TestBoolString(t *testing.T) {
 	}
 	if boolString(false) != "false" {
 		t.Error("expected false")
-	}
-}
-
-func TestParseSlackURL_PathPrefix(t *testing.T) {
-	// Must require /services/ prefix
-	u, _ := url.Parse("https://hooks.slack.com/workflows/T/B/x")
-	parsed := parseSlackIncomingWebhookURL(u.String())
-	if parsed != nil {
-		t.Error("expected nil for /workflows/ path")
 	}
 }
 

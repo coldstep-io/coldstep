@@ -26,8 +26,6 @@ function inputBoolDefault(name: string, defaultVal: boolean): boolean {
 /** Same cap as Go cmd/coldstep-action and composite main.ts readiness polling. */
 const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 
-const MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
-
 function readAgentReadyOk(statusPath: string): boolean {
   try {
     if (!fs.existsSync(statusPath)) {
@@ -42,58 +40,6 @@ function readAgentReadyOk(statusPath: string): boolean {
   } catch {
     return false;
   }
-}
-
-async function drainWebResponseBody(r: Response, maxBytes: number): Promise<void> {
-  if (!r.body) {
-    return;
-  }
-  const reader = r.body.getReader();
-  let total = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      if (value) {
-        total += value.byteLength;
-      }
-      if (total >= maxBytes) {
-        await reader.cancel();
-        break;
-      }
-    }
-  } catch {
-    try {
-      await reader.cancel();
-    } catch {
-      /* ignore */
-    }
-  }
-}
-
-/** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
-function parseSlackIncomingWebhookURL(raw: string): URL | null {
-  let u: URL;
-  try {
-    u = new URL(raw);
-  } catch {
-    return null;
-  }
-  if (u.protocol !== 'https:') {
-    return null;
-  }
-  if (u.username !== '' || u.password !== '') {
-    return null;
-  }
-  if (u.hostname.toLowerCase() !== 'hooks.slack.com') {
-    return null;
-  }
-  if (!u.pathname.toLowerCase().startsWith('/services/')) {
-    return null;
-  }
-  return u;
 }
 
 function parseAgentPidFromFile(contents: string): number | null {
@@ -186,17 +132,13 @@ function flushDetectLogToJobSummary(body: string): void {
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
 
   if (body.trim() === '') {
-    if (fs.existsSync(logPath)) {
-      fs.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
 
   if (!summaryPath) {
     // No step summary file (non-Actions or misconfigured): still consume digest so it is not left stale.
-    if (fs.existsSync(logPath)) {
-      fs.unlinkSync(logPath);
-    }
+    discardDigestFileIfPresent();
     return;
   }
 
@@ -225,11 +167,6 @@ async function finalizeDigestAndNotifications(reportJobSummary: boolean): Promis
     await maybePostPRSummary(digestBody);
   } catch (e) {
     core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
@@ -276,64 +213,6 @@ async function maybePostPRSummary(body: string): Promise<void> {
     if (ghTimeoutId !== undefined) {
       clearTimeout(ghTimeoutId);
     }
-  }
-}
-
-async function maybeSlackWebhook(body: string): Promise<void> {
-  const urlRaw = (core.getInput('slack-webhook-endpoint') || '').trim();
-  if (!urlRaw || body.trim() === '') {
-    return;
-  }
-  const urlParsed = parseSlackIncomingWebhookURL(urlRaw);
-  if (!urlParsed) {
-    core.warning(
-      'slack-webhook-endpoint: must be a Slack Incoming Webhook (https://hooks.slack.com/services/...); skipping send',
-    );
-    return;
-  }
-  const max = 35000;
-  const text =
-    body.length > max
-      ? body.slice(0, max) + '\n…(truncated for Slack)'
-      : body;
-  let payload: string;
-  try {
-    payload = JSON.stringify({ text: 'Coldstep digest\n\n' + text });
-  } catch (e) {
-    core.warning(
-      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`,
-    );
-    return;
-  }
-  const abortMs = 60_000;
-  const ctrl = new AbortController();
-  const deadline = setTimeout(() => ctrl.abort(), abortMs);
-  let r: Response | undefined;
-  try {
-    r = await fetch(urlParsed.href, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: payload,
-      signal: ctrl.signal,
-    });
-  } catch (e) {
-    core.warning(
-      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`,
-    );
-    r = undefined;
-  } finally {
-    clearTimeout(deadline);
-  }
-  if (r === undefined) {
-    return;
-  }
-  try {
-    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
-  } catch {
-    /* ignore drain errors */
-  }
-  if (!r.ok) {
-    core.warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
 }
 

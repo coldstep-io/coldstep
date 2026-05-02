@@ -92,7 +92,6 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 | **`report-job-summary`** | `true` | If **`true`**, **stop** merges **`.coldstep-detect.md`** into the Job Summary. |
 | **`report-pr-summary`** | `false` | If **`true`**, **stop** posts a PR comment (**`pull_request`** workflows only). |
 | **`github-token`** | `${{ github.token }}` | Token for PR comments when **`report-pr-summary`** is **`true`**. |
-| **`slack-webhook-endpoint`** | *(empty)* | Slack Incoming Webhook URL only (`https://hooks.slack.com/services/...`). **Stop** posts a short digest. |
 | **`smoke-test-egress`** | `false` | If **`true`**, optional IPv4 UDP/HTTP probes after start so JSONL/digest often shows **udp/http** rows. |
 | **`io-uring-disable`** | `true` | If **`true`**, disable **io_uring** via sysctl before start (reduces syscall-hook bypass). |
 | **`signing-key`** | *(empty)* | Optional base64 **Ed25519** seed/key; when set, JSONL events are signed. |
@@ -244,10 +243,10 @@ GitHub Summary rendering is Markdown-first; use short labels or optional emoji i
 ## FAQ
 
 **Why two `uses: coldstep-io/coldstep` steps?**  
-The composite has **`phase: start`** (attach agent before your work) and **`phase: stop`** (flush digest, optional Slack/PR). GitHub does not run a hidden “post” hook for composite actions—you must call **`stop`** explicitly.
+The composite has **`phase: start`** (attach agent before your work) and **`phase: stop`** (flush digest, optional PR comment). GitHub does not run a hidden “post” hook for composite actions—you must call **`stop`** explicitly.
 
 **What if I skip `phase: stop`?**  
-You lose a clean shutdown path: digest/Summary/Slack/PR comment behavior from the stop step may not run, and you may leave the workspace without the usual final artifacts.
+You lose a clean shutdown path: digest/Summary/PR comment behavior from the stop step may not run, and you may leave the workspace without the usual final artifacts.
 
 **Can I use `mode: enforce` or `CI_GUARD_MODE=enforce`?**  
 No. Use **`defend`** for blocking mode. See **[CHANGELOG](CHANGELOG.md)**.
@@ -263,9 +262,6 @@ You can, but **`main` moves**; prefer a **release tag** per **[README](README.md
 
 **How do I get a PR comment with the digest?**  
 Set **`report-pr-summary: true`** on the **`stop`** step (and ensure the workflow is a **`pull_request`** event). **`github-token`** defaults to **`github.token`**.
-
-**What Slack URL is allowed?**  
-Only **`https://hooks.slack.com/services/...`** incoming webhooks. Pass **`slack-webhook-endpoint`** on the **`stop`** step (`inputs` are read there).
 
 **Where is the full honesty matrix for CI?**  
 **[VALIDATION.md](VALIDATION.md)** — what is proven in-repo vs not.

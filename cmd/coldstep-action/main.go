@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -60,7 +59,6 @@ type stopConfig struct {
 	ReportJobSummary bool
 	ReportPRSummary  bool
 	GithubToken      string
-	SlackWebhook     string
 }
 
 func main() {
@@ -126,7 +124,6 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
 	fs.BoolVar(&cfg.ReportPRSummary, "report-pr-summary", false, "")
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
-	fs.StringVar(&cfg.SlackWebhook, "slack-webhook-endpoint", "", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -351,11 +348,6 @@ func runStop(cfg stopConfig) error {
 			_ = postPRComment(token, sanitizeDigestForMarkdown(body))
 		}
 	}
-	if strings.TrimSpace(cfg.SlackWebhook) != "" && strings.TrimSpace(body) != "" {
-		if u := parseSlackIncomingWebhookURL(cfg.SlackWebhook); u != nil {
-			_ = postSlack(*u, body)
-		}
-	}
 	return nil
 }
 
@@ -411,50 +403,6 @@ func postPRComment(token, body string) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github comment failed: %s", resp.Status)
-	}
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
-	return nil
-}
-
-func parseSlackIncomingWebhookURL(raw string) *url.URL {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return nil
-	}
-	if u.Scheme != "https" || strings.ToLower(u.Hostname()) != "hooks.slack.com" {
-		return nil
-	}
-	if !strings.HasPrefix(strings.ToLower(u.Path), "/services/") {
-		return nil
-	}
-	if u.User != nil {
-		return nil
-	}
-	return u
-}
-
-func postSlack(u url.URL, body string) error {
-	text := body
-	if len(text) > 35000 {
-		text = text[:35000] + "\n…(truncated for Slack)"
-	}
-	payload := map[string]string{"text": "Coldstep digest\n\n" + text}
-	b, err := json.Marshal(payload)
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := httpNotifyClient.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("slack webhook failed: %s", resp.Status)
 	}
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil

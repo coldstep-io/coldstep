@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Breaking
 
+- **Slack:** composite input **`slack-webhook-endpoint`** and stop-phase posting to Slack Incoming Webhooks are **removed**. Use Job Summary, PR comments (**`report-pr-summary`**), or your own workflow step if you need chat notifications.
 - **`mode: enforce`** and **`CI_GUARD_MODE=enforce`** are **removed**. Use **`defend`** for blocking egress. Historical JSONL/digest rows may still contain legacy **`"mode":"enforce"`** strings; readers remain tolerant for old artifacts.
 
 **Migration (copy/paste)**
