@@ -29,6 +29,9 @@ on:
 permissions:
   contents: read
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 jobs:
   govulncheck:
     if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.run_govulncheck)
