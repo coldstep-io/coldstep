@@ -23756,10 +23756,17 @@ function flushDetectLogToJobSummary(body) {
   const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
     fs2.appendFileSync(summaryPath, block, "utf8");
-    fs2.unlinkSync(logPath);
   } catch (e) {
     warning(
       `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`
+    );
+    return;
+  }
+  try {
+    fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${logPath}`
     );
   }
 }

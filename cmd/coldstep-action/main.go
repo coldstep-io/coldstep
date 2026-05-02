@@ -18,6 +18,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 // httpNotifyClient bounds post-step webhook/API calls so a stuck egress target
@@ -328,9 +329,15 @@ func runStop(cfg stopConfig) error {
 				block += "\n"
 			}
 			f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
-			if err == nil {
-				_, _ = f.WriteString(block)
-				_ = f.Close()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: open GITHUB_STEP_SUMMARY: %v\n", err)
+			} else {
+				if _, werr := f.WriteString(block); werr != nil {
+					fmt.Fprintf(os.Stderr, "coldstep: write GITHUB_STEP_SUMMARY: %v\n", werr)
+				}
+				if cerr := f.Close(); cerr != nil {
+					fmt.Fprintf(os.Stderr, "coldstep: close GITHUB_STEP_SUMMARY: %v\n", cerr)
+				}
 			}
 		}
 	}
@@ -345,7 +352,9 @@ func runStop(cfg stopConfig) error {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token != "" {
-			_ = postPRComment(token, sanitizeDigestForMarkdown(body))
+			if err := postPRComment(token, sanitizeDigestForMarkdown(body)); err != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: report-pr-summary: %v\n", err)
+			}
 		}
 	}
 	return nil
@@ -515,7 +524,12 @@ func sanitizeDigestForMarkdown(body string) string {
 	for i := range lines {
 		line := lines[i]
 		if len(line) > 4096 {
-			line = line[:4096] + " …(truncated)"
+			// Clip at a valid UTF-8 boundary to avoid producing invalid byte sequences.
+			end := 4096
+			for end > 0 && !utf8.ValidString(line[:end]) {
+				end--
+			}
+			line = line[:end] + " …(truncated)"
 		}
 		line = strings.ReplaceAll(line, "\\", "\\\\")
 		line = strings.ReplaceAll(line, "<", "&lt;")

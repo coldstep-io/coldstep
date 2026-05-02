@@ -148,10 +148,18 @@ function flushDetectLogToJobSummary(body: string): void {
     (body.endsWith('\n') ? '' : '\n');
   try {
     fs.appendFileSync(summaryPath, block, 'utf8');
-    fs.unlinkSync(logPath);
   } catch (e) {
     core.warning(
       `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`,
+    );
+    return;
+  }
+  // Append succeeded — clean up the workspace digest.
+  try {
+    fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${logPath}`,
     );
   }
 }
