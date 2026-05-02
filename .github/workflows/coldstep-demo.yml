@@ -239,7 +239,7 @@ jobs:
 
       - name: Persist detect JSONL baseline artifact
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: coldstep-events-baseline-${{ env.NS_RUNNER_LABEL }}
           path: ${{ github.workspace }}/.coldstep-events.jsonl

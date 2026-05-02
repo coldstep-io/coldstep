@@ -23,7 +23,7 @@ func TestSanitizeDigestForMarkdown_BackslashFirst(t *testing.T) {
 	// If \` is in input, we must get \\` not \\`` which would be wrong
 	input := "\\`test"
 	out := sanitizeDigestForMarkdown(input)
-	// Original \ ΓåÆ \\ and then the ` is a single backtick (not 3), so no fence escaping
+	// Original backslash escapes first; then ` is a single backtick (not 3), so no fence escaping
 	if !strings.Contains(out, "\\\\`") {
 		t.Errorf("backslash-first rule violated: got %q", out)
 	}
@@ -62,11 +62,27 @@ func TestSanitizeDigestForMarkdown_LineLengthCap(t *testing.T) {
 	line := strings.Repeat("x", 5000)
 	out := sanitizeDigestForMarkdown(line)
 	parts := strings.Split(out, "\n")
-	if len(parts[0]) > 4096+len(" ΓÇª(truncated)") {
+	if len(parts[0]) > 4096+len(" ...(truncated)") {
 		t.Errorf("line not capped at 4096: len=%d", len(parts[0]))
 	}
-	if !strings.Contains(parts[0], "ΓÇª(truncated)") {
+	if !strings.Contains(parts[0], "...(truncated)") {
 		t.Errorf("truncated marker missing: %q", parts[0][:80])
+	}
+}
+
+func TestTruncate_utf8Boundary(t *testing.T) {
+	prefix := strings.Repeat("x", 100)
+	s := prefix + "€"
+	if len(s) != 103 {
+		t.Fatalf("unexpected len: %d", len(s))
+	}
+	out := truncate(s, 101)
+	want := prefix + "\n\n_(truncated)_\n"
+	if out != want {
+		t.Fatalf("truncate broke UTF-8: got %q want %q", out, want)
+	}
+	if truncate(s, len(s)) != s {
+		t.Fatal("truncate noop should return identity")
 	}
 }
 

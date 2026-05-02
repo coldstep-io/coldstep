@@ -80,6 +80,27 @@ function parseAgentPidFromFile(contents: string): number | null {
  * that mitigation too; the helper now escapes both fence flavours so the
  * wrap is safe against breakout.
  */
+
+/**
+ * Max UTF-16 code units per line before truncation. The Go sanitizer clips at
+ * 4096 UTF-8 bytes; this clips at 4096 UTF-16 code units (approximate parity —
+ * for ASCII they are identical; heavy non-BMP text may differ slightly).
+ */
+const MAX_DIGEST_LINE_UNITS = 4096;
+
+/** Clip so the slice does not end between a UTF-16 surrogate pair. */
+function truncateLineUtf16(line: string, maxUnits: number): string {
+  if (line.length <= maxUnits) {
+    return line;
+  }
+  let end = maxUnits;
+  const c = line.charCodeAt(end - 1);
+  if (c >= 0xd800 && c <= 0xdbff) {
+    end -= 1;
+  }
+  return line.slice(0, end) + ' ...(truncated)';
+}
+
 function sanitizeDigestForMarkdown(body: string): string {
   if (body === '') {
     return body;
@@ -88,7 +109,11 @@ function sanitizeDigestForMarkdown(body: string): string {
   const normalized = stripped.replace(/\r\n?/g, '\n');
   const cappedLines = normalized
     .split('\n')
-    .map((line) => (line.length > 4096 ? line.slice(0, 4096) + ' ΓÇª(truncated)' : line));
+    .map((line) =>
+      line.length > MAX_DIGEST_LINE_UNITS
+        ? truncateLineUtf16(line, MAX_DIGEST_LINE_UNITS)
+        : line,
+    );
   const escaped = cappedLines
     .map((line) => line.replace(/\\/g, '\\\\'))
     .map((line) => line.replace(/</g, '&lt;'))
@@ -143,7 +168,7 @@ function flushDetectLogToJobSummary(body: string): void {
   }
 
   const block =
-    '## Coldstep ┬╖ digest (exec / network / enforcement)\n\n' +
+    '## Coldstep - digest (exec / network / enforcement)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
   try {
@@ -201,32 +226,25 @@ async function maybePostPRSummary(body: string): Promise<void> {
   const snippet = safe.length > max ? safe.slice(0, max) + '\n\n_(truncated)_\n' : safe;
   const octokit = github.getOctokit(token);
   const ghMs = 60_000;
-  let ghTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  const abort = new AbortController();
+  const timeoutId = setTimeout(() => abort.abort(), ghMs);
   try {
-    // Attach a no-op catch to the comment promise so that if the timeout wins
-    // the race and the request subsequently rejects, Node does not surface an
-    // unhandledRejection from the orphaned in-flight promise.
-    const commentPromise = octokit.rest.issues
-      .createComment({
-        owner: ctx.repo.owner,
-        repo: ctx.repo.repo,
-        issue_number: pr.number,
-        body: '## Coldstep digest\n\n' + snippet,
-      })
-      .catch(() => {});
-    await Promise.race([
-      commentPromise,
-      new Promise<never>((_, reject) => {
-        ghTimeoutId = setTimeout(
-          () => reject(new Error(`GitHub API timeout after ${ghMs / 1000}s`)),
-          ghMs,
-        );
-      }),
-    ]);
-  } finally {
-    if (ghTimeoutId !== undefined) {
-      clearTimeout(ghTimeoutId);
+    await octokit.rest.issues.createComment({
+      owner: ctx.repo.owner,
+      repo: ctx.repo.repo,
+      issue_number: pr.number,
+      body: '## Coldstep digest\n\n' + snippet,
+      request: { signal: abort.signal },
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    // AbortError fires when our timeout fires; surface as a warning, not a step failure.
+    if (abort.signal.aborted) {
+      throw new Error(`GitHub API timeout after ${ghMs / 1000}s`);
     }
+    throw new Error(msg);
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 
