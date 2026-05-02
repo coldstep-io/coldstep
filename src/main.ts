@@ -254,7 +254,7 @@ async function run(): Promise<void> {
   const detectLog = path.join(baseDir, '.coldstep-detect.md');
   const pidFile = path.join(actionPath, '.coldstep.pid');
   const binPath = path.join(actionPath, 'bin', 'coldstep');
-  const script = path.join(actionPath, 'public_scripts', 'build-agent-linux.sh');
+  const script = path.join(actionPath, 'scripts', 'build-agent-linux.sh');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');
   const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
 
@@ -352,23 +352,8 @@ async function run(): Promise<void> {
     const probeScript = [
       'set +e',
       'sleep 1',
-      'if command -v python3 >/dev/null 2>&1; then',
-      '  python3 <<\'UDPY\'',
-      'import socket',
-      's = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)',
-      's.sendto(b"x", ("1.1.1.1", 53))',
-      's.close()',
-      'UDPY',
-      '  python3 <<\'PY\'',
-      'import socket',
-      'addr = ("example.com", 80)',
-      'req = b"GET / HTTP/1.1\\r\\nHost: example.com\\r\\nConnection: close\\r\\n\\r\\n"',
-      's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
-      's.connect(addr)',
-      's.sendall(req)',
-      's.close()',
-      'PY',
-      'fi',
+      'timeout 10 bash -c \'printf "x" >/dev/udp/1.1.1.1/53\' >/dev/null 2>&1 || true',
+      'timeout 10 bash -c \'printf "GET / HTTP/1.1\\r\\nHost: example.com\\r\\n\\r\\n" >/dev/tcp/example.com/80\' >/dev/null 2>&1 || true',
     ].join('\n');
     const probe = spawn('bash', ['-c', probeScript], {
       detached: true,

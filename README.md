@@ -8,11 +8,11 @@
 
 **[Quick Start](QUICK_START.md)** · **[Validation](VALIDATION.md)** (what CI proves) · **[`action.yml`](action.yml)** (all inputs) · **[`LICENSE.md`](LICENSE.md)** · **[Contributing](CONTRIBUTING.md)** · **[Security](SECURITY.md)**
 
-### Runtime vs this repository’s CI
+### Runtime
 
-Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** for Coldstep’s own steps — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
+Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep`, `bin/coldstep-report` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
 
-The **coldstep-io/coldstep** repository’s **CI** on **`dev`** (and integration branches) continues to use **`python3`** for maintenance scripts under **`public_scripts/`** (UTF-8 checks, workflow pin checks, `unittest`, etc.). That is **maintainer automation**, not a runtime dependency of the published Action.
+
 
 ---
 
@@ -68,7 +68,7 @@ jobs:
 | :---- | :----- |
 | **IPv6 scope** | **IPv6 egress enforcement and BPF cgroup programs for IPv6 (`connect6` / `sendmsg6`) are out of scope for v1.** Observability hooks in this repo are IPv4-focused for syscall and cgroup paths that Coldstep ships; GitHub-hosted IPv6 egress is informational only where workflows probe it. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
-| **Build on runner** | The action runs [`public_scripts/build-agent-linux.sh`](public_scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
+| **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
@@ -108,9 +108,9 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
 The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default **on**). Full **detect-report** workflows keep that digest **off** so the Summary is not dominated by the long shutdown digest:
-
+- **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`coldstep-report build-model`), enriches (rDNS + OTX), writes Tier-1 BLUF and Tier-2 **`coldstep-detect-report.html`** (downloadable artifact).
 - **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`build_report_model.py`), enriches (rDNS + OTX), writes Tier-1 BLUF via **`render_step_summary.py`** and Tier-2 **`coldstep-detect-report.html`** via **`render_html_report.py`** (downloadable artifact).
-
+- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same `coldstep-report build-model` pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends IP/FQDN/rDNS matrix to the Job Summary.
 - **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same **`build_report_model.py`** pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends **`render_ip_classification_summary.py`** for the IP/FQDN/rDNS matrix in the Job Summary.
 
 Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
@@ -129,16 +129,16 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy “violations” alone. |
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
 | `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
-| `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated Python summary (full BLUF + HTML **or** IP classification on `dev`). |
+| `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated `coldstep-report render-summary` summary. |
 | `report-pr-summary` | Optional PR comment (needs `github-token`). |
 | `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
 | `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
 
 ### Optional threat intel (AlienVault OTX)
 
-Detect workflows that build the **report model** (see [`public_scripts/coldstep_detect_report/README.md`](public_scripts/coldstep_detect_report/README.md)) can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed). Details, env vars, and schema: **`public_scripts/coldstep_detect_report/README.md`**.
+Detect workflows that build the **report model** can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed).
 
-Enrichment walks indicators present in the report model — including **`ip_classification`** rows on the dev IP summary pipeline — when **`OTX_API_KEY`** is set (see **`public_scripts/coldstep_otx/enrich.py`**).
+Enrichment walks indicators present in the report model when **`OTX_API_KEY`** is set (`coldstep-report otx-enrich`).
 
 ---
 
@@ -165,13 +165,13 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 **Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
 
 - **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
-- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`public_scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
+- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
 
 ### Deep-debug escalation guide
 
 When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
 
-The workflow executes **`public_scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs — there is no supported local reproduction path.
+The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs — there is no supported local reproduction path.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo’s acknowledgment section where present.
 

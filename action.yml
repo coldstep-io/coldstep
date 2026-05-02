@@ -135,7 +135,7 @@ inputs:
     default: ''
   bootstrap-allowlist:
     description: >-
-      Default false. When true, merge vendored bootstrap packs from public_scripts/coldstep_bootstrap/
+      Default false. When true, merge vendored bootstrap packs from scripts/coldstep_bootstrap/
       (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into allowed-domains and allowed-ips after inline
       and workspace file merges. Opt-in only — review upgrades when pinning coldstep-io/coldstep tags.
     required: false
@@ -151,7 +151,7 @@ runs:
         AP="${GITHUB_ACTION_PATH:-$PWD}"
         BIN="${AP}/bin/coldstep-action"
         if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
         fi
         cmd=("${BIN}" start
           --mode "${{ inputs.mode }}"
@@ -187,7 +187,7 @@ runs:
         AP="${GITHUB_ACTION_PATH:-$PWD}"
         BIN="${AP}/bin/coldstep-action"
         if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/public_scripts/build-agent-linux.sh" "${AP}"
+          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
         fi
         "${BIN}" stop \
           --fail-on-error "${{ inputs.fail-on-error }}" \

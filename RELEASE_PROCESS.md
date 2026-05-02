@@ -8,7 +8,7 @@ This is the **single standard** for where the recommended **`coldstep-io/coldste
 
 | Surface | When to update | Rule |
 | :------ | :------------- | :--- |
-| `public_scripts/check_workflow_action_pins.py` (`MARKETPLACE_COLDSTEP_TAG`) | Release PR (same train as the tag) | Must equal the tag you are about to publish. |
+| `scripts/check_workflow_action_pins.py` (`MARKETPLACE_COLDSTEP_TAG`) | Release PR (same train as the tag) | Must equal the tag you are about to publish. |
 | `README.md`, `QUICK_START.md`, `CONTRIBUTING.md` | Release PR | Recommended consumer pin = that tag. |
 | `.github/workflows/coldstep-demo*.yml` and related (`COLDSTEP_AGENT_VERSION`, comments) | Release PR | Must match the GitHub Release that publishes **`coldstep-linux-amd64`**. |
 | `CHANGELOG.md` | Release PR | Add **`## [X.Y.Z]`** (semver without leading **`v`**) and keep footer compare links accurate. |
@@ -22,7 +22,7 @@ This is the **single standard** for where the recommended **`coldstep-io/coldste
 
 ## 1. Land the release on `main`
 
-- Open a **PR** (for example `release/vX.Y.Z`) with version bumps: **`README`**, **`QUICK_START`**, **`CONTRIBUTING`**, **`public_scripts/check_workflow_action_pins.py`** → **`MARKETPLACE_COLDSTEP_TAG`**, **`coldstep-demo*`** workflows → **`COLDSTEP_AGENT_VERSION`**, and **`CHANGELOG.md`**. **Exclude `website/`** from this PR by default; bump **`website/index.html`** in a **follow-up PR after** the tag is published on Releases (**Consumer pin standard**).
+- Open a **PR** (for example `release/vX.Y.Z`) with version bumps: **`README`**, **`QUICK_START`**, **`CONTRIBUTING`**, **`scripts/check_workflow_action_pins.py`** → **`MARKETPLACE_COLDSTEP_TAG`**, **`coldstep-demo*`** workflows → **`COLDSTEP_AGENT_VERSION`**, and **`CHANGELOG.md`**. **Exclude `website/`** from this PR by default; bump **`website/index.html`** in a **follow-up PR after** the tag is published on Releases (**Consumer pin standard**).
 - Wait for **CI green** on the PR (`coldstep-ci`, CodeQL, etc.), then **merge to `main`**.  
 - **Do not** tag until the release commit is on `main`.
 
@@ -82,7 +82,7 @@ When cutting **`vX.Y.Z`**, bump **`[X.Y.Z]`** in **`CHANGELOG.md`** in the same 
 
 | Location | What to bump |
 | -------- | ------------ |
-| `public_scripts/check_workflow_action_pins.py` | `MARKETPLACE_COLDSTEP_TAG` |
+| `scripts/check_workflow_action_pins.py` | `MARKETPLACE_COLDSTEP_TAG` |
 | `README.md`, `QUICK_START.md`, `CONTRIBUTING.md` | `coldstep-io/coldstep@vX.Y.Z` |
 | `.github/workflows/coldstep-demo*.yml` | `COLDSTEP_AGENT_VERSION` and comment examples |
 | `CHANGELOG.md` | New `## [X.Y.Z]` section; fix footer compare links |

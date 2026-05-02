@@ -3,7 +3,7 @@
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Report CLI is built from source via `public_scripts/build-coldstep-report-linux.sh`
+# (`supply-chain-attest.yml`). Report CLI is built from source via `scripts/build-coldstep-report-linux.sh`
 # (release asset is agent-only).
 
 name: coldstep-demo-defend
@@ -60,7 +60,7 @@ jobs:
           chmod +x bin/coldstep
 
       - name: Build coldstep-report (Go only; agent from release)
-        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       # apt and stub-resolver DNS must run before defend: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
       - name: Install runtime probes (before defend)

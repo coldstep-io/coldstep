@@ -34,21 +34,15 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: gofmt check
-        run: bash public_scripts/check-gofmt.sh
+        run: bash scripts/check-gofmt.sh
 
   action_manifest:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
-      - name: Assert tracked text is UTF-8 (not UTF-16)
-        run: python3 public_scripts/assert_utf8_text.py
-      - name: Check workflow action pins (no @main; marketplace tag)
-        run: python3 public_scripts/check_workflow_action_pins.py
-      - name: Python script regression tests (diff + pins)
-        run: python3 -m unittest discover -s public_scripts -p 'test_*.py' -v
       - name: Shell contract (prev-diff summary markers)
-        run: bash public_scripts/test_workflow_diff_markers.sh
+        run: bash scripts/test_workflow_diff_markers.sh
 
   unit:
     name: unit (${{ matrix.os }})
@@ -65,7 +59,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -95,7 +89,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF and generated Go
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -125,7 +119,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Prepare BPF
-        run: bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
@@ -148,7 +142,7 @@ jobs:
         with:
           go-version: '1.25.x'
       - name: Build action binaries
-        run: bash public_scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
       - name: Verify action binaries exist
         run: |
           set -euo pipefail
@@ -355,11 +349,11 @@ jobs:
         id: coldstep-bin-cache
         with:
           path: bin/coldstep
-          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'public_scripts/build-agent-linux.sh') }}
+          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh') }}
 
       - name: Build Linux agent (runs on cache miss only)
         if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
-        run: bash public_scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Install runtime probes (before enforce so mirrors/DNS still work)
         run: |

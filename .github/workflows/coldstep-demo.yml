@@ -71,7 +71,7 @@ jobs:
           chmod +x bin/coldstep
 
       - name: Build coldstep-report (Go only; agent from release)
-        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Start Coldstep (detect mode)
         uses: ./
@@ -277,7 +277,7 @@ jobs:
           chmod +x bin/coldstep
 
       - name: Build coldstep-report (Go only; agent from release)
-        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
       - name: Install runtime probes (before enforce so mirrors/DNS still work)

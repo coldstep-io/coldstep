@@ -23808,13 +23808,15 @@ async function maybePostPRSummary(body) {
   const ghMs = 6e4;
   let ghTimeoutId;
   try {
+    const commentPromise = octokit.rest.issues.createComment({
+      owner: ctx.repo.owner,
+      repo: ctx.repo.repo,
+      issue_number: pr.number,
+      body: "## Coldstep digest\n\n" + snippet
+    }).catch(() => {
+    });
     await Promise.race([
-      octokit.rest.issues.createComment({
-        owner: ctx.repo.owner,
-        repo: ctx.repo.repo,
-        issue_number: pr.number,
-        body: "## Coldstep digest\n\n" + snippet
-      }),
+      commentPromise,
       new Promise((_, reject) => {
         ghTimeoutId = setTimeout(
           () => reject(new Error(`GitHub API timeout after ${ghMs / 1e3}s`)),

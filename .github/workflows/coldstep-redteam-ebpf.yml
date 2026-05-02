@@ -38,7 +38,7 @@ jobs:
 
       - name: Build coldstep agent
         run: |
-          bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+          bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
           mv bin/coldstep bin/coldstep-built
           chmod +x bin/coldstep-built
           # For release-path compatibility in next step
@@ -68,7 +68,7 @@ jobs:
           echo "--- EXEC CANARY ---"
           # Standard exec activity
           ls /etc/passwd >/dev/null
-          # Integrity canary: JSONL exec events must match predicate comm=bash (see build_report_model.py).
+          # Integrity canary: JSONL exec events must match predicate comm=bash.
           bash -c 'echo "redteam-bash-canary" >/dev/null'
           
           echo "--- UDP/DNS CANARY ---"

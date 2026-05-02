@@ -48,7 +48,7 @@ jobs:
 
       - name: Build coldstep agent
         run: |
-          bash public_scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+          bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
           mv bin/coldstep bin/coldstep-built
           chmod +x bin/coldstep-built
           # For release-path compatibility in next step

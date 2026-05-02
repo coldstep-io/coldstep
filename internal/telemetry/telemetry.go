@@ -47,10 +47,13 @@ func appendLine(path string, b []byte) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 	line := append(append([]byte(nil), b...), '\n')
-	_, err = f.Write(line)
-	return err
+	_, werr := f.Write(line)
+	cerr := f.Close()
+	if werr != nil {
+		return werr
+	}
+	return cerr
 }
 
 // Summary is written once at agent shutdown.

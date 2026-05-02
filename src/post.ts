@@ -203,13 +203,19 @@ async function maybePostPRSummary(body: string): Promise<void> {
   const ghMs = 60_000;
   let ghTimeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
-    await Promise.race([
-      octokit.rest.issues.createComment({
+    // Attach a no-op catch to the comment promise so that if the timeout wins
+    // the race and the request subsequently rejects, Node does not surface an
+    // unhandledRejection from the orphaned in-flight promise.
+    const commentPromise = octokit.rest.issues
+      .createComment({
         owner: ctx.repo.owner,
         repo: ctx.repo.repo,
         issue_number: pr.number,
         body: '## Coldstep digest\n\n' + snippet,
-      }),
+      })
+      .catch(() => {});
+    await Promise.race([
+      commentPromise,
       new Promise<never>((_, reject) => {
         ghTimeoutId = setTimeout(
           () => reject(new Error(`GitHub API timeout after ${ghMs / 1000}s`)),

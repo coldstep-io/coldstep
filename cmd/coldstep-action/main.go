@@ -154,7 +154,7 @@ func runStart(cfg startConfig) error {
 	actionPath := getenvDefault("GITHUB_ACTION_PATH", mustGetwd())
 	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
 	binPath := filepath.Join(actionPath, "bin", "coldstep")
-	buildScript := filepath.Join(actionPath, "public_scripts", "build-agent-linux.sh")
+	buildScript := filepath.Join(actionPath, "scripts", "build-agent-linux.sh")
 	pidFile := filepath.Join(actionPath, ".coldstep.pid")
 	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
@@ -224,8 +224,8 @@ func runStart(cfg startConfig) error {
 	}
 
 	if truthyInput(cfg.BootstrapAllowlist) {
-		dPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
-		iPath := filepath.Join(actionPath, "public_scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
+		dPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
+		iPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
 		var merr error
 		domainsMerged, merr = appendBootstrapTokens(domainsMerged, dPath)
 		if merr != nil {
@@ -268,7 +268,14 @@ func runStart(cfg startConfig) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
+	// stopAgent terminates the child if we return an error after a successful Start.
+	stopAgent := func() {
+		if p := cmd.Process; p != nil {
+			_ = p.Signal(syscall.SIGTERM)
+		}
+	}
 	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+		stopAgent()
 		return err
 	}
 
@@ -280,9 +287,11 @@ func runStart(cfg startConfig) error {
 		seconds := clamp(cfg.ReadyTimeoutSeconds, 60, 2700)
 		outcome := waitForReady(agentStatus, time.Duration(seconds)*time.Second, cmd.Process.Pid)
 		if outcome != "ready" {
+			stopAgent()
 			return fmt.Errorf("coldstep agent did not report ready (%s)", outcome)
 		}
 		if err := os.WriteFile(readyMarker, []byte("true"), 0o644); err != nil {
+			stopAgent()
 			return err
 		}
 	}

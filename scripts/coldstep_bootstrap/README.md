@@ -1,6 +1,6 @@
 # Coldstep bootstrap allowlist packs (optional)
 
-These UTF-8 text files ship **inside the composite action** (`GITHUB_ACTION_PATH/public_scripts/coldstep_bootstrap/`). They are merged **only** when **`bootstrap-allowlist: true`** on the **`start`** step (`action.yml`). Default is **`false`** — consumers opt in explicitly.
+These UTF-8 text files ship **inside the composite action** (`GITHUB_ACTION_PATH/scripts/coldstep_bootstrap/`). They are merged **only** when **`bootstrap-allowlist: true`** on the **`start`** step (`action.yml`). Default is **`false`** — consumers opt in explicitly.
 
 ## Files
 

@@ -4,7 +4,7 @@
 # Consumer pin (elsewhere): `uses: coldstep-io/coldstep@v0.2.0`
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Report CLI is built from source (`public_scripts/build-coldstep-report-linux.sh`).
+# (`supply-chain-attest.yml`). Report CLI is built from source (`scripts/build-coldstep-report-linux.sh`).
 
 name: coldstep-demo-detect
 
@@ -60,7 +60,7 @@ jobs:
           chmod +x bin/coldstep
 
       - name: Build coldstep-report (Go only; agent from release)
-        run: bash public_scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
+        run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: coldstep-io/coldstep (detect)
         uses: ./

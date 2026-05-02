@@ -183,7 +183,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 
 **File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline list, but reviewable in PRs as a file).
 
-**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`public_scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`public_scripts/coldstep_bootstrap/README.md`** in the repo.
+**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`scripts/coldstep_bootstrap/README.md`** in the repo.
 
 **Example**
 
@@ -210,14 +210,14 @@ Start with default **detect**, then add **`feature-gates`** when you need those 
 
 | Workflow | Summary surface | Artifact notes |
 | -------- | ---------------- | -------------- |
-| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`render_step_summary.py`) | Tier-2 **`coldstep-detect-report.html`** artifact |
-| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown (`render_ip_classification_summary.py`) | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
+| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`coldstep-report render-summary`) | Tier-2 **`coldstep-detect-report.html`** artifact |
+| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
 
 Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
 
 ### Optional: OTX enrichment (detect reports)
 
-Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`public_scripts/coldstep_detect_report/README.md`**.
+Set repo/org secret **`OTX_API_KEY`** for AlienVault OTX. Enrichment reads indicators from the active report model (full **`report-model`** or **`ip_classification`** rows on the dev pipeline). No secret → skipped, job still succeeds. Details: **`scripts/coldstep_detect_report/README.md`**.
 
 ---
 
