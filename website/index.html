@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.1.7
+      - uses: coldstep-io/coldstep@v0.2.1
 </code></pre>
           </div>
         </section>
@@ -129,7 +129,7 @@ jobs:
         <section class="section section--tight-top" aria-labelledby="modes-heading">
           <h2 id="modes-heading">Two modes, one agent</h2>
           <p class="section-intro">
-            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.1.7</code>) instead of tracking
+            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.2.1</code>) instead of tracking
             <code>@main</code> unless you intentionally want churn.
           </p>
           <div class="modes">
@@ -199,7 +199,7 @@ jobs:
               <span>
                 The enrichment step does not fail the job on third-party errors; rate limits and budgets surface as
                 warnings or partial results in the report model. See the pipeline description in
-                <a href="https://github.com/coldstep-io/coldstep/blob/main/public_scripts/coldstep_detect_report/README.md"
+                <a href="https://github.com/coldstep-io/coldstep/blob/main/scripts/coldstep_detect_report/README.md"
                   >detect report tooling</a>
                 for environment variables and schema details.
               </span>

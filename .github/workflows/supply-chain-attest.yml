@@ -14,6 +14,9 @@ permissions:
   attestations: write
   artifact-metadata: write
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
 concurrency:
   group: supply-chain-attest-${{ github.ref }}
   cancel-in-progress: true
@@ -89,7 +92,7 @@ jobs:
           sbom-path: '${{ github.workspace }}/sbom-action.cdx.json'
 
       # One published binary per tag; demo workflows download this instead of compiling on every run.
-      # GitHub can mark a release as immutable — uploads (even --clobber) then return HTTP 422; warn and succeed so attest/SBOM still publish.
+      # Immutable releases may reject uploads: fail if coldstep-linux-amd64 is still missing (otherwise demos see "no assets to download").
       - name: Upload Linux agent to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -104,7 +107,12 @@ jobs:
             out="$(gh release upload "${tag}" coldstep-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber 2>&1)" || rc=$?
             if [[ "$rc" -ne 0 ]]; then
               if echo "$out" | grep -qiE 'immutable release|Cannot upload assets'; then
-                echo "::warning title=Skipped release binary upload::Release ${tag} rejects asset uploads (often immutable releases). Upload coldstep-linux-amd64 from workflow artifacts or temporarily disable release immutability."
+                has_bin="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | any(. == "coldstep-linux-amd64")' 2>/dev/null || echo false)"
+                if [[ "${has_bin}" != "true" ]]; then
+                  echo "::error title=Missing coldstep-linux-amd64::Release ${tag} rejected uploads and has no coldstep-linux-amd64 asset. Delete or fix the empty/immutable release, or attach bin/coldstep as coldstep-linux-amd64 from the supply-chain-artifacts artifact, then re-run this workflow on the tag."
+                  exit 1
+                fi
+                echo "::warning title=Skipped release binary re-upload::Release ${tag} rejected upload; coldstep-linux-amd64 already present."
                 exit 0
               fi
               echo "$out" >&2

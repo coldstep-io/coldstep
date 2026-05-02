@@ -1,6 +1,6 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.0`** (or a newer tag you publish). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`**). There is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.1`** (or a newer tag from [Releases](https://github.com/coldstep-io/coldstep/releases)). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`**). There is no maintained local build path for the Linux agent.
 
 ## Two modes (read this first)
 
@@ -25,11 +25,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         with:
           phase: start
       - run: echo "your build/test steps here"
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         if: always()
         with:
           phase: stop
@@ -55,11 +55,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         with:
           phase: start
       - run: echo "build/test/deploy steps"
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         if: always()
         with:
           phase: stop
@@ -109,8 +109,8 @@ Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, n
 
 ## Versioning
 
-- Prefer **`coldstep-io/coldstep@v0.2.0`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
-- **`v0.1.0`** is not usable with `uses: coldstep-io/coldstep@v0.1.0` (that tag lacks repo-root **`action.yml`**); use **`v0.2.0`** or later.
+- Prefer **`coldstep-io/coldstep@v0.2.1`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
+- The early **`v0.1.0`** tag is not usable (it lacks repo-root **`action.yml`**); use **`v0.2.1`** or a newer published tag that includes **`action.yml`**.
 
 **Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`** except **`coldstep-detect-demo-dev`** which also runs on **`push` to `dev`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-defend.yml`](.github/workflows/coldstep-demo-defend.yml)** (minimal **defend**), **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift), and **[`coldstep-detect-demo-dev.yml`](.github/workflows/coldstep-detect-demo-dev.yml)** — same agent detect setup on **`dev`** with full BLUF + HTML artifact plus an extra **IP classification** Job Summary section.
 
@@ -124,7 +124,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         with:
           phase: start
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
@@ -132,7 +132,7 @@ jobs:
           report-pr-summary: false
           fail-on-error: true
           log-level: info
-      - uses: coldstep-io/coldstep@v0.2.0
+      - uses: coldstep-io/coldstep@v0.2.1
         if: always()
         with:
           phase: stop
@@ -150,10 +150,10 @@ jobs:
 
 ## Defend mode (optional)
 
-Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.0`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
+Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.1`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.2.0
+- uses: coldstep-io/coldstep@v0.2.1
   with:
     phase: start
     mode: defend
@@ -162,7 +162,7 @@ Detect mode is default. For defend behavior (block non-allowlisted egress), reus
     # allowed-hosts: api.example.com,*.svc.example.com
     # allowed-ips: 1.1.1.1,8.8.8.8   # IPv4 literals
   # ... workload steps ...
-- uses: coldstep-io/coldstep@v0.2.0
+- uses: coldstep-io/coldstep@v0.2.1
   if: always()
   with:
     phase: stop
@@ -188,7 +188,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 **Example**
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.2.0
+- uses: coldstep-io/coldstep@v0.2.1
   with:
     phase: start
     mode: defend

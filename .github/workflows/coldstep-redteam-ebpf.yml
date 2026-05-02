@@ -18,7 +18,8 @@ on:
         default: true
 
 env:
-  COLDSTEP_AGENT_VERSION: v0.2.0
+  COLDSTEP_AGENT_VERSION: v0.2.1
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   audit-validation:

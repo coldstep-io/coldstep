@@ -16,7 +16,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 3. **Legacy TypeScript bundles (`src/`, `dist/`)** — the published composite path is Go-only. **`package.json`** labels the esbuild output as **legacy** (CodeQL / maintenance). If you touch **`src/main.ts`** or **`src/post.ts`**, commit **`dist/`** bundles that match those sources — PR **`coldstep-ci`** / CodeQL are the supported verification surfaces (there is no Docker or local Linux matrix you must reproduce).
 4. **Allowlist ergonomics** — changing **`allowed-*-file`** / **`bootstrap-allowlist`** behavior or defaults requires updating **QUICK_START**, **`VALIDATION.md`**, and **`action.yml`** input descriptions together.
 5. **Docs** — if you change workflow pins or other action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
-6. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.2.0`**), not **`@main`**, unless they intentionally track head.
+6. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.2.1`**), not **`@main`**, unless they intentionally track head.
 
 ## Security-sensitive areas
 
