@@ -23,15 +23,18 @@ permissions:
   contents: read
 
 jobs:
-  # Authoritative gofmt: same Linux + toolchain path as `docker_gofmt_check.sh` on developer machines.
-  gofmt_docker:
-    name: Go format (Docker)
+  # Authoritative gofmt on hosted Linux (same Go toolchain pin as unit/integration jobs).
+  gofmt:
+    name: Go format
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
-      - name: gofmt check (golang Docker image)
-        run: bash public_scripts/docker_gofmt_check.sh
+      - uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.x'
+      - name: gofmt check
+        run: bash public_scripts/check-gofmt.sh
 
   action_manifest:
     runs-on: ubuntu-latest
@@ -49,7 +52,7 @@ jobs:
 
   unit:
     name: unit (${{ matrix.os }})
-    needs: [gofmt_docker]
+    needs: [gofmt]
     strategy:
       fail-fast: false
       matrix:
@@ -79,7 +82,7 @@ jobs:
 
   unit-arm64:
     name: unit-arm64 (${{ matrix.os }})
-    needs: [gofmt_docker]
+    needs: [gofmt]
     strategy:
       fail-fast: false
       matrix:
@@ -109,7 +112,7 @@ jobs:
 
   integration:
     name: integration (${{ matrix.os }})
-    needs: [gofmt_docker]
+    needs: [gofmt]
     strategy:
       fail-fast: false
       matrix:
@@ -136,7 +139,7 @@ jobs:
         run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1 -parallel 1
 
   action_bundle:
-    needs: [gofmt_docker]
+    needs: [gofmt]
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -154,7 +157,7 @@ jobs:
           test -x bin/coldstep-report
 
   detect-mode:
-    needs: [gofmt_docker]
+    needs: [gofmt]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -333,7 +336,7 @@ jobs:
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
-    needs: [gofmt_docker]
+    needs: [gofmt]
     runs-on: ubuntu-latest
     # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
     timeout-minutes: 45

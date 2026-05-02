@@ -19081,6 +19081,7 @@ function saveState(name, value) {
 var import_child_process = require("child_process");
 var fs3 = __toESM(require("fs"));
 var path = __toESM(require("path"));
+var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 function tailUtf8File(filePath, maxChars) {
   try {
     const raw = fs3.readFileSync(filePath, "utf8");
@@ -19141,29 +19142,44 @@ async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
     let lastProgressLog = waitStart;
     while (Date.now() < deadline) {
       if (fs3.existsSync(statusPath)) {
-        const raw = fs3.readFileSync(statusPath, "utf8").trim();
-        let parsed;
+        let buf;
         try {
-          parsed = JSON.parse(raw);
+          buf = fs3.readFileSync(statusPath);
         } catch {
-          malformedSince ??= Date.now();
-          if (Date.now() - malformedSince >= malformedBudgetMs) {
-            return "malformed_status";
-          }
-        }
-        if (parsed !== void 0) {
           malformedSince = null;
-          if (parsed.ok === true) {
-            return "ready";
-          }
-          if (parsed.ok === false) {
-            return "explicit_not_ready";
-          }
-          if (parsed.ok !== void 0 && parsed.ok !== null) {
-            error(
-              `coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`
-            );
-            return "explicit_not_ready";
+        }
+        if (buf !== void 0) {
+          if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+            malformedSince ??= Date.now();
+            if (Date.now() - malformedSince >= malformedBudgetMs) {
+              return "malformed_status";
+            }
+          } else {
+            const raw = buf.toString("utf8").trim();
+            let parsed;
+            try {
+              parsed = JSON.parse(raw);
+            } catch {
+              malformedSince ??= Date.now();
+              if (Date.now() - malformedSince >= malformedBudgetMs) {
+                return "malformed_status";
+              }
+            }
+            if (parsed !== void 0) {
+              malformedSince = null;
+              if (parsed.ok === true) {
+                return "ready";
+              }
+              if (parsed.ok === false) {
+                return "explicit_not_ready";
+              }
+              if (parsed.ok !== void 0 && parsed.ok !== null) {
+                error(
+                  `coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`
+                );
+                return "explicit_not_ready";
+              }
+            }
           }
         }
       } else {
@@ -19186,8 +19202,13 @@ async function waitForAgentReady(statusPath, timeoutMs, child, opts) {
           let okHint = "";
           try {
             if (hasFile) {
-              const j = JSON.parse(fs3.readFileSync(statusPath, "utf8"));
-              okHint = typeof j.ok === "boolean" ? `parsed ok=${j.ok}` : `parsed ok field=${JSON.stringify(j.ok)}`;
+              const b = fs3.readFileSync(statusPath);
+              if (b.length > MAX_READY_STATUS_JSON_BYTES) {
+                okHint = "status file exceeds size limit";
+              } else {
+                const j = JSON.parse(b.toString("utf8"));
+                okHint = typeof j.ok === "boolean" ? `parsed ok=${j.ok}` : `parsed ok field=${JSON.stringify(j.ok)}`;
+              }
             }
           } catch {
             okHint = "parse failed (truncated JSON?)";
@@ -19319,11 +19340,15 @@ async function run() {
     stderrFd = fs3.openSync(stderrLog, "w", 384);
     stdio = ["ignore", "ignore", stderrFd];
   }
+  let spawnErr;
   const child = (0, import_child_process.spawn)("sudo", ["-E", binPath, "run"], {
     cwd: actionPath,
     env: childEnv,
     detached: true,
     stdio
+  });
+  child.once("error", (err) => {
+    spawnErr = err;
   });
   if (stderrFd !== void 0) {
     try {
@@ -19331,16 +19356,23 @@ async function run() {
     } catch {
     }
   }
-  child.on("error", (err) => {
-    error(`coldstep: failed to spawn agent (${err.message})`);
-  });
   if (child.pid === void 0) {
     setFailed("coldstep: failed to spawn agent (no pid \u2014 check sudo and that the binary exists)");
+    return;
+  }
+  await new Promise((resolve) => setImmediate(resolve));
+  if (spawnErr !== void 0) {
+    setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
     return;
   }
   child.unref();
   fs3.writeFileSync(pidFile, String(child.pid), "utf8");
   info(`coldstep started pid=${child.pid} mode=${mode}`);
+  if (!failOnError) {
+    warning(
+      "fail-on-error is false: workflow steps run immediately without waiting for .coldstep-ready.json \u2014 short jobs may observe incomplete BPF attach."
+    );
+  }
   if (smokeTestEgress) {
     const probeScript = [
       "set +e",

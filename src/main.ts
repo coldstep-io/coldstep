@@ -3,6 +3,9 @@ import { execFileSync, spawn, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
+/** Matches Go maxReadyStatusJSONBytes in cmd/coldstep-action (classifyReadyStatus). */
+const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+
 function tailUtf8File(filePath: string, maxChars: number): string {
   try {
     const raw = fs.readFileSync(filePath, 'utf8');
@@ -89,33 +92,48 @@ async function waitForAgentReady(
       // kernel deny event immediately; fail-fast deny handling used to exit the process while the
       // status file still contained ok:true, and checking exitedEarly first made us miss it.
       if (fs.existsSync(statusPath)) {
-        const raw = fs.readFileSync(statusPath, 'utf8').trim();
-        let parsed: { ok?: unknown } | undefined;
+        let buf: Buffer | undefined;
         try {
-          parsed = JSON.parse(raw) as { ok?: unknown };
+          buf = fs.readFileSync(statusPath);
         } catch {
-          malformedSince ??= Date.now();
-          if (Date.now() - malformedSince >= malformedBudgetMs) {
-            return 'malformed_status';
-          }
-          /* keep polling — likely mid-write */
-        }
-
-        if (parsed !== undefined) {
           malformedSince = null;
-          if (parsed.ok === true) {
-            return 'ready';
+        }
+        if (buf !== undefined) {
+          if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+            malformedSince ??= Date.now();
+            if (Date.now() - malformedSince >= malformedBudgetMs) {
+              return 'malformed_status';
+            }
+          } else {
+            const raw = buf.toString('utf8').trim();
+            let parsed: { ok?: unknown } | undefined;
+            try {
+              parsed = JSON.parse(raw) as { ok?: unknown };
+            } catch {
+              malformedSince ??= Date.now();
+              if (Date.now() - malformedSince >= malformedBudgetMs) {
+                return 'malformed_status';
+              }
+              /* keep polling — likely mid-write */
+            }
+
+            if (parsed !== undefined) {
+              malformedSince = null;
+              if (parsed.ok === true) {
+                return 'ready';
+              }
+              if (parsed.ok === false) {
+                return 'explicit_not_ready';
+              }
+              if (parsed.ok !== undefined && parsed.ok !== null) {
+                core.error(
+                  `coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`,
+                );
+                return 'explicit_not_ready';
+              }
+              /* ok missing — likely incomplete write; keep polling */
+            }
           }
-          if (parsed.ok === false) {
-            return 'explicit_not_ready';
-          }
-          if (parsed.ok !== undefined && parsed.ok !== null) {
-            core.error(
-              `coldstep-ready.json has unexpected ok type (${typeof parsed.ok}); refusing to poll until timeout`,
-            );
-            return 'explicit_not_ready';
-          }
-          /* ok missing — likely incomplete write; keep polling */
         }
       } else {
         malformedSince = null;
@@ -139,11 +157,16 @@ async function waitForAgentReady(
           let okHint = '';
           try {
             if (hasFile) {
-              const j = JSON.parse(fs.readFileSync(statusPath, 'utf8')) as { ok?: unknown };
-              okHint =
-                typeof j.ok === 'boolean'
-                  ? `parsed ok=${j.ok}`
-                  : `parsed ok field=${JSON.stringify(j.ok)}`;
+              const b = fs.readFileSync(statusPath);
+              if (b.length > MAX_READY_STATUS_JSON_BYTES) {
+                okHint = 'status file exceeds size limit';
+              } else {
+                const j = JSON.parse(b.toString('utf8')) as { ok?: unknown };
+                okHint =
+                  typeof j.ok === 'boolean'
+                    ? `parsed ok=${j.ok}`
+                    : `parsed ok field=${JSON.stringify(j.ok)}`;
+              }
             }
           } catch {
             okHint = 'parse failed (truncated JSON?)';
@@ -288,11 +311,15 @@ async function run(): Promise<void> {
     stderrFd = fs.openSync(stderrLog, 'w', 0o600);
     stdio = ['ignore', 'ignore', stderrFd];
   }
+  let spawnErr: Error | undefined;
   const child = spawn('sudo', ['-E', binPath, 'run'], {
     cwd: actionPath,
     env: childEnv,
     detached: true,
     stdio,
+  });
+  child.once('error', (err: Error) => {
+    spawnErr = err;
   });
   if (stderrFd !== undefined) {
     try {
@@ -301,17 +328,25 @@ async function run(): Promise<void> {
       /* ignore */
     }
   }
-  child.on('error', (err) => {
-    core.error(`coldstep: failed to spawn agent (${err.message})`);
-  });
   if (child.pid === undefined) {
     // `spawn` can fail asynchronously (e.g. missing sudo); avoid writing `undefined` into the pid file.
     core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
     return;
   }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  if (spawnErr !== undefined) {
+    core.setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+    return;
+  }
   child.unref();
   fs.writeFileSync(pidFile, String(child.pid), 'utf8');
   core.info(`coldstep started pid=${child.pid} mode=${mode}`);
+
+  if (!failOnError) {
+    core.warning(
+      'fail-on-error is false: workflow steps run immediately without waiting for .coldstep-ready.json — short jobs may observe incomplete BPF attach.',
+    );
+  }
 
   if (smokeTestEgress) {
     const probeScript = [

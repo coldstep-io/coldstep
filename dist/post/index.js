@@ -23678,6 +23678,50 @@ function inputBoolDefault(name, defaultVal) {
   }
   return ["true", "1", "yes", "on"].includes(v.toLowerCase());
 }
+var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+var MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
+function readAgentReadyOk(statusPath) {
+  try {
+    if (!fs2.existsSync(statusPath)) {
+      return false;
+    }
+    const buf = fs2.readFileSync(statusPath);
+    if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+      return false;
+    }
+    const j = JSON.parse(buf.toString("utf8"));
+    return j.ok === true;
+  } catch {
+    return false;
+  }
+}
+async function drainWebResponseBody(r, maxBytes) {
+  if (!r.body) {
+    return;
+  }
+  const reader = r.body.getReader();
+  let total = 0;
+  try {
+    for (; ; ) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        total += value.byteLength;
+      }
+      if (total >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+    }
+  }
+}
 function parseSlackIncomingWebhookURL(raw) {
   let u;
   try {
@@ -23725,12 +23769,26 @@ function readDetectDigest() {
   if (!fs2.existsSync(logPath)) {
     return "";
   }
-  return fs2.readFileSync(logPath, "utf8");
+  try {
+    return fs2.readFileSync(logPath, "utf8");
+  } catch (e) {
+    warning(
+      `coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`
+    );
+    return "";
+  }
 }
 function discardDigestFileIfPresent() {
   const logPath = detectLogPath();
-  if (fs2.existsSync(logPath)) {
+  if (!fs2.existsSync(logPath)) {
+    return;
+  }
+  try {
     fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`
+    );
   }
 }
 function flushDetectLogToJobSummary(body) {
@@ -23749,8 +23807,32 @@ function flushDetectLogToJobSummary(body) {
     return;
   }
   const block = "## Coldstep \xB7 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
-  fs2.appendFileSync(summaryPath, block, "utf8");
-  fs2.unlinkSync(logPath);
+  try {
+    fs2.appendFileSync(summaryPath, block, "utf8");
+    fs2.unlinkSync(logPath);
+  } catch (e) {
+    warning(
+      `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`
+    );
+  }
+}
+async function finalizeDigestAndNotifications(reportJobSummary) {
+  const digestBody = readDetectDigest();
+  if (reportJobSummary) {
+    flushDetectLogToJobSummary(digestBody);
+  } else {
+    discardDigestFileIfPresent();
+  }
+  try {
+    await maybePostPRSummary(digestBody);
+  } catch (e) {
+    warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await maybeSlackWebhook(digestBody);
+  } catch (e) {
+    warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 async function maybePostPRSummary(body) {
   if (!inputBoolDefault("report-pr-summary", false)) {
@@ -23774,12 +23856,28 @@ async function maybePostPRSummary(body) {
   const safe = sanitizeDigestForMarkdown(body);
   const snippet = safe.length > max ? safe.slice(0, max) + "\n\n_(truncated)_\n" : safe;
   const octokit = getOctokit(token);
-  await octokit.rest.issues.createComment({
-    owner: ctx.repo.owner,
-    repo: ctx.repo.repo,
-    issue_number: pr.number,
-    body: "## Coldstep digest\n\n" + snippet
-  });
+  const ghMs = 6e4;
+  let ghTimeoutId;
+  try {
+    await Promise.race([
+      octokit.rest.issues.createComment({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        issue_number: pr.number,
+        body: "## Coldstep digest\n\n" + snippet
+      }),
+      new Promise((_, reject) => {
+        ghTimeoutId = setTimeout(
+          () => reject(new Error(`GitHub API timeout after ${ghMs / 1e3}s`)),
+          ghMs
+        );
+      })
+    ]);
+  } finally {
+    if (ghTimeoutId !== void 0) {
+      clearTimeout(ghTimeoutId);
+    }
+  }
 }
 async function maybeSlackWebhook(body) {
   const urlRaw = (getInput("slack-webhook-endpoint") || "").trim();
@@ -23795,11 +23893,41 @@ async function maybeSlackWebhook(body) {
   }
   const max = 35e3;
   const text = body.length > max ? body.slice(0, max) + "\n\u2026(truncated for Slack)" : body;
-  const r = await fetch(urlParsed, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ text: "Coldstep digest\n\n" + text })
-  });
+  let payload;
+  try {
+    payload = JSON.stringify({ text: "Coldstep digest\n\n" + text });
+  } catch (e) {
+    warning(
+      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`
+    );
+    return;
+  }
+  const abortMs = 6e4;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => ctrl.abort(), abortMs);
+  let r;
+  try {
+    r = await fetch(urlParsed.href, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: payload,
+      signal: ctrl.signal
+    });
+  } catch (e) {
+    warning(
+      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`
+    );
+    r = void 0;
+  } finally {
+    clearTimeout(deadline);
+  }
+  if (r === void 0) {
+    return;
+  }
+  try {
+    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
+  } catch {
+  }
   if (!r.ok) {
     warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
@@ -23809,16 +23937,7 @@ async function post() {
   const reportJobSummary = inputBoolDefault("report-job-summary", true);
   if (failOnError && getState("coldstep_wait_ready_ok") !== "true") {
     const st = agentStatusPath();
-    let ok = false;
-    try {
-      if (fs2.existsSync(st)) {
-        const j = JSON.parse(fs2.readFileSync(st, "utf8"));
-        ok = j.ok === true;
-      }
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
+    if (!readAgentReadyOk(st)) {
       setFailed("coldstep agent did not report ready (operational fail-on-error)");
     }
   }
@@ -23826,17 +23945,18 @@ async function post() {
   const pidFile = path.join(actionPath, ".coldstep.pid");
   if (!fs2.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
-    const digestEarly = readDetectDigest();
-    if (reportJobSummary) {
-      flushDetectLogToJobSummary(digestEarly);
-    } else {
-      discardDigestFileIfPresent();
-    }
-    await maybePostPRSummary(digestEarly);
-    await maybeSlackWebhook(digestEarly);
+    await finalizeDigestAndNotifications(reportJobSummary);
     return;
   }
-  const pid = parseAgentPidFromFile(fs2.readFileSync(pidFile, "utf8"));
+  let pidContents = "";
+  try {
+    pidContents = fs2.readFileSync(pidFile, "utf8");
+  } catch {
+    warning("pid file disappeared before read; skipping SIGTERM (agent may still be running)");
+    await finalizeDigestAndNotifications(reportJobSummary);
+    return;
+  }
+  const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     warning("pid file has invalid contents; skipping SIGTERM (agent may still be running)");
   } else {
@@ -23850,22 +23970,7 @@ async function post() {
     }
   }
   await new Promise((r) => setTimeout(r, 400));
-  const digestBody = readDetectDigest();
-  if (reportJobSummary) {
-    flushDetectLogToJobSummary(digestBody);
-  } else {
-    discardDigestFileIfPresent();
-  }
-  try {
-    await maybePostPRSummary(digestBody);
-  } catch (e) {
-    warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  await finalizeDigestAndNotifications(reportJobSummary);
 }
 post().catch((e) => {
   setFailed(e instanceof Error ? e.message : String(e));

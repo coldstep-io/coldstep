@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
@@ -295,7 +296,7 @@ func renderHTML(args []string) error {
 		"<table border=\"1\" cellspacing=\"0\" cellpadding=\"6\"><thead><tr><th>Type</th><th>Count</th></tr></thead><tbody>" +
 		rows.String() +
 		"</tbody></table></body></html>"
-	return os.WriteFile(outPath, []byte(htmlBody), 0o644)
+	return atomicwrite.Bytes(outPath, []byte(htmlBody), 0o644)
 }
 
 func stringFromAny(v any) (string, bool) {

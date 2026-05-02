@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"net/url"
 	"strings"
 	"testing"
@@ -276,5 +277,33 @@ func TestParseSlackURL_PathPrefix(t *testing.T) {
 	parsed := parseSlackIncomingWebhookURL(u.String())
 	if parsed != nil {
 		t.Error("expected nil for /workflows/ path")
+	}
+}
+
+func TestClassifyReadyStatus(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		raw                                   string
+		wantReady, wantFail, wantMal, wantInc bool
+	}{
+		{`{"ok":true}`, true, false, false, false},
+		{`{"ok":false}`, false, true, false, false},
+		{`{}`, false, false, false, true},
+		{"", false, false, true, false},
+		{"  \n ", false, false, true, false},
+		{`not-json`, false, false, true, false},
+		{`{"ok":"no"}`, false, true, false, false},
+	}
+	oversized := bytes.Repeat([]byte("x"), maxReadyStatusJSONBytes+1)
+	r, f, m, i := classifyReadyStatus(oversized)
+	if r || f || i || !m {
+		t.Fatalf("classifyReadyStatus(oversized) = (%v,%v,%v,%v) want (false,false,true,false)", r, f, m, i)
+	}
+	for _, tc := range cases {
+		r, f, m, i := classifyReadyStatus([]byte(tc.raw))
+		if r != tc.wantReady || f != tc.wantFail || m != tc.wantMal || i != tc.wantInc {
+			t.Fatalf("classifyReadyStatus(%q) = (%v,%v,%v,%v) want (%v,%v,%v,%v)",
+				tc.raw, r, f, m, i, tc.wantReady, tc.wantFail, tc.wantMal, tc.wantInc)
+		}
 	}
 }

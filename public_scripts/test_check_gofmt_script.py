@@ -1,4 +1,4 @@
-"""Smoke test: docker_gofmt_check.sh exists and is valid bash."""
+"""Smoke test: check-gofmt.sh exists and is valid bash."""
 
 from __future__ import annotations
 
@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 
 
-class TestDockerGofmtCheck(unittest.TestCase):
+class TestCheckGofmtScript(unittest.TestCase):
     def test_script_exists_and_passes_bash_syntax_check(self) -> None:
-        script = Path(__file__).resolve().parent / "docker_gofmt_check.sh"
+        script = Path(__file__).resolve().parent / "check-gofmt.sh"
         self.assertTrue(script.is_file(), msg=f"missing {script}")
         head = script.read_text(encoding="utf-8")[:64]
         self.assertTrue(head.startswith("#!/"), msg="expected shell shebang")

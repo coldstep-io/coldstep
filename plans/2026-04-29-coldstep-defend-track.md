@@ -45,7 +45,7 @@
 | ID | Task | Notes |
 | -- | ------ | ----- |
 | F7 | **`defend_deny_jsonl_strict`** dispatch | Optional strict gate; default variance-tolerant |
-| F8 | Demo workflows **`mode: defend`** | `coldstep-demo`, `coldstep-demo-enforce` |
+| F8 | Demo workflows **`mode: defend`** | `coldstep-demo`, `coldstep-demo-defend` |
 | F9 | Supply-chain tarball includes bootstrap + licenses | `supply-chain-attest.yml` |
 
 ---

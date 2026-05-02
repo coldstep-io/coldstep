@@ -23,6 +23,56 @@ function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
 
+/** Same cap as Go cmd/coldstep-action and composite main.ts readiness polling. */
+const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+
+const MAX_HTTP_RESPONSE_DRAIN_BYTES = 256 * 1024;
+
+function readAgentReadyOk(statusPath: string): boolean {
+  try {
+    if (!fs.existsSync(statusPath)) {
+      return false;
+    }
+    const buf = fs.readFileSync(statusPath);
+    if (buf.length > MAX_READY_STATUS_JSON_BYTES) {
+      return false;
+    }
+    const j = JSON.parse(buf.toString('utf8')) as { ok?: boolean };
+    return j.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function drainWebResponseBody(r: Response, maxBytes: number): Promise<void> {
+  if (!r.body) {
+    return;
+  }
+  const reader = r.body.getReader();
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      if (value) {
+        total += value.byteLength;
+      }
+      if (total >= maxBytes) {
+        await reader.cancel();
+        break;
+      }
+    }
+  } catch {
+    try {
+      await reader.cancel();
+    } catch {
+      /* ignore */
+    }
+  }
+}
+
 /** Accepts only Slack Incoming Webhook URLs to avoid SSRF via arbitrary fetch targets. */
 function parseSlackIncomingWebhookURL(raw: string): URL | null {
   let u: URL;
@@ -106,14 +156,28 @@ function readDetectDigest(): string {
   if (!fs.existsSync(logPath)) {
     return '';
   }
-  return fs.readFileSync(logPath, 'utf8');
+  try {
+    return fs.readFileSync(logPath, 'utf8');
+  } catch (e) {
+    core.warning(
+      `coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`,
+    );
+    return '';
+  }
 }
 
 /** Remove workspace digest without merging (used when report-job-summary is false). */
 function discardDigestFileIfPresent(): void {
   const logPath = detectLogPath();
-  if (fs.existsSync(logPath)) {
+  if (!fs.existsSync(logPath)) {
+    return;
+  }
+  try {
     fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`,
+    );
   }
 }
 
@@ -140,8 +204,33 @@ function flushDetectLogToJobSummary(body: string): void {
     '## Coldstep · digest (exec / network / enforcement)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
-  fs.appendFileSync(summaryPath, block, 'utf8');
-  fs.unlinkSync(logPath);
+  try {
+    fs.appendFileSync(summaryPath, block, 'utf8');
+    fs.unlinkSync(logPath);
+  } catch (e) {
+    core.warning(
+      `GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${logPath}`,
+    );
+  }
+}
+
+async function finalizeDigestAndNotifications(reportJobSummary: boolean): Promise<void> {
+  const digestBody = readDetectDigest();
+  if (reportJobSummary) {
+    flushDetectLogToJobSummary(digestBody);
+  } else {
+    discardDigestFileIfPresent();
+  }
+  try {
+    await maybePostPRSummary(digestBody);
+  } catch (e) {
+    core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  try {
+    await maybeSlackWebhook(digestBody);
+  } catch (e) {
+    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 async function maybePostPRSummary(body: string): Promise<void> {
@@ -166,12 +255,28 @@ async function maybePostPRSummary(body: string): Promise<void> {
   const safe = sanitizeDigestForMarkdown(body);
   const snippet = safe.length > max ? safe.slice(0, max) + '\n\n_(truncated)_\n' : safe;
   const octokit = github.getOctokit(token);
-  await octokit.rest.issues.createComment({
-    owner: ctx.repo.owner,
-    repo: ctx.repo.repo,
-    issue_number: pr.number,
-    body: '## Coldstep digest\n\n' + snippet,
-  });
+  const ghMs = 60_000;
+  let ghTimeoutId: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      octokit.rest.issues.createComment({
+        owner: ctx.repo.owner,
+        repo: ctx.repo.repo,
+        issue_number: pr.number,
+        body: '## Coldstep digest\n\n' + snippet,
+      }),
+      new Promise<never>((_, reject) => {
+        ghTimeoutId = setTimeout(
+          () => reject(new Error(`GitHub API timeout after ${ghMs / 1000}s`)),
+          ghMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (ghTimeoutId !== undefined) {
+      clearTimeout(ghTimeoutId);
+    }
+  }
 }
 
 async function maybeSlackWebhook(body: string): Promise<void> {
@@ -191,11 +296,42 @@ async function maybeSlackWebhook(body: string): Promise<void> {
     body.length > max
       ? body.slice(0, max) + '\n…(truncated for Slack)'
       : body;
-  const r = await fetch(urlParsed, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text: 'Coldstep digest\n\n' + text }),
-  });
+  let payload: string;
+  try {
+    payload = JSON.stringify({ text: 'Coldstep digest\n\n' + text });
+  } catch (e) {
+    core.warning(
+      `slack-webhook-endpoint: JSON.stringify failed (${e instanceof Error ? e.message : String(e)})`,
+    );
+    return;
+  }
+  const abortMs = 60_000;
+  const ctrl = new AbortController();
+  const deadline = setTimeout(() => ctrl.abort(), abortMs);
+  let r: Response | undefined;
+  try {
+    r = await fetch(urlParsed.href, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+      signal: ctrl.signal,
+    });
+  } catch (e) {
+    core.warning(
+      `slack-webhook-endpoint: fetch failed (${e instanceof Error ? e.message : String(e)})`,
+    );
+    r = undefined;
+  } finally {
+    clearTimeout(deadline);
+  }
+  if (r === undefined) {
+    return;
+  }
+  try {
+    await drainWebResponseBody(r, MAX_HTTP_RESPONSE_DRAIN_BYTES);
+  } catch {
+    /* ignore drain errors */
+  }
   if (!r.ok) {
     core.warning(`slack-webhook-endpoint: POST failed (${r.status})`);
   }
@@ -207,16 +343,7 @@ async function post(): Promise<void> {
 
   if (failOnError && core.getState('coldstep_wait_ready_ok') !== 'true') {
     const st = agentStatusPath();
-    let ok = false;
-    try {
-      if (fs.existsSync(st)) {
-        const j = JSON.parse(fs.readFileSync(st, 'utf8')) as { ok?: boolean };
-        ok = j.ok === true;
-      }
-    } catch {
-      ok = false;
-    }
-    if (!ok) {
+    if (!readAgentReadyOk(st)) {
       core.setFailed('coldstep agent did not report ready (operational fail-on-error)');
     }
   }
@@ -225,17 +352,18 @@ async function post(): Promise<void> {
   const pidFile = path.join(actionPath, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('pid file missing; agent may not have started');
-    const digestEarly = readDetectDigest();
-    if (reportJobSummary) {
-      flushDetectLogToJobSummary(digestEarly);
-    } else {
-      discardDigestFileIfPresent();
-    }
-    await maybePostPRSummary(digestEarly);
-    await maybeSlackWebhook(digestEarly);
+    await finalizeDigestAndNotifications(reportJobSummary);
     return;
   }
-  const pid = parseAgentPidFromFile(fs.readFileSync(pidFile, 'utf8'));
+  let pidContents = '';
+  try {
+    pidContents = fs.readFileSync(pidFile, 'utf8');
+  } catch {
+    core.warning('pid file disappeared before read; skipping SIGTERM (agent may still be running)');
+    await finalizeDigestAndNotifications(reportJobSummary);
+    return;
+  }
+  const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     core.warning('pid file has invalid contents; skipping SIGTERM (agent may still be running)');
   } else {
@@ -249,22 +377,7 @@ async function post(): Promise<void> {
     }
   }
   await new Promise((r) => setTimeout(r, 400));
-  const digestBody = readDetectDigest();
-  if (reportJobSummary) {
-    flushDetectLogToJobSummary(digestBody);
-  } else {
-    discardDigestFileIfPresent();
-  }
-  try {
-    await maybePostPRSummary(digestBody);
-  } catch (e) {
-    core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
-  }
-  try {
-    await maybeSlackWebhook(digestBody);
-  } catch (e) {
-    core.warning(`slack-webhook-endpoint: ${e instanceof Error ? e.message : String(e)}`);
-  }
+  await finalizeDigestAndNotifications(reportJobSummary);
 }
 
 post().catch((e) => {

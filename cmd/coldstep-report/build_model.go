@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/report/integrity"
 	"github.com/coldstep-io/coldstep/internal/report/model"
 	"github.com/coldstep-io/coldstep/internal/safepath"
@@ -89,7 +90,7 @@ func buildModel(args []string) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(outPath, raw, 0o644)
+	return atomicwrite.Bytes(outPath, raw, 0o644)
 }
 
 func detectProfileForReport() (string, error) {

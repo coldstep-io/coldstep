@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Deep debug pass — stages aligned with coldstep-ci-runner + coldstep-ci-nightly.
+# Invoke via workflow_dispatch on .github/workflows/coldstep-deep-debug.yml (ubuntu-latest).
 # Design: .github/design/2026-04-18-deep-debug-pass-design.md
 #
 # Environment:

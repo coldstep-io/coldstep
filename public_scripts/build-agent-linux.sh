@@ -18,10 +18,9 @@
 #      so a struct-size drift on the BPF side fails the build immediately.
 #   4. `go build` the cmd/coldstep agent.
 #
-# Run this script from CI or locally inside a Linux container that mounts
-# the repo. Windows hosts cannot run BPF compile but can run this in
-# Docker (see Dockerfile.deep-debug for a known-good image). The script
-# does NOT need root — it uses sudo for apt-get when EUID != 0.
+# Run this script on GitHub-hosted Linux (or another Linux CI runner) with
+# the repo checkout as ROOT. It is not a supported workflow on Windows/macOS
+# hosts. The script does NOT need root — it uses sudo for apt-get when EUID != 0.
 set -euo pipefail
 ROOT="${1:?pass repository root as first argument}"
 cd "$ROOT"

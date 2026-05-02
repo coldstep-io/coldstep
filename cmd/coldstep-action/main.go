@@ -21,6 +21,16 @@ import (
 	"time"
 )
 
+// httpNotifyClient bounds post-step webhook/API calls so a stuck egress target
+// cannot hang the composite until the job's global timeout.
+var httpNotifyClient = &http.Client{Timeout: 60 * time.Second}
+
+const (
+	maxReadyStatusJSONBytes = 512 << 10 // agent status should be tiny; bound disk/memory abuse
+	maxGitHubEventJSONBytes = 8 << 20   // $GITHUB_EVENT_PATH payload cap before full json.Unmarshal
+	maxHTTPResponseDrain    = 256 << 10 // discard bodies after POST so connections can reuse
+)
+
 type startConfig struct {
 	Mode                 string
 	AllowedDomains       string
@@ -51,10 +61,6 @@ type stopConfig struct {
 	ReportPRSummary  bool
 	GithubToken      string
 	SlackWebhook     string
-}
-
-type readyFile struct {
-	OK bool `json:"ok"`
 }
 
 func main() {
@@ -370,6 +376,9 @@ func postPRComment(token, body string) error {
 	if err != nil {
 		return err
 	}
+	if len(raw) > maxGitHubEventJSONBytes {
+		return fmt.Errorf("GITHUB_EVENT payload exceeds max (%d bytes)", maxGitHubEventJSONBytes)
+	}
 	var payload map[string]any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		return err
@@ -383,13 +392,19 @@ func postPRComment(token, body string) error {
 		return nil
 	}
 	comment := map[string]string{"body": "## Coldstep digest\n\n" + truncate(body, 65000)}
-	b, _ := json.Marshal(comment)
+	b, err := json.Marshal(comment)
+	if err != nil {
+		return err
+	}
 	urlStr := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", parts[0], parts[1], int(number))
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpNotifyClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -397,6 +412,7 @@ func postPRComment(token, body string) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("github comment failed: %s", resp.Status)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil
 }
 
@@ -423,10 +439,16 @@ func postSlack(u url.URL, body string) error {
 		text = text[:35000] + "\n…(truncated for Slack)"
 	}
 	payload := map[string]string{"text": "Coldstep digest\n\n" + text}
-	b, _ := json.Marshal(payload)
-	req, _ := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, u.String(), bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
 	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpNotifyClient.Do(req)
 	if err != nil {
 		return err
 	}
@@ -434,19 +456,67 @@ func postSlack(u url.URL, body string) error {
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("slack webhook failed: %s", resp.Status)
 	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxHTTPResponseDrain))
 	return nil
+}
+
+// classifyReadyStatus mirrors composite TypeScript readiness parsing for
+// .coldstep-ready.json (including ok field absence vs false).
+func classifyReadyStatus(raw []byte) (ready, explicitFail, malformed, incomplete bool) {
+	if len(raw) > maxReadyStatusJSONBytes {
+		return false, false, true, false
+	}
+	text := strings.TrimSpace(string(raw))
+	if text == "" {
+		return false, false, true, false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(text), &m); err != nil {
+		return false, false, true, false
+	}
+	val, hasOk := m["ok"]
+	if !hasOk {
+		return false, false, false, true
+	}
+	var okBool bool
+	if err := json.Unmarshal(val, &okBool); err != nil {
+		return false, true, false, false
+	}
+	if okBool {
+		return true, false, false, false
+	}
+	return false, true, false, false
 }
 
 func waitForReady(statusPath string, timeout time.Duration, pid int) string {
 	deadline := time.Now().Add(timeout)
+	var malformedSince *time.Time
+	const malformedBudget = 45 * time.Second
+
 	for time.Now().Before(deadline) {
-		ok, known := readReady(statusPath)
-		if known && ok {
-			return "ready"
+		raw, err := os.ReadFile(statusPath)
+		if err != nil {
+			malformedSince = nil
+		} else {
+			ok, explicitFail, malformed, incomplete := classifyReadyStatus(raw)
+			switch {
+			case ok:
+				return "ready"
+			case explicitFail:
+				return "explicit_not_ready"
+			case malformed:
+				if malformedSince == nil {
+					t := time.Now()
+					malformedSince = &t
+				}
+				if time.Since(*malformedSince) >= malformedBudget {
+					return "malformed_status"
+				}
+			case incomplete:
+				malformedSince = nil
+			}
 		}
-		if known && !ok {
-			return "explicit_not_ready"
-		}
+
 		if !pidAlive(pid) {
 			return "child_exit"
 		}
@@ -460,11 +530,17 @@ func readReady(path string) (ok bool, known bool) {
 	if err != nil {
 		return false, false
 	}
-	var st readyFile
-	if err := json.Unmarshal(raw, &st); err != nil {
+	ready, explicitFail, _, incomplete := classifyReadyStatus(raw)
+	switch {
+	case ready:
+		return true, true
+	case explicitFail:
+		return false, true
+	case incomplete:
+		return false, false
+	default:
 		return false, false
 	}
-	return st.OK, true
 }
 
 func pidAlive(pid int) bool {

@@ -50,7 +50,7 @@ This document is the **honest contract** between documentation and **automated c
 | **Policy / parsing** | Go tests under **`internal/policy/`** | Allowlist and policy parsing behave as coded for covered cases. |
 | **Agent (Linux)** | **`go test ./...`**, **`go test -tags=integration ./internal/agent/...`** (with **`sudo`** in CI) | Large classes of agent behavior and BPF attach paths **on CI Linux**, subject to each test’s assertions. |
 | **`action_manifest`** | UTF-8 gate, workflow pin checker, **`public_scripts`** unittest, shell markers | Repo hygiene and workflow guardrails — **not** the eBPF runtime itself. |
-| **`gofmt_docker`** | [`public_scripts/docker_gofmt_check.sh`](public_scripts/docker_gofmt_check.sh) runs [`public_scripts/check-gofmt.sh`](public_scripts/check-gofmt.sh) inside the official **`golang:1.25-bookworm`** image (override with **`COLDSTEP_GOFMT_IMAGE`**) | **Authoritative** `gofmt` on all tracked `*.go` — same path maintainers can run on Linux with Docker. **`unit`**, **`unit-arm64`**, **`integration`**, **`action_bundle`**, **`detect-mode`**, and **`defend-mode`** **depend** on this job. |
+| **`gofmt`** | [`public_scripts/check-gofmt.sh`](public_scripts/check-gofmt.sh) on **`ubuntu-latest`** with **`actions/setup-go`** (**`go-version: '1.25.x'`**) | **Authoritative** `gofmt` on all tracked `*.go`. **`unit`**, **`unit-arm64`**, **`integration`**, **`action_bundle`**, **`detect-mode`**, and **`defend-mode`** **depend** on this job. |
 | **`action_bundle`** | Builds **`bin/coldstep`**, **`coldstep-action`**, **`coldstep-report`** | Shipping composite binaries exist after **`build-agent-linux.sh`**. |
 | **`detect-mode`** job | Real **`uses: ./`** composite **detect** (**`detect-profile: enhanced`** on **`coldstep-ci-runner`**), probes (nmap/curl/UDP/fs, etc.), **`coldstep-report build-model`** with **`COLDSTEP_DETECT_PROFILE`**, **`assert-integrity`** (when strict) | **End-to-end detect path** on **`ubuntu-latest`**: agent → JSONL → report model → integrity gate. |
 | **`defend-mode`** job (defend mode) | Real composite **`mode: defend`**, allowed + denied curl/`nc` checks, JSONL **`deny`** assertions **when deny rows appear** | **Defend** (blocking) behavior for **scripted** allow/deny scenarios on **`ubuntu-latest`**. If no deny lines appear (runner variance), the workflow **warns** by default. **`workflow_dispatch`** on **`coldstep-ci`** can set **`defend_deny_jsonl_strict: true`** to **fail** the job when no deny JSONL rows are present (stricter operator guardrail). |
@@ -70,7 +70,7 @@ This document is the **honest contract** between documentation and **automated c
 ## How to reproduce proof yourself
 
 1. Open a PR (or run **`workflow_dispatch`** on **`coldstep-ci`** with ref **`dev`** / your branch) and inspect the **`coldstep-ci`** run.
-2. Run **`workflow_dispatch`** on **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-enforce`** (legacy filename; **`mode: defend`**) on a fork for full demo graphs.
+2. Run **`workflow_dispatch`** on **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`** on a fork for full demo graphs.
 3. For release binaries, SBOMs, and **where pins must be bumped**, see **`supply-chain-attest.yml`** and **`RELEASE_PROCESS.md`** (**Consumer pin standard**).
 
 ---

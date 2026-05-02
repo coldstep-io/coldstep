@@ -86,7 +86,7 @@ Detect-mode reporting matured with a two-tier pipeline (Tier-1 GitHub Actions st
 - **OTX threat-intel enrichment (PR #30, extended in PR #43):** `public_scripts/coldstep_otx/` — client, verdicts (`malicious` / `clean` / `unidentified`), confidence tiers (schema **v2.1**), integration in `coldstep-demo-detect` with optional `secrets.OTX_API_KEY` and skip when unset.
 - **Reverse DNS enrichment:** `public_scripts/coldstep_dns/` (`rdns.py`, `enrich_rdns.py`) wired into the detect report flow.
 - **Job Summary / digest — triage-first output:** `internal/report/digest.go` and summary rendering emphasize IR-style triage (ribbon, collapsed technical detail, hot egress) for faster review; aligned Python/GFM tier (release train).
-- **CI coverage:** Multi-distro matrix (ubuntu LTS x64 + arm), `coldstep-ci-nightly` (govulncheck, shuffle, optional race), **`coldstep-deep-debug`** + `Dockerfile.deep-debug` / helper scripts for staged deep triage.
+- **CI coverage:** Multi-distro matrix (ubuntu LTS x64 + arm), `coldstep-ci-nightly` (govulncheck, shuffle, optional race), **`coldstep-deep-debug`** workflow for staged deep triage.
 - **Workflow guardrails:** `public_scripts/check_workflow_action_pins.py` + CI hook; shell markers test for JSONL diff summaries.
 - **`supply-chain-attest`:** Continued publishing of **`coldstep-linux-amd64`** on matching tags (consumer demos align `COLDSTEP_AGENT_VERSION`).
 - **`coldstep-demo-marketplace.yml`:** Minimal Marketplace-style consumer workflow.
