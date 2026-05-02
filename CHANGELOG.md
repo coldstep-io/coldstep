@@ -8,7 +8,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **`coldstep-demo`:** defend-mode verification matches **`coldstep-ci-runner`** deny-JSONL variance rules (warn when absent unless **`COLDSTEP_DEFEND_DENY_JSONL_STRICT=1`**). Detect-mode: extra HTTPS probe, settle/retry before **`tls_sni`** JSONL assertions.
+- **`coldstep-demo`:** defend-mode verification matches **`coldstep-ci-runner`** deny-JSONL variance rules (warn when absent unless **`COLDSTEP_DEFEND_DENY_JSONL_STRICT=1`**). Detect-mode: **`smoke-test-egress`**, OpenSSL **`s_client`** probes, longer TLS settle/retry, and digest fallback when **`tls`** JSONL is delayed but the Markdown digest still shows TLS context.
 
 ---
 
