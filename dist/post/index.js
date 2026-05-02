@@ -23705,13 +23705,27 @@ function parseAgentPidFromFile(contents) {
   }
   return n;
 }
+var MAX_DIGEST_LINE_UNITS = 4096;
+function truncateLineUtf16(line, maxUnits) {
+  if (line.length <= maxUnits) {
+    return line;
+  }
+  let end = maxUnits;
+  const c = line.charCodeAt(end - 1);
+  if (c >= 55296 && c <= 56319) {
+    end -= 1;
+  }
+  return line.slice(0, end) + " ...(truncated)";
+}
 function sanitizeDigestForMarkdown(body) {
   if (body === "") {
     return body;
   }
   const stripped = body.replace(/^\uFEFF/, "");
   const normalized = stripped.replace(/\r\n?/g, "\n");
-  const cappedLines = normalized.split("\n").map((line) => line.length > 4096 ? line.slice(0, 4096) + " \u0393\xC7\xAA(truncated)" : line);
+  const cappedLines = normalized.split("\n").map(
+    (line) => line.length > MAX_DIGEST_LINE_UNITS ? truncateLineUtf16(line, MAX_DIGEST_LINE_UNITS) : line
+  );
   const escaped = cappedLines.map((line) => line.replace(/\\/g, "\\\\")).map((line) => line.replace(/</g, "&lt;")).map((line) => line.replace(/`{3,}/g, (m) => "\\`".repeat(m.length))).map((line) => line.replace(/~{3,}/g, (m) => "\\~".repeat(m.length)));
   return escaped.join("\n");
 }
@@ -23753,7 +23767,7 @@ function flushDetectLogToJobSummary(body) {
     discardDigestFileIfPresent();
     return;
   }
-  const block = "## Coldstep \u252C\u2556 digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
+  const block = "## Coldstep - digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
     fs2.appendFileSync(summaryPath, block, "utf8");
   } catch (e) {
@@ -23806,28 +23820,24 @@ async function maybePostPRSummary(body) {
   const snippet = safe.length > max ? safe.slice(0, max) + "\n\n_(truncated)_\n" : safe;
   const octokit = getOctokit(token);
   const ghMs = 6e4;
-  let ghTimeoutId;
+  const abort = new AbortController();
+  const timeoutId = setTimeout(() => abort.abort(), ghMs);
   try {
-    const commentPromise = octokit.rest.issues.createComment({
+    await octokit.rest.issues.createComment({
       owner: ctx.repo.owner,
       repo: ctx.repo.repo,
       issue_number: pr.number,
-      body: "## Coldstep digest\n\n" + snippet
-    }).catch(() => {
+      body: "## Coldstep digest\n\n" + snippet,
+      request: { signal: abort.signal }
     });
-    await Promise.race([
-      commentPromise,
-      new Promise((_, reject) => {
-        ghTimeoutId = setTimeout(
-          () => reject(new Error(`GitHub API timeout after ${ghMs / 1e3}s`)),
-          ghMs
-        );
-      })
-    ]);
-  } finally {
-    if (ghTimeoutId !== void 0) {
-      clearTimeout(ghTimeoutId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (abort.signal.aborted) {
+      throw new Error(`GitHub API timeout after ${ghMs / 1e3}s`);
     }
+    throw new Error(msg);
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 async function post() {

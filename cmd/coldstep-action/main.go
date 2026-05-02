@@ -333,7 +333,7 @@ func runStop(cfg stopConfig) error {
 	if cfg.ReportJobSummary {
 		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
 			safe := sanitizeDigestForMarkdown(body)
-			block := "## Coldstep ┬╖ digest (exec / network / enforcement)\n\n" + safe
+			block := "## Coldstep - digest (exec / network / enforcement)\n\n" + safe
 			if !strings.HasSuffix(block, "\n") {
 				block += "\n"
 			}
@@ -538,7 +538,7 @@ func sanitizeDigestForMarkdown(body string) string {
 			for end > 0 && !utf8.ValidString(line[:end]) {
 				end--
 			}
-			line = line[:end] + " ΓÇª(truncated)"
+			line = line[:end] + " ...(truncated)"
 		}
 		line = strings.ReplaceAll(line, "\\", "\\\\")
 		line = strings.ReplaceAll(line, "<", "&lt;")
@@ -564,7 +564,11 @@ func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
-	return s[:max] + "\n\n_(truncated)_\n"
+	end := max
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end] + "\n\n_(truncated)_\n"
 }
 
 func clamp(v, lo, hi int) int {
