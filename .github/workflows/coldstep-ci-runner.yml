@@ -18,7 +18,7 @@ on:
 # Default to least-privilege for every job in this reusable workflow.
 # Jobs that legitimately need more (e.g. `actions: read` to download a
 # previous-run baseline artifact for JSONL diff) override this block at the
-# job level ΓÇö see `coldstep-demo-detect.yml` for the same pattern.
+# job level — see `coldstep-demo-detect.yml` for the same pattern.
 permissions:
   contents: read
 
@@ -30,6 +30,13 @@ jobs:
     timeout-minutes: 12
     steps:
       - uses: actions/checkout@v6
+      - name: AGENTS.md must not be tracked
+        run: |
+          set -euo pipefail
+          if git ls-files --error-unmatch AGENTS.md >/dev/null 2>&1; then
+            echo "::error::AGENTS.md is listed in the git index. It must remain gitignored and local-only; remove with git rm --cached AGENTS.md and drop any commit that adds it."
+            exit 1
+          fi
       - uses: actions/setup-go@v6
         with:
           go-version: '1.25.x'
