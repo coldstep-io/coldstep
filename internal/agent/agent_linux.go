@@ -408,21 +408,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer closeBPFAuditRd()
 	var bpfAuditObjs *tracebpfaudit.TracebpfauditObjects
 	var bpfAuditLnk link.Link
-	if bR, bO, bL, err := startBPFAuditTrace(); err != nil {
-		slog.Info("bpf audit trace disabled", "err", err)
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})
-	} else {
-		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
-		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
-		defer bpfAuditObjs.Close()
-		defer bpfAuditLnk.Close()
-		defer func() {
-			if bpfAuditObjs != nil {
-				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
-			}
-		}()
-	}
 
 	var forkRd *ringbuf.Reader
 	var forkRdOnce sync.Once
@@ -559,6 +544,25 @@ func Run(ctx context.Context, cfg config.Config) error {
 				}
 			}
 		}
+	}
+
+	// Attach bpf() audit tracing only after other BPF collections finish loading.
+	// Otherwise coldstep's own bpf(2) syscalls during object load can fill the small
+	// audit ringbuf before readBPFAuditRing starts, dropping later canary traffic (e.g. bpftool).
+	if bR, bO, bL, err := startBPFAuditTrace(); err != nil {
+		slog.Info("bpf audit trace disabled", "err", err)
+		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})
+	} else {
+		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
+		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
+		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
+		defer bpfAuditObjs.Close()
+		defer bpfAuditLnk.Close()
+		defer func() {
+			if bpfAuditObjs != nil {
+				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
+			}
+		}()
 	}
 
 	if cfg.EventsLogPath != "" {
