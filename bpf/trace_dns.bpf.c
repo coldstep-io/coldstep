@@ -30,9 +30,11 @@ struct recvfrom_pending {
 
 struct dns_sniff_event {
 	__u32 len;
+	__u8 is_tcp; /* 1 if record came from TCP read(2); userspace strips RFC 1035 2-byte prefix */
+	__u8 _pad[3];
 	__u8 data[DNS_SNIFF_MAX];
 };
-_Static_assert(sizeof(struct dns_sniff_event) == 4 + DNS_SNIFF_MAX,
+_Static_assert(sizeof(struct dns_sniff_event) == 4 + 1 + 3 + DNS_SNIFF_MAX,
 	       "dns_sniff_event wire size must match dnsSniffEventWireSize in agent_linux.go");
 
 struct {
@@ -59,7 +61,7 @@ struct {
 } dns_events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -73,27 +75,9 @@ struct {
 } dns_recvfrom_buf_update_failures SEC(".maps");
 
 /*
- * PR-E (Theme C, F-K8-08): TCP DNS response visibility scaffold.
- *
- * UDP DNS sniff (above) covers ~95% of public-internet name resolution. TCP
- * DNS responses occur for:
- *   - Truncated UDP responses: client retries over TCP (RFC 7766; common for
- *     DNSSEC, large TXT records, AXFR/IXFR).
- *   - Stub resolvers configured to use TCP unconditionally (rare but legal).
- *   - DNS-over-TCP (DoT/DoH wire formats use HTTPS — not this path).
- *
- * Full TCP DNS sniff would require:
- *   1. recv(2)/read(2)/recvmsg(2) sys_exit instrumentation (not just recvfrom).
- *   2. Reassembling the 2-byte length prefix (RFC 1035 §4.2.2) followed by
- *      the actual DNS message — multiple TCP reads can split this header.
- *   3. Per-fd buffer state in a map (similar to recvfrom_buf but stateful),
- *      indexed by (tgid, fd) and torn down on close(2).
- *   4. Verifier-friendly bounded read with constant payload size — DNS_SNIFF_MAX
- *      already accommodates the 16-bit length-prefix message size space.
- *
- * For now this PR ships a counter scaffold that always reads zero (no path
- * bumps it yet) so userspace sees the symbol and the digest can flag the gap
- * once a future PR fills in the read/recvmsg sys_exit handler.
+ * TCP DNS (read/recvfrom sys_exit): bumps when a plausible DNS response QR bit
+ * is visible at offset 4 after the RFC 1035 2-byte length prefix. Undersized reads
+ * bump tcp_dns_skipped_short_read; multi-read reassembly is still out of scope.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
@@ -102,6 +86,17 @@ struct {
 	__type(value, __u32);
 } tcp_dns_responses_observed SEC(".maps");
 
+/*
+ * Incremented when a TCP DNS read(2) returns fewer than 6 bytes — too short for the
+ * 2-byte RFC 1035 length prefix plus minimal DNS header inspection (partial TCP segments).
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tcp_dns_skipped_short_read SEC(".maps");
+
 static __always_inline void note_dns_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
@@ -109,7 +104,7 @@ static __always_inline void note_dns_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_dns_recvfrom_buf_update_failed(void)
@@ -126,6 +121,16 @@ static __always_inline void note_tcp_dns_response(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&tcp_dns_responses_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_tcp_dns_skipped_short_read(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&tcp_dns_skipped_short_read, &k);
 
 	if (!v)
 		return;
@@ -207,28 +212,16 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	} else {
 		/*
 		 * TCP DNS path: RFC 1035 §4.2.2 frames each DNS message with a
-		 * 2-byte length prefix, so the DNS header begins at offset 2
-		 * and the QR bit lives at byte 2 of that header (= offset 4
-		 * of the userspace buffer). We sniff the QR bit only and bump
-		 * `tcp_dns_responses_observed` for visibility.
-		 *
-		 * KNOWN GAP — M-03 (BPF Deep Audit, 2026-05-01): this path
-		 * does NOT reassemble TCP streams. We assume the entire
-		 * `length-prefix + DNS message` fits in a single `read(2)` /
-		 * `recvfrom(2)` call. In practice large responses (DNSSEC,
-		 * AXFR/IXFR, big TXT) split across multiple reads — the
-		 * length prefix may land in one read and the DNS header in
-		 * the next, in which case our offset-4 QR-bit check is
-		 * reading payload bytes and the result is meaningless. Full
-		 * reassembly would need per-(tgid,fd) parser state plus a
-		 * bounded buffer, which is heavy work for the verifier and
-		 * was deliberately deferred. The `tcp_dns_responses_observed`
-		 * counter surfaces "we saw a TCP DNS reply byte sequence" not
-		 * "we successfully decoded one"; userspace digest copy makes
-		 * that distinction explicit. TODO: add a sibling
-		 * `tcp_dns_responses_skipped_multi_read` counter when the
-		 * Go agent is widened (out of scope here).
+		 * 2-byte length prefix; QR bit for a plausible DNS response is
+		 * checked at buffer offset 4. We do not reassemble TCP streams —
+		 * see `tcp_dns_skipped_short_read` for undersized read(2) returns.
 		 */
+		if (ret < 0)
+			return 0;
+		if (ret < 6) {
+			note_tcp_dns_skipped_short_read();
+			return 0;
+		}
 		__u8 tcp_hdr[5];
 		if (bpf_probe_read_user(tcp_hdr, sizeof(tcp_hdr), (void *)pending->buf_user))
 			return 0;
@@ -264,6 +257,8 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	ev->len = copy_len;
+	ev->is_tcp = (__u8)(orig_nr == (unsigned long)COLDSTEP_NR_READ);
+	__builtin_memset(ev->_pad, 0, sizeof(ev->_pad));
 	_Static_assert(sizeof(ev->data) == DNS_SNIFF_MAX,
 		       "dns sniff data array vs DNS_SNIFF_MAX");
 	if (bpf_probe_read_user(ev->data, sizeof(ev->data), (void *)pending->buf_user)) {

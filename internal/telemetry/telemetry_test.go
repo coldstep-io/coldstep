@@ -6,8 +6,12 @@ package telemetry
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -70,9 +74,11 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	s := Summary{
 		Version: 2, SchemaVersion: SchemaVersion,
 		ExecEvents: 1, TCPEvents: 1, UDPEvents: 1, HTTPEvents: 1,
-		UDPRingbufReserveFailures: 7,
-		DNSRingbufReserveFailures: 3,
-		PolicyCounts:              map[string]int{"monitor": 1},
+		UDPRingbufReserveFailures:     7,
+		DNSRingbufReserveFailures:     3,
+		RingbufReserveFailuresTotal:   15,
+		ConnectRingbufReserveFailures: 5,
+		PolicyCounts:                  map[string]int{"monitor": 1},
 	}
 	if err := WriteSummary(p, s, nil); err != nil {
 		t.Fatal(err)
@@ -86,6 +92,35 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"dns_ringbuf_reserve_failures": 3`)) {
 		t.Fatalf("missing dns reserve count: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"ringbuf_reserve_failures_total": 15`)) {
+		t.Fatalf("missing ringbuf reserve total: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"connect_ringbuf_reserve_failures": 5`)) {
+		t.Fatalf("missing connect reserve count: %s", b)
+	}
+}
+
+func TestSumRingbufReserveFailuresDetectPath(t *testing.T) {
+	t.Parallel()
+	const (
+		udp = 1 + iota
+		dns
+		connect
+		http
+		tlsR
+		execR
+		forkR
+		fsR
+		bpfAudit
+	)
+	got := SumRingbufReserveFailuresDetectPath(udp, dns, connect, http, tlsR, execR, forkR, fsR, bpfAudit)
+	want := udp + dns + connect + http + tlsR + execR + forkR + fsR + bpfAudit
+	if got != want {
+		t.Fatalf("got %d want %d", got, want)
+	}
+	if got != 45 {
+		t.Fatalf("expected 1..9 sum 45, got %d", got)
 	}
 }
 
@@ -113,5 +148,27 @@ func TestSigning(t *testing.T) {
 
 	if !bytes.Contains(b, []byte(`"sig":`)) {
 		t.Fatalf("missing signature in output: %s", b)
+	}
+
+	line := strings.TrimRight(string(b), "\n")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("unmarshal line: %v", err)
+	}
+	sigStr, _ := m["sig"].(string)
+	if sigStr == "" {
+		t.Fatal("sig field missing or empty")
+	}
+	delete(m, "sig")
+	canonical, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(sigStr)
+	if err != nil {
+		t.Fatalf("decode sig: %v", err)
+	}
+	if !ed25519.Verify(signer.PublicKeyBytes(), canonical, sigBytes) {
+		t.Fatalf("signature verification failed\ncanonical: %s", canonical)
 	}
 }

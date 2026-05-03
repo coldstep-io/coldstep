@@ -43,22 +43,6 @@ func fillTestDenyRawV4(tgid, tid uint32, comm string, proto, reason uint8, ip ne
 	return raw
 }
 
-func fillTestDenyRawV6(tgid, tid uint32, comm string, proto, reason uint8, ip net.IP, dport uint16) []byte {
-	raw := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(raw[0:4], tgid)
-	binary.LittleEndian.PutUint32(raw[4:8], tid)
-	copy(raw[8:24], comm)
-	raw[24] = proto
-	raw[25] = reason
-	raw[26] = uint8(linuxAFInet6)
-	raw[27] = 0
-	if ip16 := ip.To16(); ip16 != nil {
-		copy(raw[28:44], ip16)
-	}
-	binary.BigEndian.PutUint16(raw[44:46], dport)
-	return raw
-}
-
 func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	stats := newRunStats()
 	stats.addExec()
@@ -245,6 +229,86 @@ func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 	}
 }
 
+func TestRun_EnforceBackendMetadataReflectsActualBackend(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		cfg          enforceBackendConfig
+		lsmAttachErr error
+		wantBackend  string
+		wantMode     string
+	}{
+		{
+			name: "lsm_backend",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     true,
+			},
+			wantBackend: enforceBackendLSM,
+			wantMode:    enforceModeLSM,
+		},
+		{
+			name: "cgroup_fallback_after_lsm_attach_error",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     true,
+			},
+			lsmAttachErr: errors.New("lsm attach failed"),
+			wantBackend:  enforceBackendCgroup,
+			wantMode:     enforceModeCgroup,
+		},
+		{
+			name: "cgroup_backend_when_lsm_unavailable",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     false,
+			},
+			wantBackend: enforceBackendCgroup,
+			wantMode:    enforceModeCgroup,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := chooseEnforceBackend(tc.cfg, tc.lsmAttachErr)
+			if outcome.backend != tc.wantBackend {
+				t.Fatalf("backend=%q want %q", outcome.backend, tc.wantBackend)
+			}
+
+			stats := newRunStats()
+			state := newEnforcementState()
+			state.setModeAndAllowlist(enforceModeForBackend(outcome.backend), 1, 0)
+
+			in := buildDigestInput(
+				config.Config{Mode: config.ModeEnforce},
+				stats,
+				[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+				nil, nil, nil, nil, nil,
+				"",
+				0,
+				120,
+				networkSectionSnapshot{},
+				state.snapshot(),
+				nil,
+				false,
+				forkSectionSnapshot{},
+				false,
+				false,
+				nil,
+				fsSectionSnapshot{},
+				false,
+				canarySnapshot{},
+			)
+
+			if in.EnforcementMode != tc.wantMode {
+				t.Fatalf("EnforcementMode=%q want %q", in.EnforcementMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -358,7 +422,7 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 	rawTCP := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	rawUDP := fillTestDenyRawV6(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("2001:db8::53"), 53)
+	rawUDP := fillTestDenyRawV4(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.2"), 53)
 
 	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append tcp: %v", err)
@@ -378,8 +442,8 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	if !strings.Contains(s, `"protocol":"tcp"`) || !strings.Contains(s, `"protocol":"udp"`) {
 		t.Fatalf("expected both protocols in JSONL:\n%s", s)
 	}
-	if !strings.Contains(s, `"dst":"2001:db8::53"`) {
-		t.Fatalf("expected IPv6 dst in JSONL:\n%s", s)
+	if !strings.Contains(s, `"dst":"10.0.0.2"`) {
+		t.Fatalf("expected UDP deny IPv4 dst in JSONL:\n%s", s)
 	}
 }
 
@@ -393,6 +457,25 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected decode error")
+	}
+}
+
+func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{Mode: config.ModeEnforce}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
+	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
+
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+	if err == nil {
+		t.Fatal("expected unsupported address family error")
+	}
+	if !strings.Contains(err.Error(), "unsupported address family") {
+		t.Fatalf("expected AF error, got %v", err)
 	}
 }
 
@@ -467,6 +550,21 @@ func TestBpfDetail_TruncatesUTF8WithoutSplittingRune(t *testing.T) {
 	}
 	if len(out) > 190 {
 		t.Fatalf("detail unexpectedly long: %d", len(out))
+	}
+}
+
+func TestDigestEnforcementLabel(t *testing.T) {
+	t.Parallel()
+	enforceCfg := config.Config{Mode: config.ModeEnforce}
+	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{}); got != "defend" {
+		t.Fatalf("empty snap with enforce cfg: got %q want defend", got)
+	}
+	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{mode: enforceModeCgroup}); got != enforceModeCgroup {
+		t.Fatalf("non-empty snap: got %q want %s", got, enforceModeCgroup)
+	}
+	detectCfg := config.Config{Mode: config.ModeDetect}
+	if got := digestEnforcementLabel(detectCfg, enforcementSnapshot{mode: "x"}); got != "x" {
+		t.Fatalf("detect cfg must pass through snap mode: got %q", got)
 	}
 }
 
@@ -587,11 +685,7 @@ func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
 	}
 	defer m.Close()
 
-	_, ipv6Net, err := net.ParseCIDR("2001:db8::/32")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = loadIgnoredLPMMap(m, []*net.IPNet{ipv6Net})
+	_, err = loadIgnoredLPMMap(m, []*net.IPNet{nil})
 	if err == nil {
 		t.Fatal("expected error when no IPv4 entries could be programmed")
 	}
@@ -836,8 +930,9 @@ func TestRearmAllowedFromSnapshot_RemovesTamperedAndRestoresMissing(t *testing.T
 	if removed != 1 {
 		t.Fatalf("expected 1 stale key removed (9.9.9.9), got removed=%d", removed)
 	}
-	if added != 2 {
-		t.Fatalf("expected 2 expected keys (re)inserted, got added=%d", added)
+	// reconcileLPMMap counts only keys that were absent before upsert (not every UpdateAny).
+	if added != 1 {
+		t.Fatalf("expected 1 new key inserted (1.1.1.2); 1.1.1.1 was already present, got added=%d", added)
 	}
 
 	// Walk the map post-rearm and confirm only the snapshot keys remain.
@@ -1109,7 +1204,45 @@ func TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs(t *testing.T) {
 		t.Fatalf("expected 0 on closed-map error, got %d", got)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "reserve-failure map lookup failed") {
+	if !strings.Contains(out, "uint32 counter map lookup failed") {
+		t.Fatalf("expected warn log, got: %q", out)
+	}
+	if !strings.Contains(out, "helper=tester") {
+		t.Fatalf("expected helper=tester attribute in log, got: %q", out)
+	}
+	if !strings.Contains(out, "err=") {
+		t.Fatalf("expected err attribute in log, got: %q", out)
+	}
+}
+
+// TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs mirrors M-07 for PERCPU_ARRAY counters
+// (reserve-failure telemetry maps): unreadable map → WARN + 0, digest paths keep progressing.
+func TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_percpu_closed",
+		Type:       ebpf.PerCPUArray,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close map: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := readUint32PerCPUArraySum(m, "tester"); got != 0 {
+		t.Fatalf("expected 0 on closed-map error, got %d", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "percpu uint32 map lookup failed") {
 		t.Fatalf("expected warn log, got: %q", out)
 	}
 	if !strings.Contains(out, "helper=tester") {

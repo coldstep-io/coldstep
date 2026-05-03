@@ -1,5 +1,10 @@
 //go:build linux
 
+// Package agent hosts the Linux BPF-backed Coldstep runtime.
+//
+// Many BPF loader unwind paths use `_ = x.Close()` during partial failure cleanup:
+// the operator-facing error is the primary attach/load failure; chained Close errors
+// are treated as best-effort (successful shutdown still uses defer Close() similarly).
 package agent
 
 import (
@@ -25,6 +30,7 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/cilium/ebpf/rlimit"
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
@@ -47,6 +53,16 @@ type execEvent struct {
 	TID     uint32
 	Comm    [16]byte
 	ExePath [256]byte
+}
+
+// removeMemlockRlimit is replaceable in tests.
+var removeMemlockRlimit = rlimit.RemoveMemlock
+
+func initMemlock() error {
+	if err := removeMemlockRlimit(); err != nil {
+		return fmt.Errorf("init memlock rlimit: %w", err)
+	}
+	return nil
 }
 
 // bpf_audit events are decoded directly via decodeBPFAuditEvent on the raw
@@ -75,6 +91,7 @@ type runStats struct {
 	unobservedEgressSyscallsN       int
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
+	tcpDNSSkippedShortReadN         int
 	bpfAuditN                       int
 	bpfMapIntegrityFailuresN        int
 	bpfDNSCacheUpdateFailuresN      int
@@ -209,21 +226,24 @@ const (
 	denyProtoUDP                = 2
 	denyReasonDstNotAllowlisted = 1
 	linuxAFInet                 = 2
-	linuxAFInet6                = 10
 
 	// BPF↔Go wire-format size contract. Each constant is paired with a
 	// `_Static_assert(sizeof(struct X) == N)` in the matching bpf/*.c file
 	// so that any drift on either side fails compilation immediately.
 	// Values were determined empirically (clang -target bpf, sizeof()).
-	connectEventWireSize     = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
-	udpSendEventWireSize     = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
-	httpSniffEventWireSize   = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
-	tlsSniffEventWireSize    = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
-	execEventWireSize        = 280 // 4+4+16+exe_path[256] → 280
-	forkEventWireSize        = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
-	fsEventWireSize          = 284 // 4+4+16+1+path[256]+_pad[3] → 284
-	denyEventWireSize        = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
-	dnsSniffEventMinWireSize = 4   // header __u32 len; payload follows up to DNS_SNIFF_MAX
+	connectEventWireSize   = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
+	udpSendEventWireSize   = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
+	httpSniffEventWireSize = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
+	tlsSniffEventWireSize  = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
+	execEventWireSize      = 280 // 4+4+16+exe_path[256] → 280
+	forkEventWireSize      = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
+	fsEventWireSize        = 284 // 4+4+16+1+path[256]+_pad[3] → 284
+	denyEventWireSize      = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
+	bpfAuditEventWireSize  = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
+	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
+	dnsSniffMaxPayload          = 4096                   // DNS_SNIFF_MAX in trace_dns.bpf.c
+	dnsSniffEventWireSizeLegacy = 4 + dnsSniffMaxPayload // pre-is_tcp layout (__u32 len + data[])
+	dnsSniffEventWireSize       = 4 + 1 + 3 + dnsSniffMaxPayload
 
 	// Header-only sub-sizes used by the http/tls capture decoders to slice
 	// out the payload window. Pair these with the respective WireSize above.
@@ -241,7 +261,45 @@ const (
 	canaryEventWireSize        = 16 // 4 magic + 4 pad + 8 seq_nr
 	canaryInterval             = 10 * time.Second
 	canaryTimeout              = 30 * time.Second
+
+	ringReadRetryBaseDelay = 5 * time.Millisecond
+	ringReadRetryMaxDelay  = 200 * time.Millisecond
 )
+
+type ringReadRetryBackoff struct {
+	current time.Duration
+	sleepFn func(time.Duration)
+}
+
+func newRingReadRetryBackoff() *ringReadRetryBackoff {
+	return &ringReadRetryBackoff{sleepFn: time.Sleep}
+}
+
+func (b *ringReadRetryBackoff) nextDelay() time.Duration {
+	if b.current <= 0 {
+		b.current = ringReadRetryBaseDelay
+		return b.current
+	}
+	next := b.current * 2
+	if next > ringReadRetryMaxDelay {
+		next = ringReadRetryMaxDelay
+	}
+	b.current = next
+	return b.current
+}
+
+func (b *ringReadRetryBackoff) sleep() time.Duration {
+	delay := b.nextDelay()
+	if delay <= 0 {
+		return 0
+	}
+	b.sleepFn(delay)
+	return delay
+}
+
+func (b *ringReadRetryBackoff) reset() {
+	b.current = 0
+}
 
 // canaryState tracks telemetry integrity canaries across the BPF
 // ringbuf pipeline. Userspace arms a sequence via the canary_trigger
@@ -330,6 +388,41 @@ type enforcementSnapshot struct {
 	denyReserveFailures  int
 	mapIntegrityFailures int
 	firstDeny            *report.DenyDigestRow
+}
+
+type enforceBackendConfig struct {
+	modeEnforce bool
+	haveLSM     bool
+}
+
+type enforceBackendOutcome struct {
+	backend string
+}
+
+const (
+	enforceBackendDetect = "detect"
+	enforceBackendLSM    = "lsm"
+	enforceBackendCgroup = "cgroup"
+
+	enforceModeLSM    = "enforce+lsm"
+	enforceModeCgroup = "enforce+cgroup"
+)
+
+func chooseEnforceBackend(cfg enforceBackendConfig, lsmAttachErr error) enforceBackendOutcome {
+	if !cfg.modeEnforce {
+		return enforceBackendOutcome{backend: enforceBackendDetect}
+	}
+	if cfg.haveLSM && lsmAttachErr == nil {
+		return enforceBackendOutcome{backend: enforceBackendLSM}
+	}
+	return enforceBackendOutcome{backend: enforceBackendCgroup}
+}
+
+func enforceModeForBackend(backend string) string {
+	if backend == enforceBackendLSM {
+		return enforceModeLSM
+	}
+	return enforceModeCgroup
 }
 
 type enforceDenyError struct {
@@ -652,6 +745,42 @@ func (s *runStats) setFSRingbufReserveFailures(n int) {
 	s.fsRingbufReserveFailuresN = n
 }
 
+func (s *runStats) connectRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connectRingbufReserveFailuresN
+}
+
+func (s *runStats) httpRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.httpRingbufReserveFailuresN
+}
+
+func (s *runStats) tlsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tlsRingbufReserveFailuresN
+}
+
+func (s *runStats) execRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.execRingbufReserveFailuresN
+}
+
+func (s *runStats) forkRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forkRingbufReserveFailuresN
+}
+
+func (s *runStats) fsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fsRingbufReserveFailuresN
+}
+
 func (s *runStats) setUDPSendmsgMultiIovecObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -710,6 +839,18 @@ func (s *runStats) tcpDNSResponsesObserved() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.tcpDNSResponsesObservedN
+}
+
+func (s *runStats) setTCPDNSSkippedShortRead(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpDNSSkippedShortReadN = n
+}
+
+func (s *runStats) tcpDNSSkippedShortRead() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tcpDNSSkippedShortReadN
 }
 
 func (s *runStats) addBPFHeartbeatFailure() {
@@ -781,6 +922,17 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 	for k, v := range s.droppedCounts {
 		dropped[k] = v
 	}
+	rbTotal := telemetry.SumRingbufReserveFailuresDetectPath(
+		s.udpRingbufReserveFailuresN,
+		s.dnsRingbufReserveFailuresN,
+		s.connectRingbufReserveFailuresN,
+		s.httpRingbufReserveFailuresN,
+		s.tlsRingbufReserveFailuresN,
+		s.execRingbufReserveFailuresN,
+		s.forkRingbufReserveFailuresN,
+		s.fsRingbufReserveFailuresN,
+		s.bpfAuditRingbufReserveFailuresN,
+	)
 	return telemetry.Summary{
 		Version:                        2,
 		SchemaVersion:                  telemetry.SchemaVersion,
@@ -799,11 +951,13 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		ExecRingbufReserveFailures:     s.execRingbufReserveFailuresN,
 		ForkRingbufReserveFailures:     s.forkRingbufReserveFailuresN,
 		FSRingbufReserveFailures:       s.fsRingbufReserveFailuresN,
+		RingbufReserveFailuresTotal:    rbTotal,
 		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
 		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
 		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
+		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
 		BPFAuditEvents:                 s.bpfAuditN,
 		BPFHeartbeatFailures:           s.bpfHeartbeatFailures,
 		BPFMapIntegrityFailures:        s.bpfMapIntegrityFailuresN,
@@ -1061,27 +1215,42 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	return tgid, tid, comm, daddr, dport, payload, true
 }
 
-// decodeDNSSniffSample parses trace_dns.bpf.c ringbuf payload (__u32 len + data[len]).
-func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
-	if len(raw) < dnsSniffEventMinWireSize {
-		return nil, false
+// decodeDNSSniffSample parses dns_sniff_event (trace_dns.bpf.c): len, is_tcp, pad, payload.
+// Legacy ringbuf records are dnsSniffEventWireSizeLegacy (len + data only).
+func decodeDNSSniffSample(raw []byte) (pkt []byte, isTCP bool, ok bool) {
+	if len(raw) < 4 {
+		return nil, false, false
 	}
 	n := binary.LittleEndian.Uint32(raw[0:4])
-	if n > 4096 || int(n)+4 > len(raw) {
-		return nil, false
+	if n > dnsSniffMaxPayload {
+		return nil, false, false
 	}
-	return raw[4 : 4+int(n)], true
+	if len(raw) == dnsSniffEventWireSizeLegacy {
+		if int(n)+4 > len(raw) {
+			return nil, false, false
+		}
+		return raw[4 : 4+int(n)], false, true
+	}
+	if len(raw) < dnsSniffEventWireSize {
+		return nil, false, false
+	}
+	isTCP = raw[4] != 0
+	if int(n)+8 > len(raw) {
+		return nil, false, false
+	}
+	return raw[8 : 8+int(n)], isTCP, true
 }
 
-// decodeBPFAuditEvent parses trace_bpf_audit.bpf.c bpf_audit_event (tgid, tid, comm, cmd).
+// decodeBPFAuditEvent parses trace_bpf_audit.bpf.c bpf_audit_event (tgid, tid, cmd, comm).
+// BPF struct layout: tgid(0-3) tid(4-7) cmd(8-11) comm[16](12-27).
 func decodeBPFAuditEvent(raw []byte) (tgid, tid uint32, comm [16]byte, cmd uint32, ok bool) {
-	if len(raw) < 28 {
+	if len(raw) < bpfAuditEventWireSize {
 		return 0, 0, [16]byte{}, 0, false
 	}
 	tgid = binary.LittleEndian.Uint32(raw[0:4])
 	tid = binary.LittleEndian.Uint32(raw[4:8])
-	copy(comm[:], raw[8:24])
-	cmd = binary.LittleEndian.Uint32(raw[24:28])
+	cmd = binary.LittleEndian.Uint32(raw[8:12])
+	copy(comm[:], raw[12:28])
 	return tgid, tid, comm, cmd, true
 }
 
@@ -1268,6 +1437,7 @@ func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, lin
 
 func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1277,9 +1447,11 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (exec)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (exec)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		var ev execEvent
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
@@ -1326,6 +1498,7 @@ type forkEventWire struct {
 
 func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	forkBuf *forkEdgeBuffer, forkState *forkSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1338,9 +1511,11 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			if forkState != nil {
 				forkState.addReadError()
 			}
-			slog.Warn("ringbuf read (fork)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (fork)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		var ev forkEventWire
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
@@ -1418,6 +1593,7 @@ const maxFSEventsTotal = 5000
 func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	fsRows *fsRowBuffer, fsState *fsSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	count := 0
+	backoff := newRingReadRetryBackoff()
 	for {
 		rec, err := rd.Read()
 		if err != nil {
@@ -1428,9 +1604,11 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 				return ctx.Err()
 			}
 			fsState.addReadError()
-			slog.Warn("ringbuf read (fs)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (fs)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 		var ev fsEventWire
 		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &ev); err != nil {
 			fsState.addReadError()
@@ -1482,6 +1660,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 
 func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
 	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, canary *canaryState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1494,9 +1673,11 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			if sectionState != nil {
 				sectionState.addTCPReaderError()
 			}
-			slog.Warn("ringbuf read (tcp)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (tcp)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		// Canary event detection: if the record starts with CANARY_MAGIC,
 		// it's a telemetry integrity canary — not a connect event.
@@ -1571,6 +1752,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1583,9 +1765,11 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			if sectionState != nil {
 				sectionState.addTLSReaderError()
 			}
-			slog.Warn("ringbuf read (tls)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (tls)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, rawPay, ok := decodeTLSSniffEvent(record.RawSample)
 		if !ok {
@@ -1640,6 +1824,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 
 func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
 	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1652,9 +1837,11 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			if sectionState != nil {
 				sectionState.addUDPReaderError()
 			}
-			slog.Warn("ringbuf read (udp)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (udp)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, dgramLen, ok := decodeUDPSendEvent(record.RawSample)
 		if !ok {
@@ -1709,6 +1896,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 
 func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1721,9 +1909,11 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 			if sectionState != nil {
 				sectionState.addHTTPReaderError()
 			}
-			slog.Warn("ringbuf read (http)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (http)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, rawPay, ok := decodeHTTPSniffEvent(record.RawSample)
 		if !ok {
@@ -1777,6 +1967,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 }
 
 func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats *runStats) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1786,11 +1977,25 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (dns)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (dns)", "err", err, "backoff", delay)
 			continue
 		}
-		pkt, ok := decodeDNSSniffSample(record.RawSample)
+		backoff.reset()
+		pkt, isTCP, ok := decodeDNSSniffSample(record.RawSample)
 		if !ok || len(pkt) < 12 {
+			stats.addDropped("dns_decode")
+			continue
+		}
+		if isTCP {
+			// Strip RFC 1035 TCP framing 2-byte length prefix before the DNS header.
+			if len(pkt) < 14 {
+				stats.addDropped("dns_decode_tcp_short")
+				continue
+			}
+			pkt = pkt[2:]
+		}
+		if len(pkt) < 12 {
 			stats.addDropped("dns_decode")
 			continue
 		}
@@ -1799,6 +2004,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 }
 
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1808,9 +2014,11 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (bpf_audit)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (bpf_audit)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, cmd, ok := decodeBPFAuditEvent(record.RawSample)
 		if !ok {
@@ -2133,66 +2341,89 @@ func readUint32CounterMap(m *ebpf.Map, helperName string) int {
 		if errors.Is(err, ebpf.ErrKeyNotExist) {
 			return 0
 		}
-		slog.Warn("reserve-failure map lookup failed", "helper", helperName, "err", err)
+		slog.Warn("uint32 counter map lookup failed", "helper", helperName, "err", err)
 		return 0
 	}
 	return int(v)
+}
+
+// readUint32PerCPUArraySum sums all CPU slots for a BPF_MAP_TYPE_PERCPU_ARRAY map
+// with uint32 values at key 0. Used after migrating reserve-failure maps off a
+// contended global ARRAY slot.
+func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
+	if m == nil {
+		return 0
+	}
+	var k uint32
+	var vals []uint32
+	if err := m.Lookup(&k, &vals); err != nil {
+		if errors.Is(err, ebpf.ErrKeyNotExist) {
+			return 0
+		}
+		slog.Warn("percpu uint32 map lookup failed", "helper", helperName, "err", err)
+		return 0
+	}
+	n := 0
+	for _, v := range vals {
+		n += int(v)
+	}
+	return n
 }
 
 func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.DenyReserveFailures, "readDenyReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.DenyReserveFailures, "readDenyReserveFailureCount")
 }
 
 func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
+	return readUint32PerCPUArraySum(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
 }
 
 func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
 }
 
 func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
 }
 
 func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
 }
 
 func readBPFAuditRingbufReserveFailureCount(objs *tracebpfaudit.TracebpfauditObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
 }
 
 func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
 }
 
 func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
 }
 
 func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
@@ -2230,32 +2461,39 @@ func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
 	return readUint32CounterMap(objs.TcpDnsResponsesObserved, "readTCPDNSResponsesObservedCount")
 }
 
+func readTCPDNSSkippedShortReadCount(objs *tracedns.TracednsObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32CounterMap(objs.TcpDnsSkippedShortRead, "readTCPDNSSkippedShortReadCount")
+}
+
 func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
 }
 
 func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
 }
 
 func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
 }
 
 func readLSMDenyReserveFailureCount(objs *tracelsmenforce.TracelsmenforceObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
 func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
@@ -2389,18 +2627,22 @@ func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPN
 	}
 	for _, n := range nets {
 		if n == nil {
+			slog.Warn("allowed_ipv4: skipping nil CIDR entry in allowed_ipv4 LPM load")
 			continue
 		}
 		ones, bits := n.Mask.Size()
 		if bits != 32 || ones < 0 || ones > 32 {
+			slog.Warn("allowed_ipv4: skipping CIDR with non-IPv4 mask (unexpected from policy parse)", "cidr", n.String(), "bits", bits, "ones", ones)
 			continue
 		}
 		ip4 := n.IP.To4()
 		if ip4 == nil {
+			slog.Warn("allowed_ipv4: skipping non-IPv4 CIDR (unexpected from policy parse)", "cidr", n.String())
 			continue
 		}
 		network := ip4.Mask(n.Mask)
 		if network == nil {
+			slog.Warn("allowed_ipv4: skipping CIDR with nil masked network (unexpected)", "cidr", n.String())
 			continue
 		}
 		var key [8]byte
@@ -2420,15 +2662,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	protocol := denyProtocolLabel(protocolRaw)
 	reason := denyReasonLabel(reasonRaw)
-	var dst string
-	switch af {
-	case linuxAFInet:
-		dst = net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
-	case linuxAFInet6:
-		dst = net.IP(daddr16[:]).String()
-	default:
-		dst = net.IP(daddr16[:]).String()
+	if af != linuxAFInet {
+		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
 	}
+	dst := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer
@@ -2479,6 +2716,8 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
 	// would kill the agent before later job steps (nmap/curl) run. Exit only on ctx cancel / closed ring.
+	backoff := newRingReadRetryBackoff()
+	drainBackoff := newRingReadRetryBackoff()
 	for {
 		rd.SetDeadline(time.Time{})
 		record, err := rd.Read()
@@ -2489,9 +2728,11 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (deny)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (deny)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer); err != nil {
 			slog.Warn("deny ring sample skipped", "err", err)
@@ -2515,9 +2756,11 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 					return ctx.Err()
 				}
 				rd.SetDeadline(time.Time{})
-				slog.Warn("ringbuf read (deny drain)", "err", err2)
+				delay := drainBackoff.sleep()
+				slog.Warn("ringbuf read (deny drain)", "err", err2, "backoff", delay)
 				continue
 			}
+			drainBackoff.reset()
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
 				continue
@@ -2581,6 +2824,9 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 // digestEnforcementLabel maps internal enforcement snapshot + config to the digest/JSONL-facing mode name.
 func digestEnforcementLabel(cfg config.Config, snap enforcementSnapshot) string {
 	if cfg.Mode != config.ModeEnforce {
+		return snap.mode
+	}
+	if strings.TrimSpace(snap.mode) != "" {
 		return snap.mode
 	}
 	return "defend"
@@ -2652,6 +2898,12 @@ func buildDigestInput(
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
 		UDPRingbufReserveFailures:      stats.udpRingbufReserveFailures(),
 		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),
+		ConnectRingbufReserveFailures:  stats.connectRingbufReserveFailures(),
+		HTTPRingbufReserveFailures:     stats.httpRingbufReserveFailures(),
+		TLSRingbufReserveFailures:      stats.tlsRingbufReserveFailures(),
+		ExecRingbufReserveFailures:     stats.execRingbufReserveFailures(),
+		ForkRingbufReserveFailures:     stats.forkRingbufReserveFailures(),
+		FSRingbufReserveFailures:       stats.fsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
 		UnobservedEgressSyscalls:       stats.unobservedEgressSyscalls(),
@@ -2659,6 +2911,7 @@ func buildDigestInput(
 		CanaryPipelineOK:               canarySnap.pipelineOK,
 		CanaryFailCount:                canarySnap.failCount,
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
+		TCPDNSSkippedShortRead:         stats.tcpDNSSkippedShortRead(),
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
@@ -2714,6 +2967,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	signer, err := telemetry.NewSigner(cfg.SigningKey)
 	if err != nil {
 		return fmt.Errorf("setup telemetry signer: %w", err)
+	}
+	if err := initMemlock(); err != nil {
+		return err
 	}
 
 	bpfSt := []telemetry.BPFStatus{
@@ -2813,46 +3069,68 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
 	if cfg.Mode == config.ModeEnforce {
-		useLSM := false
+		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
-			useLSM = true
+			haveLSM = true
 		}
+		var lsmAttachErr error
 
-		if useLSM {
-			lsmObjs = new(tracelsmenforce.TracelsmenforceObjects)
-			if err := tracelsmenforce.LoadTracelsmenforceObjects(lsmObjs, nil); err != nil {
+		if haveLSM {
+			lsmCandidate := new(tracelsmenforce.TracelsmenforceObjects)
+			if err := tracelsmenforce.LoadTracelsmenforceObjects(lsmCandidate, nil); err != nil {
 				return fmt.Errorf("load lsm enforce bpf objects: %w", err)
 			}
-			hasLSM = true
-			defer func() {
-				enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
-				_ = lsmObjs.Close()
-			}()
 
-			allowlistSize, ignoredSize, loadErr := loadLSMEnforceMaps(lsmObjs, enforceCompiled, pol)
+			allowlistSize, ignoredSize, loadErr := loadLSMEnforceMaps(lsmCandidate, enforceCompiled, pol)
 			if loadErr != nil {
+				_ = lsmCandidate.Close()
 				return loadErr
 			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode)+"+lsm", allowlistSize, ignoredSize)
 
-			var err error
-			denyRd, err = ringbuf.NewReader(lsmObjs.LsmDenyEvents)
+			lsmDenyRd, err := ringbuf.NewReader(lsmCandidate.LsmDenyEvents)
 			if err != nil {
+				_ = lsmCandidate.Close()
 				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
 			}
 
-			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmObjs.LsmSocketConnect})
+			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketConnect})
 			if err != nil {
-				return fmt.Errorf("attach lsm_socket_connect: %w", err)
+				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
+				_ = lsmDenyRd.Close()
+				_ = lsmCandidate.Close()
+			} else {
+				lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketSendmsg})
+				if err != nil {
+					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
+					_ = lnk1.Close()
+					_ = lsmDenyRd.Close()
+					_ = lsmCandidate.Close()
+				} else {
+					lsmObjs = lsmCandidate
+					hasLSM = true
+					denyRd = lsmDenyRd
+					enforceState.setModeAndAllowlist(enforceModeForBackend(enforceBackendLSM), allowlistSize, ignoredSize)
+					defer func() {
+						enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
+						_ = lsmObjs.Close()
+					}()
+					defer lnk1.Close()
+					defer lnk2.Close()
+				}
 			}
-			defer lnk1.Close()
+		}
 
-			lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmObjs.LsmSocketSendmsg})
-			if err != nil {
-				return fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
+		backend := chooseEnforceBackend(
+			enforceBackendConfig{
+				modeEnforce: cfg.Mode == config.ModeEnforce,
+				haveLSM:     haveLSM,
+			},
+			lsmAttachErr,
+		)
+		if backend.backend == enforceBackendCgroup {
+			if lsmAttachErr != nil {
+				slog.Warn("lsm enforce attach failed; falling back to cgroup", "err", lsmAttachErr)
 			}
-			defer lnk2.Close()
-		} else {
 			if err := traceenforce.LoadTraceenforceObjects(&enforceObjs, nil); err != nil {
 				return fmt.Errorf("load enforce bpf objects: %w", err)
 			}
@@ -2866,7 +3144,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if loadErr != nil {
 				return loadErr
 			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize, ignoredSize)
+			enforceState.setModeAndAllowlist(enforceModeForBackend(backend.backend), allowlistSize, ignoredSize)
 			var err error
 			denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
 			if err != nil {
@@ -3018,6 +3296,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
 				stats.setTCPDNSResponsesObserved(readTCPDNSResponsesObservedCount(dnsObjs))
+				stats.setTCPDNSSkippedShortRead(readTCPDNSSkippedShortReadCount(dnsObjs))
 			}
 		}()
 	}

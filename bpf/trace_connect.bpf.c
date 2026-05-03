@@ -1,6 +1,6 @@
 /*
  * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64).
- * Scope is IPv4-centric (IPv6 syscall/cgroup enforcement is out of project scope for v1).
+ * IPv6 is not supported; tracing is IPv4-focused.
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
  *     not complete for all UDP egress paths)
@@ -67,35 +67,35 @@ struct {
 } connect4_by_tgid_fd SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
 } connect4_tuple_update_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
 } udp_ringbuf_reserve_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
 } connect_ringbuf_reserve_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
 } http_ringbuf_reserve_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -202,8 +202,8 @@ static __always_inline void note_connect4_tuple_update_failed(void)
 
 	if (!v)
 		return;
-	/* Shared map value may be updated concurrently; use atomic increment. */
-	__sync_fetch_and_add(v, 1);
+	/* PERCPU_ARRAY: each CPU owns its slot; no global atomic contention. */
+	(*v)++;
 }
 
 static __always_inline void note_udp_ringbuf_reserve_failed(void)
@@ -213,7 +213,7 @@ static __always_inline void note_udp_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_connect_ringbuf_reserve_failed(void)
@@ -223,7 +223,7 @@ static __always_inline void note_connect_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_http_ringbuf_reserve_failed(void)
@@ -233,7 +233,7 @@ static __always_inline void note_http_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_tls_ringbuf_reserve_failed(void)
@@ -243,7 +243,7 @@ static __always_inline void note_tls_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_udp_sendmsg_multi_iovec(void)

@@ -107,7 +107,9 @@ func reconcileLPMMap(m *ebpf.Map, expected map[[8]byte]struct{}) (added int, rem
 	var k [8]byte
 	var v uint8
 	var stale [][8]byte
+	existing := make(map[[8]byte]struct{}, 32)
 	for iter.Next(&k, &v) {
+		existing[k] = struct{}{}
 		if _, ok := expected[k]; !ok {
 			cp := k
 			stale = append(stale, cp)
@@ -134,7 +136,9 @@ func reconcileLPMMap(m *ebpf.Map, expected map[[8]byte]struct{}) (added int, rem
 		if updErr := m.Update(&key, &val, ebpf.UpdateAny); updErr != nil {
 			return added, removed, fmt.Errorf("update map key: %w", updErr)
 		}
-		added++
+		if _, alreadyPresent := existing[ek]; !alreadyPresent {
+			added++
+		}
 	}
 	return added, removed, nil
 }

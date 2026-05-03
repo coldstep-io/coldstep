@@ -23,7 +23,7 @@ struct {
 } events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -36,7 +36,7 @@ static __always_inline void note_exec_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 SEC("tp/sched/sched_process_exec")

@@ -63,7 +63,6 @@ func diffSummary(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
 
 	if _, err := fmt.Fprintf(
 		f,
@@ -77,7 +76,8 @@ func diffSummary(args []string) error {
 		*marker,
 		len(diff.TrafficChanged),
 	); err != nil {
+		_ = f.Close()
 		return err
 	}
-	return nil
+	return f.Close()
 }

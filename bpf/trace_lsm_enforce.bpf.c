@@ -6,6 +6,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "trace_connect_obs.h"
 #include "dns_cache.h"
 #include "deny_event.h"
 
@@ -51,7 +52,7 @@ struct {
 } lsm_deny_events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -137,7 +138,7 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)
@@ -264,20 +265,14 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	__be16 dport = 0;
 
 	if (address && namelen >= (int)sizeof(struct sockaddr_in)) {
-		/* Explicit destination: read sockaddr_in fields from userspace-
-		 * sourced kernel-side `msghdr`. */
-		struct sockaddr_in *addr4 = (struct sockaddr_in *)address;
-		short family;
-		bpf_probe_read_kernel(&family, sizeof(family), &addr4->sin_family);
-		if (family != AF_INET)
+		/* msg_name is userspace memory — use read_ipv4_sockaddr like other sendmsg hooks. */
+		if (read_ipv4_sockaddr((unsigned long)address, &dport, &daddr))
 			return 0;
-		bpf_probe_read_kernel(&daddr, sizeof(daddr), &addr4->sin_addr.s_addr);
-		bpf_probe_read_kernel(&dport, sizeof(dport), &addr4->sin_port);
 	} else {
 		/*
 		 * No explicit destination — connected socket. Derive IPv4
 		 * peer from `sock_common`. Skip if the socket isn't AF_INET
-		 * (AF_INET6 / AF_UNIX / AF_NETLINK / etc.) or isn't connected
+		 * (other families / AF_UNIX / AF_NETLINK / etc.) or isn't connected
 		 * (skc_daddr == 0). The verifier accepts these reads because
 		 * `sk` is a kernel pointer obtained via `bpf_probe_read_kernel`
 		 * and we always go back through `bpf_probe_read_kernel` to read

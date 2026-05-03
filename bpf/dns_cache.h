@@ -5,7 +5,7 @@
 #include <bpf/bpf_helpers.h>
 
 /*
- * dns_cache map: IPv4 -> FQDN (64 bytes).
+ * dns_cache map: IPv4 -> FQDN (value char[256]).
  * Populated by userspace agent after parsing DNS responses.
  * Queried by BPF observability/enforcement programs for late-binding attribution.
  */

@@ -157,9 +157,15 @@ type DigestInput struct {
 	EnforcementDenyReserveFailures int
 	EnforcementFirstDeny           *DenyDigestRow
 
-	Connect4TupleUpdateFailures int
-	UDPRingbufReserveFailures   int
-	DNSRingbufReserveFailures   int
+	Connect4TupleUpdateFailures   int
+	UDPRingbufReserveFailures     int
+	DNSRingbufReserveFailures     int
+	ConnectRingbufReserveFailures int
+	HTTPRingbufReserveFailures    int
+	TLSRingbufReserveFailures     int
+	ExecRingbufReserveFailures    int
+	ForkRingbufReserveFailures    int
+	FSRingbufReserveFailures      int
 	// Multi-iovec visibility (PR-D). Counts BPF observations of scatter/gather
 	// syscalls that we only capture iov[0] for; non-zero indicates payload past
 	// the first iovec is invisible to the JSONL/digest. Operators can use this
@@ -179,11 +185,12 @@ type DigestInput struct {
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool
 	CanaryFailCount  int
-	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
-	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
-	// PR-E did not ship. The symbol exists so userspace surfaces the gap
-	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
-	TCPDNSResponsesObserved        int
+	// TCPDNSResponsesObserved counts TCP DNS length-framed replies where the BPF
+	// path could inspect the QR bit (trace_dns.bpf.c read/recvfrom sys_exit).
+	TCPDNSResponsesObserved int
+	// TCPDNSSkippedShortRead counts read(2) returns shorter than 6 bytes on the
+	// TCP DNS path (partial segment — cannot validate length prefix + header).
+	TCPDNSSkippedShortRead         int
 	BPFHeartbeatFailures           int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow
@@ -266,7 +273,10 @@ func buildHotEgressList(in DigestInput) []hotEgressAgg {
 
 func isBlockingDigestMode(m string) bool {
 	m = strings.TrimSpace(m)
-	return strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend")
+	if strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(m), "enforce+")
 }
 
 func digestModeCell(m string) string {
@@ -274,7 +284,8 @@ func digestModeCell(m string) string {
 	if m == "" {
 		return "detect"
 	}
-	if strings.EqualFold(m, "enforce") {
+	lm := strings.ToLower(m)
+	if lm == "enforce" || strings.HasPrefix(lm, "enforce+") {
 		return "defend"
 	}
 	return m
@@ -289,6 +300,22 @@ func hotKindTags(kinds map[string]struct{}) string {
 		}
 	}
 	return strings.Join(tags, ", ")
+}
+
+// totalDetectRingbufReserveFailures sums ringbuf reserve failures across detect-path
+// telemetry channels (excludes defend deny-event reserves; those are separate).
+func totalDetectRingbufReserveFailures(in DigestInput) int {
+	return telemetry.SumRingbufReserveFailuresDetectPath(
+		in.UDPRingbufReserveFailures,
+		in.DNSRingbufReserveFailures,
+		in.ConnectRingbufReserveFailures,
+		in.HTTPRingbufReserveFailures,
+		in.TLSRingbufReserveFailures,
+		in.ExecRingbufReserveFailures,
+		in.ForkRingbufReserveFailures,
+		in.FSRingbufReserveFailures,
+		in.BPFAuditRingbufReserveFailures,
+	)
 }
 
 func writeTriageRibbon(b *strings.Builder, in DigestInput) {
@@ -345,6 +372,24 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.DNSRingbufReserveFailures > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("dns ringbuf reserve=%d", in.DNSRingbufReserveFailures))
 	}
+	if in.ConnectRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("connect ringbuf reserve=%d", in.ConnectRingbufReserveFailures))
+	}
+	if in.HTTPRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("http ringbuf reserve=%d", in.HTTPRingbufReserveFailures))
+	}
+	if in.TLSRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("tls ringbuf reserve=%d", in.TLSRingbufReserveFailures))
+	}
+	if in.ExecRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("exec ringbuf reserve=%d", in.ExecRingbufReserveFailures))
+	}
+	if in.ForkRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("fork ringbuf reserve=%d", in.ForkRingbufReserveFailures))
+	}
+	if in.FSRingbufReserveFailures > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("fs ringbuf reserve=%d", in.FSRingbufReserveFailures))
+	}
 	if in.UDPSendmsgMultiIovecObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("udp multi-iovec=%d", in.UDPSendmsgMultiIovecObserved))
 	}
@@ -353,6 +398,9 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	}
 	if in.UnobservedEgressSyscalls > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
 	}
 	if in.IoUringSetupObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup detected=%d", in.IoUringSetupObserved))
@@ -367,6 +415,10 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
 	} else {
 		b.WriteString(fmt.Sprintf("| **Capture gaps** | **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
+	}
+
+	if rbTotal := totalDetectRingbufReserveFailures(in); rbTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **Ringbuf reserve pressure (total)** | **%d** across detect-path channels (per-channel KPI rows below) |\n", rbTotal))
 	}
 
 	b.WriteString("\n")
@@ -448,6 +500,24 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
 	}
+	if in.ConnectRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **connect_events ringbuf reserve failures** | %d |\n", in.ConnectRingbufReserveFailures))
+	}
+	if in.HTTPRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **http_events ringbuf reserve failures** | %d |\n", in.HTTPRingbufReserveFailures))
+	}
+	if in.TLSRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures))
+	}
+	if in.ExecRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **exec_events ringbuf reserve failures** | %d |\n", in.ExecRingbufReserveFailures))
+	}
+	if in.ForkRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **proc_fork_events ringbuf reserve failures** | %d |\n", in.ForkRingbufReserveFailures))
+	}
+	if in.FSRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **fs_events ringbuf reserve failures** | %d |\n", in.FSRingbufReserveFailures))
+	}
 	if in.UDPSendmsgMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
 	}
@@ -478,7 +548,10 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
 	if in.TCPDNSResponsesObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
+		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved))
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead))
 	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
@@ -514,6 +587,24 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
 	}
+	if in.ConnectRingbufReserveFailures > 0 {
+		b.WriteString(" **connect_events** reserve failures indicate ringbuf pressure; some TCP connect telemetry may be missed.")
+	}
+	if in.HTTPRingbufReserveFailures > 0 {
+		b.WriteString(" **http_events** reserve failures indicate ringbuf pressure; some cleartext HTTP telemetry may be missed.")
+	}
+	if in.TLSRingbufReserveFailures > 0 {
+		b.WriteString(" **tls_events** reserve failures indicate ringbuf pressure; some TLS/SNI telemetry may be missed.")
+	}
+	if in.ExecRingbufReserveFailures > 0 {
+		b.WriteString(" **exec_events** reserve failures indicate ringbuf pressure; some exec telemetry may be missed.")
+	}
+	if in.ForkRingbufReserveFailures > 0 {
+		b.WriteString(" **proc_fork_events** reserve failures indicate ringbuf pressure; some fork/process-tree telemetry may be missed.")
+	}
+	if in.FSRingbufReserveFailures > 0 {
+		b.WriteString(" **fs_events** reserve failures indicate ringbuf pressure; some filesystem telemetry may be missed.")
+	}
 	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
 	}
@@ -522,6 +613,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring operations completely bypass syscall-based eBPF hooks (raw_tp/sys_enter, cgroup/connect4). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter means something attempted it. If io-uring-disable was false, traffic may have been invisible to Coldstep.")
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString(" **TCP DNS short reads** counts TCP read(2) returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.")
 	}
 	b.WriteString("</sub>\n\n")
 

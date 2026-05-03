@@ -24,7 +24,7 @@ _Static_assert(sizeof(struct fork_event) == 48,
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	/*
-	 * 1<<22 = 4 MiB. fork_event is 52 bytes so this holds ~80,000 events —
+	 * 1<<22 = 4 MiB. fork_event is 48 bytes so this holds ~87,000 events —
 	 * far more than any CI pipeline produces. Intentionally smaller than the
 	 * 1<<24 (16 MiB) used by network ringbufs whose payloads are much larger.
 	 */
@@ -32,7 +32,7 @@ struct {
 } fork_events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -45,7 +45,7 @@ static __always_inline void note_fork_ringbuf_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 /*

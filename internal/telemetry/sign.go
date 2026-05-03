@@ -44,6 +44,14 @@ func (s *Signer) PublicKey() string {
 	return base64.StdEncoding.EncodeToString(s.pub)
 }
 
+// PublicKeyBytes returns the raw Ed25519 public key for signature verification.
+func (s *Signer) PublicKeyBytes() ed25519.PublicKey {
+	if s == nil {
+		return nil
+	}
+	return s.pub
+}
+
 // Sign marshals v, signs the JSON, and returns the base64 signature.
 // v must NOT already contain a "sig" field or it will be included in the signed payload.
 func (s *Signer) Sign(v any) (string, error) {

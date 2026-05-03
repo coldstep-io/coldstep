@@ -29,3 +29,30 @@ func TestEventStructWireSizes(t *testing.T) {
 		}
 	}
 }
+
+// TestNetworkAndAuditWireSizes guards wire-size constants for network and
+// audit records that are decoded from raw ringbuf bytes (no Go mirror struct).
+func TestNetworkAndAuditWireSizes(t *testing.T) {
+	cases := []struct {
+		name     string
+		got      uintptr
+		expected uintptr
+	}{
+		{"connect_event", uintptr(connectEventWireSize), uintptr(4 + 4 + 16 + 4 + 2 + 2)},
+		{"udp_send_event", uintptr(udpSendEventWireSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 4)},
+		{"http_sniff_event", uintptr(httpSniffEventWireSize), uintptr(httpSniffEventHeaderSize + httpPayloadMax + 2)},
+		{"tls_sniff_event", uintptr(tlsSniffEventWireSize), uintptr(tlsSniffEventHeaderSize + tlsPayloadMax + 2)},
+		{"http_sniff_event_header", uintptr(httpSniffEventHeaderSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 2)},
+		{"tls_sniff_event_header", uintptr(tlsSniffEventHeaderSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 2)},
+		{"deny_event", uintptr(denyEventWireSize), uintptr(4 + 4 + 16 + 1 + 1 + 1 + 1 + 16 + 2)},
+		{"bpf_audit_event", uintptr(bpfAuditEventWireSize), uintptr(4 + 4 + 4 + 16)},
+		{"dns_sniff_event_legacy", uintptr(dnsSniffEventWireSizeLegacy), uintptr(4 + dnsSniffMaxPayload)},
+		{"dns_sniff_event", uintptr(dnsSniffEventWireSize), uintptr(4 + 1 + 3 + dnsSniffMaxPayload)},
+	}
+	for _, c := range cases {
+		if c.got != c.expected {
+			t.Errorf("%s: wire size = %d, want %d (BPF→Go ABI drift)",
+				c.name, c.got, c.expected)
+		}
+	}
+}

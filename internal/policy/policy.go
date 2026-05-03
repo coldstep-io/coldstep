@@ -1,5 +1,5 @@
-// Package policy implements Coldstep v1 IPv4-centric egress allowlists. IPv6 literals and IPv6
-// ignored CIDRs are rejected at parse time; BPF enforcement uses IPv4 maps only (see bpf/trace_enforce.bpf.c).
+// Package policy implements Coldstep IPv4-only egress allowlists. IPv6 is not supported; invalid
+// literals/CIDRs are rejected at parse time. BPF enforcement uses IPv4 maps only.
 package policy
 
 import (
@@ -16,6 +16,11 @@ const MaxIgnoredIPv4Nets = 128
 
 // MaxAllowedEnforceIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_enforce.bpf.c.
 const MaxAllowedEnforceIPv4Keys = 4096
+
+// MaxAllowedHostnameBytes is the maximum length of an allowed hostname (exact match or wildcard suffix).
+// DNS FQDNs are at most 253 octets (RFC 1035). BPF allowed_domains uses fixed char[256] keys; longer
+// names would truncate silently in userspace map updates without this guard.
+const MaxAllowedHostnameBytes = 253
 
 // Class describes egress vs allow lists (v1: never fails the job on policy).
 type Class string
@@ -57,11 +62,17 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 			if suf == "" || strings.Contains(suf, "*") {
 				continue
 			}
+			if len(suf) > MaxAllowedHostnameBytes {
+				return nil, fmt.Errorf("allowed-hosts: wildcard suffix exceeds maximum length %d bytes", MaxAllowedHostnameBytes)
+			}
 			if !validHostnameSuffix.MatchString(suf) {
 				return nil, fmt.Errorf("allowed-hosts: wildcard suffix %q contains invalid hostname characters", suf)
 			}
 			p.wildSuffixes = append(p.wildSuffixes, suf)
 		} else {
+			if len(h) > MaxAllowedHostnameBytes {
+				return nil, fmt.Errorf("allowed-hosts: hostname exceeds maximum length %d bytes", MaxAllowedHostnameBytes)
+			}
 			p.exactHosts[h] = struct{}{}
 		}
 	}
@@ -73,7 +84,7 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 		// PR-G: accept either bare IPv4 literal (kept as /32 in p.ips for
 		// fast Classify exact-match) or a CIDR like "10.0.0.0/8" (kept in
 		// p.nets and programmed into the BPF allowed_ipv4 LPM trie).
-		// IPv6 literals + IPv6 CIDRs are still rejected (Coldstep v1 scope).
+		// IPv6 literals and CIDRs are rejected (IPv4 only).
 		if strings.Contains(raw, "/") {
 			ipNet, err := parseIPv4CIDR(raw)
 			if err != nil {
