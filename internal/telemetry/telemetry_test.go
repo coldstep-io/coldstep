@@ -6,8 +6,12 @@ package telemetry
 
 import (
 	"bytes"
+	"crypto/ed25519"
+	"encoding/base64"
+	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +117,27 @@ func TestSigning(t *testing.T) {
 
 	if !bytes.Contains(b, []byte(`"sig":`)) {
 		t.Fatalf("missing signature in output: %s", b)
+	}
+
+	line := strings.TrimRight(string(b), "\n")
+	var m map[string]any
+	if err := json.Unmarshal([]byte(line), &m); err != nil {
+		t.Fatalf("unmarshal line: %v", err)
+	}
+	sigStr, _ := m["sig"].(string)
+	if sigStr == "" {
+		t.Fatal("sig field missing or empty")
+	}
+	delete(m, "sig")
+	canonical, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sigBytes, err := base64.StdEncoding.DecodeString(sigStr)
+	if err != nil {
+		t.Fatalf("decode sig: %v", err)
+	}
+	if !ed25519.Verify(signer.PublicKeyBytes(), canonical, sigBytes) {
+		t.Fatalf("signature verification failed\ncanonical: %s", canonical)
 	}
 }

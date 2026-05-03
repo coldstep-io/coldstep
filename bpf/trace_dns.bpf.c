@@ -30,9 +30,11 @@ struct recvfrom_pending {
 
 struct dns_sniff_event {
 	__u32 len;
+	__u8 is_tcp; /* 1 if record came from TCP read(2); userspace strips RFC 1035 2-byte prefix */
+	__u8 _pad[3];
 	__u8 data[DNS_SNIFF_MAX];
 };
-_Static_assert(sizeof(struct dns_sniff_event) == 4 + DNS_SNIFF_MAX,
+_Static_assert(sizeof(struct dns_sniff_event) == 4 + 1 + 3 + DNS_SNIFF_MAX,
 	       "dns_sniff_event wire size must match dnsSniffEventWireSize in agent_linux.go");
 
 struct {
@@ -264,6 +266,8 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	ev->len = copy_len;
+	ev->is_tcp = (__u8)(orig_nr == (unsigned long)COLDSTEP_NR_READ);
+	__builtin_memset(ev->_pad, 0, sizeof(ev->_pad));
 	_Static_assert(sizeof(ev->data) == DNS_SNIFF_MAX,
 		       "dns sniff data array vs DNS_SNIFF_MAX");
 	if (bpf_probe_read_user(ev->data, sizeof(ev->data), (void *)pending->buf_user)) {

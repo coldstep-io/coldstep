@@ -17,8 +17,9 @@ func AppendJSONL(path string, v any, s *Signer) error {
 		return nil
 	}
 	if s != nil {
-		// We need to inject the signature. Since v is any, we can't easily set a field.
-		// We'll marshal to map, sign, inject, and re-marshal.
+		// Marshal to map, then sign the canonical map JSON (sorted keys). Signing the
+		// struct-marshaled bytes and writing map-marshaled bytes made signatures
+		// unverifiable — struct field order ≠ alphabetical map key order.
 		b, err := json.Marshal(v)
 		if err != nil {
 			return err
@@ -27,13 +28,17 @@ func AppendJSONL(path string, v any, s *Signer) error {
 		if err := json.Unmarshal(b, &m); err != nil {
 			return err
 		}
-		sig := ed25519.Sign(s.priv, b)
-		m["sig"] = base64.StdEncoding.EncodeToString(sig)
-		b, err = json.Marshal(m)
+		bCanon, err := json.Marshal(m)
 		if err != nil {
 			return err
 		}
-		return appendLine(path, b)
+		sig := ed25519.Sign(s.priv, bCanon)
+		m["sig"] = base64.StdEncoding.EncodeToString(sig)
+		bFinal, err := json.Marshal(m)
+		if err != nil {
+			return err
+		}
+		return appendLine(path, bFinal)
 	}
 	b, err := json.Marshal(v)
 	if err != nil {

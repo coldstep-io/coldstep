@@ -215,16 +215,19 @@ const (
 	// `_Static_assert(sizeof(struct X) == N)` in the matching bpf/*.c file
 	// so that any drift on either side fails compilation immediately.
 	// Values were determined empirically (clang -target bpf, sizeof()).
-	connectEventWireSize     = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
-	udpSendEventWireSize     = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
-	httpSniffEventWireSize   = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
-	tlsSniffEventWireSize    = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
-	execEventWireSize        = 280 // 4+4+16+exe_path[256] → 280
-	forkEventWireSize        = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
-	fsEventWireSize          = 284 // 4+4+16+1+path[256]+_pad[3] → 284
-	denyEventWireSize        = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
-	bpfAuditEventWireSize    = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
-	dnsSniffEventMinWireSize = 4   // header __u32 len; payload follows up to DNS_SNIFF_MAX
+	connectEventWireSize   = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
+	udpSendEventWireSize   = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
+	httpSniffEventWireSize = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
+	tlsSniffEventWireSize  = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
+	execEventWireSize      = 280 // 4+4+16+exe_path[256] → 280
+	forkEventWireSize      = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
+	fsEventWireSize        = 284 // 4+4+16+1+path[256]+_pad[3] → 284
+	denyEventWireSize      = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
+	bpfAuditEventWireSize  = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
+	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
+	dnsSniffMaxPayload          = 4096                   // DNS_SNIFF_MAX in trace_dns.bpf.c
+	dnsSniffEventWireSizeLegacy = 4 + dnsSniffMaxPayload // pre-is_tcp layout (__u32 len + data[])
+	dnsSniffEventWireSize       = 4 + 1 + 3 + dnsSniffMaxPayload
 
 	// Header-only sub-sizes used by the http/tls capture decoders to slice
 	// out the payload window. Pair these with the respective WireSize above.
@@ -1062,16 +1065,33 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	return tgid, tid, comm, daddr, dport, payload, true
 }
 
-// decodeDNSSniffSample parses trace_dns.bpf.c ringbuf payload (__u32 len + data[len]).
-func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
-	if len(raw) < dnsSniffEventMinWireSize {
-		return nil, false
+// decodeDNSSniffSample parses trace_dns.bpf.c ringbuf payload (__u32 len + __u8 is_tcp +
+// __u8 _pad[3] + data[len]). is_tcp is 1 when the syscall was read(2) (TCP DNS framing).
+//
+// Legacy objects embed only (__u32 len + data[DNS_SNIFF_MAX]); ringbuf records are
+// dnsSniffEventWireSizeLegacy bytes — accept that layout until bpf2go regeneration.
+func decodeDNSSniffSample(raw []byte) (pkt []byte, isTCP bool, ok bool) {
+	if len(raw) < 4 {
+		return nil, false, false
 	}
 	n := binary.LittleEndian.Uint32(raw[0:4])
-	if n > 4096 || int(n)+4 > len(raw) {
-		return nil, false
+	if n > dnsSniffMaxPayload {
+		return nil, false, false
 	}
-	return raw[4 : 4+int(n)], true
+	if len(raw) == dnsSniffEventWireSizeLegacy {
+		if int(n)+4 > len(raw) {
+			return nil, false, false
+		}
+		return raw[4 : 4+int(n)], false, true
+	}
+	if len(raw) < dnsSniffEventWireSize {
+		return nil, false, false
+	}
+	isTCP = raw[4] != 0
+	if int(n)+8 > len(raw) {
+		return nil, false, false
+	}
+	return raw[8 : 8+int(n)], isTCP, true
 }
 
 // decodeBPFAuditEvent parses trace_bpf_audit.bpf.c bpf_audit_event (tgid, tid, cmd, comm).
@@ -1791,8 +1811,20 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 			slog.Warn("ringbuf read (dns)", "err", err)
 			continue
 		}
-		pkt, ok := decodeDNSSniffSample(record.RawSample)
+		pkt, isTCP, ok := decodeDNSSniffSample(record.RawSample)
 		if !ok || len(pkt) < 12 {
+			stats.addDropped("dns_decode")
+			continue
+		}
+		if isTCP {
+			// Strip RFC 1035 §4.2.2 2-byte length prefix before DNS header.
+			if len(pkt) < 14 {
+				stats.addDropped("dns_decode_tcp_short")
+				continue
+			}
+			pkt = pkt[2:]
+		}
+		if len(pkt) < 12 {
 			stats.addDropped("dns_decode")
 			continue
 		}
