@@ -5,19 +5,31 @@ package agent
 import (
 	"encoding/binary"
 	"net"
+	"strings"
 	"testing"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/rlimit"
 )
 
 func TestReconcileLPMMap_AddedCountsOnlyNewKeys(t *testing.T) {
+	if err := rlimit.RemoveMemlock(); err != nil {
+		t.Skipf("remove memlock rlimit (needed for ebpf.NewMap in Docker/minimal env): %v", err)
+	}
+
 	m, err := ebpf.NewMap(&ebpf.MapSpec{
 		Type:       ebpf.LPMTrie,
 		KeySize:    8,
 		ValueSize:  1,
 		MaxEntries: 16,
+		Flags:      1, // BPF_F_NO_PREALLOC (required for LPM trie on many kernels)
 	})
 	if err != nil {
+		// Docker/default seccomp often denies BPF map create without CAP_BPF
+		// (use: docker run --cap-add BPF). GitHub-hosted ubuntu-latest allows it.
+		if strings.Contains(err.Error(), "operation not permitted") {
+			t.Skipf("ebpf map create not permitted in this environment: %v", err)
+		}
 		t.Fatal(err)
 	}
 	defer m.Close()

@@ -836,8 +836,9 @@ func TestRearmAllowedFromSnapshot_RemovesTamperedAndRestoresMissing(t *testing.T
 	if removed != 1 {
 		t.Fatalf("expected 1 stale key removed (9.9.9.9), got removed=%d", removed)
 	}
-	if added != 2 {
-		t.Fatalf("expected 2 expected keys (re)inserted, got added=%d", added)
+	// reconcileLPMMap counts only keys that were absent before upsert (not every UpdateAny).
+	if added != 1 {
+		t.Fatalf("expected 1 new key inserted (1.1.1.2); 1.1.1.1 was already present, got added=%d", added)
 	}
 
 	// Walk the map post-rearm and confirm only the snapshot keys remain.
