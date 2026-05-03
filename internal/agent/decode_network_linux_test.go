@@ -114,3 +114,37 @@ func TestDecodeTLSSniffEvent_captureLenTooLarge(t *testing.T) {
 		t.Fatal("expected false for capLen > tlsPayloadMax")
 	}
 }
+
+func TestDecodeBPFAuditEvent(t *testing.T) {
+	// BPF struct layout: tgid(0-3) tid(4-7) cmd(8-11) comm(12-27)
+	raw := make([]byte, bpfAuditEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 1234) // tgid
+	binary.LittleEndian.PutUint32(raw[4:8], 5678) // tid
+	binary.LittleEndian.PutUint32(raw[8:12], 12)  // cmd = BPF_MAP_GET_NEXT_ID
+	copy(raw[12:28], []byte("bpftool\x00"))       // comm
+
+	tgid, tid, comm, cmd, ok := decodeBPFAuditEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if tgid != 1234 {
+		t.Errorf("tgid = %d, want 1234", tgid)
+	}
+	if tid != 5678 {
+		t.Errorf("tid = %d, want 5678", tid)
+	}
+	if cmd != 12 {
+		t.Errorf("cmd = %d, want 12 (BPF_MAP_GET_NEXT_ID)", cmd)
+	}
+	commStr := string(bytes.TrimRight(comm[:], "\x00"))
+	if commStr != "bpftool" {
+		t.Errorf("comm = %q, want \"bpftool\"", commStr)
+	}
+}
+
+func TestDecodeBPFAuditEvent_tooShort(t *testing.T) {
+	_, _, _, _, ok := decodeBPFAuditEvent(make([]byte, bpfAuditEventWireSize-1))
+	if ok {
+		t.Fatal("expected ok=false for short input")
+	}
+}

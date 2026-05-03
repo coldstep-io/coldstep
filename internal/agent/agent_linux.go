@@ -223,6 +223,7 @@ const (
 	forkEventWireSize        = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
 	fsEventWireSize          = 284 // 4+4+16+1+path[256]+_pad[3] → 284
 	denyEventWireSize        = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
+	bpfAuditEventWireSize    = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
 	dnsSniffEventMinWireSize = 4   // header __u32 len; payload follows up to DNS_SNIFF_MAX
 
 	// Header-only sub-sizes used by the http/tls capture decoders to slice
@@ -1073,15 +1074,16 @@ func decodeDNSSniffSample(raw []byte) ([]byte, bool) {
 	return raw[4 : 4+int(n)], true
 }
 
-// decodeBPFAuditEvent parses trace_bpf_audit.bpf.c bpf_audit_event (tgid, tid, comm, cmd).
+// decodeBPFAuditEvent parses trace_bpf_audit.bpf.c bpf_audit_event (tgid, tid, cmd, comm).
+// BPF struct layout: tgid(0-3) tid(4-7) cmd(8-11) comm[16](12-27).
 func decodeBPFAuditEvent(raw []byte) (tgid, tid uint32, comm [16]byte, cmd uint32, ok bool) {
-	if len(raw) < 28 {
+	if len(raw) < bpfAuditEventWireSize {
 		return 0, 0, [16]byte{}, 0, false
 	}
 	tgid = binary.LittleEndian.Uint32(raw[0:4])
 	tid = binary.LittleEndian.Uint32(raw[4:8])
-	copy(comm[:], raw[8:24])
-	cmd = binary.LittleEndian.Uint32(raw[24:28])
+	cmd = binary.LittleEndian.Uint32(raw[8:12])
+	copy(comm[:], raw[12:28])
 	return tgid, tid, comm, cmd, true
 }
 
