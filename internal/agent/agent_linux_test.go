@@ -112,7 +112,7 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	}
 }
 
-// stableRingDropKinds lists every stats.addDropped kind used on ring/decode/jsonl paths in agent_linux.go.
+// stableRingDropKinds lists every stats.addDropped kind used on ring/decode/jsonl paths in agent_linux_*.go (readers + decoders).
 func stableRingDropKinds() []string {
 	return []string{
 		"exec_decode", "exec_jsonl",
