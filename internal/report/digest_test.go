@@ -413,6 +413,28 @@ func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_RingbufReserveRollup(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		UDPRingbufReserveFailures:     1,
+		ConnectRingbufReserveFailures: 2,
+		HTTPRingbufReserveFailures:    3,
+	})
+	for _, needle := range []string{
+		"Ringbuf reserve pressure (total)** | **6**",
+		"connect ringbuf reserve=2",
+		"http ringbuf reserve=3",
+		"udp ringbuf reserve=1",
+		"**connect_events ringbuf reserve failures** | 2 |",
+		"**http_events ringbuf reserve failures** | 3 |",
+		"**udp_events ringbuf reserve failures** | 1 |",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		DroppedCounts: map[string]int{

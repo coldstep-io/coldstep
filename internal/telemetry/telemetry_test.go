@@ -74,9 +74,11 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	s := Summary{
 		Version: 2, SchemaVersion: SchemaVersion,
 		ExecEvents: 1, TCPEvents: 1, UDPEvents: 1, HTTPEvents: 1,
-		UDPRingbufReserveFailures: 7,
-		DNSRingbufReserveFailures: 3,
-		PolicyCounts:              map[string]int{"monitor": 1},
+		UDPRingbufReserveFailures:     7,
+		DNSRingbufReserveFailures:     3,
+		RingbufReserveFailuresTotal:   15,
+		ConnectRingbufReserveFailures: 5,
+		PolicyCounts:                  map[string]int{"monitor": 1},
 	}
 	if err := WriteSummary(p, s, nil); err != nil {
 		t.Fatal(err)
@@ -90,6 +92,12 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"dns_ringbuf_reserve_failures": 3`)) {
 		t.Fatalf("missing dns reserve count: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"ringbuf_reserve_failures_total": 15`)) {
+		t.Fatalf("missing ringbuf reserve total: %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"connect_ringbuf_reserve_failures": 5`)) {
+		t.Fatalf("missing connect reserve count: %s", b)
 	}
 }
 

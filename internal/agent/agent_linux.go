@@ -740,6 +740,42 @@ func (s *runStats) setFSRingbufReserveFailures(n int) {
 	s.fsRingbufReserveFailuresN = n
 }
 
+func (s *runStats) connectRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.connectRingbufReserveFailuresN
+}
+
+func (s *runStats) httpRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.httpRingbufReserveFailuresN
+}
+
+func (s *runStats) tlsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tlsRingbufReserveFailuresN
+}
+
+func (s *runStats) execRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.execRingbufReserveFailuresN
+}
+
+func (s *runStats) forkRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.forkRingbufReserveFailuresN
+}
+
+func (s *runStats) fsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.fsRingbufReserveFailuresN
+}
+
 func (s *runStats) setUDPSendmsgMultiIovecObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -869,6 +905,10 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 	for k, v := range s.droppedCounts {
 		dropped[k] = v
 	}
+	rbTotal := s.udpRingbufReserveFailuresN + s.dnsRingbufReserveFailuresN +
+		s.connectRingbufReserveFailuresN + s.httpRingbufReserveFailuresN + s.tlsRingbufReserveFailuresN +
+		s.execRingbufReserveFailuresN + s.forkRingbufReserveFailuresN + s.fsRingbufReserveFailuresN +
+		s.bpfAuditRingbufReserveFailuresN
 	return telemetry.Summary{
 		Version:                        2,
 		SchemaVersion:                  telemetry.SchemaVersion,
@@ -887,6 +927,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		ExecRingbufReserveFailures:     s.execRingbufReserveFailuresN,
 		ForkRingbufReserveFailures:     s.forkRingbufReserveFailuresN,
 		FSRingbufReserveFailures:       s.fsRingbufReserveFailuresN,
+		RingbufReserveFailuresTotal:    rbTotal,
 		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
 		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
 		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
@@ -2830,6 +2871,12 @@ func buildDigestInput(
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
 		UDPRingbufReserveFailures:      stats.udpRingbufReserveFailures(),
 		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),
+		ConnectRingbufReserveFailures:  stats.connectRingbufReserveFailures(),
+		HTTPRingbufReserveFailures:     stats.httpRingbufReserveFailures(),
+		TLSRingbufReserveFailures:      stats.tlsRingbufReserveFailures(),
+		ExecRingbufReserveFailures:     stats.execRingbufReserveFailures(),
+		ForkRingbufReserveFailures:     stats.forkRingbufReserveFailures(),
+		FSRingbufReserveFailures:       stats.fsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
 		UnobservedEgressSyscalls:       stats.unobservedEgressSyscalls(),
