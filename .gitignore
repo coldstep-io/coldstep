@@ -4,6 +4,7 @@
 
 # Go coverage profiles (local / CI artifact downloads; Linux CI is the coverage source of truth)
 coverage.out
+coverage*.out
 coverage
 *.coverprofile
 

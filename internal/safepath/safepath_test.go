@@ -8,6 +8,16 @@ import (
 	"testing"
 )
 
+func TestWorkspace_acceptsPathUnderRunnerTemp(t *testing.T) {
+	rt := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("RUNNER_TEMP", rt)
+	child := filepath.Join(rt, "agent-status.json")
+	if _, err := Workspace(child, "STATUS"); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWorkspaceAcceptsPathsUnderWorkspace(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", tmp)

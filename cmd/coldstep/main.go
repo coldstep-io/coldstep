@@ -2,24 +2,32 @@ package main
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/coldstep-io/coldstep/internal/agent"
 )
 
+// agentMain is swapped in tests to avoid running the real agent.
+var agentMain = agent.Main
+
 func main() {
-	if len(os.Args) < 2 {
+	os.Exit(runCLI(os.Args))
+}
+
+func runCLI(args []string) int {
+	if len(args) < 2 {
 		fmt.Fprintln(os.Stderr, "usage: coldstep run")
-		os.Exit(2)
+		return 2
 	}
-	switch os.Args[1] {
+	switch args[1] {
 	case "run":
-		if err := agent.Main(); err != nil {
-			log.Fatal(err)
+		if err := agentMain(); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			return 1
 		}
+		return 0
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command")
-		os.Exit(2)
+		return 2
 	}
 }
