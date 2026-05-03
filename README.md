@@ -160,7 +160,7 @@ Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubunt
 **Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
 
 - **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
-- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**.
+- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**. On a non-Linux workstation, **[`scripts/docker-linux-test.sh`](scripts/docker-linux-test.sh)** runs that pipeline plus **`go test`** inside an **Ubuntu** container (bind-mounts the repo).
 
 ### Deep-debug escalation guide
 

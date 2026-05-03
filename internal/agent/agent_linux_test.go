@@ -1205,7 +1205,45 @@ func TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs(t *testing.T) {
 		t.Fatalf("expected 0 on closed-map error, got %d", got)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "reserve-failure map lookup failed") {
+	if !strings.Contains(out, "uint32 counter map lookup failed") {
+		t.Fatalf("expected warn log, got: %q", out)
+	}
+	if !strings.Contains(out, "helper=tester") {
+		t.Fatalf("expected helper=tester attribute in log, got: %q", out)
+	}
+	if !strings.Contains(out, "err=") {
+		t.Fatalf("expected err attribute in log, got: %q", out)
+	}
+}
+
+// TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs mirrors M-07 for PERCPU_ARRAY counters
+// (reserve-failure telemetry maps): unreadable map → WARN + 0, digest paths keep progressing.
+func TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs(t *testing.T) {
+	spec := &ebpf.MapSpec{
+		Name:       "coldstep_t_percpu_closed",
+		Type:       ebpf.PerCPUArray,
+		KeySize:    4,
+		ValueSize:  4,
+		MaxEntries: 1,
+	}
+	m, err := ebpf.NewMap(spec)
+	if err != nil {
+		t.Skipf("ebpf test map unavailable: %v", err)
+	}
+	if err := m.Close(); err != nil {
+		t.Fatalf("close map: %v", err)
+	}
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	if got := readUint32PerCPUArraySum(m, "tester"); got != 0 {
+		t.Fatalf("expected 0 on closed-map error, got %d", got)
+	}
+	out := buf.String()
+	if !strings.Contains(out, "percpu uint32 map lookup failed") {
 		t.Fatalf("expected warn log, got: %q", out)
 	}
 	if !strings.Contains(out, "helper=tester") {

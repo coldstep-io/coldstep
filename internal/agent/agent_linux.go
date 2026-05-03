@@ -2275,7 +2275,7 @@ func readUint32CounterMap(m *ebpf.Map, helperName string) int {
 		if errors.Is(err, ebpf.ErrKeyNotExist) {
 			return 0
 		}
-		slog.Warn("reserve-failure map lookup failed", "helper", helperName, "err", err)
+		slog.Warn("uint32 counter map lookup failed", "helper", helperName, "err", err)
 		return 0
 	}
 	return int(v)
