@@ -45,6 +45,14 @@ jobs:
           # For release-path compatibility in next step
           cp bin/coldstep-built bin/coldstep
 
+      # Install packages before starting Coldstep so apt/dpkg filesystem noise
+      # does not exhaust the agent's fs_event JSONL cap (5k lines) before canary chmod.
+      - name: Install runtime tools
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils linux-tools-common linux-tools-generic linux-tools-azure
+
       - name: Start Coldstep (detect mode with full audit gates)
         uses: ./
         with:
@@ -55,12 +63,6 @@ jobs:
           allowed-hosts: theclouddj.com, *.ubuntu.com
           feature-gates: proc_tree=1,tls_sni=1,fs_events=1
           release-path: bin/coldstep
-
-      - name: Install runtime tools
-        run: |
-          set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils linux-tools-common linux-tools-generic linux-tools-azure
 
       - name: Red-team probes (Generate Telemetry)
         run: |
@@ -77,9 +79,16 @@ jobs:
           dig @8.8.8.8 google.com +short >/dev/null || true
           
           echo "--- BPF AUDIT PROBE ---"
-          # Trigger BPF audit events (if supported by runner kernel)
-          sudo bpftool map show >/dev/null 2>&1 || echo "bpftool map show failed; best effort audit signal"
-          sudo bpftool prog show >/dev/null 2>&1 || echo "bpftool prog show failed; best effort audit signal"
+          # Prefer real binary path so comm=bpftool matches integrity canaries (not a shell wrapper).
+          BPFTOOL_BIN="$(command -v bpftool || true)"
+          if [[ -z "${BPFTOOL_BIN}" && -x /usr/sbin/bpftool ]]; then BPFTOOL_BIN=/usr/sbin/bpftool; fi
+          if [[ -n "${BPFTOOL_BIN}" ]]; then
+            sudo "${BPFTOOL_BIN}" map show >/dev/null 2>&1 || echo "bpftool map show failed; best effort audit signal"
+            sudo "${BPFTOOL_BIN}" prog show >/dev/null 2>&1 || echo "bpftool prog show failed; best effort audit signal"
+            sudo "${BPFTOOL_BIN}" map show >/dev/null 2>&1 || true
+          else
+            echo "bpftool not found; skipping bpf audit probe"
+          fi
           
           echo "--- NETWORK EGRESS PROBE (TLS) ---"
           # TLS connect (SNI: theclouddj.com); -4 so agent records IPv4 TLS (JSONL filters non-IPv4).
@@ -87,16 +96,20 @@ jobs:
             curl -4 --http1.1 -s -I --max-time 8 https://theclouddj.com >/dev/null && break || true
             sleep 1
           done
+          # Second probe: OpenSSL often emits ClientHello in one write (helps when curl path misses SNI sniff).
+          if command -v openssl >/dev/null 2>&1; then
+            timeout 8 openssl s_client -4 -connect theclouddj.com:443 -servername theclouddj.com </dev/null >/dev/null 2>&1 || true
+          fi
           
           echo "--- FS EVENT PROBE ---"
-          # Filesystem events
+          # Filesystem events (glibc chmod uses fchmodat, which trace_fs hooks).
           TMP_F=$(mktemp)
           echo "redteam" > "${TMP_F}"
-          chmod 400 "${TMP_F}"
+          /bin/chmod 400 "${TMP_F}"
           rm "${TMP_F}"
 
           # Give ring readers time to drain telemetry before stop.
-          sleep 2
+          sleep 5
       - name: Stop Coldstep (flush digest)
         uses: ./
         with:
@@ -131,7 +144,7 @@ jobs:
 
       - name: Upload Redteam Report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coldstep-redteam-report
           path: ${{ github.workspace }}/coldstep-redteam-report.html

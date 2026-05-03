@@ -366,7 +366,7 @@ jobs:
         run: ./bin/coldstep-report render-summary
       - name: Persist detect JSONL baseline artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: coldstep-events-baseline-ubuntu-latest
           path: ${{ github.workspace }}/.coldstep-events.jsonl

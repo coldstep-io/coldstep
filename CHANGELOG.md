@@ -9,6 +9,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 
 - **`coldstep-demo`:** defend-mode verification matches **`coldstep-ci-runner`** deny-JSONL variance rules (warn when absent unless **`COLDSTEP_DEFEND_DENY_JSONL_STRICT=1`**). Detect-mode: **`smoke-test-egress`**, OpenSSL **`s_client`** probes, longer TLS settle/retry, and digest fallback when **`tls`** JSONL is delayed but the Markdown digest still shows TLS context.
+- **BPF audit canary (CI):** defer **`raw_tp/sys_enter (bpf audit)`** attach until after fork/fs BPF loads so startup **`bpf(2)`** bursts do not fill the audit ringbuf before **`readBPFAuditRing`** runs (restores **`bpftool`** JSONL canaries on **`coldstep-redteam-ebpf`**).
+- **`coldstep-redteam-ebpf`:** run **`apt-get`** before **`phase: start`** so package installs do not exhaust the fs-event JSONL cap before the intentional **`chmod`** probe; add OpenSSL TLS probe, longer post-probe settle, and explicit **`bpftool`** path.
+- **Workflows:** `actions/upload-artifact@v4` → **`@v6`** everywhere it was pinned (native Node 24; clears deprecation warnings when **`FORCE_JAVASCRIPT_ACTIONS_TO_NODE24`** is set).
 
 ---
 
