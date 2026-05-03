@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/cilium/ebpf"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"golang.org/x/sys/unix"
 )
@@ -553,8 +554,28 @@ func TestRun_FSEventJSONLWhenFeatureGate(t *testing.T) {
 	}
 }
 
-// bpfMapGetNextID is BPF_MAP_GET_NEXT_ID from Linux UAPI linux/bpf.h — bpftool map list issues bpf(BPF_MAP_GET_NEXT_ID, …).
+// bpfMapGetNextID is BPF_MAP_GET_NEXT_ID from Linux UAPI linux/bpf.h.
 const bpfMapGetNextID = 12
+
+// triggerBPFMapGetNextIDSyscalls walks map IDs via bpf(BPF_MAP_GET_NEXT_ID, …).
+// Newer bpftool releases may implement "map list" without that syscall (breaking the
+// audit JSONL probe on ubuntu-24.04+); cilium/ebpf always uses the UAPI path we assert on.
+func triggerBPFMapGetNextIDSyscalls() (emitted bool) {
+	first, err := ebpf.MapGetNextID(0)
+	if err != nil {
+		return false
+	}
+	emitted = true
+	id := first
+	for range 64 {
+		next, err := ebpf.MapGetNextID(id)
+		if err != nil {
+			break
+		}
+		id = next
+	}
+	return emitted
+}
 
 // validateBPFAuditJSONL returns nil when JSONL satisfies bpf_audit field assertions (non-empty comm;
 // when requireBPFMapGetNextID is true, at least one record must have cmd==BPF_MAP_GET_NEXT_ID).
@@ -637,11 +658,17 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 
 	deadline := time.Now().Add(14 * time.Second)
 	validated := false
+	emittedMapGetNextDuringPoll := false
 	for time.Now().Before(deadline) {
+		emittedMapGetNext := triggerBPFMapGetNextIDSyscalls()
+		if emittedMapGetNext {
+			emittedMapGetNextDuringPoll = true
+		}
 		if hasBpftool {
-			// bpftool map list triggers BPF_MAP_GET_NEXT_ID (12).
 			_ = exec.Command("bpftool", "map", "list").Run()
 		}
+		// Only require cmd=12 when we actually issued BPF_MAP_GET_NEXT_ID; bpftool alone is not enough on newer distros.
+		requireMapGetNextID := emittedMapGetNext
 		time.Sleep(150 * time.Millisecond)
 		b, rerr := os.ReadFile(events)
 		if rerr != nil {
@@ -650,7 +677,7 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		if !bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
 			continue
 		}
-		if validateBPFAuditJSONL(b, hasBpftool) == nil {
+		if validateBPFAuditJSONL(b, requireMapGetNextID) == nil {
 			validated = true
 			break
 		}
@@ -671,10 +698,10 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
-		if !hasBpftool {
-			t.Skip("no bpf_audit events and no bpftool to trigger them")
+		if !emittedMapGetNextDuringPoll && !hasBpftool {
+			t.Skip("no bpf_audit events and no probe for BPF_MAP_GET_NEXT_ID")
 		}
 		t.Fatalf("expected bpf_audit in jsonl:\n%s", string(b))
 	}
-	requireValidBPFAuditJSONL(t, b, hasBpftool)
+	requireValidBPFAuditJSONL(t, b, emittedMapGetNextDuringPoll)
 }
