@@ -43,22 +43,6 @@ func fillTestDenyRawV4(tgid, tid uint32, comm string, proto, reason uint8, ip ne
 	return raw
 }
 
-func fillTestDenyRawV6(tgid, tid uint32, comm string, proto, reason uint8, ip net.IP, dport uint16) []byte {
-	raw := make([]byte, denyEventWireSize)
-	binary.LittleEndian.PutUint32(raw[0:4], tgid)
-	binary.LittleEndian.PutUint32(raw[4:8], tid)
-	copy(raw[8:24], comm)
-	raw[24] = proto
-	raw[25] = reason
-	raw[26] = uint8(linuxAFInet6)
-	raw[27] = 0
-	if ip16 := ip.To16(); ip16 != nil {
-		copy(raw[28:44], ip16)
-	}
-	binary.BigEndian.PutUint16(raw[44:46], dport)
-	return raw
-}
-
 func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 	stats := newRunStats()
 	stats.addExec()
@@ -438,7 +422,7 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 	rawTCP := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	rawUDP := fillTestDenyRawV6(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("2001:db8::53"), 53)
+	rawUDP := fillTestDenyRawV4(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.2"), 53)
 
 	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil); err != nil {
 		t.Fatalf("append tcp: %v", err)
@@ -458,8 +442,8 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	if !strings.Contains(s, `"protocol":"tcp"`) || !strings.Contains(s, `"protocol":"udp"`) {
 		t.Fatalf("expected both protocols in JSONL:\n%s", s)
 	}
-	if !strings.Contains(s, `"dst":"2001:db8::53"`) {
-		t.Fatalf("expected IPv6 dst in JSONL:\n%s", s)
+	if !strings.Contains(s, `"dst":"10.0.0.2"`) {
+		t.Fatalf("expected UDP deny IPv4 dst in JSONL:\n%s", s)
 	}
 }
 
@@ -473,6 +457,25 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
 	if err == nil {
 		t.Fatal("expected decode error")
+	}
+}
+
+func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
+	t.Parallel()
+	cfg := config.Config{Mode: config.ModeEnforce}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+
+	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
+	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
+
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+	if err == nil {
+		t.Fatal("expected unsupported address family error")
+	}
+	if !strings.Contains(err.Error(), "unsupported address family") {
+		t.Fatalf("expected AF error, got %v", err)
 	}
 }
 
@@ -682,11 +685,7 @@ func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
 	}
 	defer m.Close()
 
-	_, ipv6Net, err := net.ParseCIDR("2001:db8::/32")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = loadIgnoredLPMMap(m, []*net.IPNet{ipv6Net})
+	_, err = loadIgnoredLPMMap(m, []*net.IPNet{nil})
 	if err == nil {
 		t.Fatal("expected error when no IPv4 entries could be programmed")
 	}

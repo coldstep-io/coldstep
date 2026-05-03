@@ -1,8 +1,6 @@
 /*
  * cgroup egress enforcement for mode: enforce — IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`).
- * IPv6 cgroup hooks (`connect6`, `sendmsg6`, …) are intentionally absent: Coldstep v1 scope is IPv4
- * egress policy and GitHub-hosted validation matrices aligned with README / policy (IPv6 literals rejected).
- * Loaded as a separate BPF collection from syscall observability programs.
+ * IPv6 is not supported. Loaded as a separate BPF collection from syscall observability programs.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>

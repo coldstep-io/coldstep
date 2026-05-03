@@ -8,7 +8,7 @@ import (
 )
 
 // ParseIgnoredIPNets parses comma- or ASCII-whitespace-separated IPv4 CIDRs.
-// IPv6 CIDRs are rejected.
+// IPv6 is not supported.
 func ParseIgnoredIPNets(raw string) ([]*net.IPNet, error) {
 	var out []*net.IPNet
 	for _, tok := range splitIgnoredRawFields(raw) {

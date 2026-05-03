@@ -1,6 +1,6 @@
 /*
  * Observability-only BPF: raw_tp/sys_enter on GitHub-hosted Ubuntu runners (x86_64 and arm64).
- * Scope is IPv4-centric (IPv6 syscall/cgroup enforcement is out of project scope for v1).
+ * IPv6 is not supported; tracing is IPv4-focused.
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
  *     not complete for all UDP egress paths)

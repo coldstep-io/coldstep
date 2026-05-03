@@ -1,5 +1,5 @@
-// Package policy implements Coldstep v1 IPv4-centric egress allowlists. IPv6 literals and IPv6
-// ignored CIDRs are rejected at parse time; BPF enforcement uses IPv4 maps only (see bpf/trace_enforce.bpf.c).
+// Package policy implements Coldstep IPv4-only egress allowlists. IPv6 is not supported; invalid
+// literals/CIDRs are rejected at parse time. BPF enforcement uses IPv4 maps only.
 package policy
 
 import (
@@ -84,7 +84,7 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 		// PR-G: accept either bare IPv4 literal (kept as /32 in p.ips for
 		// fast Classify exact-match) or a CIDR like "10.0.0.0/8" (kept in
 		// p.nets and programmed into the BPF allowed_ipv4 LPM trie).
-		// IPv6 literals + IPv6 CIDRs are still rejected (Coldstep v1 scope).
+		// IPv6 literals and CIDRs are rejected (IPv4 only).
 		if strings.Contains(raw, "/") {
 			ipNet, err := parseIPv4CIDR(raw)
 			if err != nil {

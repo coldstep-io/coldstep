@@ -220,7 +220,6 @@ const (
 	denyProtoUDP                = 2
 	denyReasonDstNotAllowlisted = 1
 	linuxAFInet                 = 2
-	linuxAFInet6                = 10
 
 	// BPF↔Go wire-format size contract. Each constant is paired with a
 	// `_Static_assert(sizeof(struct X) == N)` in the matching bpf/*.c file
@@ -2630,15 +2629,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	protocol := denyProtocolLabel(protocolRaw)
 	reason := denyReasonLabel(reasonRaw)
-	var dst string
-	switch af {
-	case linuxAFInet:
-		dst = net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
-	case linuxAFInet6:
-		dst = net.IP(daddr16[:]).String()
-	default:
-		dst = net.IP(daddr16[:]).String()
+	if af != linuxAFInet {
+		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
 	}
+	dst := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer

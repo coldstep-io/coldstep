@@ -272,7 +272,7 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 		/*
 		 * No explicit destination — connected socket. Derive IPv4
 		 * peer from `sock_common`. Skip if the socket isn't AF_INET
-		 * (AF_INET6 / AF_UNIX / AF_NETLINK / etc.) or isn't connected
+		 * (other families / AF_UNIX / AF_NETLINK / etc.) or isn't connected
 		 * (skc_daddr == 0). The verifier accepts these reads because
 		 * `sk` is a kernel pointer obtained via `bpf_probe_read_kernel`
 		 * and we always go back through `bpf_probe_read_kernel` to read

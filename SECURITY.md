@@ -23,7 +23,7 @@ Coldstep is commonly used in **GitHub-hosted Ubuntu** jobs. This section summari
 
 ### What a job adversary can do
 
-Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep’s **v1 defend** (blocking) path is **IPv4-only** for cgroup **connect** / **sendmsg** hooks; **IPv6** and other syscall surfaces are **explicitly out of scope** for v1 — see **README** → Requirements.
+Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep’s **defend** (blocking) path is **IPv4-only** for cgroup **connect** / **sendmsg** hooks. **IPv6 is not supported** — see **README** → Requirements.
 
 ### Mitigations consumers should apply
 
