@@ -413,6 +413,35 @@ func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
 	}
 }
 
+func TestTotalDetectRingbufReserveFailures_MatchesTelemetrySum(t *testing.T) {
+	t.Parallel()
+	in := DigestInput{
+		UDPRingbufReserveFailures:      1,
+		DNSRingbufReserveFailures:      2,
+		ConnectRingbufReserveFailures:  3,
+		HTTPRingbufReserveFailures:     4,
+		TLSRingbufReserveFailures:      5,
+		ExecRingbufReserveFailures:     6,
+		ForkRingbufReserveFailures:     7,
+		FSRingbufReserveFailures:       8,
+		BPFAuditRingbufReserveFailures: 9,
+	}
+	want := telemetry.SumRingbufReserveFailuresDetectPath(
+		in.UDPRingbufReserveFailures,
+		in.DNSRingbufReserveFailures,
+		in.ConnectRingbufReserveFailures,
+		in.HTTPRingbufReserveFailures,
+		in.TLSRingbufReserveFailures,
+		in.ExecRingbufReserveFailures,
+		in.ForkRingbufReserveFailures,
+		in.FSRingbufReserveFailures,
+		in.BPFAuditRingbufReserveFailures,
+	)
+	if got := totalDetectRingbufReserveFailures(in); got != want {
+		t.Fatalf("digest total %d != telemetry sum %d", got, want)
+	}
+}
+
 func TestBuildDetectMarkdown_RingbufReserveRollup(t *testing.T) {
 	t.Parallel()
 	md := BuildDetectMarkdown(DigestInput{

@@ -101,6 +101,29 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	}
 }
 
+func TestSumRingbufReserveFailuresDetectPath(t *testing.T) {
+	t.Parallel()
+	const (
+		udp = 1 + iota
+		dns
+		connect
+		http
+		tlsR
+		execR
+		forkR
+		fsR
+		bpfAudit
+	)
+	got := SumRingbufReserveFailuresDetectPath(udp, dns, connect, http, tlsR, execR, forkR, fsR, bpfAudit)
+	want := udp + dns + connect + http + tlsR + execR + forkR + fsR + bpfAudit
+	if got != want {
+		t.Fatalf("got %d want %d", got, want)
+	}
+	if got != 45 {
+		t.Fatalf("expected 1..9 sum 45, got %d", got)
+	}
+}
+
 func TestSigning(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "e.jsonl")

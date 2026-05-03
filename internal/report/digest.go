@@ -304,15 +304,17 @@ func hotKindTags(kinds map[string]struct{}) string {
 // totalDetectRingbufReserveFailures sums ringbuf reserve failures across detect-path
 // telemetry channels (excludes defend deny-event reserves; those are separate).
 func totalDetectRingbufReserveFailures(in DigestInput) int {
-	return in.ConnectRingbufReserveFailures +
-		in.HTTPRingbufReserveFailures +
-		in.TLSRingbufReserveFailures +
-		in.ExecRingbufReserveFailures +
-		in.ForkRingbufReserveFailures +
-		in.FSRingbufReserveFailures +
-		in.UDPRingbufReserveFailures +
-		in.DNSRingbufReserveFailures +
-		in.BPFAuditRingbufReserveFailures
+	return telemetry.SumRingbufReserveFailuresDetectPath(
+		in.UDPRingbufReserveFailures,
+		in.DNSRingbufReserveFailures,
+		in.ConnectRingbufReserveFailures,
+		in.HTTPRingbufReserveFailures,
+		in.TLSRingbufReserveFailures,
+		in.ExecRingbufReserveFailures,
+		in.ForkRingbufReserveFailures,
+		in.FSRingbufReserveFailures,
+		in.BPFAuditRingbufReserveFailures,
+	)
 }
 
 func writeTriageRibbon(b *strings.Builder, in DigestInput) {

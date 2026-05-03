@@ -904,10 +904,17 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 	for k, v := range s.droppedCounts {
 		dropped[k] = v
 	}
-	rbTotal := s.udpRingbufReserveFailuresN + s.dnsRingbufReserveFailuresN +
-		s.connectRingbufReserveFailuresN + s.httpRingbufReserveFailuresN + s.tlsRingbufReserveFailuresN +
-		s.execRingbufReserveFailuresN + s.forkRingbufReserveFailuresN + s.fsRingbufReserveFailuresN +
-		s.bpfAuditRingbufReserveFailuresN
+	rbTotal := telemetry.SumRingbufReserveFailuresDetectPath(
+		s.udpRingbufReserveFailuresN,
+		s.dnsRingbufReserveFailuresN,
+		s.connectRingbufReserveFailuresN,
+		s.httpRingbufReserveFailuresN,
+		s.tlsRingbufReserveFailuresN,
+		s.execRingbufReserveFailuresN,
+		s.forkRingbufReserveFailuresN,
+		s.fsRingbufReserveFailuresN,
+		s.bpfAuditRingbufReserveFailuresN,
+	)
 	return telemetry.Summary{
 		Version:                        2,
 		SchemaVersion:                  telemetry.SchemaVersion,

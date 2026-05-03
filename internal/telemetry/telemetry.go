@@ -61,6 +61,17 @@ func appendLine(path string, b []byte) error {
 	return cerr
 }
 
+// SumRingbufReserveFailuresDetectPath sums the nine per-channel ringbuf reserve failure
+// counters on the detect telemetry path. Defend deny-event ring reserves are separate.
+//
+// Callers: internal/agent snapshotSummary (RingbufReserveFailuresTotal) and
+// internal/report digest totals — keep parameter order stable when adding channels.
+func SumRingbufReserveFailuresDetectPath(
+	udp, dns, connect, http, tlsRingbuf, execRingbuf, forkRingbuf, fsRingbuf, bpfAuditRingbuf int,
+) int {
+	return udp + dns + connect + http + tlsRingbuf + execRingbuf + forkRingbuf + fsRingbuf + bpfAuditRingbuf
+}
+
 // Summary is written once at agent shutdown.
 type Summary struct {
 	Version                        int    `json:"version"`
