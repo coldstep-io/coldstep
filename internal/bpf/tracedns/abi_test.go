@@ -41,4 +41,17 @@ func TestDNSMapShapes(t *testing.T) {
 			t.Fatalf("unexpected shape %+v", ms)
 		}
 	})
+
+	t.Run("tcp_dns_skipped_short_read is ARRAY uint32 counter", func(t *testing.T) {
+		ms, ok := spec.Maps["tcp_dns_skipped_short_read"]
+		if !ok {
+			t.Fatal(`map "tcp_dns_skipped_short_read" not found`)
+		}
+		if ms.Type != ebpf.Array {
+			t.Fatalf("type = %v, want ebpf.Array", ms.Type)
+		}
+		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+			t.Fatalf("unexpected shape %+v", ms)
+		}
+	})
 }

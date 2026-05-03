@@ -98,6 +98,7 @@ type Summary struct {
 	UnobservedEgressSyscalls       int    `json:"unobserved_egress_syscalls_observed,omitempty"`
 	IoUringSetupObserved           int    `json:"io_uring_setup_observed,omitempty"`
 	TCPDNSResponsesObserved        int    `json:"tcp_dns_responses_observed,omitempty"`
+	TCPDNSSkippedShortRead         int    `json:"tcp_dns_skipped_short_read,omitempty"`
 	BPFAuditEvents                 int    `json:"bpf_audit_events,omitempty"`
 	BPFHeartbeatFailures           int    `json:"bpf_heartbeat_failures,omitempty"`
 	BPFMapIntegrityFailures        int    `json:"bpf_map_integrity_failures,omitempty"`

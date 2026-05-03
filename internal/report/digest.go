@@ -185,11 +185,12 @@ type DigestInput struct {
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool
 	CanaryFailCount  int
-	// TCPDNSResponsesObserved is a scaffold counter — currently always 0
-	// because TCP DNS sniff requires read/recvmsg sys_exit reassembly that
-	// PR-E did not ship. The symbol exists so userspace surfaces the gap
-	// once a future PR fills in the handler. See trace_dns.bpf.c comment.
-	TCPDNSResponsesObserved        int
+	// TCPDNSResponsesObserved counts TCP DNS length-framed replies where the BPF
+	// path could inspect the QR bit (trace_dns.bpf.c read/recvfrom sys_exit).
+	TCPDNSResponsesObserved int
+	// TCPDNSSkippedShortRead counts read(2) returns shorter than 6 bytes on the
+	// TCP DNS path (partial segment — cannot validate length prefix + header).
+	TCPDNSSkippedShortRead         int
 	BPFHeartbeatFailures           int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow
@@ -398,6 +399,9 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.UnobservedEgressSyscalls > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
 	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
+	}
 	if in.IoUringSetupObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup detected=%d", in.IoUringSetupObserved))
 	}
@@ -544,7 +548,10 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
 	if in.TCPDNSResponsesObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed (scaffold)** | %d |\n", in.TCPDNSResponsesObserved))
+		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved))
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead))
 	}
 	droppedTotal := 0
 	for _, v := range in.DroppedCounts {
@@ -606,6 +613,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring operations completely bypass syscall-based eBPF hooks (raw_tp/sys_enter, cgroup/connect4). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter means something attempted it. If io-uring-disable was false, traffic may have been invisible to Coldstep.")
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString(" **TCP DNS short reads** counts TCP read(2) returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.")
 	}
 	b.WriteString("</sub>\n\n")
 

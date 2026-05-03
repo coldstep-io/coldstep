@@ -1,5 +1,10 @@
 //go:build linux
 
+// Package agent hosts the Linux BPF-backed Coldstep runtime.
+//
+// Many BPF loader unwind paths use `_ = x.Close()` during partial failure cleanup:
+// the operator-facing error is the primary attach/load failure; chained Close errors
+// are treated as best-effort (successful shutdown still uses defer Close() similarly).
 package agent
 
 import (
@@ -86,6 +91,7 @@ type runStats struct {
 	unobservedEgressSyscallsN       int
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
+	tcpDNSSkippedShortReadN         int
 	bpfAuditN                       int
 	bpfMapIntegrityFailuresN        int
 	bpfDNSCacheUpdateFailuresN      int
@@ -835,6 +841,18 @@ func (s *runStats) tcpDNSResponsesObserved() int {
 	return s.tcpDNSResponsesObservedN
 }
 
+func (s *runStats) setTCPDNSSkippedShortRead(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpDNSSkippedShortReadN = n
+}
+
+func (s *runStats) tcpDNSSkippedShortRead() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tcpDNSSkippedShortReadN
+}
+
 func (s *runStats) addBPFHeartbeatFailure() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -939,6 +957,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
+		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
 		BPFAuditEvents:                 s.bpfAuditN,
 		BPFHeartbeatFailures:           s.bpfHeartbeatFailures,
 		BPFMapIntegrityFailures:        s.bpfMapIntegrityFailuresN,
@@ -2442,6 +2461,13 @@ func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
 	return readUint32CounterMap(objs.TcpDnsResponsesObserved, "readTCPDNSResponsesObservedCount")
 }
 
+func readTCPDNSSkippedShortReadCount(objs *tracedns.TracednsObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32CounterMap(objs.TcpDnsSkippedShortRead, "readTCPDNSSkippedShortReadCount")
+}
+
 func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
@@ -2885,6 +2911,7 @@ func buildDigestInput(
 		CanaryPipelineOK:               canarySnap.pipelineOK,
 		CanaryFailCount:                canarySnap.failCount,
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
+		TCPDNSSkippedShortRead:         stats.tcpDNSSkippedShortRead(),
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
@@ -3269,6 +3296,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
 				stats.setTCPDNSResponsesObserved(readTCPDNSResponsesObservedCount(dnsObjs))
+				stats.setTCPDNSSkippedShortRead(readTCPDNSSkippedShortReadCount(dnsObjs))
 			}
 		}()
 	}

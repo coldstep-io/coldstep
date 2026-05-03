@@ -128,14 +128,8 @@ func TestDNSCache_longerNameSkippedWhileValid(t *testing.T) {
 	}
 }
 
-// TestDNSCache_purgeExpiredCallsBPFDelete pins H-03: when an entry expires,
-// the in-memory delete must propagate to BPF maps. With no ebpf.Map fake
-// available in pure-Go tests, this test exercises the in-memory side and
-// asserts deleteBPFMapsLocked tolerates a nil map slot without panicking.
-//
-// TODO: replace with a real (or fake) *ebpf.Map once a userspace test
-// pattern lands in the agent test harness; until then the BPF Delete edge
-// runs only on Linux CI when the agent attaches real maps.
+// TestDNSCache_purgeExpiredEvictsAndCallsHook exercises in-memory purge without
+// BPF maps. BPF Delete + map verification lives in dns_cache_linux_test.go.
 func TestDNSCache_purgeExpiredEvictsAndCallsHook(t *testing.T) {
 	orig := dnsNow
 	defer func() { dnsNow = orig }()
