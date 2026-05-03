@@ -35,13 +35,13 @@ func TestBPFAuditMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("bpf_audit_reserve_failures is array with 1 entry", func(t *testing.T) {
+	t.Run("bpf_audit_reserve_failures is PERCPU_ARRAY with 1 entry", func(t *testing.T) {
 		ms, ok := spec.Maps["bpf_audit_reserve_failures"]
 		if !ok {
 			t.Fatal("map bpf_audit_reserve_failures not found in CollectionSpec")
 		}
-		if ms.Type != ebpf.Array {
-			t.Errorf("bpf_audit_reserve_failures type = %v, want ebpf.Array", ms.Type)
+		if ms.Type != ebpf.PerCPUArray {
+			t.Errorf("bpf_audit_reserve_failures type = %v, want ebpf.PerCPUArray", ms.Type)
 		}
 		if ms.MaxEntries != 1 {
 			t.Errorf("bpf_audit_reserve_failures MaxEntries = %d, want 1", ms.MaxEntries)

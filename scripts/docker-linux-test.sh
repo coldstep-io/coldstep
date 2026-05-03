@@ -8,7 +8,8 @@
 # Notes:
 # - Mounts repo root at /work; uses committed bpf/vmlinux.h when present (skips BTF dump).
 # - ebpf map tests need CAP_BPF inside the container (matches unprivileged restrictions).
-# - Default image: golang:bookworm (Go downloads toolchain from go.mod via GOTOOLCHAIN=auto).
+# - Default image: ubuntu:noble (24.04 LTS). Installs golang-go + clang/llvm/libbpf-dev from apt;
+#   newer Go from go.mod is fetched via GOTOOLCHAIN=auto when needed.
 
 set -euo pipefail
 
@@ -19,5 +20,6 @@ exec docker run --rm \
 	-v "${ROOT}:/work" \
 	-w /work \
 	-e GOTOOLCHAIN=auto \
-	golang:bookworm \
-	bash -c 'apt-get update -qq && apt-get install -y -qq clang llvm libbpf-dev && export PATH=/usr/local/go/bin:$PATH && bash scripts/build-agent-linux.sh /work && go test ./...'
+	-e DEBIAN_FRONTEND=noninteractive \
+	ubuntu:noble \
+	bash -c 'apt-get update -qq && apt-get install -y -qq golang-go clang llvm libbpf-dev ca-certificates git && bash scripts/build-agent-linux.sh /work && go test ./...'

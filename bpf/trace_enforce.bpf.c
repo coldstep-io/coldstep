@@ -50,7 +50,7 @@ struct {
 } deny_events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -161,8 +161,7 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 	if (!v)
 		return;
-	/* Shared map value may be updated concurrently; use atomic increment. */
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)

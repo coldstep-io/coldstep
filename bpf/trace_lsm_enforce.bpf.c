@@ -52,7 +52,7 @@ struct {
 } lsm_deny_events SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -138,7 +138,7 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)
@@ -265,18 +265,7 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	__be16 dport = 0;
 
 	if (address && namelen >= (int)sizeof(struct sockaddr_in)) {
-		/*
-		 * Explicit destination (`msg_name`) is userspace-origin data.
-		 * Keep this on the shared userspace sockaddr helper path so we
-		 * preserve the single bounded bpf_probe_read_user + AF_INET
-		 * validation contract used by observability sendmsg handlers.
-		 * Do not switch this branch back to direct kernel field reads of
-		 * sockaddr members: those belong to kernel-memory structures.
-		 *
-		 * Contrast: the `else` branch reads connected-peer fields from
-		 * `sk->__sk_common` (kernel memory), where bpf_probe_read_kernel
-		 * is the correct provenance.
-		 */
+		/* msg_name is userspace memory — use read_ipv4_sockaddr like other sendmsg hooks. */
 		if (read_ipv4_sockaddr((unsigned long)address, &dport, &daddr))
 			return 0;
 	} else {

@@ -51,17 +51,12 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("array control and counter maps keep singleton shape", func(t *testing.T) {
+	t.Run("singleton ARRAY control and observation maps", func(t *testing.T) {
 		cases := []struct {
 			mapName   string
 			valueSize uint32
 		}{
 			{"tls_agent_cfg", 1},
-			{"connect4_tuple_update_failures", 4},
-			{"udp_ringbuf_reserve_failures", 4},
-			{"connect_ringbuf_reserve_failures", 4},
-			{"http_ringbuf_reserve_failures", 4},
-			{"tls_ringbuf_reserve_failures", 4},
 			{"udp_sendmsg_multi_iovec_observed", 4},
 			{"tls_writev_multi_iovec_observed", 4},
 			{"unobserved_egress_syscalls_observed", 4},
@@ -85,6 +80,30 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			}
 			if ms.ValueSize != c.valueSize {
 				t.Errorf("%s ValueSize = %d, want %d", c.mapName, ms.ValueSize, c.valueSize)
+			}
+		}
+	})
+
+	t.Run("PERCPU_ARRAY reserve and tuple failure maps", func(t *testing.T) {
+		names := []string{
+			"connect4_tuple_update_failures",
+			"udp_ringbuf_reserve_failures",
+			"connect_ringbuf_reserve_failures",
+			"http_ringbuf_reserve_failures",
+			"tls_ringbuf_reserve_failures",
+		}
+		for _, name := range names {
+			ms, ok := spec.Maps[name]
+			if !ok {
+				t.Errorf("map %s not found in CollectionSpec", name)
+				continue
+			}
+			if ms.Type != ebpf.PerCPUArray {
+				t.Errorf("%s type = %v, want ebpf.PerCPUArray", name, ms.Type)
+			}
+			if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+				t.Errorf("%s unexpected shape MaxEntries=%d KeySize=%d ValueSize=%d",
+					name, ms.MaxEntries, ms.KeySize, ms.ValueSize)
 			}
 		}
 	})

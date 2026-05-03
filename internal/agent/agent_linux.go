@@ -271,9 +271,6 @@ func newRingReadRetryBackoff() *ringReadRetryBackoff {
 }
 
 func (b *ringReadRetryBackoff) nextDelay() time.Duration {
-	if b == nil {
-		return 0
-	}
 	if b.current <= 0 {
 		b.current = ringReadRetryBaseDelay
 		return b.current
@@ -291,16 +288,11 @@ func (b *ringReadRetryBackoff) sleep() time.Duration {
 	if delay <= 0 {
 		return 0
 	}
-	if b.sleepFn != nil {
-		b.sleepFn(delay)
-	}
+	b.sleepFn(delay)
 	return delay
 }
 
 func (b *ringReadRetryBackoff) reset() {
-	if b == nil {
-		return
-	}
 	b.current = 0
 }
 
@@ -1157,11 +1149,8 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	return tgid, tid, comm, daddr, dport, payload, true
 }
 
-// decodeDNSSniffSample parses trace_dns.bpf.c ringbuf payload (__u32 len + __u8 is_tcp +
-// __u8 _pad[3] + data[len]). is_tcp is 1 when the syscall was read(2) (TCP DNS framing).
-//
-// Legacy objects embed only (__u32 len + data[DNS_SNIFF_MAX]); ringbuf records are
-// dnsSniffEventWireSizeLegacy bytes — accept that layout until bpf2go regeneration.
+// decodeDNSSniffSample parses dns_sniff_event (trace_dns.bpf.c): len, is_tcp, pad, payload.
+// Legacy ringbuf records are dnsSniffEventWireSizeLegacy (len + data only).
 func decodeDNSSniffSample(raw []byte) (pkt []byte, isTCP bool, ok bool) {
 	if len(raw) < 4 {
 		return nil, false, false
@@ -1933,7 +1922,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 			continue
 		}
 		if isTCP {
-			// Strip RFC 1035 §4.2.2 2-byte length prefix before DNS header.
+			// Strip RFC 1035 TCP framing 2-byte length prefix before the DNS header.
 			if len(pkt) < 14 {
 				stats.addDropped("dns_decode_tcp_short")
 				continue
@@ -2292,60 +2281,83 @@ func readUint32CounterMap(m *ebpf.Map, helperName string) int {
 	return int(v)
 }
 
+// readUint32PerCPUArraySum sums all CPU slots for a BPF_MAP_TYPE_PERCPU_ARRAY map
+// with uint32 values at key 0. Used after migrating reserve-failure maps off a
+// contended global ARRAY slot.
+func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
+	if m == nil {
+		return 0
+	}
+	var k uint32
+	var vals []uint32
+	if err := m.Lookup(&k, &vals); err != nil {
+		if errors.Is(err, ebpf.ErrKeyNotExist) {
+			return 0
+		}
+		slog.Warn("percpu uint32 map lookup failed", "helper", helperName, "err", err)
+		return 0
+	}
+	n := 0
+	for _, v := range vals {
+		n += int(v)
+	}
+	return n
+}
+
 func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.DenyReserveFailures, "readDenyReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.DenyReserveFailures, "readDenyReserveFailureCount")
 }
 
 func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
+	return readUint32PerCPUArraySum(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
 }
 
 func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
 }
 
 func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
 }
 
 func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
 }
 
 func readBPFAuditRingbufReserveFailureCount(objs *tracebpfaudit.TracebpfauditObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
 }
 
 func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
 }
 
 func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
 }
 
 func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
@@ -2387,28 +2399,28 @@ func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
 }
 
 func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
 }
 
 func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
 }
 
 func readLSMDenyReserveFailureCount(objs *tracelsmenforce.TracelsmenforceObjects) int {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
+	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
 func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {

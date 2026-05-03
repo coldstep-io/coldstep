@@ -28,4 +28,17 @@ func TestDNSMapShapes(t *testing.T) {
 			t.Errorf("dns_events MaxEntries = %d, want %d (1<<24)", ms.MaxEntries, 1<<24)
 		}
 	})
+
+	t.Run("dns_ringbuf_reserve_failures is PERCPU_ARRAY", func(t *testing.T) {
+		ms, ok := spec.Maps["dns_ringbuf_reserve_failures"]
+		if !ok {
+			t.Fatal(`map "dns_ringbuf_reserve_failures" not found`)
+		}
+		if ms.Type != ebpf.PerCPUArray {
+			t.Fatalf("type = %v, want ebpf.PerCPUArray", ms.Type)
+		}
+		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+			t.Fatalf("unexpected shape %+v", ms)
+		}
+	})
 }

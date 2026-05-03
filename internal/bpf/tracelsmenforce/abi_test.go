@@ -14,6 +14,7 @@ package tracelsmenforce
 import (
 	"testing"
 
+	"github.com/cilium/ebpf"
 	"github.com/coldstep-io/coldstep/internal/policy"
 )
 
@@ -42,5 +43,23 @@ func TestLSMEnforceMapMaxEntriesMatchGoConstants(t *testing.T) {
 			t.Errorf("BPF map %q MaxEntries = %d, want %d (Go constant %s)",
 				c.mapName, ms.MaxEntries, c.expected, c.goConstantName)
 		}
+	}
+}
+
+func TestLSMDenyReserveFailuresMapIsPerCPUArray(t *testing.T) {
+	spec, err := LoadTracelsmenforce()
+	if err != nil {
+		t.Fatalf("LoadTracelsmenforce: %v", err)
+	}
+	ms, ok := spec.Maps["lsm_deny_reserve_failures"]
+	if !ok {
+		t.Fatal(`BPF map "lsm_deny_reserve_failures" missing`)
+	}
+	if ms.Type != ebpf.PerCPUArray {
+		t.Fatalf("lsm_deny_reserve_failures type = %v, want ebpf.PerCPUArray", ms.Type)
+	}
+	if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+		t.Fatalf("unexpected shape MaxEntries=%d KeySize=%d ValueSize=%d",
+			ms.MaxEntries, ms.KeySize, ms.ValueSize)
 	}
 }
