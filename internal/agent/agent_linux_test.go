@@ -245,6 +245,86 @@ func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 	}
 }
 
+func TestRun_EnforceBackendMetadataReflectsActualBackend(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name         string
+		cfg          enforceBackendConfig
+		lsmAttachErr error
+		wantBackend  string
+		wantMode     string
+	}{
+		{
+			name: "lsm_backend",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     true,
+			},
+			wantBackend: enforceBackendLSM,
+			wantMode:    enforceModeLSM,
+		},
+		{
+			name: "cgroup_fallback_after_lsm_attach_error",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     true,
+			},
+			lsmAttachErr: errors.New("lsm attach failed"),
+			wantBackend:  enforceBackendCgroup,
+			wantMode:     enforceModeCgroup,
+		},
+		{
+			name: "cgroup_backend_when_lsm_unavailable",
+			cfg: enforceBackendConfig{
+				modeEnforce: true,
+				haveLSM:     false,
+			},
+			wantBackend: enforceBackendCgroup,
+			wantMode:    enforceModeCgroup,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			outcome := chooseEnforceBackend(tc.cfg, tc.lsmAttachErr)
+			if outcome.backend != tc.wantBackend {
+				t.Fatalf("backend=%q want %q", outcome.backend, tc.wantBackend)
+			}
+
+			stats := newRunStats()
+			state := newEnforcementState()
+			state.setModeAndAllowlist(enforceModeForBackend(outcome.backend), 1, 0)
+
+			in := buildDigestInput(
+				config.Config{Mode: config.ModeEnforce},
+				stats,
+				[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+				nil, nil, nil, nil, nil,
+				"",
+				0,
+				120,
+				networkSectionSnapshot{},
+				state.snapshot(),
+				nil,
+				false,
+				forkSectionSnapshot{},
+				false,
+				false,
+				nil,
+				fsSectionSnapshot{},
+				false,
+				canarySnapshot{},
+			)
+
+			if in.EnforcementMode != tc.wantMode {
+				t.Fatalf("EnforcementMode=%q want %q", in.EnforcementMode, tc.wantMode)
+			}
+		})
+	}
+}
+
 func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -467,6 +547,21 @@ func TestBpfDetail_TruncatesUTF8WithoutSplittingRune(t *testing.T) {
 	}
 	if len(out) > 190 {
 		t.Fatalf("detail unexpectedly long: %d", len(out))
+	}
+}
+
+func TestDigestEnforcementLabel(t *testing.T) {
+	t.Parallel()
+	enforceCfg := config.Config{Mode: config.ModeEnforce}
+	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{}); got != "defend" {
+		t.Fatalf("empty snap with enforce cfg: got %q want defend", got)
+	}
+	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{mode: enforceModeCgroup}); got != enforceModeCgroup {
+		t.Fatalf("non-empty snap: got %q want %s", got, enforceModeCgroup)
+	}
+	detectCfg := config.Config{Mode: config.ModeDetect}
+	if got := digestEnforcementLabel(detectCfg, enforcementSnapshot{mode: "x"}); got != "x" {
+		t.Fatalf("detect cfg must pass through snap mode: got %q", got)
 	}
 }
 

@@ -266,7 +266,10 @@ func buildHotEgressList(in DigestInput) []hotEgressAgg {
 
 func isBlockingDigestMode(m string) bool {
 	m = strings.TrimSpace(m)
-	return strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend")
+	if strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend") {
+		return true
+	}
+	return strings.HasPrefix(strings.ToLower(m), "enforce+")
 }
 
 func digestModeCell(m string) string {
@@ -274,7 +277,8 @@ func digestModeCell(m string) string {
 	if m == "" {
 		return "detect"
 	}
-	if strings.EqualFold(m, "enforce") {
+	lm := strings.ToLower(m)
+	if lm == "enforce" || strings.HasPrefix(lm, "enforce+") {
 		return "defend"
 	}
 	return m

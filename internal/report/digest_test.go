@@ -281,6 +281,26 @@ func TestBuildDetectMarkdown_ReasonFlagsIgnoredWhenRowsPresent(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_EnforcePlusLabelBlocking(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		EnforcementMode:          "enforce+cgroup",
+		EnforcementAllowlistSize: 1,
+		EnforcementDenyCount:     4,
+		MaxRowsPerSection:        50,
+	})
+	for _, needle := range []string{
+		"## Coldstep · defend",
+		"| **Mode** | `defend`",
+		"**deny events:** 4",
+		"### Enforcement",
+		"| Mode | `defend` |",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_EnforcementSection(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		EnforcementMode:          "enforce",

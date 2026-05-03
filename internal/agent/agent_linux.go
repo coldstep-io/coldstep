@@ -25,6 +25,7 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/cilium/ebpf/rlimit"
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
@@ -47,6 +48,16 @@ type execEvent struct {
 	TID     uint32
 	Comm    [16]byte
 	ExePath [256]byte
+}
+
+// removeMemlockRlimit is replaceable in tests.
+var removeMemlockRlimit = rlimit.RemoveMemlock
+
+func initMemlock() error {
+	if err := removeMemlockRlimit(); err != nil {
+		return fmt.Errorf("init memlock rlimit: %w", err)
+	}
+	return nil
 }
 
 // bpf_audit events are decoded directly via decodeBPFAuditEvent on the raw
@@ -245,7 +256,53 @@ const (
 	canaryEventWireSize        = 16 // 4 magic + 4 pad + 8 seq_nr
 	canaryInterval             = 10 * time.Second
 	canaryTimeout              = 30 * time.Second
+
+	ringReadRetryBaseDelay = 5 * time.Millisecond
+	ringReadRetryMaxDelay  = 200 * time.Millisecond
 )
+
+type ringReadRetryBackoff struct {
+	current time.Duration
+	sleepFn func(time.Duration)
+}
+
+func newRingReadRetryBackoff() *ringReadRetryBackoff {
+	return &ringReadRetryBackoff{sleepFn: time.Sleep}
+}
+
+func (b *ringReadRetryBackoff) nextDelay() time.Duration {
+	if b == nil {
+		return 0
+	}
+	if b.current <= 0 {
+		b.current = ringReadRetryBaseDelay
+		return b.current
+	}
+	next := b.current * 2
+	if next > ringReadRetryMaxDelay {
+		next = ringReadRetryMaxDelay
+	}
+	b.current = next
+	return b.current
+}
+
+func (b *ringReadRetryBackoff) sleep() time.Duration {
+	delay := b.nextDelay()
+	if delay <= 0 {
+		return 0
+	}
+	if b.sleepFn != nil {
+		b.sleepFn(delay)
+	}
+	return delay
+}
+
+func (b *ringReadRetryBackoff) reset() {
+	if b == nil {
+		return
+	}
+	b.current = 0
+}
 
 // canaryState tracks telemetry integrity canaries across the BPF
 // ringbuf pipeline. Userspace arms a sequence via the canary_trigger
@@ -334,6 +391,41 @@ type enforcementSnapshot struct {
 	denyReserveFailures  int
 	mapIntegrityFailures int
 	firstDeny            *report.DenyDigestRow
+}
+
+type enforceBackendConfig struct {
+	modeEnforce bool
+	haveLSM     bool
+}
+
+type enforceBackendOutcome struct {
+	backend string
+}
+
+const (
+	enforceBackendDetect = "detect"
+	enforceBackendLSM    = "lsm"
+	enforceBackendCgroup = "cgroup"
+
+	enforceModeLSM    = "enforce+lsm"
+	enforceModeCgroup = "enforce+cgroup"
+)
+
+func chooseEnforceBackend(cfg enforceBackendConfig, lsmAttachErr error) enforceBackendOutcome {
+	if !cfg.modeEnforce {
+		return enforceBackendOutcome{backend: enforceBackendDetect}
+	}
+	if cfg.haveLSM && lsmAttachErr == nil {
+		return enforceBackendOutcome{backend: enforceBackendLSM}
+	}
+	return enforceBackendOutcome{backend: enforceBackendCgroup}
+}
+
+func enforceModeForBackend(backend string) string {
+	if backend == enforceBackendLSM {
+		return enforceModeLSM
+	}
+	return enforceModeCgroup
 }
 
 type enforceDenyError struct {
@@ -1290,6 +1382,7 @@ func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, lin
 
 func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1299,9 +1392,11 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (exec)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (exec)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		var ev execEvent
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
@@ -1348,6 +1443,7 @@ type forkEventWire struct {
 
 func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	forkBuf *forkEdgeBuffer, forkState *forkSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1360,9 +1456,11 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			if forkState != nil {
 				forkState.addReadError()
 			}
-			slog.Warn("ringbuf read (fork)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (fork)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		var ev forkEventWire
 		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
@@ -1440,6 +1538,7 @@ const maxFSEventsTotal = 5000
 func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	fsRows *fsRowBuffer, fsState *fsSectionState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	count := 0
+	backoff := newRingReadRetryBackoff()
 	for {
 		rec, err := rd.Read()
 		if err != nil {
@@ -1450,9 +1549,11 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 				return ctx.Err()
 			}
 			fsState.addReadError()
-			slog.Warn("ringbuf read (fs)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (fs)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 		var ev fsEventWire
 		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &ev); err != nil {
 			fsState.addReadError()
@@ -1504,6 +1605,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 
 func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
 	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, canary *canaryState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1516,9 +1618,11 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			if sectionState != nil {
 				sectionState.addTCPReaderError()
 			}
-			slog.Warn("ringbuf read (tcp)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (tcp)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		// Canary event detection: if the record starts with CANARY_MAGIC,
 		// it's a telemetry integrity canary — not a connect event.
@@ -1593,6 +1697,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1605,9 +1710,11 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			if sectionState != nil {
 				sectionState.addTLSReaderError()
 			}
-			slog.Warn("ringbuf read (tls)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (tls)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, rawPay, ok := decodeTLSSniffEvent(record.RawSample)
 		if !ok {
@@ -1662,6 +1769,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 
 func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
 	pol *policy.Policy, stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1674,9 +1782,11 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			if sectionState != nil {
 				sectionState.addUDPReaderError()
 			}
-			slog.Warn("ringbuf read (udp)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (udp)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, dgramLen, ok := decodeUDPSendEvent(record.RawSample)
 		if !ok {
@@ -1731,6 +1841,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 
 func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1743,9 +1854,11 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 			if sectionState != nil {
 				sectionState.addHTTPReaderError()
 			}
-			slog.Warn("ringbuf read (http)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (http)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, daddr, port, rawPay, ok := decodeHTTPSniffEvent(record.RawSample)
 		if !ok {
@@ -1799,6 +1912,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 }
 
 func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats *runStats) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1808,9 +1922,11 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (dns)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (dns)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 		pkt, isTCP, ok := decodeDNSSniffSample(record.RawSample)
 		if !ok || len(pkt) < 12 {
 			stats.addDropped("dns_decode")
@@ -1833,6 +1949,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 }
 
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -1842,9 +1959,11 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (bpf_audit)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (bpf_audit)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		tgid, tid, commb, cmd, ok := decodeBPFAuditEvent(record.RawSample)
 		if !ok {
@@ -2517,6 +2636,8 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
 	// would kill the agent before later job steps (nmap/curl) run. Exit only on ctx cancel / closed ring.
+	backoff := newRingReadRetryBackoff()
+	drainBackoff := newRingReadRetryBackoff()
 	for {
 		rd.SetDeadline(time.Time{})
 		record, err := rd.Read()
@@ -2527,9 +2648,11 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			slog.Warn("ringbuf read (deny)", "err", err)
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (deny)", "err", err, "backoff", delay)
 			continue
 		}
+		backoff.reset()
 
 		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer); err != nil {
 			slog.Warn("deny ring sample skipped", "err", err)
@@ -2553,9 +2676,11 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 					return ctx.Err()
 				}
 				rd.SetDeadline(time.Time{})
-				slog.Warn("ringbuf read (deny drain)", "err", err2)
+				delay := drainBackoff.sleep()
+				slog.Warn("ringbuf read (deny drain)", "err", err2, "backoff", delay)
 				continue
 			}
+			drainBackoff.reset()
 			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
 				continue
@@ -2619,6 +2744,9 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 // digestEnforcementLabel maps internal enforcement snapshot + config to the digest/JSONL-facing mode name.
 func digestEnforcementLabel(cfg config.Config, snap enforcementSnapshot) string {
 	if cfg.Mode != config.ModeEnforce {
+		return snap.mode
+	}
+	if strings.TrimSpace(snap.mode) != "" {
 		return snap.mode
 	}
 	return "defend"
@@ -2753,6 +2881,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return fmt.Errorf("setup telemetry signer: %w", err)
 	}
+	if err := initMemlock(); err != nil {
+		return err
+	}
 
 	bpfSt := []telemetry.BPFStatus{
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
@@ -2851,46 +2982,68 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
 	if cfg.Mode == config.ModeEnforce {
-		useLSM := false
+		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
-			useLSM = true
+			haveLSM = true
 		}
+		var lsmAttachErr error
 
-		if useLSM {
-			lsmObjs = new(tracelsmenforce.TracelsmenforceObjects)
-			if err := tracelsmenforce.LoadTracelsmenforceObjects(lsmObjs, nil); err != nil {
+		if haveLSM {
+			lsmCandidate := new(tracelsmenforce.TracelsmenforceObjects)
+			if err := tracelsmenforce.LoadTracelsmenforceObjects(lsmCandidate, nil); err != nil {
 				return fmt.Errorf("load lsm enforce bpf objects: %w", err)
 			}
-			hasLSM = true
-			defer func() {
-				enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
-				_ = lsmObjs.Close()
-			}()
 
-			allowlistSize, ignoredSize, loadErr := loadLSMEnforceMaps(lsmObjs, enforceCompiled, pol)
+			allowlistSize, ignoredSize, loadErr := loadLSMEnforceMaps(lsmCandidate, enforceCompiled, pol)
 			if loadErr != nil {
+				_ = lsmCandidate.Close()
 				return loadErr
 			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode)+"+lsm", allowlistSize, ignoredSize)
 
-			var err error
-			denyRd, err = ringbuf.NewReader(lsmObjs.LsmDenyEvents)
+			lsmDenyRd, err := ringbuf.NewReader(lsmCandidate.LsmDenyEvents)
 			if err != nil {
+				_ = lsmCandidate.Close()
 				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
 			}
 
-			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmObjs.LsmSocketConnect})
+			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketConnect})
 			if err != nil {
-				return fmt.Errorf("attach lsm_socket_connect: %w", err)
+				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
+				_ = lsmDenyRd.Close()
+				_ = lsmCandidate.Close()
+			} else {
+				lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketSendmsg})
+				if err != nil {
+					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
+					_ = lnk1.Close()
+					_ = lsmDenyRd.Close()
+					_ = lsmCandidate.Close()
+				} else {
+					lsmObjs = lsmCandidate
+					hasLSM = true
+					denyRd = lsmDenyRd
+					enforceState.setModeAndAllowlist(enforceModeForBackend(enforceBackendLSM), allowlistSize, ignoredSize)
+					defer func() {
+						enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
+						_ = lsmObjs.Close()
+					}()
+					defer lnk1.Close()
+					defer lnk2.Close()
+				}
 			}
-			defer lnk1.Close()
+		}
 
-			lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmObjs.LsmSocketSendmsg})
-			if err != nil {
-				return fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
+		backend := chooseEnforceBackend(
+			enforceBackendConfig{
+				modeEnforce: cfg.Mode == config.ModeEnforce,
+				haveLSM:     haveLSM,
+			},
+			lsmAttachErr,
+		)
+		if backend.backend == enforceBackendCgroup {
+			if lsmAttachErr != nil {
+				slog.Warn("lsm enforce attach failed; falling back to cgroup", "err", lsmAttachErr)
 			}
-			defer lnk2.Close()
-		} else {
 			if err := traceenforce.LoadTraceenforceObjects(&enforceObjs, nil); err != nil {
 				return fmt.Errorf("load enforce bpf objects: %w", err)
 			}
@@ -2904,7 +3057,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if loadErr != nil {
 				return loadErr
 			}
-			enforceState.setModeAndAllowlist(string(cfg.Mode), allowlistSize, ignoredSize)
+			enforceState.setModeAndAllowlist(enforceModeForBackend(backend.backend), allowlistSize, ignoredSize)
 			var err error
 			denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
 			if err != nil {

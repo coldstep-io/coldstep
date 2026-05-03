@@ -6,6 +6,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "trace_connect_obs.h"
 #include "dns_cache.h"
 #include "deny_event.h"
 
@@ -264,15 +265,20 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	__be16 dport = 0;
 
 	if (address && namelen >= (int)sizeof(struct sockaddr_in)) {
-		/* Explicit destination: read sockaddr_in fields from userspace-
-		 * sourced kernel-side `msghdr`. */
-		struct sockaddr_in *addr4 = (struct sockaddr_in *)address;
-		short family;
-		bpf_probe_read_kernel(&family, sizeof(family), &addr4->sin_family);
-		if (family != AF_INET)
+		/*
+		 * Explicit destination (`msg_name`) is userspace-origin data.
+		 * Keep this on the shared userspace sockaddr helper path so we
+		 * preserve the single bounded bpf_probe_read_user + AF_INET
+		 * validation contract used by observability sendmsg handlers.
+		 * Do not switch this branch back to direct kernel field reads of
+		 * sockaddr members: those belong to kernel-memory structures.
+		 *
+		 * Contrast: the `else` branch reads connected-peer fields from
+		 * `sk->__sk_common` (kernel memory), where bpf_probe_read_kernel
+		 * is the correct provenance.
+		 */
+		if (read_ipv4_sockaddr((unsigned long)address, &dport, &daddr))
 			return 0;
-		bpf_probe_read_kernel(&daddr, sizeof(daddr), &addr4->sin_addr.s_addr);
-		bpf_probe_read_kernel(&dport, sizeof(dport), &addr4->sin_port);
 	} else {
 		/*
 		 * No explicit destination — connected socket. Derive IPv4
