@@ -1,15 +1,14 @@
 // Package tracelsmenforce loads the trace_lsm_enforce.bpf.c BPF object via
 // cilium/ebpf bpf2go-generated bindings.
 //
-// Loader pattern: direct `//go:generate` line — no per-arch flags needed.
-// trace_lsm_enforce.bpf.c attaches LSM hooks (BPF LSM programs) that
-// receive kernel-defined LSM hook arguments and do not include
-// bpf/trace_connect_obs.h, so the per-arch syscall-NR table is not
-// referenced and no `-D__TARGET_ARCH_<arch>` define is required. A
-// one-line `//go:generate` therefore suffices (no run_bpf2go.go helper).
+// Loader pattern: indirect via run_bpf2go.go (//go:build ignore main program).
 //
-// See internal/bpf/traceenforce/gen.go for an explanation of the two
-// loader patterns used in this repo.
+// trace_lsm_enforce.bpf.c includes bpf/trace_connect_obs.h for read_ipv4_sockaddr on
+// the sendmsg explicit-destination path. That header's syscall-NR table is keyed by
+// bpf_target_* macros set from __TARGET_ARCH_*; bpf2go must pass
+// `-D__TARGET_ARCH_x86` or `-D__TARGET_ARCH_arm64` derived from runtime.GOARCH.
+//
+// See internal/bpf/traceconnect/gen.go for the two loader patterns used in this repo.
 package tracelsmenforce
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 -cc clang -no-strip -target bpfel,bpfeb -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Tracelsmenforce ../../../bpf/trace_lsm_enforce.bpf.c -- -I../../../bpf -I/usr/include/bpf
+//go:generate go run ./run_bpf2go.go
