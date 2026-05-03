@@ -17,6 +17,11 @@ const MaxIgnoredIPv4Nets = 128
 // MaxAllowedEnforceIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_enforce.bpf.c.
 const MaxAllowedEnforceIPv4Keys = 4096
 
+// MaxAllowedHostnameBytes is the maximum length of an allowed hostname (exact match or wildcard suffix).
+// DNS FQDNs are at most 253 octets (RFC 1035). BPF allowed_domains uses fixed char[256] keys; longer
+// names would truncate silently in userspace map updates without this guard.
+const MaxAllowedHostnameBytes = 253
+
 // Class describes egress vs allow lists (v1: never fails the job on policy).
 type Class string
 
@@ -57,11 +62,17 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 			if suf == "" || strings.Contains(suf, "*") {
 				continue
 			}
+			if len(suf) > MaxAllowedHostnameBytes {
+				return nil, fmt.Errorf("allowed-hosts: wildcard suffix exceeds maximum length %d bytes", MaxAllowedHostnameBytes)
+			}
 			if !validHostnameSuffix.MatchString(suf) {
 				return nil, fmt.Errorf("allowed-hosts: wildcard suffix %q contains invalid hostname characters", suf)
 			}
 			p.wildSuffixes = append(p.wildSuffixes, suf)
 		} else {
+			if len(h) > MaxAllowedHostnameBytes {
+				return nil, fmt.Errorf("allowed-hosts: hostname exceeds maximum length %d bytes", MaxAllowedHostnameBytes)
+			}
 			p.exactHosts[h] = struct{}{}
 		}
 	}

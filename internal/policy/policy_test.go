@@ -97,6 +97,22 @@ func TestParse_AllowedIPv6CIDRRejected(t *testing.T) {
 	}
 }
 
+func TestParse_AllowedHostnameTooLong(t *testing.T) {
+	long := strings.Repeat("a", MaxAllowedHostnameBytes+1)
+	_, err := Parse(long, "")
+	if err == nil {
+		t.Fatal("expected error for hostname exceeding MaxAllowedHostnameBytes")
+	}
+}
+
+func TestParse_WildcardSuffixTooLong(t *testing.T) {
+	suf := strings.Repeat("b", MaxAllowedHostnameBytes+1)
+	_, err := Parse("*."+suf, "")
+	if err == nil {
+		t.Fatal("expected error for wildcard suffix exceeding MaxAllowedHostnameBytes")
+	}
+}
+
 func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
 	p, err := Parse("", "1.1.1.1, 8.8.8.8")
 	if err != nil {

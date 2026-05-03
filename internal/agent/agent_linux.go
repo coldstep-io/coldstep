@@ -2391,18 +2391,22 @@ func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPN
 	}
 	for _, n := range nets {
 		if n == nil {
+			slog.Warn("allowed_ipv4: skipping nil CIDR entry in allowed_ipv4 LPM load")
 			continue
 		}
 		ones, bits := n.Mask.Size()
 		if bits != 32 || ones < 0 || ones > 32 {
+			slog.Warn("allowed_ipv4: skipping CIDR with non-IPv4 mask (unexpected from policy parse)", "cidr", n.String(), "bits", bits, "ones", ones)
 			continue
 		}
 		ip4 := n.IP.To4()
 		if ip4 == nil {
+			slog.Warn("allowed_ipv4: skipping non-IPv4 CIDR (unexpected from policy parse)", "cidr", n.String())
 			continue
 		}
 		network := ip4.Mask(n.Mask)
 		if network == nil {
+			slog.Warn("allowed_ipv4: skipping CIDR with nil masked network (unexpected)", "cidr", n.String())
 			continue
 		}
 		var key [8]byte

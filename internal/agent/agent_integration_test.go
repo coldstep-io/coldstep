@@ -7,6 +7,8 @@ package agent
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -551,6 +553,56 @@ func TestRun_FSEventJSONLWhenFeatureGate(t *testing.T) {
 	}
 }
 
+// bpfMapGetNextID is BPF_MAP_GET_NEXT_ID from Linux UAPI linux/bpf.h — bpftool map list issues bpf(BPF_MAP_GET_NEXT_ID, …).
+const bpfMapGetNextID = 12
+
+// validateBPFAuditJSONL returns nil when JSONL satisfies bpf_audit field assertions (non-empty comm;
+// when requireBPFMapGetNextID is true, at least one record must have cmd==BPF_MAP_GET_NEXT_ID).
+func validateBPFAuditJSONL(data []byte, requireBPFMapGetNextID bool) error {
+	var sawAudit bool
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var ev struct {
+			Type string `json:"type"`
+			Cmd  uint32 `json:"cmd"`
+			Comm string `json:"comm"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		if ev.Type != "bpf_audit" {
+			continue
+		}
+		sawAudit = true
+		if strings.TrimSpace(ev.Comm) == "" {
+			return fmt.Errorf("bpf_audit line has empty comm: %s", line)
+		}
+		if !requireBPFMapGetNextID {
+			return nil
+		}
+		if ev.Cmd == bpfMapGetNextID {
+			return nil
+		}
+	}
+	if !sawAudit {
+		return fmt.Errorf("no bpf_audit JSONL record")
+	}
+	if requireBPFMapGetNextID {
+		return fmt.Errorf("no bpf_audit with cmd=%d (BPF_MAP_GET_NEXT_ID)", bpfMapGetNextID)
+	}
+	return nil
+}
+
+func requireValidBPFAuditJSONL(t *testing.T, data []byte, requireBPFMapGetNextID bool) {
+	t.Helper()
+	if err := validateBPFAuditJSONL(data, requireBPFMapGetNextID); err != nil {
+		t.Fatalf("%v\n%s", err, data)
+	}
+}
+
 func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root for BPF load")
@@ -584,7 +636,7 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 	hasBpftool := bpftoolErr == nil
 
 	deadline := time.Now().Add(14 * time.Second)
-	found := false
+	validated := false
 	for time.Now().Before(deadline) {
 		if hasBpftool {
 			// bpftool map list triggers BPF_MAP_GET_NEXT_ID (12).
@@ -595,8 +647,11 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		if rerr != nil {
 			continue
 		}
-		if bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
-			found = true
+		if !bytes.Contains(b, []byte(`"type":"bpf_audit"`)) {
+			continue
+		}
+		if validateBPFAuditJSONL(b, hasBpftool) == nil {
+			validated = true
 			break
 		}
 	}
@@ -607,7 +662,7 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	if found {
+	if validated {
 		return
 	}
 
@@ -621,4 +676,5 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 		}
 		t.Fatalf("expected bpf_audit in jsonl:\n%s", string(b))
 	}
+	requireValidBPFAuditJSONL(t, b, hasBpftool)
 }
