@@ -384,8 +384,12 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			handle_udp_obs_emit(sin_port, sin_addr, len);
 
 		if (sin_port == bpf_htons(80) && len >= 4 &&
-		    http_prefix_looks_like_request(buf_ptr, len))
-			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
+		    http_prefix_looks_like_request(buf_ptr, len)) {
+			if (!addr_ul)
+				handle_http_obs_emit_pt(tuple_pt, buf_ptr, len, sin_port, sin_addr);
+			else
+				handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
+		}
 
 		if (!addr_ul)
 			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
