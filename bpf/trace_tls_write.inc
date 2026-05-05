@@ -4,12 +4,13 @@
 
 /*
  * Emit TLS sniff event using an already-resolved connect tuple (no map lookup).
- * Used by connected sendto after coldstep_connect_tuple_fetch shares one lookup
- * with udp_events attribution.
+ * Caller passes pt from coldstep_connect_tuple_fetch so we do not call
+ * bpf_get_current_pid_tgid again after tuple correlation.
  */
 static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_tuple *tup,
 								unsigned long buf_ptr,
-								__u32 len_in)
+								__u32 len_in,
+								__u64 pt)
 {
 	{
 		__u32 key0 = 0;
@@ -28,7 +29,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 		return;
 
 	{
-		unsigned char peek[8];
+		unsigned char peek[6];
 
 		/* Constant read size — variable peeksz trips strict verifiers on some runners. */
 		if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
@@ -45,7 +46,6 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 	}
 
 	{
-		__u64 pt = bpf_get_current_pid_tgid();
 		__u32 tgid = (__u32)(pt >> 32);
 		struct tls_sniff_event *ev =
 			bpf_ringbuf_reserve(&tls_events, sizeof(*ev), 0);
@@ -82,10 +82,11 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	struct connect4_tuple tup;
+	__u64 pt;
 
-	if (coldstep_connect_tuple_fetch(fd32, &tup))
+	if (coldstep_connect_tuple_fetch(fd32, &tup, &pt))
 		return;
-	try_emit_tls_clienthello_from_tuple(&tup, buf_ptr, len_in);
+	try_emit_tls_clienthello_from_tuple(&tup, buf_ptr, len_in, pt);
 }
 
 /* id + syscall arg registers; di/si/dx read only in handle_raw_sys_enter. */

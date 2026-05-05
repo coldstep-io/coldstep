@@ -37,6 +37,8 @@ static __always_inline int handle_udp_obs_sendmsg(__u32 fd32, unsigned long msg_
 	unsigned long msg_iov = 0;
 	unsigned long msg_iovlen = 0;
 	struct coldstep_iovec iov0 = {};
+	int use_tuple_pt = 0;
+	__u64 tuple_pt = 0;
 
 	if (!msg_hdr_ptr)
 		return 0;
@@ -52,8 +54,9 @@ static __always_inline int handle_udp_obs_sendmsg(__u32 fd32, unsigned long msg_
 			goto have_dest;
 	}
 
-	if (coldstep_tuple_dst_for_fd(fd32, &sin_port, &sin_addr))
+	if (coldstep_tuple_dst_for_fd(fd32, &sin_port, &sin_addr, &tuple_pt))
 		return 0;
+	use_tuple_pt = 1;
 
 have_dest:
 
@@ -77,7 +80,10 @@ have_dest:
 			len = (__u32)iov0.iov_len;
 	}
 
-	handle_udp_obs_emit(sin_port, sin_addr, len);
+	if (use_tuple_pt)
+		handle_udp_obs_emit_pt(tuple_pt, sin_port, sin_addr, len);
+	else
+		handle_udp_obs_emit(sin_port, sin_addr, len);
 	return 0;
 }
 

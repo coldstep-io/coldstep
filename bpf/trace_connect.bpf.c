@@ -352,6 +352,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		__be32 sin_addr;
 		/* Populated once on connected sendto; reused for udp/http/tls below. */
 		struct connect4_tuple ct = {};
+		__u64 tuple_pt = 0;
 
 		/* Read args in syscall order: fd(0), buf(1), len(2), [skip flags(3)], addr(4). */
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -364,7 +365,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 
 		if (!addr_ul) {
-			if (coldstep_connect_tuple_fetch((__u32)di_ul, &ct))
+			if (coldstep_connect_tuple_fetch((__u32)di_ul, &ct, &tuple_pt))
 				return 0;
 			__builtin_memcpy(&sin_port, ct.dport, sizeof(sin_port));
 			__builtin_memcpy(&sin_addr, ct.daddr, sizeof(sin_addr));
@@ -377,14 +378,17 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (len > 0x00100000)
 			len = 0x00100000;
 
-		handle_udp_obs_emit(sin_port, sin_addr, len);
+		if (!addr_ul)
+			handle_udp_obs_emit_pt(tuple_pt, sin_port, sin_addr, len);
+		else
+			handle_udp_obs_emit(sin_port, sin_addr, len);
 
 		if (sin_port == bpf_htons(80) && len >= 4 &&
 		    http_prefix_looks_like_request(buf_ptr, len))
 			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 
 		if (!addr_ul)
-			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len);
+			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
 
 		return 0;
 	}
@@ -454,6 +458,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		__be16 sin_port;
 		__be32 sin_addr;
 		__u32 len;
+		__u64 pt;
 
 		/* arg0 = out_fd */
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -466,8 +471,8 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (len > 0x00100000)
 			len = 0x00100000;
 
-		if (!coldstep_tuple_dst_for_fd((__u32)di_ul, &sin_port, &sin_addr))
-			handle_udp_obs_emit(sin_port, sin_addr, len);
+		if (!coldstep_tuple_dst_for_fd((__u32)di_ul, &sin_port, &sin_addr, &pt))
+			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
 		return 0;
 	}
 
@@ -476,6 +481,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		__be16 sin_port;
 		__be32 sin_addr;
 		__u32 len;
+		__u64 pt;
 
 		/* arg2 = fd_out */
 		if (ns_read_syscall_arg(regs, 2, &fd_out_ul))
@@ -488,8 +494,8 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (len > 0x00100000)
 			len = 0x00100000;
 
-		if (!coldstep_tuple_dst_for_fd((__u32)fd_out_ul, &sin_port, &sin_addr))
-			handle_udp_obs_emit(sin_port, sin_addr, len);
+		if (!coldstep_tuple_dst_for_fd((__u32)fd_out_ul, &sin_port, &sin_addr, &pt))
+			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
 		return 0;
 	}
 
