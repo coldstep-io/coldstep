@@ -38,21 +38,34 @@ static __always_inline void handle_udp_obs_emit(__be16 sin_port, __be32 sin_addr
 }
 
 /*
- * Shared fast path: resolve IPv4 dst from the (tgid,fd) connect correlation map.
- * Used by sendto(NULL), sendfile, splice, and sendmsg connected-socket paths.
+ * Copy full tuple from (tgid,fd) LRU map — basis for dst extraction and TLS
+ * sniff on connected sendto (single lookup shared across udp_events + tls_events).
  */
-static __always_inline int coldstep_tuple_dst_for_fd(__u32 fd32, __be16 *sin_port,
-						     __be32 *sin_addr)
+static __always_inline int coldstep_connect_tuple_fetch(__u32 fd32, struct connect4_tuple *out)
 {
 	__u64 pt = bpf_get_current_pid_tgid();
 	__u32 tgid = (__u32)(pt >> 32);
 	__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
 	struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
 
-	if (!tup || !tup->in_use)
+	if (!tup || !tup->in_use || !out)
 		return -1;
-	__builtin_memcpy(sin_port, tup->dport, sizeof(*sin_port));
-	__builtin_memcpy(sin_addr, tup->daddr, sizeof(*sin_addr));
+	__builtin_memcpy(out, tup, sizeof(*out));
+	return 0;
+}
+
+/*
+ * Resolve IPv4 dst from tuple map — sendfile/splice and sendmsg fallback paths.
+ */
+static __always_inline int coldstep_tuple_dst_for_fd(__u32 fd32, __be16 *sin_port,
+						     __be32 *sin_addr)
+{
+	struct connect4_tuple t;
+
+	if (coldstep_connect_tuple_fetch(fd32, &t))
+		return -1;
+	__builtin_memcpy(sin_port, t.dport, sizeof(*sin_port));
+	__builtin_memcpy(sin_addr, t.daddr, sizeof(*sin_addr));
 	return 0;
 }
 

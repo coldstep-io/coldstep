@@ -203,6 +203,14 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 	bpf_map_delete_elem(&recvfrom_buf, &pid_tgid);
 
+	/*
+	 * Failed syscalls must not drive QR sniffing or length accounting; user
+	 * buffer content is undefined on error (recvfrom path previously probed
+	 * before discovering ret < 0).
+	 */
+	if (ret < 0)
+		return 0;
+
 	if (orig_nr == (unsigned long)COLDSTEP_NR_RECVFROM) {
 		if (bpf_probe_read_user(hdr, sizeof(hdr), (void *)pending->buf_user))
 			return 0;
@@ -216,8 +224,6 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		 * checked at buffer offset 4. We do not reassemble TCP streams —
 		 * see `tcp_dns_skipped_short_read` for undersized read(2) returns.
 		 */
-		if (ret < 0)
-			return 0;
 		if (ret < 6) {
 			note_tcp_dns_skipped_short_read();
 			return 0;

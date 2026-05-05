@@ -350,6 +350,8 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		__u32 len;
 		__be16 sin_port;
 		__be32 sin_addr;
+		/* Populated once on connected sendto; reused for udp/http/tls below. */
+		struct connect4_tuple ct = {};
 
 		/* Read args in syscall order: fd(0), buf(1), len(2), [skip flags(3)], addr(4). */
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -362,12 +364,10 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 
 		if (!addr_ul) {
-			/*
-			 * NULL destination pointer — connected socket; look up dst
-			 * from the prior connect(2) (tgid,fd) correlation map.
-			 */
-			if (coldstep_tuple_dst_for_fd((__u32)di_ul, &sin_port, &sin_addr))
+			if (coldstep_connect_tuple_fetch((__u32)di_ul, &ct))
 				return 0;
+			__builtin_memcpy(&sin_port, ct.dport, sizeof(sin_port));
+			__builtin_memcpy(&sin_addr, ct.daddr, sizeof(sin_addr));
 		} else {
 			if (read_ipv4_sockaddr(addr_ul, &sin_port, &sin_addr))
 				return 0;
@@ -383,13 +383,8 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		    http_prefix_looks_like_request(buf_ptr, len))
 			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 
-		/*
-		 * TLS ClientHello sniff only makes sense on connected TCP sockets
-		 * (addr_ul == NULL path). Skipping for explicit-dest sendto avoids
-		 * a wasted connect4_by_tgid_fd lookup on every UDP sendto.
-		 */
 		if (!addr_ul)
-			try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
+			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len);
 
 		return 0;
 	}
