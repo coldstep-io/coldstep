@@ -37,4 +37,23 @@ static __always_inline void handle_udp_obs_emit(__be16 sin_port, __be32 sin_addr
 	bpf_ringbuf_submit(ue, 0);
 }
 
+/*
+ * Shared fast path: resolve IPv4 dst from the (tgid,fd) connect correlation map.
+ * Used by sendto(NULL), sendfile, splice, and sendmsg connected-socket paths.
+ */
+static __always_inline int coldstep_tuple_dst_for_fd(__u32 fd32, __be16 *sin_port,
+						     __be32 *sin_addr)
+{
+	__u64 pt = bpf_get_current_pid_tgid();
+	__u32 tgid = (__u32)(pt >> 32);
+	__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+	struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
+
+	if (!tup || !tup->in_use)
+		return -1;
+	__builtin_memcpy(sin_port, tup->dport, sizeof(*sin_port));
+	__builtin_memcpy(sin_addr, tup->daddr, sizeof(*sin_addr));
+	return 0;
+}
+
 #endif /* TRACE_UDP_OBS_INC */
