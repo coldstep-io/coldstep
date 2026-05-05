@@ -4,8 +4,19 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+func TestWorkspace_acceptsPathUnderRunnerTemp(t *testing.T) {
+	rt := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", "")
+	t.Setenv("RUNNER_TEMP", rt)
+	child := filepath.Join(rt, "agent-status.json")
+	if _, err := Workspace(child, "STATUS"); err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestWorkspaceAcceptsPathsUnderWorkspace(t *testing.T) {
 	tmp := t.TempDir()
@@ -28,8 +39,20 @@ func TestWorkspaceRejectsPathOutsideTrustedRoots(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("GITHUB_WORKSPACE", tmp)
 	t.Setenv("RUNNER_TEMP", "")
-	t.Setenv("TMPDIR", tmp) // collapse os.TempDir() onto the workspace so a sibling is genuinely outside
-	outside := filepath.Join(filepath.Dir(tmp), "outside.json")
+	t.Setenv("TMPDIR", tmp) // Unix: collapse os.TempDir() onto the workspace so a sibling is genuinely outside
+	var outside string
+	if runtime.GOOS == "windows" {
+		// Windows ignores TMPDIR for os.TempDir() (uses %TEMP%/%TMP%); a sibling of t.TempDir()
+		// often still lies under the real Temp directory and remains trusted. Use a path under
+		// %SystemRoot% which is outside typical workspace/temp/cwd roots for this test layout.
+		root := os.Getenv("SystemRoot")
+		if root == "" {
+			t.Skip("SystemRoot unset")
+		}
+		outside = filepath.Join(root, "coldstep-safepath-outside-root-test.json")
+	} else {
+		outside = filepath.Join(filepath.Dir(tmp), "outside.json")
+	}
 	if _, err := Workspace(outside, "OUT"); err == nil {
 		t.Fatal("Workspace: expected error for path outside trusted roots")
 	} else if !errors.Is(err, ErrInvalidPath) {
@@ -58,6 +81,9 @@ func TestWorkspaceAcceptsNonExistentPathUnderSymlinkedWorkspace(t *testing.T) {
 	}
 	linkWorkspace := filepath.Join(tmp, "workspace-link")
 	if err := os.Symlink(realWorkspace, linkWorkspace); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skip("workspace symlink requires developer-mode symlink privilege or elevation on Windows:", err)
+		}
 		t.Fatalf("setup workspace symlink: %v", err)
 	}
 
