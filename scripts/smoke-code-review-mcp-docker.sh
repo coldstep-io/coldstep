@@ -6,7 +6,8 @@ IMAGE_TAG="${IMAGE_TAG:-coldstep-code-review-mcp:smoke}"
 
 docker build -t "${IMAGE_TAG}" "${ROOT}/docker/code-review-assistant"
 
-docker run --rm "${IMAGE_TAG}" python -c "
+# Override ENTRYPOINT so we run assertions instead of starting stdio MCP.
+docker run --rm --entrypoint python "${IMAGE_TAG}" -c "
 import sys
 sys.path.insert(0, '/app')
 import server

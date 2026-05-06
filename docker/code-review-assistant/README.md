@@ -8,6 +8,18 @@ Stdio MCP server: expert rubric and checklists ship **inside the image**. **No A
 docker build -t coldstep-code-review-mcp:local docker/code-review-assistant
 ```
 
+## Verify (smoke test)
+
+The image `ENTRYPOINT` starts stdio MCP. To assert prompts load inside the container, override the entrypoint:
+
+```bash
+./scripts/smoke-code-review-mcp-docker.sh
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-code-review-mcp-docker.ps1
+```
+
 ## Pin by digest (repeatability)
 
 After pushing to a registry:
