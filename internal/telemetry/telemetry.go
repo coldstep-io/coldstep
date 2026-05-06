@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
@@ -56,7 +57,7 @@ func appendLine(path string, b []byte) error {
 	_, werr := f.Write(line)
 	cerr := f.Close()
 	if werr != nil {
-		return werr
+		return errors.Join(werr, cerr)
 	}
 	return cerr
 }

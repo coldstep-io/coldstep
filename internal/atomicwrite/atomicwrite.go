@@ -24,13 +24,13 @@ func Bytes(path string, data []byte, perm os.FileMode) error {
 			_ = os.Remove(tmpPath)
 		}
 	}()
-	if _, err := f.Write(data); err != nil {
-		f.Close()
-		return err
+	if _, werr := f.Write(data); werr != nil {
+		cerr := f.Close()
+		return errors.Join(werr, cerr)
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
-		return err
+		cerr := f.Close()
+		return errors.Join(err, cerr)
 	}
 	if err := f.Close(); err != nil {
 		return err
