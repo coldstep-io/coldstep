@@ -20,6 +20,16 @@ The image `ENTRYPOINT` starts stdio MCP. To assert prompts load inside the conta
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/smoke-code-review-mcp-docker.ps1
 ```
 
+### Full MCP session (real protocol, not mocked)
+
+On the host you need Python with the **`mcp`** package (`pip install mcp`). This spawns Docker stdio MCP and performs **initialize**, **tools/list**, and **tools/call** (`get_expert_system_prompt`, `prepare_review_packet`) using bytes read from `bpf/trace_connect.bpf.c`:
+
+```bash
+python scripts/verify-mcp-code-review-docker.py
+```
+
+Success prints `MCP_OK real_stdio_session` plus character counts.
+
 ## Pin by digest (repeatability)
 
 After pushing to a registry:
