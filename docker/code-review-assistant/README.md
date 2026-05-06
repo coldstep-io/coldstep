@@ -30,6 +30,25 @@ python scripts/verify-mcp-code-review-docker.py
 
 Success prints `MCP_OK real_stdio_session` plus character counts.
 
+### Repo-wide rubric export (optional)
+
+From repo root, dump container prompts plus checklists and capped sources for BPF / agent / workflows:
+
+```bash
+docker build -t coldstep-code-review-mcp:local docker/code-review-assistant
+python scripts/mcp_emit_review_surfaces.py > review-surfaces.md
+```
+
+On Windows, prefer UTF-8 output redirection or redirect to a file opened as UTF-8.
+
+### Pre-PR automated gate (includes MCP verify unless skipped)
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/repo-review-gate.ps1
+```
+
+Set `SKIP_MCP_DOCKER_VERIFY=1` to run Go/TS checks only.
+
 ## Pin by digest (repeatability)
 
 After pushing to a registry:
