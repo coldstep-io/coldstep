@@ -1,5 +1,7 @@
 # BPF gaps — engineering backlog (ranked)
 
+**Implementation plan:** [`2026-05-09-bpf-features-implementation-plan.md`](./2026-05-09-bpf-features-implementation-plan.md) (phased PRs BG-04 -> BG-01 -> …).
+
 **Companion:** theme-first narrative + sources in [`2026-05-08-bpf-gaps-wiki-memo.md`](./2026-05-08-bpf-gaps-wiki-memo.md) (vault memo: `knowledge/wiki/Memo - BPF observability gaps backlog 2026-05-08.md`).
 
 **Ranking:** Lower **rank #** = ship first. Tags: **theme** (Wiki cluster), **surface** (syscall / cgroup / LSM / research).
