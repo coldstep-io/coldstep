@@ -52,13 +52,17 @@ AGENTS.md
 .coldstep-detect.md
 .coldstep-agent.stderr.log
 
+# Agent Linux verify loop transcript (scripts/agent-linux-verify.sh)
+.coldstep-verify-last.log
+
 # Local deep-debug pass output (scripts/deep-debug.sh)
 .coldstep-deep-debug/
 
-# Local-only trees — never staged, never committed (do not `git add` docs/ or knowledge/, never `git add -f`).
+# Local-only trees — never staged, never committed (do not `git add` docs/, design/, or knowledge/, never `git add -f`).
 /plans/
 /skills/
 /docs/
+/design/
 /knowledge/
 /.worktrees/
 # Soft alias junction (mklink /J elon knowledge) — same vault, local-only.

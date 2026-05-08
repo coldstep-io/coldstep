@@ -17,6 +17,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 4. **Allowlist ergonomics** — changing **`allowed-*-file`** / **`bootstrap-allowlist`** behavior or defaults requires updating **QUICK_START**, **`VALIDATION.md`**, and **`action.yml`** input descriptions together.
 5. **Docs** — if you change workflow pins or other action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
 6. **Pinning for consumers** — downstream workflows should use a **release tag** (for example **`coldstep-io/coldstep@v0.2.1`**), not **`@main`**, unless they intentionally track head.
+7. **Local Linux oracle** — maintenance with Docker can run **`bash scripts/agent-linux-verify.sh`** (writes **`.coldstep-verify-last.log`**, emits a **`COLDSTEP_AGENT_VERIFY_BUNDLE`** block for iterative fixes). Use **`COLDSTEP_VERIFY_MODE=quick`** for **`docker-linux-test`** only or **`fast`** for a shorter **`docker-deep-debug`** iteration. **Windows (fast path):** install **Git for Windows** once (**`winget install --id Git.Git -e`**) for **`bash`**, then **`scripts\agent-linux-verify.cmd`** (double-click) or **`python scripts/agent_linux_verify.py --mode fast`** or **`powershell -NoProfile -File scripts/agent-linux-verify.ps1 -VerifyMode fast`**.
 
 ## Security-sensitive areas
 

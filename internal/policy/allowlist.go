@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -10,6 +11,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 )
+
+// coldstepDomainAllowlistIPv4WarnThreshold triggers slog.Warn when one allowlisted domain resolves
+// to more than this many distinct IPv4 addresses (warn-only; compile outcome unchanged).
+const coldstepDomainAllowlistIPv4WarnThreshold = 10
 
 // coldstepDomainLookupAttemptTimeout caps a single Resolver.LookupIP call so goroutines cannot
 // block past the parent compile context (hosted runners / flaky resolvers).
@@ -154,6 +159,21 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 	// Merge results back into CompileResult (single-threaded; goroutines are done).
 	for _, res := range results {
 		if res.resolved {
+			seen := make(map[[4]byte]struct{})
+			for _, ip := range res.ips {
+				if ip.To4() == nil {
+					continue
+				}
+				var k [4]byte
+				copy(k[:], ip.To4())
+				seen[k] = struct{}{}
+			}
+			if len(seen) > coldstepDomainAllowlistIPv4WarnThreshold {
+				slog.Warn("allowlist domain resolved to many distinct IPv4 addresses (policy ambiguity risk)",
+					"domain", res.domain,
+					"unique_ipv4", len(seen),
+					"threshold", coldstepDomainAllowlistIPv4WarnThreshold)
+			}
 			for _, ip := range res.ips {
 				result.AllowedIPv4.Add(ip)
 			}

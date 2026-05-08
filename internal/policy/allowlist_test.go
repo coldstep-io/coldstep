@@ -3,8 +3,10 @@
 package policy
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"reflect"
 	"sync"
@@ -168,5 +170,30 @@ func TestCompileDomainAllowlist_MaxAttemptsFloor(t *testing.T) {
 	_ = CompileDomainAllowlist(ctx, []string{"a.example.com"}, resolver, 0)
 	if calls != 1 {
 		t.Fatalf("resolver calls: got %d want 1 (ip4 once) when maxAttempts <= 0", calls)
+	}
+}
+
+func TestCompileDomainAllowlist_HighCardinalityIPv4Warns(t *testing.T) {
+	ctx := context.Background()
+	var buf bytes.Buffer
+	h := slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	old := slog.Default()
+	slog.SetDefault(slog.New(h))
+	defer slog.SetDefault(old)
+
+	ips := make([]net.IP, 0, 12)
+	for i := 0; i < 12; i++ {
+		ips = append(ips, net.IPv4(10, 0, 0, byte(i+1)))
+	}
+	resolver := func(_ context.Context, _, _ string) ([]net.IP, error) {
+		return ips, nil
+	}
+	got := CompileDomainAllowlist(ctx, []string{"cdn-heavy.example.com"}, resolver, 2)
+	if got.AllowedIPv4.Len() != 12 {
+		t.Fatalf("AllowedIPv4.Len()=%d want 12", got.AllowedIPv4.Len())
+	}
+	b := buf.Bytes()
+	if !bytes.Contains(b, []byte(`"unique_ipv4":12`)) || !bytes.Contains(b, []byte(`cdn-heavy.example.com`)) {
+		t.Fatalf("expected high-cardinality warn log, got %q", string(b))
 	}
 }
