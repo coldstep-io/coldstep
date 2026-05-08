@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
+- **BPF build:** **`scripts/ensure_vmlinux_int_typedefs.py`** runs from **`scripts/build-agent-linux.sh`** after **`bpf/vmlinux.h`** is present — repairs **`bpftool btf dump format c`** output when kernel BTF places integer typedefs after forward refs (fixes **`clang`** **`unknown type name '__u8'`** on GitHub-hosted kernels).
 - **BPF (detect telemetry):** **`pwrite(2)`/`pwritev`/`pwritev2`** use the same TLS ClientHello sniff path as **`write`/`writev`** (first three syscall args match; **`NR_PWRITE64`/`PWRITEV`/`PWRITEV2`** in **`trace_tls_write.inc`**); no longer counted only as **`unobserved_egress_syscalls_observed`**.
 - **BPF (detect telemetry):** **TLS ClientHello / SNI** sniffing mirrors the HTTP **`sendto`+sockaddr** path on **`NR_SENDTO`**: when **`addr_ul`** is populated and matches the **`connect`** destination, the first handshake-shaped buffer still runs **`try_emit_tls_clienthello`** (best-effort, same **`connect4_tuple`** layout).
 - **BPF (defend enforcement):** **cgroup/LSM enforce** helpers shared via **`bpf/enforce_policy.inc`** (**`enforce_lpm_key.h`** for forward **LPM** key types); **`trace_enforce`** and **`trace_lsm_enforce`** stay behavior-equivalent while deduplicating deny/allowlist plumbing.
