@@ -2,8 +2,8 @@
 #ifndef TRACE_HTTP_OBS_INC
 #define TRACE_HTTP_OBS_INC
 
-static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 len,
-						 __be16 sin_port, __be32 sin_addr)
+static __always_inline void handle_http_obs_emit_pt(__u64 pt, unsigned long buf_ptr, __u32 len,
+						    __be16 sin_port, __be32 sin_addr)
 {
 	struct http_sniff_event *he =
 		bpf_ringbuf_reserve(&http_events, sizeof(*he), 0);
@@ -11,12 +11,8 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 		note_http_ringbuf_reserve_failed();
 		return;
 	}
-	{
-		__u64 pt = bpf_get_current_pid_tgid();
-
-		he->tgid = (__u32)(pt >> 32);
-		he->tid = (__u32)pt;
-	}
+	he->tgid = (__u32)(pt >> 32);
+	he->tid = (__u32)pt;
 	bpf_get_current_comm(&he->comm, sizeof(he->comm));
 	__builtin_memcpy(he->daddr, &sin_addr, sizeof(he->daddr));
 	__builtin_memcpy(he->dport, &sin_port, sizeof(he->dport));
@@ -40,6 +36,14 @@ static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 le
 		}
 	}
 	bpf_ringbuf_submit(he, 0);
+}
+
+static __always_inline void handle_http_obs_emit(unsigned long buf_ptr, __u32 len,
+						 __be16 sin_port, __be32 sin_addr)
+{
+	__u64 pt = bpf_get_current_pid_tgid();
+
+	handle_http_obs_emit_pt(pt, buf_ptr, len, sin_port, sin_addr);
 }
 
 #endif /* TRACE_HTTP_OBS_INC */

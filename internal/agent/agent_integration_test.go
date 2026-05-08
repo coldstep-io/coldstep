@@ -480,6 +480,116 @@ func TestRun_TLSClientHelloSNIJSONL(t *testing.T) {
 	}
 }
 
+func TestRun_TLSClientHelloSendtoSockaddrJSONL(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed:", err)
+	}
+
+	dir := t.TempDir()
+	detect := filepath.Join(dir, "detect.md")
+	events := filepath.Join(dir, ".coldstep-events.jsonl")
+	probe := filepath.Join(dir, "tls_sendto_probe.py")
+	if err := os.WriteFile(detect, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
+	t.Setenv("COLDSTEP_ALLOWED_IPS", "")
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_DETECT_LOG", detect)
+	t.Setenv("COLDSTEP_EVENTS_LOG", events)
+	t.Setenv("COLDSTEP_FEATURE_GATES", "tls_sni=1")
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(ctx, cfg) }()
+
+	time.Sleep(450 * time.Millisecond)
+
+	// Mirrors internal/telemetry buildSyntheticClientHelloWithSNI: TCP sendto(+sockaddr)
+	// after connect must classify as TLS ClientHello (same parity as HTTP sendto).
+	py := `import socket
+import struct
+
+def build_synthetic_clienthello_sni(host: str) -> bytes:
+    hb = host.encode('ascii')
+    if not (0 < len(hb) <= 200):
+        raise ValueError(host)
+    list_len = 1 + 2 + len(hb)
+    ext_val = bytearray(2 + list_len)
+    struct.pack_into('>H', ext_val, 0, list_len)
+    ext_val[2] = 0
+    struct.pack_into('>H', ext_val, 3, len(hb))
+    ext_val[5 : 5 + len(hb)] = hb
+    ext_block = bytearray(4 + len(ext_val))
+    struct.pack_into('>H', ext_block, 0, 0)
+    struct.pack_into('>H', ext_block, 2, len(ext_val))
+    ext_block[4:] = ext_val
+    ch = bytearray()
+    ch.extend(bytes([0x03, 0x03]))
+    ch.extend(bytes(32))
+    ch.append(0)
+    ch.extend(bytes([0x00, 0x02, 0x13, 0x01]))
+    ch.extend(bytes([0x01, 0x00]))
+    ext_len = len(ext_block)
+    ch.extend(struct.pack('>H', ext_len))
+    ch.extend(ext_block)
+    ch_len = len(ch)
+    hs = bytearray([0x01])
+    hs.extend([(ch_len >> 16) & 0xFF, (ch_len >> 8) & 0xFF, ch_len & 0xFF])
+    hs.extend(ch)
+    rec_body = bytes(hs)
+    rec_len = len(rec_body)
+    out = bytearray([0x16, 0x03, 0x01, (rec_len >> 8) & 0xFF, rec_len & 0xFF])
+    out.extend(rec_body)
+    return bytes(out)
+
+addr = ("example.com", 443)
+buf = build_synthetic_clienthello_sni("example.com")
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(addr)
+s.sendto(buf, 0, addr)
+s.close()
+`
+	if err := os.WriteFile(probe, []byte(py), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", probe)
+	if err := cmd.Run(); err != nil {
+		t.Logf("tls sendto probe (non-fatal): %v", err)
+	}
+
+	cancel()
+	err = <-errCh
+	if err != nil && err != context.Canceled {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"type":"tls"`)) {
+		t.Fatalf("expected tls JSONL line, got:\n%s", string(b))
+	}
+	if !bytes.Contains(b, []byte(`"sni":"example.com"`)) {
+		t.Fatalf("expected tls JSONL with sni example.com, got:\n%s", string(b))
+	}
+}
+
 func TestRun_FSEventJSONLWhenFeatureGate(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root for BPF load")

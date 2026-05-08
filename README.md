@@ -140,7 +140,7 @@ Enrichment walks indicators present in the report model when **`OTX_API_KEY`** i
 ## Limits (read before relying on signals)
 
 - **TCP** rows reflect **`connect(2)` at syscall enter**, not guaranteed established sockets.
-- **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first **`write(2)`** after **`connect`** (best-effort).
+- **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first cleartext handshake buffer seen on **`write(2)`/`writev`/`sendto`** paths after IPv4 **`connect`** (best-effort); explicit-address TCP **`sendto`** is included when the tuple matches the syscall destination.
 - **Shared runners**: attribution is **PID / `comm`**-class; not a perfect global process tree.
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
 - **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.

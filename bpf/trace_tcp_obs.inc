@@ -24,25 +24,24 @@ static __always_inline int handle_tcp_obs_connect(__u32 fd32, unsigned long sock
 
 		ce->tgid = (__u32)(pt >> 32);
 		ce->tid = (__u32)pt;
-	}
-	bpf_get_current_comm(&ce->comm, sizeof(ce->comm));
-	__builtin_memcpy(ce->daddr, &sin_addr, sizeof(ce->daddr));
-	__builtin_memcpy(ce->dport, &sin_port, sizeof(ce->dport));
-	bpf_ringbuf_submit(ce, 0);
+		bpf_get_current_comm(&ce->comm, sizeof(ce->comm));
+		__builtin_memcpy(ce->daddr, &sin_addr, sizeof(ce->daddr));
+		__builtin_memcpy(ce->dport, &sin_port, sizeof(ce->dport));
+		bpf_ringbuf_submit(ce, 0);
 
-	{
-		struct connect4_tuple tup = {};
-
-		__builtin_memcpy(tup.daddr, &sin_addr, sizeof(sin_addr));
-		__builtin_memcpy(tup.dport, &sin_port, sizeof(sin_port));
-		tup.in_use = 1;
 		{
-			__u64 pt = bpf_get_current_pid_tgid();
-			__u32 tgid = (__u32)(pt >> 32);
-			__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+			struct connect4_tuple tup = {};
 
-			if (bpf_map_update_elem(&connect4_by_tgid_fd, &mkey, &tup, BPF_ANY))
-				note_connect4_tuple_update_failed();
+			__builtin_memcpy(tup.daddr, &sin_addr, sizeof(sin_addr));
+			__builtin_memcpy(tup.dport, &sin_port, sizeof(sin_port));
+			tup.in_use = 1;
+			{
+				__u32 tgid = (__u32)(pt >> 32);
+				__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+
+				if (bpf_map_update_elem(&connect4_by_tgid_fd, &mkey, &tup, BPF_ANY))
+					note_connect4_tuple_update_failed();
+			}
 		}
 	}
 	return 0;
