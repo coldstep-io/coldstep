@@ -10,8 +10,9 @@
 #define TRACE_TLS_WRITE_INC
 
 /*
- * Emit TLS sniff using connect4_tuple-shaped daddr/dport + pt from caller:
- * NR_SENDTO may pass stack tuple synthesized from sockaddr; write path passes map tuple.
+ * Emit TLS sniff using connect4_tuple-shaped daddr/dport + caller pt (no fd map lookup here).
+ * NR_write/NR_writev resolve tuple via coldstep_connect_tuple_fetch first; NR_sendto passes
+ * tuple from trace_connect.bpf.c (cached connect or sockaddr-synthesized stack tuple).
  */
 static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_tuple *tup,
 								unsigned long buf_ptr,
@@ -84,7 +85,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 	}
 }
 
-/* Used by NR_write / NR_writev only — NR_sendto invokes try_emit_tls_clienthello_from_tuple from trace_connect.bpf.c. */
+/* NR_write/NR_writev: fd lookup then try_emit_tls_clienthello_from_tuple. NR_sendto paths call try_emit_tls_clienthello_from_tuple from trace_connect.bpf.c (including explicit sockaddr TCP sendto). */
 static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	struct connect4_tuple tup;

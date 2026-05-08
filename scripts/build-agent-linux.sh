@@ -34,6 +34,8 @@ fi
 "${APTGET[@]}" update -qq
 "${APTGET[@]}" install -y -qq clang llvm libbpf-dev
 
+bash "${ROOT}/scripts/run-bpf-c-unit-tests.sh" "${ROOT}"
+
 mkdir -p bpf
 if [[ ! -s bpf/vmlinux.h ]]; then
 	if [[ ! -r /sys/kernel/btf/vmlinux ]]; then

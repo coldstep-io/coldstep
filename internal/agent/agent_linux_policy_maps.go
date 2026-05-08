@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -303,7 +304,12 @@ func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled p
 	if pol != nil {
 		literalNets = pol.AllowedIPv4Nets()
 	}
-	totalEntries := len(v4keys) + len(literalNets)
+
+	plan, err := buildAllowedLPMPlan("lsm_allowed_ipv4", v4keys, literalNets)
+	if err != nil {
+		return 0, 0, err
+	}
+	totalEntries := plan.totalEntries
 	if totalEntries > policy.MaxAllowedEnforceIPv4Keys {
 		return 0, 0, fmt.Errorf("lsm_allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedEnforceIPv4Keys)
 	}
@@ -312,7 +318,7 @@ func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled p
 		return 0, 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
 	}
 
-	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, v4keys, literalNets); err != nil {
+	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, plan); err != nil {
 		return 0, 0, err
 	}
 
@@ -357,7 +363,12 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 	if pol != nil {
 		literalNets = pol.AllowedIPv4Nets()
 	}
-	totalEntries := len(v4keys) + len(literalNets)
+
+	plan, err := buildAllowedLPMPlan("allowed_ipv4", v4keys, literalNets)
+	if err != nil {
+		return 0, 0, err
+	}
+	totalEntries := plan.totalEntries
 	if totalEntries > policy.MaxAllowedEnforceIPv4Keys {
 		return 0, 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedEnforceIPv4Keys)
 	}
@@ -366,7 +377,7 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 		return 0, 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
 	}
 
-	if err := loadAllowedLPMMap(objs.AllowedIpv4, v4keys, literalNets); err != nil {
+	if err := loadAllowedLPMMap(objs.AllowedIpv4, plan); err != nil {
 		return 0, 0, err
 	}
 
@@ -388,54 +399,90 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 // reads it as a u32) and bytes [4:8] are the network address in network byte
 // order. Don't reorder fields without also updating the BPF `struct ns_lpm4_key`
 // definition in bpf/trace_enforce.bpf.c — they share wire format.
-func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPNet) error {
-	if m == nil {
-		if len(ipKeys) > 0 || len(nets) > 0 {
-			return fmt.Errorf("allowed_ipv4 map is nil with %d entries", len(ipKeys)+len(nets))
+type allowedLPMPlan struct {
+	singleIPKeys [][8]byte
+	cidrKeys     [][8]byte
+	totalEntries int
+}
+
+func buildAllowedLPMPlan(mapName string, ipKeys map[[4]byte]struct{}, nets []*net.IPNet) (allowedLPMPlan, error) {
+	plan := allowedLPMPlan{}
+	seen := make(map[[8]byte]struct{}, len(ipKeys)+len(nets))
+
+	addKey := func(key [8]byte, dst *[][8]byte) {
+		if _, ok := seen[key]; ok {
+			return
 		}
-		return nil
+		seen[key] = struct{}{}
+		*dst = append(*dst, key)
 	}
-	val := uint8(1)
+
+	// Build deterministic ordering for /32 entries.
+	ipAddrs := make([][4]byte, 0, len(ipKeys))
 	for addr := range ipKeys {
+		ipAddrs = append(ipAddrs, addr)
+	}
+	sort.Slice(ipAddrs, func(i, j int) bool {
+		return bytes.Compare(ipAddrs[i][:], ipAddrs[j][:]) < 0
+	})
+	for _, addr := range ipAddrs {
 		var key [8]byte
 		binary.LittleEndian.PutUint32(key[0:4], 32)
 		copy(key[4:8], addr[:])
-		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("load allowed_ipv4 map (/32 %d.%d.%d.%d): %w",
-				addr[0], addr[1], addr[2], addr[3], err)
-		}
+		addKey(key, &plan.singleIPKeys)
 	}
+
 	for _, n := range nets {
 		if n == nil {
-			slog.Warn("allowed_ipv4: skipping nil CIDR entry in allowed_ipv4 LPM load")
-			continue
+			return allowedLPMPlan{}, fmt.Errorf("%s: nil CIDR entry in policy", mapName)
 		}
 		ones, bits := n.Mask.Size()
 		if bits != 32 || ones < 0 || ones > 32 {
-			slog.Warn("allowed_ipv4: skipping CIDR with non-IPv4 mask (unexpected from policy parse)", "cidr", n.String(), "bits", bits, "ones", ones)
-			continue
+			return allowedLPMPlan{}, fmt.Errorf("%s: non-IPv4 CIDR mask %q (bits=%d ones=%d)", mapName, n.String(), bits, ones)
 		}
 		ip4 := n.IP.To4()
 		if ip4 == nil {
-			slog.Warn("allowed_ipv4: skipping non-IPv4 CIDR (unexpected from policy parse)", "cidr", n.String())
-			continue
+			return allowedLPMPlan{}, fmt.Errorf("%s: non-IPv4 CIDR %q", mapName, n.String())
 		}
 		network := ip4.Mask(n.Mask)
 		if network == nil {
-			slog.Warn("allowed_ipv4: skipping CIDR with nil masked network (unexpected)", "cidr", n.String())
-			continue
+			return allowedLPMPlan{}, fmt.Errorf("%s: invalid masked network for CIDR %q", mapName, n.String())
 		}
 		var key [8]byte
 		binary.LittleEndian.PutUint32(key[0:4], uint32(ones))
 		binary.BigEndian.PutUint32(key[4:8], binary.BigEndian.Uint32(network))
+		addKey(key, &plan.cidrKeys)
+	}
+
+	plan.totalEntries = len(seen)
+	return plan, nil
+}
+
+func loadAllowedLPMMap(m *ebpf.Map, plan allowedLPMPlan) error {
+	if m == nil {
+		if plan.totalEntries > 0 {
+			return fmt.Errorf("allowed_ipv4 map is nil with %d entries", plan.totalEntries)
+		}
+		return nil
+	}
+	val := uint8(1)
+	for _, key := range plan.singleIPKeys {
 		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
-			return fmt.Errorf("load allowed_ipv4 map (cidr %s): %w", n.String(), err)
+			addr := key[4:8]
+			return fmt.Errorf("load allowed_ipv4 map (/32 %d.%d.%d.%d): %w",
+				addr[0], addr[1], addr[2], addr[3], err)
+		}
+	}
+	for _, key := range plan.cidrKeys {
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			prefix := binary.LittleEndian.Uint32(key[0:4])
+			return fmt.Errorf("load allowed_ipv4 map (cidr %d.%d.%d.%d/%d): %w", key[4], key[5], key[6], key[7], prefix, err)
 		}
 	}
 	return nil
 }
 
-func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) (telemetry.DenyEvent, error) {
+func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
 		return telemetry.DenyEvent{}, fmt.Errorf("decode deny event")
@@ -445,9 +492,14 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	if af != linuxAFInet {
 		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
 	}
-	dst := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
+	dstIP := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
+	dst := dstIP.String()
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	matchKind := "unknown"
+	if dns != nil && dns.Lookup(dstIP) != "" {
+		matchKind = "dns_cache"
+	}
 	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer
 	// branch fires, so it stays paired with the actual JSONL line under jsonlMu (M-05) and
 	// avoids burning sequence numbers when EventsLogPath is empty (M-06). Other JSONL writers
@@ -465,6 +517,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 		Reason:   reason,
 		Mode:     cfg.PublicMode(),
 	}
+	if hookFamily != "" {
+		deny.HookFamily = hookFamily
+	}
+	deny.MatchKind = matchKind
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
 		deny.Seq = seq.Next()
@@ -483,15 +539,15 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 // testAppendDenySample exercises appendDenyFromRaw JSONL emission and returns a sentinel error
 // for unit tests. Production readDenyRing logs and skips decode/JSONL failures so enforcement
 // keeps running; successful denies still flow through appendDenyFromRaw unchanged.
-func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
+func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		return err
 	}
 	return newEnforceDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
 	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
@@ -514,7 +570,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 		}
 		backoff.reset()
 
-		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer); err != nil {
+		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer, hookFamily, dns); err != nil {
 			slog.Warn("deny ring sample skipped", "err", err)
 			continue
 		}
@@ -541,7 +597,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 				continue
 			}
 			drainBackoff.reset()
-			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
+			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer, hookFamily, dns); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
 				continue
 			}
@@ -553,8 +609,8 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 
 // processDenyRingSample handles one deny ringbuf payload. Decode or JSONL failures are logged and
 // dropped so readDenyRing never returns a fatal error (enforcement stays attached).
-func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
+func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		slog.Warn("deny ring sample skipped", "err", err, "raw_len", len(raw))
 		return

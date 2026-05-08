@@ -178,8 +178,9 @@ type DigestInput struct {
 	// Non-zero indicates Coldstep's observability has a real-workload gap.
 	UnobservedEgressSyscalls int
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
-	// dispatch arm. Any non-zero value is a critical security signal: io_uring
-	// operations bypass all syscall-based BPF hooks entirely.
+	// dispatch arm. Non-zero means some workload attempted async I/O setup;
+	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.
+	// It is a syscall-hook bypass-class signal, not proof of exfiltration.
 	IoUringSetupObserved int
 	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
@@ -318,6 +319,22 @@ func totalDetectRingbufReserveFailures(in DigestInput) int {
 	)
 }
 
+// truthfulnessInterpretation adds triage text for partial syscall visibility and io_uring_setup
+// (neutral wording; ringbuf pressure is its own triage row).
+func truthfulnessInterpretation(in DigestInput) string {
+	var parts []string
+	if in.UnobservedEgressSyscalls > 0 {
+		parts = append(parts, "Some egress syscalls are counter-only; JSONL is not a full traffic map (SECURITY.md, Guarantees vs best-effort).")
+	}
+	if in.IoUringSetupObserved > 0 {
+		parts = append(parts, "io_uring_setup(2) observed: async I/O may bypass syscall tracepoints; see io-uring-disable and SECURITY.md.")
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ")
+}
+
 func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	b.WriteString("### Triage\n\n")
 	b.WriteString("| Question | Answer |\n|:--|:--|\n")
@@ -403,7 +420,7 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
 	}
 	if in.IoUringSetupObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup detected=%d", in.IoUringSetupObserved))
+		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup (syscall-hook bypass class)=%d", in.IoUringSetupObserved))
 	}
 	if in.BPFAuditRingbufReserveFailures > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("bpf audit ringbuf reserve=%d", in.BPFAuditRingbufReserveFailures))
@@ -415,6 +432,10 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
 	} else {
 		b.WriteString(fmt.Sprintf("| **Capture gaps** | **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
+	}
+
+	if interp := truthfulnessInterpretation(in); interp != "" {
+		b.WriteString(fmt.Sprintf("| **Observability (partial / bypass-class)** | %s |\n", sanitizeCell(interp)))
 	}
 
 	if rbTotal := totalDetectRingbufReserveFailures(in); rbTotal > 0 {
@@ -528,7 +549,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
 	}
 	if in.IoUringSetupObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup detected (bypass risk)** | %d |\n", in.IoUringSetupObserved))
+		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
 	}
 	if in.BPFAuditRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures))
@@ -609,10 +630,10 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
 	}
 	if in.UnobservedEgressSyscalls > 0 {
-		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer (BPF connect/policy enforcement still applied to the underlying TCP/UDP socket).")
+		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
 	}
 	if in.IoUringSetupObserved > 0 {
-		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring operations completely bypass syscall-based eBPF hooks (raw_tp/sys_enter, cgroup/connect4). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter means something attempted it. If io-uring-disable was false, traffic may have been invisible to Coldstep.")
+		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode (and may complicate observation). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).")
 	}
 	if in.TCPDNSSkippedShortRead > 0 {
 		b.WriteString(" **TCP DNS short reads** counts TCP read(2) returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.")

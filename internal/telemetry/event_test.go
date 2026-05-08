@@ -126,6 +126,34 @@ func TestDenyEventJSON(t *testing.T) {
 	}
 }
 
+func TestDenyEventJSON_HookProvenance(t *testing.T) {
+	ev := DenyEvent{
+		Type:       "deny",
+		TS:         "2026-01-01T00:00:00Z",
+		Seq:        3,
+		PID:        1,
+		TGID:       1,
+		ThreadID:   2,
+		Comm:       "curl",
+		Protocol:   "tcp",
+		Dst:        "10.0.0.1",
+		Dport:      443,
+		Reason:     "dst_not_allowlisted",
+		Mode:       "defend",
+		HookFamily: "cgroup",
+		MatchKind:  "dns_cache",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{`"hook_family":"cgroup"`, `"match_kind":"dns_cache"`} {
+		if !bytes.Contains(b, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, string(b))
+		}
+	}
+}
+
 func TestFSEvent_RoundTrip(t *testing.T) {
 	t.Parallel()
 	ev := FSEvent{

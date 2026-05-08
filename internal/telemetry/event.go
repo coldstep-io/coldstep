@@ -171,7 +171,11 @@ type DenyEvent struct {
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
 	Mode     string `json:"mode"` // "defend" (blocking; legacy rows may say "enforce")
-	Sig      string `json:"sig,omitempty"`
+	// HookFamily is "lsm" or "cgroup" when known (which deny ring handled the event).
+	HookFamily string `json:"hook_family,omitempty"`
+	// MatchKind is "dns_cache" if Dst had a cached DNS owner name at emission time, else "unknown".
+	MatchKind string `json:"match_kind,omitempty"`
+	Sig       string `json:"sig,omitempty"`
 }
 
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.

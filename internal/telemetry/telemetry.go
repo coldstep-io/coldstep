@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"os"
 	"time"
 
@@ -56,7 +57,7 @@ func appendLine(path string, b []byte) error {
 	_, werr := f.Write(line)
 	cerr := f.Close()
 	if werr != nil {
-		return werr
+		return errors.Join(werr, cerr)
 	}
 	return cerr
 }
@@ -72,7 +73,8 @@ func SumRingbufReserveFailuresDetectPath(
 	return udp + dns + connect + http + tlsRingbuf + execRingbuf + forkRingbuf + fsRingbuf + bpfAuditRingbuf
 }
 
-// Summary is written once at agent shutdown.
+// Summary is written once at agent shutdown. Non-zero partial-visibility counters
+// (unobserved syscalls, io_uring_setup, ringbuf reserves) need SECURITY.md context to interpret.
 type Summary struct {
 	Version                        int    `json:"version"`
 	SchemaVersion                  int    `json:"schema_version"`

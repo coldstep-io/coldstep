@@ -3,6 +3,7 @@ package policy
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -10,6 +11,10 @@ import (
 
 	"golang.org/x/sync/errgroup"
 )
+
+// coldstepDomainAllowlistIPv4WarnThreshold triggers slog.Warn when one allowlisted domain resolves
+// to more than this many distinct IPv4 addresses (warn-only; compile outcome unchanged).
+const coldstepDomainAllowlistIPv4WarnThreshold = 10
 
 // coldstepDomainLookupAttemptTimeout caps a single Resolver.LookupIP call so goroutines cannot
 // block past the parent compile context (hosted runners / flaky resolvers).
@@ -108,12 +113,9 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 	results := make([]domainResult, len(normalized))
 
 	// errgroup.SetLimit bounds in-flight goroutines to N; Go() blocks on the
-	// internal semaphore once N goroutines are running. Workers never return
-	// an error (resolution failures land in domainResult.resolved=false), so
-	// the eg.Wait() error is unconditionally nil — but using errgroup over a
-	// hand-rolled sync.WaitGroup + chan-semaphore keeps the bounded-concurrency
-	// pattern self-documenting and cancels via parent-ctx if Coldstep ever
-	// switches to a context-cancellation model for compile timeouts.
+	// internal semaphore once N goroutines are running. Workers currently return
+	// nil errors (resolution failures land in domainResult.resolved=false); Wait
+	// is still checked so unexpected errgroup failures remain observable in logs.
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -149,11 +151,29 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 			return nil
 		})
 	}
-	_ = eg.Wait()
+	if err := eg.Wait(); err != nil {
+		slog.Warn("domain allowlist compile: errgroup wait returned error", "err", err)
+	}
 
 	// Merge results back into CompileResult (single-threaded; goroutines are done).
 	for _, res := range results {
 		if res.resolved {
+			seen := make(map[[4]byte]struct{})
+			for _, ip := range res.ips {
+				ip4 := ip.To4()
+				if ip4 == nil {
+					continue
+				}
+				var k [4]byte
+				copy(k[:], ip4)
+				seen[k] = struct{}{}
+			}
+			if len(seen) > coldstepDomainAllowlistIPv4WarnThreshold {
+				slog.Warn("allowlist domain resolved to many distinct IPv4 addresses (policy ambiguity risk)",
+					"domain", res.domain,
+					"unique_ipv4", len(seen),
+					"threshold", coldstepDomainAllowlistIPv4WarnThreshold)
+			}
 			for _, ip := range res.ips {
 				result.AllowedIPv4.Add(ip)
 			}

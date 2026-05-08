@@ -6,7 +6,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/report/model"
 )
 
-// evaluateCoverage parity target: build_report_model.py evaluate_coverage.
+// EvaluateCoverage mirrors build_report_model.py evaluate_coverage parity for coverage scoring.
 func EvaluateCoverage(events []model.Event) model.CoverageSection {
 	required := []string{"meta", "exec", "tcp", "udp", "tls", "http", "proc_fork", "fs_event", "bpf_audit"}
 	seen := map[string]struct{}{}
