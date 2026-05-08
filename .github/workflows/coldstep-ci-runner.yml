@@ -42,7 +42,7 @@ jobs:
           fi
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
       - name: gofmt check
         run: bash scripts/check-gofmt.sh
       - name: encoding check
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
       - name: Prepare BPF and generated Go
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
       - name: Prepare BPF and generated Go
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -127,7 +127,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
       - name: Prepare BPF
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
@@ -150,7 +150,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
       - name: Build action binaries
         run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
       - name: Verify action binaries exist
@@ -176,7 +176,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
 
       - name: Start Coldstep (detect mode)
         uses: ./
@@ -392,7 +392,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
 
       # Cache skips clang+bpf rebuild when sources unchanged — composite uses release-path so startup
       # stays fast under fail-on-error (BPF verifier remains on first load inside the agent).

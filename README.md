@@ -80,7 +80,7 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 
 | Workflow / area | Notable `uses:` |
 | :-------------- | :-------------- |
-| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version: 1.25.x`), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v6` |
+| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version-file: go.mod`, matches **`go`** directive), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v6` |
 | **Supply chain** | `actions/attest@v4` |
 | **Pages** | `actions/checkout@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v4`, `actions/deploy-pages@v5` |
 

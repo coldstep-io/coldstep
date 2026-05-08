@@ -12,7 +12,7 @@ Thanks for helping improve coldstep. This document is the maintainer-facing coun
 ## Before you open a PR
 
 1. **Describe the change** — behavior, risk (especially for **defend** (blocking) mode and BPF), and how you validated it (e.g. link to a fork run or `workflow_dispatch` on **`coldstep-ci`** / **`coldstep-demo`**).
-2. **Go** — CI uses **`setup-go`** with **`go-version: 1.25.x`** (see **`.github/workflows/coldstep-ci-runner.yml`**), matching **`go.mod`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
+2. **Go** — CI uses **`setup-go`** with **`go-version-file: go.mod`** (matches the **`go`** directive, currently **1.25.10**); see **`.github/workflows/coldstep-ci-runner.yml`**. After Linux prep, `gofmt`, `go vet ./...`, and `go test ./...` should pass (see CI for integration tags).
 3. **Legacy TypeScript bundles (`src/`, `dist/`)** — the published composite path is Go-only. **`package.json`** labels the esbuild output as **legacy** (CodeQL / maintenance). If you touch **`src/main.ts`** or **`src/post.ts`**, commit **`dist/`** bundles that match those sources — PR **`coldstep-ci`** / CodeQL are the supported verification surfaces (there is no Docker or local Linux matrix you must reproduce).
 4. **Allowlist ergonomics** — changing **`allowed-*-file`** / **`bootstrap-allowlist`** behavior or defaults requires updating **QUICK_START**, **`VALIDATION.md`**, and **`action.yml`** input descriptions together.
 5. **Docs** — if you change workflow pins or other action inputs, update **README**, **QUICK_START**, and **`action.yml`** descriptions so they stay aligned.
