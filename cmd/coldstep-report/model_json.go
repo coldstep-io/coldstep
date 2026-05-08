@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
@@ -12,7 +13,12 @@ import (
 const maxReportModelJSONBytes = 64 << 20
 
 func readModelMap(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	raw, err := io.ReadAll(io.LimitReader(f, maxReportModelJSONBytes+1))
 	if err != nil {
 		return nil, err
 	}
