@@ -161,11 +161,12 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 		if res.resolved {
 			seen := make(map[[4]byte]struct{})
 			for _, ip := range res.ips {
-				if ip.To4() == nil {
+				ip4 := ip.To4()
+				if ip4 == nil {
 					continue
 				}
 				var k [4]byte
-				copy(k[:], ip.To4())
+				copy(k[:], ip4)
 				seen[k] = struct{}{}
 			}
 			if len(seen) > coldstepDomainAllowlistIPv4WarnThreshold {
