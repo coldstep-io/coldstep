@@ -4,7 +4,7 @@
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
  *     not complete for all UDP egress paths)
- *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/sendto
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/pwrite*/sendto
  *   - LRU map eviction handles stale (tgid,fd) entries (close(2) cleanup removed)
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
@@ -423,7 +423,10 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return handle_udp_obs_sendmsg((__u32)di_ul, msg_hdr_ptr);
 	}
 
-	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_WRITEV) {
+	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_WRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITE64 ||
+	    id == (long)COLDSTEP_NR_PWRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITEV2) {
 		unsigned long di_ul = 0, si_ul = 0, dx_ul = 0;
 
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -524,13 +527,8 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	 * that have no full-emission arm above. We only bump a single global
 	 * counter (no per-syscall breakdown, no payload sniff) so the verifier
 	 * sees this as a constant-cost branch. See unobserved_egress_syscalls_observed.
+	 * (pwrite* handled with write/writev TLS sniff — same fd, buf, len/vlen args.)
 	 */
-	if (id == (long)COLDSTEP_NR_PWRITE64 ||
-	    id == (long)COLDSTEP_NR_PWRITEV ||
-	    id == (long)COLDSTEP_NR_PWRITEV2) {
-		note_unobserved_egress_syscall();
-		return 0;
-	}
 
 	/*
 	 * io_uring_setup(2) detection: any call is a security signal because
