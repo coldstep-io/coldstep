@@ -14,6 +14,7 @@ coverage
 # Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
 bpf/vmlinux.h
 internal/bpf/**/*.o
+internal/bpf/**/*.o.tmp
 internal/bpf/**/*_bpfel.go
 internal/bpf/**/*_bpfeb.go
 **/__pycache__/
