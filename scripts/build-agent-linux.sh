@@ -106,8 +106,15 @@ fi
 
 # bpftool BTF dumps on some kernels emit integer typedefs late; clang then fails on __u8 before typedef.
 # Normalize committed/regenerated headers (idempotent when typedefs already precede structs).
-if [[ -s "${ROOT}/bpf/vmlinux.h" ]] && command -v python3 >/dev/null 2>&1; then
-	python3 "${ROOT}/scripts/ensure_vmlinux_int_typedefs.py" "${ROOT}/bpf/vmlinux.h"
+PY=""
+for cand in python3 python; do
+	if command -v "${cand}" >/dev/null 2>&1; then
+		PY="${cand}"
+		break
+	fi
+done
+if [[ -s "${ROOT}/bpf/vmlinux.h" && -n "${PY}" ]]; then
+	"${PY}" "${ROOT}/scripts/ensure_vmlinux_int_typedefs.py" "${ROOT}/bpf/vmlinux.h"
 fi
 
 go generate ./internal/bpf/traceexec/...
