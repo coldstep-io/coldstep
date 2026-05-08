@@ -3,7 +3,9 @@
 Repair bpftool `btf dump format c` output when integer typedefs appear after forward
 declarations that reference __u8 / __s16 / etc. (clang then fails with unknown type).
 
-Idempotent: if typedef unsigned char __u8 appears in the header preamble, insertion is skipped.
+Idempotent: insertion is skipped when the CO-RE integer typedef shim immediately follows the
+standard `#ifndef __VMLINUX_H__` preamble (same layout as libbpf-generated headers).
+
 Removes duplicate copies of the same typedef block when bpftool emits them twice.
 """
 
@@ -12,6 +14,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from typing import Optional
 
 # Matches the CO-RE shim block at the top of a typical libbpf-style vmlinux.h (through u64 aliases).
 _INT_TYPEDEF_BLOCK = """typedef signed char __s8;
@@ -48,16 +51,7 @@ typedef __u64 u64;
 
 """
 
-_HEADER_SCAN = 12000
-
-
-def _needs_insert(text: str) -> bool:
-    head = text[:_HEADER_SCAN]
-    return "typedef unsigned char __u8" not in head
-
-
-def _insert_after_preamble(text: str) -> str:
-    """Insert integer typedef block immediately after the standard vmlinux.h preamble."""
+def _vmlinux_preamble_match(text: str) -> Optional[re.Match[str]]:
     long_pat = re.compile(
         r"(?ms)^#ifndef __VMLINUX_H__\n#define __VMLINUX_H__\n\n"
         r"#ifndef BPF_NO_PRESERVE_ACCESS_INDEX\n"
@@ -66,11 +60,34 @@ def _insert_after_preamble(text: str) -> str:
     )
     m = long_pat.match(text)
     if m:
-        end = m.end()
-        return text[:end] + _INT_TYPEDEF_BLOCK + "\n" + text[end:]
-
+        return m
     short_pat = re.compile(r"(?ms)^#ifndef __VMLINUX_H__\n#define __VMLINUX_H__\n\n")
-    m = short_pat.match(text)
+    return short_pat.match(text)
+
+
+def _needs_insert(text: str) -> bool:
+    """
+    True when integer typedefs are not placed immediately after the vmlinux.h preamble.
+    A substring scan is insufficient: bpftool can emit a late `typedef unsigned char __u8`
+    after structs that already reference `__u8`, which still breaks clang.
+    """
+    m = _vmlinux_preamble_match(text)
+    if not m:
+        return False
+    rest = text[m.end() :]
+    pos = 0
+    while pos < len(rest) and rest[pos] in " \t\n\r":
+        pos += 1
+    tail = rest[pos:]
+    # Require the canonical opening pair (some dumps emit __s8 alone before structs).
+    return not tail.startswith(
+        "typedef signed char __s8;\n\ntypedef unsigned char __u8;"
+    )
+
+
+def _insert_after_preamble(text: str) -> str:
+    """Insert integer typedef block immediately after the standard vmlinux.h preamble."""
+    m = _vmlinux_preamble_match(text)
     if m:
         end = m.end()
         return text[:end] + _INT_TYPEDEF_BLOCK + "\n" + text[end:]
