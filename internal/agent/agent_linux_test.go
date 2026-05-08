@@ -728,6 +728,47 @@ func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
 	}
 }
 
+func TestBuildAllowedLPMPlan_DeduplicatesAcrossIPAndCIDR(t *testing.T) {
+	ipKeys := map[[4]byte]struct{}{
+		{1, 1, 1, 1}: {},
+		{1, 1, 1, 2}: {},
+	}
+	_, cidr32a, err := net.ParseCIDR("1.1.1.1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cidr24, err := net.ParseCIDR("1.1.1.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := buildAllowedLPMPlan("allowed_ipv4", ipKeys, []*net.IPNet{cidr32a, cidr24})
+	if err != nil {
+		t.Fatalf("buildAllowedLPMPlan: %v", err)
+	}
+	// 1.1.1.1/32 exists in both ipKeys and literal nets; should be counted once.
+	if plan.totalEntries != 3 {
+		t.Fatalf("totalEntries=%d want 3", plan.totalEntries)
+	}
+}
+
+func TestBuildAllowedLPMPlan_RejectsMalformedCIDRInput(t *testing.T) {
+	ipKeys := map[[4]byte]struct{}{
+		{1, 1, 1, 1}: {},
+	}
+	invalid := &net.IPNet{
+		IP:   net.ParseIP("2001:db8::"),
+		Mask: net.CIDRMask(64, 128),
+	}
+	_, err := buildAllowedLPMPlan("allowed_ipv4", ipKeys, []*net.IPNet{invalid})
+	if err == nil {
+		t.Fatal("expected malformed CIDR error")
+	}
+	if !strings.Contains(err.Error(), "non-IPv4 CIDR") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadEnforceMaps.
 func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
 	spec := &ebpf.MapSpec{
