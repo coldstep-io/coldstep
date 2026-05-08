@@ -46,6 +46,28 @@ func TestBuildDetectMarkdown_TriageRibbon_EnforceDeny(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                      []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		ExecTotal:                1,
+		TCPTotal:                 1,
+		UnobservedEgressSyscalls: 2,
+		IoUringSetupObserved:     1,
+		MaxRowsPerSection:        50,
+	})
+	for _, needle := range []string{
+		"| **Observability (partial / bypass-class)** |",
+		"counter-only",
+		"io_uring_setup(2) observed",
+		"⚠ io_uring_setup (syscall-hook bypass class)=1",
+		"unobserved egress syscalls=2",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_HotEgressDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{

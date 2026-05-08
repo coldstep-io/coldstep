@@ -1,0 +1,6 @@
+README.md
+*.md
+.git
+__pycache__
+*.pyc
+.venv

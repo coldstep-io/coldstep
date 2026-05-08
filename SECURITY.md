@@ -35,6 +35,25 @@ Workflow steps run with the **same privileges** as the job (modulo `sudo` elevat
 | **Workflow permissions** | Grant **`contents: read`** (and other scopes) minimally; follow GitHub hardening guidance for your org. |
 | **Interpret outputs** | Treat **`.coldstep-telemetry.json`** and JSONL as **best-effort telemetry** — design assumes **possible loss** under extreme event rates, consistent with industry guidance on eBPF-based monitoring. |
 
+### Guarantees vs best-effort (defend and detect)
+
+Coldstep’s contract has three layers:
+
+1. **Defend (when programs are loaded and mode is blocking):** **IPv4** egress that hits the attached **cgroup** and/or **BPF LSM** hooks is **denied** unless it matches the **effective allowlist** (IPv4 literals / CIDRs in the LPM map, plus optional **DNS cache–backed** domain rules). This is **hook-scoped** and **IPv4-only**; it is not a promise that every kernel egress mechanism was evaluated.
+2. **Detect:** Syscall and tracepoint visibility is **best-effort**. Counters may show **partial** visibility (e.g. unobserved syscall families, multi-iovec captures, ringbuf reserve failures). **Absence of JSONL lines does not prove absence of traffic.**
+3. **Explicit non-coverage:** **IPv6** is unsupported. **io_uring** and similar paths can **bypass typical syscall tracepoints**; Coldstep may surface `io_uring_setup` as a **signal**, not as payload visibility. Organizational controls remain necessary for audit-grade posture (see **Residual risk** below).
+
+**DNS domain allowlists (defend):** Resolution and BPF `dns_cache` updates are **best-effort**. High cardinality answers, shared IPs, and cache timing can make **allow-by-domain** subtle. Prefer **IPv4 literals or CIDRs** when you need crisp policy; treat domain rules as convenient but higher-ambiguity. The agent may **log a warning** when a single allowed domain resolves to more than **10** distinct IPv4 addresses (warn-only — does not change the effective allowlist). Future digest surfacing may add operator-visible notes without changing allow/deny unless explicitly documented.
+
+### Defend enforcement hooks (cgroup and LSM)
+
+| Layer | BPF object (repo) | Role |
+| ----- | ----------------- | ---- |
+| **cgroup** | `bpf/trace_enforce.bpf.c` | **`cgroup/connect4`**, **`cgroup/sendmsg4`** — primary IPv4 egress enforcement for TCP and UDP on the job cgroup. |
+| **LSM** | `bpf/trace_lsm_enforce.bpf.c` | **`bpf_lsm_socket_connect`**, **`bpf_lsm_socket_sendmsg`** — supplemental enforcement where LSM BPF is available. |
+
+Both are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same enforcement story on every kernel.
+
 ### Residual risk (honest scope)
 
 No userland agent can promise **complete** observation of every kernel path on every kernel revision. Consumers needing **audit-grade non-repudiation** must combine Coldstep with **organizational controls** (locked-down workflows, secrets policies, optional additional LSM / host controls outside this project).
@@ -49,4 +68,4 @@ The tracked workflow **`.github/workflows/codeql.yml`** runs CodeQL for **Go**, 
 
 ### Further reading
 
-Maintain optional extended design material under **`docs/design/`** in your clone; that tree is **gitignored** and **not** published from Git. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.
+Maintain optional extended design material under repo-root **`design/`** (e.g. **`egress-truthfulness-spec.md`**, **`egress-truthfulness-implementation-plan.md`**) or **`docs/`** in your clone; those trees are **gitignored** and **not** published from Git. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.

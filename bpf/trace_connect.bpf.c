@@ -350,6 +350,9 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		__u32 len;
 		__be16 sin_port;
 		__be32 sin_addr;
+		/* Populated once on connected sendto; reused for udp/http/tls below. */
+		struct connect4_tuple ct = {};
+		__u64 tuple_pt = 0;
 
 		/* Read args in syscall order: fd(0), buf(1), len(2), [skip flags(3)], addr(4). */
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -362,19 +365,10 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 
 		if (!addr_ul) {
-			/*
-			 * NULL destination pointer — connected socket; look up dst
-			 * from the prior connect(2) (tgid,fd) correlation map.
-			 */
-			__u64 pt = bpf_get_current_pid_tgid();
-			__u32 tgid = (__u32)(pt >> 32);
-			__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)di_ul;
-			struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
-
-			if (!tup || !tup->in_use)
+			if (coldstep_connect_tuple_fetch((__u32)di_ul, &ct, &tuple_pt))
 				return 0;
-			__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
-			__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
+			__builtin_memcpy(&sin_port, ct.dport, sizeof(sin_port));
+			__builtin_memcpy(&sin_addr, ct.daddr, sizeof(sin_addr));
 		} else {
 			if (read_ipv4_sockaddr(addr_ul, &sin_port, &sin_addr))
 				return 0;
@@ -384,19 +378,21 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (len > 0x00100000)
 			len = 0x00100000;
 
-		handle_udp_obs_emit(sin_port, sin_addr, len);
+		if (!addr_ul)
+			handle_udp_obs_emit_pt(tuple_pt, sin_port, sin_addr, len);
+		else
+			handle_udp_obs_emit(sin_port, sin_addr, len);
 
 		if (sin_port == bpf_htons(80) && len >= 4 &&
-		    http_prefix_looks_like_request(buf_ptr, len))
-			handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
+		    http_prefix_looks_like_request(buf_ptr, len)) {
+			if (!addr_ul)
+				handle_http_obs_emit_pt(tuple_pt, buf_ptr, len, sin_port, sin_addr);
+			else
+				handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
+		}
 
-		/*
-		 * TLS ClientHello sniff only makes sense on connected TCP sockets
-		 * (addr_ul == NULL path). Skipping for explicit-dest sendto avoids
-		 * a wasted connect4_by_tgid_fd lookup on every UDP sendto.
-		 */
 		if (!addr_ul)
-			try_emit_tls_clienthello((__u32)di_ul, buf_ptr, len);
+			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
 
 		return 0;
 	}
@@ -444,8 +440,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		 * operators misread the metric.
 		 *
 		 * The correct multi-iovec increment still fires from
-		 * `coldstep_udp_len_from_msghdr` in `trace_udp_sendmsg.inc`
-		 * (called below via `handle_udp_obs_sendmsg`) when the first
+		 * `handle_udp_obs_sendmsg` in `trace_udp_sendmsg.inc` when the first
 		 * message's `msg_iovlen > 1`. Userspace cannot today
 		 * distinguish "multi-message but single-iovec each" because
 		 * adding a new counter slot would also require touching the
@@ -464,59 +459,47 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 	if (id == (long)COLDSTEP_NR_SENDFILE) {
 		unsigned long di_ul = 0, count_ul = 0;
-		
+		__be16 sin_port;
+		__be32 sin_addr;
+		__u32 len;
+		__u64 pt;
+
 		/* arg0 = out_fd */
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
 			return 0;
 		/* arg3 = count */
 		if (ns_read_syscall_arg(regs, 3, &count_ul))
 			return 0;
-			
-		__u64 pt = bpf_get_current_pid_tgid();
-		__u32 tgid = (__u32)(pt >> 32);
-		__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)di_ul;
-		struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
 
-		if (tup && tup->in_use) {
-			__be16 sin_port;
-			__be32 sin_addr;
-			__u32 len = coldstep_syscall_len_u32(count_ul);
-			if (len > 0x00100000)
-				len = 0x00100000;
-			
-			__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
-			__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
-			handle_udp_obs_emit(sin_port, sin_addr, len);
-		}
+		len = coldstep_syscall_len_u32(count_ul);
+		if (len > 0x00100000)
+			len = 0x00100000;
+
+		if (!coldstep_tuple_dst_for_fd((__u32)di_ul, &sin_port, &sin_addr, &pt))
+			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
 		return 0;
 	}
 
 	if (id == (long)COLDSTEP_NR_SPLICE) {
 		unsigned long fd_out_ul = 0, len_ul = 0;
-		
+		__be16 sin_port;
+		__be32 sin_addr;
+		__u32 len;
+		__u64 pt;
+
 		/* arg2 = fd_out */
 		if (ns_read_syscall_arg(regs, 2, &fd_out_ul))
 			return 0;
 		/* arg4 = len */
 		if (ns_read_syscall_arg(regs, 4, &len_ul))
 			return 0;
-			
-		__u64 pt = bpf_get_current_pid_tgid();
-		__u32 tgid = (__u32)(pt >> 32);
-		__u64 mkey = ((__u64)tgid << 32) | (__u64)(__u32)fd_out_ul;
-		struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
 
-		if (tup && tup->in_use) {
-			__be16 sin_port;
-			__be32 sin_addr;
-			__u32 len = coldstep_syscall_len_u32(len_ul);
-			if (len > 0x00100000)
-				len = 0x00100000;
-			
-			__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
-			__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
-			handle_udp_obs_emit(sin_port, sin_addr, len);
-		}
+		len = coldstep_syscall_len_u32(len_ul);
+		if (len > 0x00100000)
+			len = 0x00100000;
+
+		if (!coldstep_tuple_dst_for_fd((__u32)fd_out_ul, &sin_port, &sin_addr, &pt))
+			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
 		return 0;
 	}
 

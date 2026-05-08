@@ -773,9 +773,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	if denyRd != nil {
 		wg.Add(1)
+		denyHookFamily := ""
+		if hasLSM {
+			denyHookFamily = "lsm"
+		} else if hasEnforce {
+			denyHookFamily = "cgroup"
+		}
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer, denyHookFamily, dnsCache)
 		}()
 	}
 	if dnsRd != nil {

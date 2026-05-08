@@ -435,7 +435,7 @@ func loadAllowedLPMMap(m *ebpf.Map, ipKeys map[[4]byte]struct{}, nets []*net.IPN
 	return nil
 }
 
-func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) (telemetry.DenyEvent, error) {
+func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
 		return telemetry.DenyEvent{}, fmt.Errorf("decode deny event")
@@ -448,6 +448,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	dst := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	matchKind := "unknown"
+	if dns != nil && dns.Lookup(net.ParseIP(dst)) != "" {
+		matchKind = "dns_cache"
+	}
 	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer
 	// branch fires, so it stays paired with the actual JSONL line under jsonlMu (M-05) and
 	// avoids burning sequence numbers when EventsLogPath is empty (M-06). Other JSONL writers
@@ -465,6 +469,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 		Reason:   reason,
 		Mode:     cfg.PublicMode(),
 	}
+	if hookFamily != "" {
+		deny.HookFamily = hookFamily
+	}
+	deny.MatchKind = matchKind
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
 		deny.Seq = seq.Next()
@@ -483,15 +491,15 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 // testAppendDenySample exercises appendDenyFromRaw JSONL emission and returns a sentinel error
 // for unit tests. Production readDenyRing logs and skips decode/JSONL failures so enforcement
 // keeps running; successful denies still flow through appendDenyFromRaw unchanged.
-func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
+func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		return err
 	}
 	return newEnforceDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) error {
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
 	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
@@ -514,7 +522,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 		}
 		backoff.reset()
 
-		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer); err != nil {
+		if _, err := appendDenyFromRaw(cfg, record.RawSample, seq, jsonlMu, state, signer, hookFamily, dns); err != nil {
 			slog.Warn("deny ring sample skipped", "err", err)
 			continue
 		}
@@ -541,7 +549,7 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 				continue
 			}
 			drainBackoff.reset()
-			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer); err3 != nil {
+			if _, err3 := appendDenyFromRaw(cfg, rec2.RawSample, seq, jsonlMu, state, signer, hookFamily, dns); err3 != nil {
 				slog.Warn("deny ring drain sample skipped", "err", err3)
 				continue
 			}
@@ -553,8 +561,8 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 
 // processDenyRingSample handles one deny ringbuf payload. Decode or JSONL failures are logged and
 // dropped so readDenyRing never returns a fatal error (enforcement stays attached).
-func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer) {
-	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer)
+func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) {
+	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		slog.Warn("deny ring sample skipped", "err", err, "raw_len", len(raw))
 		return

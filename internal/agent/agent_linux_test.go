@@ -371,7 +371,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 
 	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 
-	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state, nil)
+	err := testAppendDenySample(cfg, raw, &seq, &jsonlMu, state, nil, "cgroup", nil)
 	if err == nil {
 		t.Fatal("expected deny to fail fast with error")
 	}
@@ -391,6 +391,8 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 		`"dport":443`,
 		`"reason":"dst_not_allowlisted"`,
 		`"mode":"defend"`,
+		`"hook_family":"cgroup"`,
+		`"match_kind":"unknown"`,
 	} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("events log missing %q:\n%s", want, line)
@@ -405,6 +407,38 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 	}
 	if first.Protocol != "tcp" || first.Dst != "1.2.3.4" || first.Dport != 443 || first.Reason != "dst_not_allowlisted" {
 		t.Fatalf("unexpected first deny row: %+v", *first)
+	}
+}
+
+func TestAppendDenyFromRaw_MatchKindDNSCache(t *testing.T) {
+	t.Parallel()
+	orig := dnsNow
+	defer func() { dnsNow = orig }()
+	dnsNow = func() time.Time { return time.Unix(50_000, 0).UTC() }
+
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{
+		Mode:          config.ModeEnforce,
+		EventsLogPath: events,
+	}
+	dc := NewDNSCache()
+	dc.AddFromPacket(dnsReplySingleA([4]byte{9, 9, 9, 9}, 'x', 600))
+
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newEnforcementState()
+	raw := fillTestDenyRawV4(1, 2, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("9.9.9.9"), 443)
+	if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "lsm", dc); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := string(b)
+	if !strings.Contains(s, `"hook_family":"lsm"`) || !strings.Contains(s, `"match_kind":"dns_cache"`) {
+		t.Fatalf("expected hook_family lsm and match_kind dns_cache:\n%s", s)
 	}
 }
 
@@ -424,10 +458,10 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 	rawUDP := fillTestDenyRawV4(101, 201, "dig", denyProtoUDP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.2"), 53)
 
-	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawTCP, &seq, &jsonlMu, state, nil, "", nil); err != nil {
 		t.Fatalf("append tcp: %v", err)
 	}
-	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state, nil); err != nil {
+	if _, err := appendDenyFromRaw(cfg, rawUDP, &seq, &jsonlMu, state, nil, "", nil); err != nil {
 		t.Fatalf("append udp: %v", err)
 	}
 
@@ -454,7 +488,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
+	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
 		t.Fatal("expected decode error")
 	}
@@ -470,7 +504,7 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
 
-	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
 		t.Fatal("expected unsupported address family error")
 	}
@@ -493,7 +527,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 
 	raw := fillTestDenyRawV4(1, 1, "", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 
-	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
 		t.Fatal("expected append deny jsonl error")
 	}
@@ -511,7 +545,7 @@ func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
 
-	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil)
+	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil, "", nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("decode failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -534,7 +568,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 
 	raw := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
-	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state, nil)
+	processDenyRingSample(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 	if state.denyCount() != 0 {
 		t.Fatalf("JSONL failure must not noteDeny, got denyCount=%d", state.denyCount())
 	}
@@ -1068,7 +1102,7 @@ func TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder(t *testing.T) {
 			defer wg.Done()
 			for i := 0; i < perWriter; i++ {
 				raw := fillTestDenyRawV4(uint32(w), uint32(i), "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
-				if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil); err != nil {
+				if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil); err != nil {
 					errCh <- fmt.Errorf("worker %d iter %d: %w", w, i, err)
 					return
 				}
@@ -1122,7 +1156,7 @@ func TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq(t *testing.T) {
 
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 	for i := 0; i < 5; i++ {
-		ev, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil)
+		ev, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 		if err != nil {
 			t.Fatalf("append %d: %v", i, err)
 		}

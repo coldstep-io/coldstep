@@ -70,7 +70,7 @@ jobs:
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
-For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*).
+For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hooks, IPv4-only defend), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
 
 ---
 
@@ -155,18 +155,19 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 ## Contributing (GitHub Actions only)
 
-Validation and BPF builds run **only on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). There is no supported local workflow for compiling the agent, reproducing CI, or running the integration suite outside Actions.
+Validation and BPF builds are **authoritative on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). Local workstations can approximate parts of the Linux pipeline with Docker (below); kernels and cgroup layout still differ from hosted runners.
 
 **Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
 
 - **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
-- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**. On a non-Linux workstation, **[`scripts/docker-linux-test.sh`](scripts/docker-linux-test.sh)** runs that pipeline plus **`go test`** inside an **Ubuntu** container (bind-mounts the repo).
+- **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**. On a non-Linux workstation, **[`scripts/docker-linux-test.sh`](scripts/docker-linux-test.sh)** runs that pipeline plus **`go test`** inside an **`ubuntu:24.04`** container (bind-mounts the repo). For a **closer match** to **`coldstep-ci-runner`** ( **`go vet`**, **staticcheck**, race on **`internal/agent`**, optional **`integration`** tests in a **`--privileged`** container), use **[`scripts/docker-deep-debug.sh`](scripts/docker-deep-debug.sh)** — by default it also runs **`go test -shuffle`**, **`govulncheck`**, and a **coverage** summary (set **`COLDSTEP_DOCKER_DEEP=0`** to skip). See the script header for **`COLDSTEP_DOCKER_IMAGE`**, **`COLDSTEP_DOCKER_RACE_FULL`**, **`COLDSTEP_DOCKER_INTERACTIVE`**, **`COLDSTEP_DOCKER_NO_INTEGRATION`**, and related env vars (run from the repo root on **Docker Desktop + Git Bash** so bind mounts resolve cleanly).
+- **Assistants / iterative fixes:** **[`scripts/agent-linux-verify.sh`](scripts/agent-linux-verify.sh)** wraps the Docker flows, writes **`.coldstep-verify-last.log`**, echoes **`COLDSTEP_AGENT_VERIFY_BUNDLE_*`** markers with a reproducible **`NEXT`** checklist. **`COLDSTEP_VERIFY_MODE=quick`** (**`docker-linux-test`**) for fast fails; **`deep`** (**`docker-deep-debug`**, default); **`fast`** for a shorter **`deep`** pass (**shuffle/govulncheck/coverage** skipped, **integration** skipped). Example: **`COLDSTEP_VERIFY_MODE=fast bash scripts/agent-linux-verify.sh`**. **Windows quickest path:** **`winget install --id Git.Git -e`** once (adds **`bash`**), Docker running; then **`scripts\agent-linux-verify.cmd`**, **`python scripts/agent_linux_verify.py --mode fast`**, or **`powershell -NoProfile -File scripts/agent-linux-verify.ps1 -VerifyMode fast`**.
 
 ### Deep-debug escalation guide
 
 When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
 
-The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs — there is no supported local reproduction path.
+The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs. For **local** BPF/agent-focused debugging (without the workflow’s npm/deep-debug stages), run **`scripts/docker-deep-debug.sh`** on a Linux host or Docker Desktop.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo's acknowledgment section where present.
 

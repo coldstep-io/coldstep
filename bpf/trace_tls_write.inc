@@ -2,8 +2,15 @@
 #ifndef TRACE_TLS_WRITE_INC
 #define TRACE_TLS_WRITE_INC
 
-/* Shared by __NR_write, __NR_writev, and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
-static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
+/*
+ * Emit TLS sniff event using an already-resolved connect tuple (no map lookup).
+ * Caller passes pt from coldstep_connect_tuple_fetch so we do not call
+ * bpf_get_current_pid_tgid again after tuple correlation.
+ */
+static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_tuple *tup,
+								unsigned long buf_ptr,
+								__u32 len_in,
+								__u64 pt)
 {
 	{
 		__u32 key0 = 0;
@@ -18,63 +25,68 @@ static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long b
 	if (len < 6 || !buf_ptr)
 		return;
 
+	if (!tup || !tup->in_use)
+		return;
+
 	{
-		__u64 pt = bpf_get_current_pid_tgid();
-		__u32 tgid = (__u32)(pt >> 32);
-		__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
-		struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
+		unsigned char peek[6];
 
-		if (!tup || !tup->in_use)
+		/* Constant read size — variable peeksz trips strict verifiers on some runners. */
+		if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 			return;
-
-		{
-			unsigned char peek[8];
-
-			/* Constant read size — variable peeksz trips strict verifiers on some runners. */
-			if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
-				return;
-			if (peek[0] != 0x16)   /* ContentType: Handshake */
-				return;
-			if (peek[1] != 0x03)   /* LegacyRecordVersion major byte */
-				return;
-			/* Minor byte: 0x00–0x04 covers SSLv3 through TLS 1.3 legacy values. */
-			if (peek[2] > 0x04)
-				return;
-			if (peek[5] != 0x01)   /* HandshakeType: ClientHello */
-				return;
-		}
-
-		{
-			struct tls_sniff_event *ev =
-				bpf_ringbuf_reserve(&tls_events, sizeof(*ev), 0);
-
-			if (!ev) {
-				note_tls_ringbuf_reserve_failed();
-				return;
-			}
-			ev->tgid = tgid;
-			ev->tid = (__u32)pt;
-			bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
-			__builtin_memcpy(ev->daddr, tup->daddr, sizeof(ev->daddr));
-			__builtin_memcpy(ev->dport, tup->dport, sizeof(ev->dport));
-			ev->_pad[0] = 0;
-			ev->_pad[1] = 0;
-			{
-				/*
-				 * Constant read size for strict verifiers (same pattern as HTTP sniff —
-				 * variable len trips R2 on some matrix legs; see trace_http_obs.inc).
-				 */
-				_Static_assert(sizeof(ev->payload) == TLS_PAYLOAD_MAX,
-					       "tls sniff payload array vs TLS_PAYLOAD_MAX");
-				ev->capture_len = (__u16)len;
-				if (bpf_probe_read_user(ev->payload, sizeof(ev->payload), (void *)buf_ptr)) {
-					bpf_ringbuf_discard(ev, 0);
-					return;
-				}
-			}
-			bpf_ringbuf_submit(ev, 0);
-		}
+		if (peek[0] != 0x16)   /* ContentType: Handshake */
+			return;
+		if (peek[1] != 0x03)   /* LegacyRecordVersion major byte */
+			return;
+		/* Minor byte: 0x00–0x04 covers SSLv3 through TLS 1.3 legacy values. */
+		if (peek[2] > 0x04)
+			return;
+		if (peek[5] != 0x01)   /* HandshakeType: ClientHello */
+			return;
 	}
+
+	{
+		__u32 tgid = (__u32)(pt >> 32);
+		struct tls_sniff_event *ev =
+			bpf_ringbuf_reserve(&tls_events, sizeof(*ev), 0);
+
+		if (!ev) {
+			note_tls_ringbuf_reserve_failed();
+			return;
+		}
+		ev->tgid = tgid;
+		ev->tid = (__u32)pt;
+		bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+		__builtin_memcpy(ev->daddr, tup->daddr, sizeof(ev->daddr));
+		__builtin_memcpy(ev->dport, tup->dport, sizeof(ev->dport));
+		ev->_pad[0] = 0;
+		ev->_pad[1] = 0;
+		{
+			/*
+			 * Constant read size for strict verifiers (same pattern as HTTP sniff —
+			 * variable len trips R2 on some matrix legs; see trace_http_obs.inc).
+			 */
+			_Static_assert(sizeof(ev->payload) == TLS_PAYLOAD_MAX,
+				       "tls sniff payload array vs TLS_PAYLOAD_MAX");
+			ev->capture_len = (__u16)len;
+			if (bpf_probe_read_user(ev->payload, sizeof(ev->payload), (void *)buf_ptr)) {
+				bpf_ringbuf_discard(ev, 0);
+				return;
+			}
+		}
+		bpf_ringbuf_submit(ev, 0);
+	}
+}
+
+/* Shared by __NR_write, __NR_writev, and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
+static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
+{
+	struct connect4_tuple tup;
+	__u64 pt;
+
+	if (coldstep_connect_tuple_fetch(fd32, &tup, &pt))
+		return;
+	try_emit_tls_clienthello_from_tuple(&tup, buf_ptr, len_in, pt);
 }
 
 /* id + syscall arg registers; di/si/dx read only in handle_raw_sys_enter. */
