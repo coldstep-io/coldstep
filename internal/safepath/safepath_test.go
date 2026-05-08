@@ -106,7 +106,10 @@ func TestWorkspaceAcceptsNonExistentPathUnderSymlinkedWorkspace(t *testing.T) {
 func TestWorkspaceFallsBackToCwdWhenWorkspaceUnset(t *testing.T) {
 	t.Setenv("GITHUB_WORKSPACE", "")
 	t.Setenv("RUNNER_TEMP", "")
-	cwd, _ := os.Getwd()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Skip("cwd unavailable:", err)
+	}
 	target := filepath.Join(cwd, "rel-target.json")
 	if err := os.WriteFile(target, []byte("{}"), 0o644); err != nil {
 		t.Fatalf("setup: %v", err)
