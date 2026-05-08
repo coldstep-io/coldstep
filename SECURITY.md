@@ -50,7 +50,7 @@ Coldstep’s contract has three layers:
 | Layer | BPF object (repo) | Role |
 | ----- | ----------------- | ---- |
 | **cgroup** | `bpf/trace_enforce.bpf.c` | **`cgroup/connect4`**, **`cgroup/sendmsg4`** — primary IPv4 egress enforcement for TCP and UDP on the job cgroup. |
-| **LSM** | `bpf/trace_lsm_enforce.bpf.c` | **`bpf_lsm_socket_connect`**, **`bpf_lsm_socket_sendmsg`** — supplemental enforcement where LSM BPF is available. |
+| **LSM** | `bpf/trace_lsm_enforce.bpf.c` | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM enforcement where available). |
 
 Both are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same enforcement story on every kernel.
 

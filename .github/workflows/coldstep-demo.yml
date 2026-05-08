@@ -57,7 +57,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
 
       - name: Download coldstep agent (GitHub Release)
         env:
@@ -291,7 +291,7 @@ jobs:
 
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.25.x'
+          go-version-file: go.mod
 
       - name: Download coldstep agent (GitHub Release)
         env:

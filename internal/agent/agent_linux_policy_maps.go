@@ -445,11 +445,12 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	if af != linuxAFInet {
 		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
 	}
-	dst := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3]).String()
+	dstIP := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
+	dst := dstIP.String()
 	comm := string(bytes.TrimRight(commb[:], "\x00"))
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	matchKind := "unknown"
-	if dns != nil && dns.Lookup(net.ParseIP(dst)) != "" {
+	if dns != nil && dns.Lookup(dstIP) != "" {
 		matchKind = "dns_cache"
 	}
 	// Build the deny event without Seq up front; Seq is only assigned when the JSONL writer
