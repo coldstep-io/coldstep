@@ -10,6 +10,7 @@
 #   bash scripts/docker-deep-debug.sh [repo-root]
 #
 # Environment:
+#   DOCKER                         Container CLI (default: docker); used for preflight + run.
 #   COLDSTEP_DOCKER_IMAGE          Override image (e.g. ubuntu:22.04 for jammy parity).
 #   COLDSTEP_DOCKER_NO_INTEGRATION Set to 1 to skip integration tests (faster).
 #   COLDSTEP_DOCKER_INTERACTIVE    Set to 1 for shell after deps + BPF build (manual bpftool/agent).
@@ -27,6 +28,12 @@
 #   - Integration tests skip some cases on WSL-like kernels; native Linux hosts match CI best.
 #
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=require-docker-daemon.sh
+source "${SCRIPT_DIR}/require-docker-daemon.sh"
+DOCKER="${DOCKER:-docker}"
+coldstep_require_docker
 
 ROOT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 # Docker Desktop on Windows: Git Bash / MSYS passes Unix paths; convert for bind-mount reliability.
@@ -63,7 +70,7 @@ DOCKER_ARGS+=(
 	-e "COLDSTEP_DOCKER_RACE_FULL=${RACE_FULL}"
 )
 
-exec docker "${DOCKER_ARGS[@]}" "${IMAGE}" bash -s <<'EOS'
+exec "${DOCKER}" "${DOCKER_ARGS[@]}" "${IMAGE}" bash -s <<'EOS'
 set -euo pipefail
 export PATH="/usr/local/go/bin:${PATH}"
 

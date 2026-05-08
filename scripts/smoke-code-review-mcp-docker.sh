@@ -2,12 +2,18 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=require-docker-daemon.sh
+source "${SCRIPT_DIR}/require-docker-daemon.sh"
+DOCKER="${DOCKER:-docker}"
+coldstep_require_docker
+
 IMAGE_TAG="${IMAGE_TAG:-coldstep-code-review-mcp:smoke}"
 
-docker build -t "${IMAGE_TAG}" "${ROOT}/docker/code-review-assistant"
+"${DOCKER}" build -t "${IMAGE_TAG}" "${ROOT}/docker/code-review-assistant"
 
 # Override ENTRYPOINT so we run assertions instead of starting stdio MCP.
-docker run --rm --entrypoint python "${IMAGE_TAG}" -c "
+"${DOCKER}" run --rm --entrypoint python "${IMAGE_TAG}" -c "
 import sys
 sys.path.insert(0, '/app')
 import server

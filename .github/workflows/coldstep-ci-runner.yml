@@ -114,7 +114,10 @@ jobs:
       - name: Race detector (Go agent)
         run: go test -race -count=1 ./internal/agent/... -timeout 15m
 
+  # Skip on locked-down runners: set repository variable COLDSTEP_SKIP_INTEGRATION=1
+  # (Settings → Secrets and variables → Actions → Variables).
   integration:
+    if: ${{ vars.COLDSTEP_SKIP_INTEGRATION != '1' }}
     name: integration (${{ matrix.os }})
     needs: [gofmt]
     strategy:
