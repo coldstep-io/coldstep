@@ -14,6 +14,10 @@ on:
         description: When true, defend-mode fails if no deny JSONL rows appear after defend smoke (stricter than default variance-tolerant path)
         type: boolean
         default: false
+      skip_integration:
+        description: When true, skip the integration matrix (faster manual runs)
+        type: boolean
+        default: false
 
 # Default to least-privilege for every job in this reusable workflow.
 # Jobs that legitimately need more (e.g. `actions: read` to download a
@@ -114,10 +118,11 @@ jobs:
       - name: Race detector (Go agent)
         run: go test -race -count=1 ./internal/agent/... -timeout 15m
 
-  # Skip on locked-down runners: set repository variable COLDSTEP_SKIP_INTEGRATION=1
-  # (Settings → Secrets and variables → Actions → Variables).
+  # Integration can be skipped in two ways:
+  # 1) workflow input skip_integration=true (used by coldstep-ci.yml fast preset)
+  # 2) repository variable COLDSTEP_SKIP_INTEGRATION=1 (global override)
   integration:
-    if: ${{ vars.COLDSTEP_SKIP_INTEGRATION != '1' }}
+    if: ${{ !inputs.skip_integration && vars.COLDSTEP_SKIP_INTEGRATION != '1' }}
     name: integration (${{ matrix.os }})
     needs: [gofmt]
     strategy:

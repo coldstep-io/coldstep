@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"net"
 	"testing"
 	"time"
@@ -194,6 +195,17 @@ func TestDNSCache_failureCallbackRegistration(t *testing.T) {
 	c.AddFromPacket(minimalResponseWWWExample())
 	if called != 0 {
 		t.Fatalf("no BPF map registered, callback should not fire; got %d", called)
+	}
+}
+
+func TestDNSNameForBPF_TruncatesLongNames(t *testing.T) {
+	name := string(bytes.Repeat([]byte{'a'}, dnsBPFNameMax+10))
+	got, truncated := dnsNameForBPF(name)
+	if !truncated {
+		t.Fatal("expected truncation flag for oversized DNS name")
+	}
+	if len(got) != dnsBPFNameMax {
+		t.Fatalf("truncated length=%d want %d", len(got), dnsBPFNameMax)
 	}
 }
 

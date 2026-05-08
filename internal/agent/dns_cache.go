@@ -20,6 +20,9 @@ const (
 	dnsMaxTTLSec  = 3600
 	dnsDefaultTTL = 300
 	dnsMinTTLSec  = 1
+	// dnsBPFNameMax is the maximum DNS name payload we write into the
+	// 256-byte BPF value buffer while preserving trailing NUL.
+	dnsBPFNameMax = 255
 )
 
 type dnsEntry struct {
@@ -60,6 +63,13 @@ func (c *DNSCache) SetBPFFailureCallback(cb func()) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.onBPFFailure = cb
+}
+
+func dnsNameForBPF(name string) (string, bool) {
+	if len(name) <= dnsBPFNameMax {
+		return name, false
+	}
+	return name[:dnsBPFNameMax], true
 }
 
 func ttlToExpiry(ttl uint32, now time.Time) int64 {
@@ -158,7 +168,13 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 			var bpfKey [4]byte
 			copy(bpfKey[:], ip[:])
 			var bpfVal [256]byte
-			copy(bpfVal[:], ans.name)
+			bpfName, truncated := dnsNameForBPF(ans.name)
+			if truncated {
+				ipString := net.IP(ip[:]).String()
+				slog.Warn("dns cache owner truncated for BPF map value",
+					"ip", ipString, "name_len", len(ans.name), "max_len", dnsBPFNameMax)
+			}
+			copy(bpfVal[:], bpfName)
 			for i, bpfMap := range c.bpfMaps {
 				if bpfMap == nil {
 					continue
