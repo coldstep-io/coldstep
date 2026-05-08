@@ -8,8 +8,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Integration:** **`TestRun_TLSClientHelloSendtoSockaddrJSONL`** exercises **`tls_sni=1`** on **TCP `sendto` with explicit `sockaddr`** after **`connect`**, asserting **`type:tls`** and **SNI** (parity with HTTP cleartext **sendto** coverage).
 - **`.github/pr-bodies/`** — tracked UTF-8 templates for **`gh pr create` / `gh pr edit --body-file`** so PR descriptions are not corrupted by shell quoting (especially PowerShell); **`scripts/gh-pr-body.ps1`** wraps **`gh pr edit --body-file`** on Windows.
 - **Optional `.pre-commit-config.yaml`** — runs **`scripts/check-encoding.sh`** on **`pre-commit install`** (same guard as CI **`gofmt`** job).
+
+### Changed
+
+- **BPF (detect telemetry):** **TLS ClientHello / SNI** sniffing mirrors the HTTP **`sendto`+sockaddr** path on **`NR_SENDTO`**: when **`addr_ul`** is populated and matches the **`connect`** destination, the first handshake-shaped buffer still runs **`try_emit_tls_clienthello`** (best-effort, same **`connect4_tuple`** layout).
+- **BPF (defend enforcement):** **cgroup/LSM enforce** helpers shared via **`bpf/enforce_policy.inc`** (**`enforce_lpm_key.h`** for forward **LPM** key types); **`trace_enforce`** and **`trace_lsm_enforce`** stay behavior-equivalent while deduplicating deny/allowlist plumbing.
 
 ### Fixed
 

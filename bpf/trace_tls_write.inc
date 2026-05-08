@@ -1,11 +1,18 @@
-/* TLS ClientHello sniff on IPv4 TCP (write(2), writev(2), or sendto(2) with NULL dest), correlated with prior connect(2). */
+/*
+ * TLS ClientHello sniff on IPv4 TCP buffers.
+ *
+ * Dispatch:
+ *   - write(2) / writev(2): handled here via handle_tls_obs_sys_enter (tuple from fd map).
+ *   - sendto(2): handled in trace_connect.bpf.c NR_SENDTO — builds connect4_tuple from
+ *     cached connect tuple OR explicit sockaddr-in (parity with HTTP sendto path).
+ */
 #ifndef TRACE_TLS_WRITE_INC
 #define TRACE_TLS_WRITE_INC
 
 /*
- * Emit TLS sniff event using an already-resolved connect tuple (no map lookup).
- * Caller passes pt from coldstep_connect_tuple_fetch so we do not call
- * bpf_get_current_pid_tgid again after tuple correlation.
+ * Emit TLS sniff using connect4_tuple-shaped daddr/dport + caller pt (no fd map lookup here).
+ * NR_write/NR_writev resolve tuple via coldstep_connect_tuple_fetch first; NR_sendto passes
+ * tuple from trace_connect.bpf.c (cached connect or sockaddr-synthesized stack tuple).
  */
 static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_tuple *tup,
 								unsigned long buf_ptr,
@@ -78,7 +85,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 	}
 }
 
-/* Shared by __NR_write, __NR_writev, and __NR_sendto (connected TCP often uses sendto(fd, buf, len, flags, NULL, 0)). */
+/* NR_write/NR_writev: fd lookup then try_emit_tls_clienthello_from_tuple. NR_sendto paths call try_emit_tls_clienthello_from_tuple from trace_connect.bpf.c (including explicit sockaddr TCP sendto). */
 static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
 {
 	struct connect4_tuple tup;

@@ -391,8 +391,24 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 				handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 		}
 
-		if (!addr_ul)
+		/*
+		 * TLS ClientHello sniff: connected sendto(NULL) uses cached connect tuple +
+		 * tuple_pt from coldstep_connect_tuple_fetch. Explicit sockaddr sendto mirrors
+		 * the HTTP branch — synthesize tuple bytes from sin_addr/sin_port (same layout
+		 * as connect4_by_tgid_fd values) so try_emit_tls_clienthello_from_tuple can run.
+		 */
+		if (!addr_ul) {
 			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
+		} else {
+			struct connect4_tuple st = {};
+
+			st.in_use = 1;
+			st._pad = 0;
+			__builtin_memcpy(st.daddr, &sin_addr, sizeof(st.daddr));
+			__builtin_memcpy(st.dport, &sin_port, sizeof(st.dport));
+			try_emit_tls_clienthello_from_tuple(&st, buf_ptr, len,
+							    bpf_get_current_pid_tgid());
+		}
 
 		return 0;
 	}

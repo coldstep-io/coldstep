@@ -591,7 +591,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	b.WriteString("<sub>UDP KPI counts IPv4 sendto and sendmsg egress (first iovec length; destination from msg_name or connected socket cache). HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
 	if tlsKPIVisible(in) {
-		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first `write(2)` after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
+		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
 	}
 	if procForkKPIVisible(in) {
 		b.WriteString(" **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).")
@@ -935,7 +935,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets.\n")
 	if tlsKPIVisible(in) {
-		b.WriteString("- **TLS / SNI:** rows come from the first `write(2)` buffer after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
+		b.WriteString("- **TLS / SNI:** rows come from the first ClientHello-shaped buffer on supported `write`/`writev`/connected or explicit-`sockaddr` `sendto` paths after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
 	} else {
 		b.WriteString("- **HTTPS:** TLS payloads are not decrypted; enable `tls_sni=1` in `COLDSTEP_FEATURE_GATES` for optional ClientHello SNI hints.\n")
 	}
