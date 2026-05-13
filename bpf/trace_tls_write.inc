@@ -2,7 +2,8 @@
  * TLS ClientHello sniff on IPv4 TCP buffers.
  *
  * Dispatch:
- *   - write(2) / writev(2): handled here via handle_tls_obs_sys_enter (tuple from fd map).
+ *   - write(2) / writev(2) / pwrite(2) / pwritev(2) / pwritev2(2): handled here via
+ *     handle_tls_obs_sys_enter (tuple from fd map; first three syscall args match write/writev ABI).
  *   - sendto(2): handled in trace_connect.bpf.c NR_SENDTO — builds connect4_tuple from
  *     cached connect tuple OR explicit sockaddr-in (parity with HTTP sendto path).
  */
@@ -105,7 +106,9 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 		return 0;
 	}
 
-	if (id == (long)COLDSTEP_NR_WRITEV) {
+	if (id == (long)COLDSTEP_NR_WRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITEV2) {
 		struct coldstep_iovec iov0 = {};
 		if (dx_ul > 0 && si_ul) {
 			/*
@@ -130,6 +133,12 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, iov_len);
 			}
 		}
+		return 0;
+	}
+
+	if (id == (long)COLDSTEP_NR_PWRITE64) {
+		/* fd, buf, count — same layout as NR_WRITE; offset is arg3 (ignored for sniff). */
+		try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
 		return 0;
 	}
 

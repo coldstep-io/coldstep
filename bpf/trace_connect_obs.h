@@ -28,7 +28,7 @@
 #define COLDSTEP_NR_RECVMSG 212
 #define COLDSTEP_NR_READ 63
 #define COLDSTEP_NR_WRITEV 66
-/* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
+/* PR-E / dispatch: sendmmsg/sendfile/splice class; pwrite* also defined here and dispatched with TLS write path. */
 #define COLDSTEP_NR_SENDMMSG 269
 #define COLDSTEP_NR_PWRITE64 68
 #define COLDSTEP_NR_PWRITEV 70
@@ -51,7 +51,7 @@
 #define COLDSTEP_NR_RECVMSG 47
 #define COLDSTEP_NR_READ 0
 #define COLDSTEP_NR_WRITEV 20
-/* PR-E: NRs for syscalls we do NOT fully observe, used by the unobserved-egress counter. */
+/* PR-E / dispatch: sendmmsg/sendfile/splice class; pwrite* also defined here and dispatched with TLS write path. */
 #define COLDSTEP_NR_SENDMMSG 307
 #define COLDSTEP_NR_PWRITE64 18
 #define COLDSTEP_NR_PWRITEV 296
