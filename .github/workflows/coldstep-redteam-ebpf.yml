@@ -59,9 +59,9 @@ jobs:
           phase: start
           mode: detect
           log-level: info
-          report-job-summary: 'false'
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          report: none
+          allow: theclouddj.com, *.ubuntu.com
+          detect-profile: enhanced
           release-path: bin/coldstep
 
       - name: Red-team probes (Generate Telemetry)
@@ -114,7 +114,7 @@ jobs:
         uses: ./
         with:
           phase: stop
-          report-job-summary: 'false'
+          report: none
           fail-on-error: 'false'
 
       - name: Build report model

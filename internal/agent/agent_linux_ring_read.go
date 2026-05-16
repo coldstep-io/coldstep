@@ -396,7 +396,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				Comm: comm, SNI: sni,
 				Dst: ip.String(), Dport: port,
 				Policy: string(cl),
-				Note:   "ClientHello SNI from first write(2) buffer; fragmented handshakes may be missed",
+				Note:   "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()

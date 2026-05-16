@@ -6,10 +6,35 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- **`action.yml` inputs:** deprecated allowlist / report / feature-gate aliases removed. Consumers must migrate before the next tag:
+  - `allowed-domains`, `allowed-domains-file`, `allowed-hosts`, `allowed-hosts-file`, `allowed-ips`, `allowed-ips-file` → unified **`allow`** / **`allow-file`** (entries auto-classify into domains, wildcard hosts, IPv4 literals/CIDRs).
+  - `ignored-ip-nets`, `ignored-ip-nets-file` → **`ignored-nets`** / **`ignored-nets-file`**.
+  - `report-job-summary`, `report-pr-summary` → unified **`report`** (`job-summary` | `pr-comment` | `both` | `none`).
+  - `feature-gates` → **`detect-profile`** (`enhanced` enables `proc_tree=1,tls_sni=1,fs_events=1`).
+- **`phase:`** input kept (internal). In-repo CI workflows still use it because **`uses: ./`** does not fire node24 pre/post hooks; consumer workflows pin a published tag and use a single `uses:` block.
+
+### Changed
+
+- **Internal config enum:** `config.ModeEnforce` renamed to `config.ModeDefend`; underlying string value also changed from `"enforce"` to `"defend"` so the in-memory enum matches the public surface. `internal/report/digest.go` keeps accepting legacy `"enforce"` JSONL/digest for replay.
+- **BPF generators:** the five per-package `run_bpf2go.go` wrappers under `internal/bpf/{traceconnect,tracedns,tracefs,tracebpfaudit,tracelsmenforce}/` collapsed into one shared helper at `internal/bpf/bpfgen/main.go`. Each `gen.go` now reads `//go:generate go run ../bpfgen/main.go <Target> <source>.bpf.c`.
+
 ### Added
 
+- **Integration:** **`TestRun_TLSClientHelloPwriteJSONL`** exercises **`tls_sni=1`** on **`os.pwrite`** (**`NR_PWRITE64`**) after **`connect`**, asserting **`type:tls`** and **SNI** (synthetic ClientHello, same shape as sendto coverage).
+- **Integration:** **`TestRun_TLSClientHelloSendtoSockaddrJSONL`** exercises **`tls_sni=1`** on **TCP `sendto` with explicit `sockaddr`** after **`connect`**, asserting **`type:tls`** and **SNI** (parity with HTTP cleartext **sendto** coverage).
 - **`.github/pr-bodies/`** — tracked UTF-8 templates for **`gh pr create` / `gh pr edit --body-file`** so PR descriptions are not corrupted by shell quoting (especially PowerShell); **`scripts/gh-pr-body.ps1`** wraps **`gh pr edit --body-file`** on Windows.
 - **Optional `.pre-commit-config.yaml`** — runs **`scripts/check-encoding.sh`** on **`pre-commit install`** (same guard as CI **`gofmt`** job).
+
+### Changed
+
+- **BPF build:** **`scripts/ensure_vmlinux_int_typedefs.py`** runs from **`scripts/build-agent-linux.sh`** after **`bpf/vmlinux.h`** is present — repairs **`bpftool btf dump format c`** output when kernel BTF places integer typedefs after forward refs (fixes **`clang`** **`unknown type name '__u8'`** on GitHub-hosted kernels). Detection keys off the **`typedef signed char __s8`** / **`typedef unsigned char __u8`** pair immediately after the **`__VMLINUX_H__`** preamble (not a substring scan).
+- **BPF (comments):** **`trace_connect.bpf.c`** file header no longer contains a **`pwrite*`** + **`/sendto`** sequence that closed the block comment early (**`*/`**) and broke **`clang`** (spurious **`sendto`** token) on CI.
+- **BPF:** Removed unused **`note_unobserved_egress_syscall`** (**`-Werror,-Wunused-function`** on **`clang`** after **`pwrite*`** dispatch stopped calling it).
+- **BPF (detect telemetry):** **`pwrite(2)`/`pwritev`/`pwritev2`** use the same TLS ClientHello sniff path as **`write`/`writev`** (first three syscall args match; **`NR_PWRITE64`/`PWRITEV`/`PWRITEV2`** in **`trace_tls_write.inc`**); no longer counted only as **`unobserved_egress_syscalls_observed`**.
+- **BPF (detect telemetry):** **TLS ClientHello / SNI** sniffing mirrors the HTTP **`sendto`+sockaddr** path on **`NR_SENDTO`**: when **`addr_ul`** is populated and matches the **`connect`** destination, the first handshake-shaped buffer still runs **`try_emit_tls_clienthello`** (best-effort, same **`connect4_tuple`** layout).
+- **BPF (defend enforcement):** **cgroup/LSM enforce** helpers shared via **`bpf/enforce_policy.inc`** (**`enforce_lpm_key.h`** for forward **LPM** key types); **`trace_enforce`** and **`trace_lsm_enforce`** stay behavior-equivalent while deduplicating deny/allowlist plumbing.
 
 ### Fixed
 

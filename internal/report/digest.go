@@ -173,8 +173,8 @@ type DigestInput struct {
 	UDPSendmsgMultiIovecObserved int
 	TLSWritevMultiIovecObserved  int
 	// UnobservedEgressSyscalls counts IPv4-egress / fd-write syscalls (sendmmsg,
-	// pwrite64, pwritev, pwritev2, sendfile, sendfile64, splice) observed in
-	// the BPF dispatch arm but not fully sniffed for HTTP/TLS payload (PR-E).
+	// sendfile, sendfile64, splice, etc.) not fully covered by HTTP/TLS sniff arms (PR-E).
+	// pwrite64/pwritev/pwritev2 share the TLS ClientHello path with write/writev when tuple-correlated.
 	// Non-zero indicates Coldstep's observability has a real-workload gap.
 	UnobservedEgressSyscalls int
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
@@ -546,7 +546,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
 	}
 	if in.UnobservedEgressSyscalls > 0 {
-		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/pwrite*/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
@@ -591,7 +591,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	b.WriteString("<sub>UDP KPI counts IPv4 sendto and sendmsg egress (first iovec length; destination from msg_name or connected socket cache). HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
 	if tlsKPIVisible(in) {
-		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first `write(2)` after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
+		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
 	}
 	if procForkKPIVisible(in) {
 		b.WriteString(" **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).")
@@ -630,7 +630,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
 	}
 	if in.UnobservedEgressSyscalls > 0 {
-		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (`sendmmsg`, `pwrite64`, `pwritev`, `pwritev2`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
+		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (e.g. `sendmmsg`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode (and may complicate observation). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).")
@@ -935,7 +935,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets.\n")
 	if tlsKPIVisible(in) {
-		b.WriteString("- **TLS / SNI:** rows come from the first `write(2)` buffer after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
+		b.WriteString("- **TLS / SNI:** rows come from the first ClientHello-shaped buffer on supported `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/connected or explicit-`sockaddr` `sendto` paths after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
 	} else {
 		b.WriteString("- **HTTPS:** TLS payloads are not decrypted; enable `tls_sni=1` in `COLDSTEP_FEATURE_GATES` for optional ClientHello SNI hints.\n")
 	}

@@ -104,6 +104,19 @@ if [[ ! -s bpf/vmlinux.h ]]; then
 	trap - EXIT
 fi
 
+# bpftool BTF dumps on some kernels emit integer typedefs late; clang then fails on __u8 before typedef.
+# Normalize committed/regenerated headers (idempotent when typedefs already precede structs).
+PY=""
+for cand in python3 python; do
+	if command -v "${cand}" >/dev/null 2>&1; then
+		PY="${cand}"
+		break
+	fi
+done
+if [[ -s "${ROOT}/bpf/vmlinux.h" && -n "${PY}" ]]; then
+	"${PY}" "${ROOT}/scripts/ensure_vmlinux_int_typedefs.py" "${ROOT}/bpf/vmlinux.h"
+fi
+
 go generate ./internal/bpf/traceexec/...
 go generate ./internal/bpf/tracefork/...
 go generate ./internal/bpf/traceconnect/...

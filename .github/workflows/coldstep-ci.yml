@@ -10,14 +10,14 @@ on:
   pull_request:
   workflow_dispatch:
     inputs:
-      coldstep_diff_strict:
-        description: Fail detect-mode if previous-run JSONL diff baseline is unavailable (hosted-linux job)
-        type: boolean
-        default: true
-      defend_deny_jsonl_strict:
-        description: Fail defend-mode if defend smoke produces no deny JSONL rows (optional strict gate)
-        type: boolean
-        default: false
+      ci_preset:
+        description: CI preset (default = normal, fast = skip integration, strict = extra defend/diff gates)
+        type: choice
+        options:
+          - default
+          - fast
+          - strict
+        default: default
 
 permissions:
   contents: read
@@ -33,6 +33,7 @@ jobs:
   hosted-linux:
     uses: ./.github/workflows/coldstep-ci-runner.yml
     with:
-      coldstep_diff_strict: ${{ github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict }}
-      defend_deny_jsonl_strict: ${{ github.event_name == 'workflow_dispatch' && inputs.defend_deny_jsonl_strict || false }}
+      coldstep_diff_strict: ${{ github.event_name != 'workflow_dispatch' || inputs.ci_preset == 'strict' }}
+      defend_deny_jsonl_strict: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'strict' || false }}
+      skip_integration: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'fast' || false }}
     secrets: inherit

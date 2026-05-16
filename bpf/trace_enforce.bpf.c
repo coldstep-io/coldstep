@@ -6,6 +6,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include "enforce_lpm_key.h"
 #include "dns_cache.h"
 #include "deny_event.h"
 
@@ -32,13 +33,6 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
 
-/*
- * `struct deny_event` + the packed-size _Static_assert live in
- * `bpf/deny_event.h` (shared with `bpf/trace_lsm_enforce.bpf.c`). The
- * include-site assert below is intentional belt-and-braces: if either object
- * ever silently drifts (e.g. a stray inline redefinition is reintroduced),
- * the build still fails here rather than at runtime in Go decode.
- */
 _Static_assert(sizeof(struct deny_event) == 46,
 	       "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
@@ -62,27 +56,7 @@ struct {
 } enforce_cfg SEC(".maps");
 
 /*
- * IPv4 LPM key shared by the allowlist + ignored-CIDR maps. Layout matches
- * what the kernel BPF_MAP_TYPE_LPM_TRIE expects: prefixlen (CPU-endian u32)
- * followed by the network address in network byte order. Keep packed because
- * userspace builds the key as `[8]byte` (LE prefixlen | BE addr) and any
- * implicit padding here would shift the addr field and silently break LPM
- * matches.
- */
-struct ns_lpm4_key {
-	__u32 prefixlen;
-	__be32 addr;
-} __attribute__((packed));
-
-/*
- * PR-G (Theme G of the 2026-04-18 review): promoted allowed_ipv4 from
- * BPF_MAP_TYPE_HASH (key=__be32, exact /32 only) to BPF_MAP_TYPE_LPM_TRIE
- * (key={prefixlen, __be32}) so users can allowlist whole CIDR ranges
- * (e.g. 10.0.0.0/8 for an internal corp network) instead of enumerating
- * every /32. Backward-compat: bare IPs are programmed by userspace as /32
- * keys and match identically. max_entries=4096 unchanged so the abi_test.go
- * map-size guard does not move (and policy.MaxAllowedEnforceIPv4Keys
- * still reflects the per-LPM-prefix entry budget).
+ * PR-G (Theme G): LPM trie allowlist + ignored trie; sizes locked with abi_test.go.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
@@ -100,50 +74,17 @@ struct {
 	__type(value, __u8);
 } ignored_ipv4_lpm SEC(".maps");
 
-static __always_inline int enforcement_enabled(void)
-{
-	__u32 key = COLDSTEP_ENFORCE_KEY_MODE;
-	__u32 *mode = bpf_map_lookup_elem(&enforce_cfg, &key);
-
-	return mode && *mode == COLDSTEP_ENFORCE_MODE_ENFORCE;
-}
-
-static __always_inline int dst_is_allowlisted(__be32 addr)
-{
-	struct ns_lpm4_key k = {};
-
-	/* Check IP/CIDR allowlist first (fast path) */
-	k.prefixlen = 32;
-	k.addr = addr;
-	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv4, &k);
-	if (ok)
-		return 1;
-
-	/* 
-	 * Check domain-based allowlist (late binding).
-	 * Lookup IP in dns_cache map (populated by Go agent).
-	 */
-	char *domain = bpf_map_lookup_elem(&dns_cache, &addr);
-	if (domain) {
-		/* If IP matches a known domain, check if that domain is allowed. */
-		__u8 *dom_ok = bpf_map_lookup_elem(&allowed_domains, domain);
-		if (dom_ok)
-			return 1;
-	}
-
-	return 0;
-}
-
-static __always_inline int dst_in_ignored(__be32 daddr)
-{
-	struct ns_lpm4_key k = {};
-
-	k.prefixlen = 32;
-	k.addr = daddr;
-	__u8 *v = bpf_map_lookup_elem(&ignored_ipv4_lpm, &k);
-
-	return v != 0;
-}
+#define CS_EF_RB_DENY deny_events
+#define CS_EF_PC_DENY_FAIL deny_reserve_failures
+#define CS_EF_ARR_ENFORCE_CFG enforce_cfg
+#define CS_EF_TRIE_ALLOWED allowed_ipv4
+#define CS_EF_TRIE_IGNORED ignored_ipv4_lpm
+#include "enforce_policy.inc"
+#undef CS_EF_RB_DENY
+#undef CS_EF_PC_DENY_FAIL
+#undef CS_EF_ARR_ENFORCE_CFG
+#undef CS_EF_TRIE_ALLOWED
+#undef CS_EF_TRIE_IGNORED
 
 static __always_inline __u8 protocol_from_sock_ctx(struct bpf_sock_addr *ctx)
 {
@@ -152,48 +93,10 @@ static __always_inline __u8 protocol_from_sock_ctx(struct bpf_sock_addr *ctx)
 	return COLDSTEP_PROTO_TCP;
 }
 
-static __always_inline void note_deny_ring_reserve_failed(void)
-{
-	__u32 k = 0;
-	__u32 *v = bpf_map_lookup_elem(&deny_reserve_failures, &k);
-
-	if (!v)
-		return;
-	(*v)++;
-}
-
-static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)
-{
-	struct deny_event *de = bpf_ringbuf_reserve(&deny_events, sizeof(*de), 0);
-
-	if (!de) {
-		note_deny_ring_reserve_failed();
-		return;
-	}
-	{
-		__u64 pt = bpf_get_current_pid_tgid();
-
-		de->tgid = (__u32)(pt >> 32);
-		de->tid = (__u32)pt;
-	}
-	bpf_get_current_comm(&de->comm, sizeof(de->comm));
-	de->protocol = protocol;
-	de->reason = reason;
-	de->af = AF_INET;
-	de->_pad = 0;
-	__builtin_memset(de->daddr, 0, sizeof(de->daddr));
-	if (dst4)
-		__builtin_memcpy(de->daddr, dst4, 4);
-	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
-	bpf_ringbuf_submit(de, 0);
-}
-
 /*
- * Successful policy outcome returns 1 (allow syscall); deny returns 0 — matches kernel examples for
- * BPF_PROG_TYPE_CGROUP_SOCK_ADDR (docs.ebpf.io). Same convention for enforce_sendmsg4 below.
+ * Successful outcome returns 1 (allow syscall); deny returns 0 — cgroup/connect4 convention.
  */
-SEC("cgroup/connect4")
-int enforce_connect4(struct bpf_sock_addr *ctx)
+static __always_inline int enforce_cgroup_sock_addr_ipv4(struct bpf_sock_addr *ctx)
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
@@ -210,24 +113,16 @@ int enforce_connect4(struct bpf_sock_addr *ctx)
 	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
 	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
+}
+
+SEC("cgroup/connect4")
+int enforce_connect4(struct bpf_sock_addr *ctx)
+{
+	return enforce_cgroup_sock_addr_ipv4(ctx);
 }
 
 SEC("cgroup/sendmsg4")
 int enforce_sendmsg4(struct bpf_sock_addr *ctx)
 {
-	__be32 daddr = (__be32)ctx->user_ip4;
-	__be16 dport = (__be16)ctx->user_port;
-	__u8 protocol = protocol_from_sock_ctx(ctx);
-	__u8 addr4[4];
-
-	if (!enforcement_enabled())
-		return 1;
-	if (dst_in_ignored(daddr))
-		return 1;
-	if (dst_is_allowlisted(daddr))
-		return 1;
-
-	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
-	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
-	return 0;
+	return enforce_cgroup_sock_addr_ipv4(ctx);
 }

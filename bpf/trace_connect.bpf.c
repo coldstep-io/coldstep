@@ -4,7 +4,7 @@
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
  *     not complete for all UDP egress paths)
- *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/sendto
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/pwrite(2)/pwritev/pwritev2/sendto
  *   - LRU map eviction handles stale (tgid,fd) entries (close(2) cleanup removed)
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
@@ -266,16 +266,6 @@ static __always_inline void note_tls_writev_multi_iovec(void)
 	__sync_fetch_and_add(v, 1);
 }
 
-static __always_inline void note_unobserved_egress_syscall(void)
-{
-	__u32 k = 0;
-	__u32 *v = bpf_map_lookup_elem(&unobserved_egress_syscalls_observed, &k);
-
-	if (!v)
-		return;
-	__sync_fetch_and_add(v, 1);
-}
-
 static __always_inline void note_io_uring_setup_observed(void)
 {
 	__u32 k = 0;
@@ -391,8 +381,24 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 				handle_http_obs_emit(buf_ptr, len, sin_port, sin_addr);
 		}
 
-		if (!addr_ul)
+		/*
+		 * TLS ClientHello sniff: connected sendto(NULL) uses cached connect tuple +
+		 * tuple_pt from coldstep_connect_tuple_fetch. Explicit sockaddr sendto mirrors
+		 * the HTTP branch — synthesize tuple bytes from sin_addr/sin_port (same layout
+		 * as connect4_by_tgid_fd values) so try_emit_tls_clienthello_from_tuple can run.
+		 */
+		if (!addr_ul) {
 			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
+		} else {
+			struct connect4_tuple st = {};
+
+			st.in_use = 1;
+			st._pad = 0;
+			__builtin_memcpy(st.daddr, &sin_addr, sizeof(st.daddr));
+			__builtin_memcpy(st.dport, &sin_port, sizeof(st.dport));
+			try_emit_tls_clienthello_from_tuple(&st, buf_ptr, len,
+							    bpf_get_current_pid_tgid());
+		}
 
 		return 0;
 	}
@@ -407,7 +413,10 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return handle_udp_obs_sendmsg((__u32)di_ul, msg_hdr_ptr);
 	}
 
-	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_WRITEV) {
+	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_WRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITE64 ||
+	    id == (long)COLDSTEP_NR_PWRITEV ||
+	    id == (long)COLDSTEP_NR_PWRITEV2) {
 		unsigned long di_ul = 0, si_ul = 0, dx_ul = 0;
 
 		if (ns_read_syscall_arg(regs, 0, &di_ul))
@@ -504,17 +513,9 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	/*
-	 * PR-E: visibility-only counter for IPv4 egress / fd-write syscalls
-	 * that have no full-emission arm above. We only bump a single global
-	 * counter (no per-syscall breakdown, no payload sniff) so the verifier
-	 * sees this as a constant-cost branch. See unobserved_egress_syscalls_observed.
+	 * PR-E: `unobserved_egress_syscalls_observed` stays in the object for digest parity;
+	 * dispatch arms above cover today’s sniff paths (including pwrite* TLS).
 	 */
-	if (id == (long)COLDSTEP_NR_PWRITE64 ||
-	    id == (long)COLDSTEP_NR_PWRITEV ||
-	    id == (long)COLDSTEP_NR_PWRITEV2) {
-		note_unobserved_egress_syscall();
-		return 0;
-	}
 
 	/*
 	 * io_uring_setup(2) detection: any call is a security signal because
