@@ -151,6 +151,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 		})
 	}
 	defer closeDenyRd()
+	var lsmDenyRd *ringbuf.Reader
+	var lsmDenyRdOnce sync.Once
+	closeLsmDenyRd := func() {
+		lsmDenyRdOnce.Do(func() {
+			if lsmDenyRd != nil {
+				_ = lsmDenyRd.Close()
+			}
+		})
+	}
+	defer closeLsmDenyRd()
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
 	var enforceObjs traceenforce.TraceenforceObjects
@@ -176,13 +186,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 				return fmt.Errorf("load lsm enforce bpf objects: %w", err)
 			}
 
-			allowlistSize, ignoredSize, loadErr := loadLSMEnforceMaps(lsmCandidate, enforceCompiled, pol)
-			if loadErr != nil {
+			if _, _, loadErr := loadLSMEnforceMaps(lsmCandidate, enforceCompiled, pol); loadErr != nil {
 				_ = lsmCandidate.Close()
 				return loadErr
 			}
 
-			lsmDenyRd, err := ringbuf.NewReader(lsmCandidate.LsmDenyEvents)
+			rd, err := ringbuf.NewReader(lsmCandidate.LsmDenyEvents)
 			if err != nil {
 				_ = lsmCandidate.Close()
 				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
@@ -191,20 +200,24 @@ func Run(ctx context.Context, cfg config.Config) error {
 			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketConnect})
 			if err != nil {
 				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
-				_ = lsmDenyRd.Close()
+				_ = rd.Close()
 				_ = lsmCandidate.Close()
 			} else {
 				lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketSendmsg})
 				if err != nil {
 					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
 					_ = lnk1.Close()
-					_ = lsmDenyRd.Close()
+					_ = rd.Close()
 					_ = lsmCandidate.Close()
 				} else {
 					lsmObjs = lsmCandidate
 					hasLSM = true
-					denyRd = lsmDenyRd
-					enforceState.setModeAndAllowlist(enforceModeForBackend(enforceBackendLSM), allowlistSize, ignoredSize)
+					// Keep the LSM ringbuf as a secondary reader. The primary denyRd
+					// always reads from the cgroup ringbuf (attached below) because on
+					// some kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but
+					// never fire — `lsm_deny_events` then stays empty even though
+					// cgroup is enforcing.
+					lsmDenyRd = rd
 					defer func() {
 						enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
 						_ = lsmObjs.Close()
@@ -222,55 +235,60 @@ func Run(ctx context.Context, cfg config.Config) error {
 			},
 			lsmAttachErr,
 		)
-		if backend.backend == enforceBackendCgroup {
-			if lsmAttachErr != nil {
-				slog.Warn("lsm enforce attach failed; falling back to cgroup", "err", lsmAttachErr)
-			}
-			if err := traceenforce.LoadTraceenforceObjects(&enforceObjs, nil); err != nil {
-				return fmt.Errorf("load enforce bpf objects: %w", err)
-			}
-			hasEnforce = true
-			defer func() {
-				enforceState.setDenyReserveFailures(readDenyReserveFailureCount(&enforceObjs))
-				_ = enforceObjs.Close()
-			}()
-
-			allowlistSize, ignoredSize, loadErr := loadEnforceMaps(&enforceObjs, enforceCompiled, pol)
-			if loadErr != nil {
-				return loadErr
-			}
-			enforceState.setModeAndAllowlist(enforceModeForBackend(backend.backend), allowlistSize, ignoredSize)
-			var err error
-			denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
-			if err != nil {
-				return fmt.Errorf("ringbuf reader deny: %w", err)
-			}
-
-			cgPath := cfg.CgroupAttachPath
-			if cgPath == "" {
-				cgPath = "/sys/fs/cgroup"
-			}
-
-			enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupInet4Connect,
-				Program: enforceObjs.EnforceConnect4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_connect4: %w", err)
-			}
-			defer enforceConnectLnk.Close()
-
-			enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupUDP4Sendmsg,
-				Program: enforceObjs.EnforceSendmsg4,
-			})
-			if err != nil {
-				return fmt.Errorf("attach enforce_sendmsg4: %w", err)
-			}
-			defer enforceSendmsgLnk.Close()
+		if lsmAttachErr != nil {
+			slog.Warn("lsm enforce attach failed; falling back to cgroup", "err", lsmAttachErr)
 		}
+
+		// Always load and attach the cgroup enforce program, regardless of whether
+		// LSM also attached. The cgroup hook is the reliable always-on enforcement
+		// path: LSM hooks may attach but never fire when the kernel's `lsm=` boot
+		// chain excludes BPF (Ubuntu 24.04 ships this way). The primary deny
+		// reader watches the cgroup `deny_events` ringbuf; the LSM ringbuf, when
+		// present, is drained by a separate reader.
+		if err := traceenforce.LoadTraceenforceObjects(&enforceObjs, nil); err != nil {
+			return fmt.Errorf("load enforce bpf objects: %w", err)
+		}
+		hasEnforce = true
+		defer func() {
+			enforceState.setDenyReserveFailures(readDenyReserveFailureCount(&enforceObjs))
+			_ = enforceObjs.Close()
+		}()
+
+		allowlistSize, ignoredSize, loadErr := loadEnforceMaps(&enforceObjs, enforceCompiled, pol)
+		if loadErr != nil {
+			return loadErr
+		}
+		enforceState.setModeAndAllowlist(enforceModeForBackend(backend.backend), allowlistSize, ignoredSize)
+		var err error
+		denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
+		if err != nil {
+			return fmt.Errorf("ringbuf reader deny: %w", err)
+		}
+
+		cgPath := cfg.CgroupAttachPath
+		if cgPath == "" {
+			cgPath = "/sys/fs/cgroup"
+		}
+
+		enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupInet4Connect,
+			Program: enforceObjs.EnforceConnect4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_connect4: %w", err)
+		}
+		defer enforceConnectLnk.Close()
+
+		enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
+			Path:    cgPath,
+			Attach:  ebpf.AttachCGroupUDP4Sendmsg,
+			Program: enforceObjs.EnforceSendmsg4,
+		})
+		if err != nil {
+			return fmt.Errorf("attach enforce_sendmsg4: %w", err)
+		}
+		defer enforceSendmsgLnk.Close()
 	}
 
 	var execObjs traceexec.TraceexecObjects
@@ -320,11 +338,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
-		if cfg.Mode == config.ModeDefend {
-			if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
-				return fmt.Errorf("agent ready status: %w", err)
-			}
-		}
+		// Defend mode readiness is written after the deny reader goroutine launches
+		// (further below); writing it here would race the action's probe steps, which
+		// run as soon as readiness is set, against the reader being alive.
 		defer syscallObjs.Close()
 		defer syscallLnk.Close()
 		defer func() {
@@ -343,7 +359,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// Ring readers are closed exactly once via closeSyscallReaders (runCtx shutdown goroutine + defer).
 	}
 
-	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after syscall attach succeeds.
+	// Detect mode: ready after syscall trace initialized. Defend mode defers readiness
+	// until after the deny reader goroutine is launched (further below).
 	if cfg.Mode != config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
@@ -602,6 +619,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		_ = execRd.Close()
 		closeSyscallReaders()
 		closeDenyRd()
+		closeLsmDenyRd()
 		closeDNSRd()
 		closeBPFAuditRd()
 		closeForkRd()
@@ -631,6 +649,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if denyRd != nil {
+		readerCount++
+	}
+	if lsmDenyRd != nil {
 		readerCount++
 	}
 	if dnsRd != nil {
@@ -773,15 +794,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 	if denyRd != nil {
 		wg.Add(1)
-		denyHookFamily := ""
-		if hasLSM {
-			denyHookFamily = "lsm"
-		} else if hasEnforce {
-			denyHookFamily = "cgroup"
-		}
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer, denyHookFamily, dnsCache)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer, "cgroup", dnsCache)
+		}()
+	}
+	if lsmDenyRd != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd, &seq, &jsonlMu, enforceState, signer, "lsm", dnsCache)
 		}()
 	}
 	if dnsRd != nil {
@@ -814,6 +836,17 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
+	// Defend-mode readiness: write only after the deny reader goroutine(s) are alive,
+	// so the GitHub Action's probe steps (which start as soon as readiness flips) cannot
+	// race the reader being attached. Detect-mode readiness was written above.
+	var readyErr error
+	if cfg.Mode == config.ModeDefend {
+		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
+			readyErr = fmt.Errorf("agent ready status: %w", err)
+			runCancel()
+		}
+	}
+
 	wg.Wait()
 	close(errCh)
 
@@ -822,6 +855,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		retErr = preferRunError(retErr, err)
 	}
 	closeExecRdOnEarlyExit = false
+	if readyErr != nil {
+		return preferRunError(readyErr, retErr)
+	}
 	return retErr
 }
 
