@@ -113,14 +113,12 @@ export interface AllowlistResult {
 export function resolveAllowlist(baseDir: string): AllowlistResult {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
 
-  // New unified inputs
-  const newTokens = [
+  const tokens = [
     ...splitTokens(core.getInput('allow')),
     ...readFileTokensSafe(core.getInput('allow-file'), baseDir),
   ];
-  const parsed = classifyTokens(newTokens);
+  const parsed = classifyTokens(tokens);
 
-  // Bootstrap allowlist — read vendored packs and merge
   if (inputBoolDefault('bootstrap-allowlist', false)) {
     const bsDir = path.join(actionPath, 'scripts', 'coldstep_bootstrap');
     const bsDomains = readSingleFileSafe(path.join(bsDir, 'allowlist-domains-v1.txt'));
@@ -130,55 +128,25 @@ export function resolveAllowlist(baseDir: string): AllowlistResult {
     parsed.allowedIPs.push(...bsIPs);
   }
 
-  // Deprecated inputs — merged after new inputs
-  const oldDomains = splitTokens(core.getInput('allowed-domains'));
-  const oldDomainsFile = readFileTokensSafe(core.getInput('allowed-domains-file'), baseDir);
-  const oldHosts = splitTokens(core.getInput('allowed-hosts'));
-  const oldHostsFile = readFileTokensSafe(core.getInput('allowed-hosts-file'), baseDir);
-  const oldIPs = splitTokens(core.getInput('allowed-ips'));
-  const oldIPsFile = readFileTokensSafe(core.getInput('allowed-ips-file'), baseDir);
-
-  // ignored-nets (new) and ignored-ip-nets (deprecated) — both work
-  const ignoredNetsRaw = core.getInput('ignored-nets') || core.getInput('ignored-ip-nets');
-  const ignoredNetsFileRaw = core.getInput('ignored-nets-file') || core.getInput('ignored-ip-nets-file');
-  const oldIgnoredNets = splitTokens(ignoredNetsRaw);
-  const oldIgnoredNetsFile = readFileTokensSafe(ignoredNetsFileRaw, baseDir);
+  const ignoredNetsTokens = [
+    ...splitTokens(core.getInput('ignored-nets')),
+    ...readFileTokensSafe(core.getInput('ignored-nets-file'), baseDir),
+  ];
 
   return {
-    allowedIPs: mergeUnique(parsed.allowedIPs, oldIPs, oldIPsFile),
-    ignoredNets: mergeUnique(parsed.ignoredNets, oldIgnoredNets, oldIgnoredNetsFile),
-    allowedHosts: mergeUnique(parsed.allowedHosts, oldHosts, oldHostsFile),
-    allowedDomains: mergeUnique(parsed.allowedDomains, oldDomains, oldDomainsFile),
+    allowedIPs: mergeUnique(parsed.allowedIPs),
+    ignoredNets: mergeUnique(parsed.ignoredNets, ignoredNetsTokens),
+    allowedHosts: mergeUnique(parsed.allowedHosts),
+    allowedDomains: mergeUnique(parsed.allowedDomains),
   };
 }
 
-// --- Feature-gate resolution (detect-profile + feature-gates merge) ---
+// --- Feature-gate resolution (detect-profile only) ---
 
 export function resolveFeatureGates(): string {
   const detectProfile = (core.getInput('detect-profile') || 'standard').trim().toLowerCase();
-  const featureGatesRaw = core.getInput('feature-gates').trim();
-
-  const gates = new Map<string, string>();
-  if (featureGatesRaw) {
-    for (const gate of featureGatesRaw.split(',').map((g) => g.trim()).filter(Boolean)) {
-      const eq = gate.indexOf('=');
-      if (eq >= 0) {
-        gates.set(gate.slice(0, eq).trim(), gate.slice(eq + 1).trim());
-      } else {
-        gates.set(gate, '1');
-      }
-    }
-  }
-
-  if (detectProfile === 'enhanced') {
-    for (const [k, v] of [['proc_tree', '1'], ['tls_sni', '1'], ['fs_events', '1']] as const) {
-      if (!gates.has(k)) gates.set(k, v);
-    }
-  }
-
-  return Array.from(gates.entries())
-    .map(([k, v]) => `${k}=${v}`)
-    .join(',');
+  if (detectProfile !== 'enhanced') return '';
+  return 'proc_tree=1,tls_sni=1,fs_events=1';
 }
 
 // --- fail-on-error with smart defend-mode default (Change 5) ---
@@ -201,37 +169,14 @@ export interface ReportFlags {
 
 export function resolveReportFlags(): ReportFlags {
   const report = (core.getInput('report') || 'job-summary').trim().toLowerCase();
-
-  let reportJobSummary: boolean;
-  let reportPRSummary: boolean;
-
   switch (report) {
     case 'pr-comment':
-      reportJobSummary = false;
-      reportPRSummary = true;
-      break;
+      return { reportJobSummary: false, reportPRSummary: true };
     case 'both':
-      reportJobSummary = true;
-      reportPRSummary = true;
-      break;
+      return { reportJobSummary: true, reportPRSummary: true };
     case 'none':
-      reportJobSummary = false;
-      reportPRSummary = false;
-      break;
+      return { reportJobSummary: false, reportPRSummary: false };
     default: // 'job-summary'
-      reportJobSummary = true;
-      reportPRSummary = false;
+      return { reportJobSummary: true, reportPRSummary: false };
   }
-
-  // Deprecated inputs override if explicitly set
-  const oldJobSummary = core.getInput('report-job-summary');
-  const oldPRSummary = core.getInput('report-pr-summary');
-  if (oldJobSummary !== '') {
-    reportJobSummary = ['true', '1', 'yes', 'on'].includes(oldJobSummary.toLowerCase());
-  }
-  if (oldPRSummary !== '') {
-    reportPRSummary = ['true', '1', 'yes', 'on'].includes(oldPRSummary.toLowerCase());
-  }
-
-  return { reportJobSummary, reportPRSummary };
 }

@@ -46,17 +46,12 @@ jobs:
       - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.2.1
         with:
-          phase: start
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
-      - uses: coldstep-io/coldstep@v0.2.1
-        if: always()
-        with:
-          phase: stop
 ```
 
-**`coldstep-demo`** (`workflow_dispatch`) runs the in-repo action with **`uses: ./`** (same pattern as [`.github/workflows/coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)). Downstream repos should pin **`coldstep-io/coldstep@v0.2.1`** (or a newer tag).
+The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.2.1`** (or a newer tag).
 
 ---
 
@@ -93,7 +88,7 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`defend`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allowed-ips`** IPv4 literals). |
+| **`defend`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allow`** IPv4 literals/CIDRs). |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -103,7 +98,7 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 | **`.coldstep-detect.md`** | Shutdown digest (triage ribbon, KPI tables, collapsible sections). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
-The **post** step can merge **`.coldstep-detect.md`** into the **Actions Summary** tab (`report-job-summary`, default **on**). Full **detect-report** workflows keep that digest **off** so the Summary is not dominated by the long shutdown digest:
+The **post** step merges **`.coldstep-detect.md`** into the **Actions Summary** tab by default (`report: job-summary`). Full **detect-report** workflows set **`report: none`** so the Summary is not dominated by the long shutdown digest:
 
 - **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`coldstep-report build-model`), enriches (rDNS + OTX), writes Tier-1 BLUF and Tier-2 **`coldstep-detect-report.html`** (downloadable artifact).
 - **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same `coldstep-report build-model` pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends IP/FQDN/rDNS matrix to the Job Summary.
@@ -119,15 +114,11 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | Input | Purpose |
 | :---- | :------ |
 | `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
-| `allowed-domains` | Domain allowlist (**required** for **defend** / blocking). |
-| `allowed-hosts` / `allowed-ips` | Optional classification / policy hints; **`allowed-ips`** accepts IPv4 literals only (see **`action.yml`**). |
-| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. |
-| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced merges default `proc_tree` / `tls_sni` / `fs_events` gates when unset and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
-| `feature-gates` | Example: `proc_tree=1`, `tls_sni=1`, `fs_events=1` — passed as `COLDSTEP_FEATURE_GATES` (explicit values override enhanced defaults for those keys). |
-| `report-job-summary` | Merge digest into Summary when **true**; **false** for workflows that emit a dedicated `coldstep-report render-summary` summary. |
-| `report-pr-summary` | Optional PR comment (needs `github-token`). |
-| `ignored-ip-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
-| `smoke-test-egress` | Optional UDP/HTTP probes after startup (default `false`; set `true` for extra digest/JSONL coverage). |
+| `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards, IPv4 literals/CIDRs, and `!CIDR` ignore entries. |
+| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode. |
+| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
+| `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
+| `ignored-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
 
 ### Optional threat intel (AlienVault OTX)
 
@@ -175,7 +166,7 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 
 ## Minimal deploy path
 
-1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with **`phase: start`** before your steps and **`phase: stop`** at the end (`if: always()` as needed) — see **[QUICK_START](QUICK_START.md)**.
+1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with a single **`uses:`** block before your build steps (node24 `pre` starts the agent; `post` flushes the digest at job end) — see **[QUICK_START](QUICK_START.md)**.
 2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
 3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
 

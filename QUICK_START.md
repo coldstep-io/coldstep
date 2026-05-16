@@ -9,7 +9,7 @@ Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`d
 | You want… | Set |
 | :-------- | :-- |
 | Observe-only telemetry (default) | `mode: detect` or omit `mode` |
-| Block egress not on the allowlist | `mode: defend` + non-empty **`allowed-domains`** / policy files |
+| Block egress not on the allowlist | `mode: defend` + non-empty **`allow`** / **`allow-file`** |
 
 If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`defend`**. See **[CHANGELOG — Breaking](CHANGELOG.md)**.
 
@@ -17,7 +17,7 @@ If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`d
 
 ## Bare minimum
 
-Smallest workflow that runs Coldstep in **detect** mode: **`checkout` → `phase: start` → your steps → `phase: stop`** (`stop` should run even when earlier steps fail).
+Smallest workflow that runs Coldstep in **detect** mode: **`checkout` → single `uses:` block → your steps**. The action's node24 `pre` hook starts the agent before your build steps; `post` flushes the digest at job end.
 
 ```yaml
 jobs:
@@ -26,22 +26,16 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.2.1
-        with:
-          phase: start
       - run: echo "your build/test steps here"
-      - uses: coldstep-io/coldstep@v0.2.1
-        if: always()
-        with:
-          phase: stop
 ```
 
-You get default **detect** telemetry, **`.coldstep-events.jsonl`**, and (with defaults) the digest merged into the **Job Summary** when **`report-job-summary`** is left at **`true`**.
+You get default **detect** telemetry, **`.coldstep-events.jsonl`**, and the digest merged into the **Job Summary** (default **`report: job-summary`**).
 
 ---
 
 ## Recommended starter (copy/paste)
 
-Same lifecycle as bare minimum, explicit **`name`/`on`** and pin for a full job you can drop into a repo:
+Same single-block lifecycle, with explicit **`name`/`on`** for a full job you can drop into a repo:
 
 ```yaml
 name: coldstep
@@ -56,46 +50,31 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.2.1
-        with:
-          phase: start
       - run: echo "build/test/deploy steps"
-      - uses: coldstep-io/coldstep@v0.2.1
-        if: always()
-        with:
-          phase: stop
 ```
 
 ---
 
-## All composite inputs (summary)
+## All action inputs (summary)
 
-Every `with:` key the action accepts (defaults are what you get if you omit the key). **`phase`** is the only key that must differ between the **start** and **stop** steps.
+Every `with:` key the action accepts (defaults are what you get if you omit the key). Use **one `uses:` block per job** — node24 pre/post hooks start the agent before your steps and flush the digest at job end.
 
 | Input | Default | Summary |
 | :---- | :------ | :------ |
-| **`phase`** | `start` | **`start`** — attach agent before workload. **`stop`** — flush digest/telemetry at job end (use **`if: always()`** on this step). |
 | **`mode`** | `detect` | **`detect`** — observe only. **`defend`** — block non-allowlisted egress (**`enforce`** is rejected). |
-| **`allowed-domains`** | *(empty)* | Comma/whitespace-separated domains for **defend** (trimmed, lowercased). |
-| **`allowed-domains-file`** | *(empty)* | Comma-separated workspace paths to UTF-8 files; merged after inline **`allowed-domains`**. |
-| **`allowed-hosts`** | *(empty)* | Hostnames; **`*.example.com`** = one-level wildcard. |
-| **`allowed-hosts-file`** | *(empty)* | File paths merged after **`allowed-hosts`**. |
-| **`allowed-ips`** | *(empty)* | IPv4 literals/CIDRs for policy. |
-| **`allowed-ips-file`** | *(empty)* | File paths merged after **`allowed-ips`**. |
-| **`ignored-ip-nets`** | *(empty)* | Extra IPv4 CIDRs to treat as ignored (plus implicit RFC1918 unless disabled below). Max **128** merged CIDRs total. |
-| **`ignored-ip-nets-file`** | *(empty)* | File paths for more ignored CIDRs. |
+| **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com`), IPv4 literals (`1.2.3.4`), and CIDRs (`10.0.0.0/8`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
+| **`allow-file`** | *(empty)* | Comma-separated workspace paths to UTF-8 files; same format as `allow`. Merged after inline `allow`. |
+| **`ignored-nets`** | *(empty)* | Extra IPv4 CIDRs to treat as ignored (plus implicit RFC1918 unless disabled below). Also accepts `!CIDR` entries via `allow`. Max **128** merged CIDRs total. |
+| **`ignored-nets-file`** | *(empty)* | File paths for more ignored CIDRs. |
 | **`no-default-ignored-nets`** | `false` | If **`true`**, do **not** add implicit **`10.0.0.0/8`** and **`172.16.0.0/12`** ignores. |
 | **`bootstrap-allowlist`** | `false` | If **`true`**, merge vendored bootstrap domain/IP packs from the action after your lists. |
-| **`fail-on-error`** | `false` | If **`true`**, fail the step if the agent never reaches **operational readiness** (BPF/trace/cgroup as required for the mode). Does **not** fail on policy/deny traffic alone. |
-| **`ready-timeout-seconds`** | *(see agent)* | Only when **`fail-on-error`** is **`true`**: max seconds to wait for **`.coldstep-ready.json`** (`ok:true`). Clamped **60–2700**; malformed **`ok:false`** fails fast. |
+| **`detect-profile`** | `standard` | **`detect` only**: `standard` (default) or `enhanced`. Enhanced enables `proc_tree`, `tls_sni`, and `fs_events`, and tightens report-model integrity. |
+| **`report`** | `job-summary` | Where to post the detect digest: `job-summary`, `pr-comment`, `both`, or `none`. |
+| **`fail-on-error`** | `false` (detect) / `true` (defend) | If **`true`**, fail when the agent never reaches **operational readiness** (BPF/trace/cgroup). Does **not** fail on policy/deny traffic alone. |
+| **`ready-timeout-seconds`** | `1500` | Only when **`fail-on-error`** is **`true`**: max seconds to wait for **`.coldstep-ready.json`** (`ok:true`). Clamped **60–2700**; malformed **`ok:false`** fails fast. |
 | **`log-level`** | `info` | Agent stderr log level: **`debug`**, **`info`**, **`warn`**, **`error`**. |
-| **`feature-gates`** | *(empty)* | Comma-separated **`key=value`** (e.g. **`proc_tree=1,tls_sni=1,fs_events=1`**) passed to the agent. |
-| **`report-job-summary`** | `true` | If **`true`**, **stop** merges **`.coldstep-detect.md`** into the Job Summary. |
-| **`report-pr-summary`** | `false` | If **`true`**, **stop** posts a PR comment (**`pull_request`** workflows only). |
-| **`github-token`** | `${{ github.token }}` | Token for PR comments when **`report-pr-summary`** is **`true`**. |
-| **`smoke-test-egress`** | `false` | If **`true`**, optional IPv4 UDP/HTTP probes after start so JSONL/digest often shows **udp/http** rows. |
-| **`io-uring-disable`** | `true` | If **`true`**, disable **io_uring** via sysctl before start (reduces syscall-hook bypass). |
+| **`github-token`** | `${{ github.token }}` | Token for PR comments when **`report`** is **`pr-comment`** or **`both`**. |
 | **`signing-key`** | *(empty)* | Optional base64 **Ed25519** seed/key; when set, JSONL events are signed. |
-| **`release-path`** | *(empty)* | Optional path to a prebuilt **`coldstep`** binary; skips build when file exists (advanced/debug). |
 
 **Environment (job-level):** workflows may set **`CI_GUARD_MODE`** to **`detect`** or **`defend`** instead of **`mode:`** in `with:` — same validation rules as **`mode`**.
 
@@ -126,25 +105,18 @@ jobs:
       - uses: actions/checkout@v6
       - uses: coldstep-io/coldstep@v0.2.1
         with:
-          phase: start
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
-          report-job-summary: true
-          report-pr-summary: false
+          detect-profile: enhanced
+          report: job-summary
           fail-on-error: true
           log-level: info
-      - uses: coldstep-io/coldstep@v0.2.1
-        if: always()
-        with:
-          phase: stop
-          report-job-summary: true
+      - run: echo "your build/test/deploy steps"
 ```
 
 ### What these controls do
 
-- `proc_tree=1`: emits `proc_fork` events and a process tree section in the digest.
-- `tls_sni=1`: adds TLS ClientHello / SNI rows (`"type":"tls"` in JSONL).
-- `fs_events=1`: adds filesystem events (`"type":"fs_event"`).
-- `fail-on-error=true`: fails the step if agent **operational** readiness cannot be established (BPF/load), not merely on policy noise.
+- `detect-profile: enhanced`: enables `proc_tree` (fork edges + process tree), `tls_sni` (TLS ClientHello / SNI rows, `"type":"tls"`), and `fs_events` (filesystem events, `"type":"fs_event"`).
+- `report: job-summary` (default): merge the digest into the Job Summary tab. Use `pr-comment`, `both`, or `none` for other surfaces.
+- `fail-on-error: true`: fail the step if agent **operational** readiness cannot be established (BPF/load), not merely on policy noise.
 
 ---
 
@@ -155,45 +127,35 @@ Detect mode is default. For defend behavior (block non-allowlisted egress), reus
 ```yaml
 - uses: coldstep-io/coldstep@v0.2.1
   with:
-    phase: start
     mode: defend
-    allowed-domains: google.com,github.com
-    # optional:
-    # allowed-hosts: api.example.com,*.svc.example.com
-    # allowed-ips: 1.1.1.1,8.8.8.8   # IPv4 literals
-  # ... workload steps ...
-- uses: coldstep-io/coldstep@v0.2.1
-  if: always()
-  with:
-    phase: stop
+    allow: |
+      google.com
+      github.com
+      api.example.com
+      *.svc.example.com
+      1.1.1.1
+      8.8.8.8
+- run: echo "your build/test/deploy steps"
 ```
 
 Denied egress appears as `"type":"deny"` in JSONL and in the digest.
 
 ### Allowlist files (long lists in the repo)
 
-For large allowlists, keep **UTF-8 text files** in the repository and pass **comma-separated paths** relative to **`GITHUB_WORKSPACE`** (no path escape outside the workspace):
+For large allowlists, keep **UTF-8 text files** in the repository and pass **comma-separated paths** to **`allow-file`** relative to **`GITHUB_WORKSPACE`** (no path escape outside the workspace).
 
-| Input | Merged with |
-| ----- | ------------- |
-| **`allowed-domains-file`** | Inline **`allowed-domains`** (inline first, then each file in order) |
-| **`allowed-hosts-file`** | **`allowed-hosts`** |
-| **`allowed-ips-file`** | **`allowed-ips`** |
-| **`ignored-ip-nets-file`** | **`ignored-ip-nets`** |
+**File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline `allow:` list, but reviewable in PRs as a file). Entries are auto-classified into domains, wildcard hosts, IPv4 literals, and `!`-prefixed ignore CIDRs.
 
-**File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline list, but reviewable in PRs as a file).
-
-**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep’s bundled policy for your pin — see **`scripts/coldstep_bootstrap/README.md`** in the repo.
+**Bootstrap pack (opt-in, default off):** set **`bootstrap-allowlist: true`** to merge vendored **`scripts/coldstep_bootstrap/`** domain and IP packs shipped **inside** the action after your inline and file merges. Default packs may be comment-only; enable only when you accept Coldstep's bundled policy for your pin — see **`scripts/coldstep_bootstrap/README.md`** in the repo.
 
 **Example**
 
 ```yaml
 - uses: coldstep-io/coldstep@v0.2.1
   with:
-    phase: start
     mode: defend
-    allowed-domains: api.github.com
-    allowed-domains-file: .github/coldstep/egress-domains.txt
+    allow: api.github.com
+    allow-file: .github/coldstep/egress-allow.txt
     fail-on-error: true
 ```
 
@@ -204,7 +166,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 - **Summary tab:** digest from `.coldstep-detect.md` (when enabled).
 - **Workspace:** `.coldstep-events.jsonl`, `.coldstep-telemetry.json`.
 
-Start with default **detect**, then add **`feature-gates`** when you need those streams.
+Start with default **detect**, then set **`detect-profile: enhanced`** when you need `proc_tree` / `tls_sni` / `fs_events` streams.
 
 ### Report pipelines (maintainers)
 
@@ -242,11 +204,8 @@ GitHub Summary rendering is Markdown-first; use short labels or optional emoji i
 
 ## FAQ
 
-**Why two `uses: coldstep-io/coldstep` steps?**  
-The composite has **`phase: start`** (attach agent before your work) and **`phase: stop`** (flush digest, optional PR comment). GitHub does not run a hidden “post” hook for composite actions—you must call **`stop`** explicitly.
-
-**What if I skip `phase: stop`?**  
-You lose a clean shutdown path: digest/Summary/PR comment behavior from the stop step may not run, and you may leave the workspace without the usual final artifacts.
+**Why one `uses: coldstep-io/coldstep` block instead of two?**  
+The action is a node24 JavaScript action with `pre` / `main` / `post` hooks. GitHub runs `pre` before your build steps (starts the agent), `main` at the step's position (a status check), and `post` at job end (flushes digest, optional PR comment). One `uses:` block is all you need — no explicit start/stop. In-repo CI workflows use `phase: start` / `phase: stop` because `uses: ./` (local refs) do not fire node24 pre/post hooks; consumer workflows pin a published tag and omit `phase`.
 
 **Can I use `mode: enforce` or `CI_GUARD_MODE=enforce`?**  
 No. Use **`defend`** for blocking mode. See **[CHANGELOG](CHANGELOG.md)**.
@@ -261,7 +220,7 @@ You can, but **`main` moves**; prefer a **release tag** per **[README](README.md
 **No** for this **v1** quick path — use **`ubuntu-latest`** only.
 
 **How do I get a PR comment with the digest?**  
-Set **`report-pr-summary: true`** on the **`stop`** step (and ensure the workflow is a **`pull_request`** event). **`github-token`** defaults to **`github.token`**.
+Set **`report: pr-comment`** (or **`both`** for Summary + PR comment) and ensure the workflow is a **`pull_request`** event. **`github-token`** defaults to **`github.token`**.
 
 **Where is the full honesty matrix for CI?**  
 **[VALIDATION.md](VALIDATION.md)** — what is proven in-repo vs not.

@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed (breaking)
+
+- **`action.yml` inputs:** deprecated allowlist / report / feature-gate aliases removed. Consumers must migrate before the next tag:
+  - `allowed-domains`, `allowed-domains-file`, `allowed-hosts`, `allowed-hosts-file`, `allowed-ips`, `allowed-ips-file` → unified **`allow`** / **`allow-file`** (entries auto-classify into domains, wildcard hosts, IPv4 literals/CIDRs).
+  - `ignored-ip-nets`, `ignored-ip-nets-file` → **`ignored-nets`** / **`ignored-nets-file`**.
+  - `report-job-summary`, `report-pr-summary` → unified **`report`** (`job-summary` | `pr-comment` | `both` | `none`).
+  - `feature-gates` → **`detect-profile`** (`enhanced` enables `proc_tree=1,tls_sni=1,fs_events=1`).
+- **`phase:`** input kept (internal). In-repo CI workflows still use it because **`uses: ./`** does not fire node24 pre/post hooks; consumer workflows pin a published tag and use a single `uses:` block.
+
+### Changed
+
+- **Internal config enum:** `config.ModeEnforce` renamed to `config.ModeDefend`; underlying string value also changed from `"enforce"` to `"defend"` so the in-memory enum matches the public surface. `internal/report/digest.go` keeps accepting legacy `"enforce"` JSONL/digest for replay.
+- **BPF generators:** the five per-package `run_bpf2go.go` wrappers under `internal/bpf/{traceconnect,tracedns,tracefs,tracebpfaudit,tracelsmenforce}/` collapsed into one shared helper at `internal/bpf/bpfgen/main.go`. Each `gen.go` now reads `//go:generate go run ../bpfgen/main.go <Target> <source>.bpf.c`.
+
 ### Added
 
 - **Integration:** **`TestRun_TLSClientHelloPwriteJSONL`** exercises **`tls_sni=1`** on **`os.pwrite`** (**`NR_PWRITE64`**) after **`connect`**, asserting **`type:tls`** and **SNI** (synthetic ClientHello, same shape as sendto coverage).
