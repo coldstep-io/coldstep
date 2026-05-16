@@ -9,9 +9,10 @@
 
 name: coldstep-demo
 
-# Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
-# from the workflow ref. Published tags (e.g. v0.2.1) must also ship `action.yml` at the root
-# for `uses: coldstep-io/coldstep@TAG` to work elsewhere; see coldstep-ci-runner.yml for the same pattern.
+# Demo uses the remote action ref (not `uses: ./`) so that the node24 pre/post lifecycle hooks fire.
+# GitHub Actions does not execute pre: and post: for local `uses: ./` references — only for
+# remote `owner/repo@ref` references. Published tags (e.g. v0.2.1) work the same way.
+# To test a branch, update COLDSTEP_ACTION_REF below to the branch name being validated.
 
 on:
   workflow_dispatch:
@@ -31,8 +32,6 @@ on:
 
 env:
   COLDSTEP_AGENT_VERSION: v0.2.1
-  # Align other JS actions (e.g. upload-artifact) with hosted Node 24; see GitHub Actions changelog.
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # Default to least-privilege; the detect-mode job overrides with
 # `permissions: { actions: read, contents: read }` when previous-run baseline
@@ -84,17 +83,19 @@ jobs:
       - name: Build coldstep-report (Go only; agent from release)
         run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
-      - name: Start Coldstep (detect mode)
-        uses: ./
+      # Single `uses:` block — pre hook starts the agent, post hook stops it and flushes the digest.
+      # Uses remote ref so that node24 pre/post hooks fire (local `uses: ./` suppresses them).
+      - name: Coldstep (detect mode)
+        uses: coldstep-io/coldstep@claude/sharp-pare-41d3da
         with:
-          phase: start
           mode: detect
-          allowed-hosts: theclouddj.com, *.ubuntu.com
+          allow: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          detect-profile: enhanced
           release-path: bin/coldstep
-          # Extra UDP/HTTP probes after attach — improves baseline JSONL on ubuntu-latest (TLS still from curl/openssl below).
+          # Extra UDP/HTTP probes after attach — improves baseline JSONL on ubuntu-latest.
           smoke-test-egress: 'true'
+          report: job-summary
 
       - name: Install runtime probes
         run: |
@@ -138,18 +139,20 @@ jobs:
           rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
 
-      - name: Stop Coldstep (flush digest to workspace)
-        uses: ./
-        with:
-          phase: stop
-          report-job-summary: 'false'
-          fail-on-error: 'false'
-
       - name: Verify detect capabilities and write visual summary
         run: |
           set -euo pipefail
           f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          # The agent finalizes the digest at SIGTERM, not continuously. Stop it now so the digest
+          # is complete before we check it. post.js will handle the already-dead process gracefully.
+          if CS_PID="$(cat "${GITHUB_WORKSPACE}/.coldstep.pid" 2>/dev/null)"; then
+            sudo kill -s SIGTERM "${CS_PID}" 2>/dev/null || true
+            for _i in 1 2 3 4 5 6 7 8; do
+              sleep 1
+              sudo kill -0 "${CS_PID}" 2>/dev/null || break
+            done
+          fi
           test -f "$f"
           test -f "$j"
           # Drain delay + retries: tls_sni rows can lag ringbuf flush on hosted runners (same class as fs_event variance).
@@ -352,17 +355,17 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
-        uses: ./
+      # Single `uses:` block — pre hook starts the agent, post hook stops it.
+      # Defend mode defaults fail-on-error to true (Change 5) — no need to set it explicitly.
+      # Uses remote ref so that node24 pre/post hooks fire (local `uses: ./` suppresses them).
+      - name: Coldstep (defend mode)
+        uses: coldstep-io/coldstep@claude/sharp-pare-41d3da
         with:
-          phase: start
           mode: defend
-          fail-on-error: 'true'
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
-          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
-          allowed-ips: 1.1.1.1
+          # Unified allow input: domains, wildcard domains, and IPs in one place.
+          allow: theclouddj.com, *.ubuntu.com, archive.ubuntu.com, azure.archive.ubuntu.com, 1.1.1.1
           release-path: bin/coldstep
+          report: none
 
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
@@ -399,13 +402,6 @@ jobs:
             echo "expected direct IP connect to be blocked under enforce allowlist"
             exit 1
           fi
-
-      - name: Stop Coldstep (flush digest to workspace)
-        uses: ./
-        with:
-          phase: stop
-          report-job-summary: 'false'
-          fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |

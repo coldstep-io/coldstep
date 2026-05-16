@@ -5,192 +5,204 @@ description: >-
 branding:
   icon: shield
   color: blue
+
 inputs:
-  phase:
-    description: >-
-      Composite action phase. Use `start` before workload steps and `stop` near job end to flush digest and optional notifications.
-    required: false
-    default: start
+  # --- Core inputs (document these in README) ---
+
   mode:
     description: >-
       Runtime mode: detect (default) or defend (blocking, requires allowlist). The enforce spelling is not supported; use defend.
     required: false
     default: detect
-  allowed-domains:
+
+  allow:
     description: >-
-      Comma- or whitespace-separated egress allowlist domains for defend mode. Values are trimmed, lowercased, and deduplicated.
+      Comma- or newline-separated egress allowlist. Accepts plain domains (example.com), wildcard domains (*.example.com),
+      IPv4 literals (1.2.3.4), and CIDRs (10.0.0.0/8). Prefix a CIDR with ! to ignore that net (e.g. !192.168.0.0/16).
+      Entries are auto-classified: IP/CIDR → allowed-ips, domain/wildcard → allowed-hosts + allowed-domains.
+      Merged with allow-file and the legacy per-type inputs.
     required: false
     default: ''
-  allowed-domains-file:
+
+  allow-file:
     description: >-
-      Optional comma-separated paths relative to GITHUB_WORKSPACE (or absolute paths still inside the workspace) to UTF-8 text files.
-      Each file contributes tokens (one per line or comma-separated); lines starting with # are comments. Merged after inline allowed-domains.
+      Comma-separated paths to UTF-8 text files (one entry per line or comma-separated; # comments).
+      Same format as allow; entries are classified and merged automatically.
     required: false
     default: ''
-  github-token:
-    description: >-
-      Default GitHub token. Used when report-pr-summary is true to post an optional PR comment
-      (pull_request workflows only).
-    required: false
-    default: ${{ github.token }}
-  allowed-hosts:
-    description: >-
-      Comma- or whitespace-separated hostnames. Use *.example.com for one-level subdomains (clean-room matcher).
-    required: false
-    default: ''
-  allowed-hosts-file:
-    description: >-
-      Optional comma-separated workspace text files; tokens merged after inline allowed-hosts (same line/comment rules as allowed-domains-file).
-    required: false
-    default: ''
-  allowed-ips:
-    description: >-
-      Comma- or whitespace-separated IPv4 literals and CIDRs for policy (see internal/policy). Merged with allowed-ips-file.
-    required: false
-    default: ''
-  allowed-ips-file:
-    description: >-
-      Optional comma-separated workspace text files for additional IPv4 literals/CIDRs (same line/comment rules).
-    required: false
-    default: ''
-  ignored-ip-nets:
-    description: >-
-      Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores
-      (common private-network / RFC1918 internal traffic), unless no-default-ignored-nets is true. Maximum 128 merged CIDRs total.
-      Affects policy classification and defend-mode BPF bypass for those destinations. Merged with ignored-ip-nets-file.
-    required: false
-    default: ''
-  ignored-ip-nets-file:
-    description: >-
-      Optional comma-separated workspace text files for additional ignored CIDRs (same line/comment rules).
-    required: false
-    default: ''
-  no-default-ignored-nets:
-    description: >-
-      When true, do not merge implicit 10.0.0.0/8 and 172.16.0.0/12; only ignored-ip-nets is used (may be empty).
-    required: false
-    default: 'false'
-  fail-on-error:
-    description: >-
-      If true, fail when the agent never reports operational readiness after startup attach succeeds for the
-      selected mode: detect requires sched_process_exec; connect/sendto/HTTP sniff and DNS recvfrom sniff are
-      best-effort and may be skipped (see digest BPF status). Defend additionally requires syscall tracing and cgroup
-      programs. Does not fail on egress policy violations (v1).
-    required: false
-    default: 'false'
-  ready-timeout-seconds:
-    description: >-
-      Only when fail-on-error is true: maximum seconds to wait for .coldstep-ready.json with ok:true (default 1500).
-      Values are clamped between 60 and 2700. If the agent writes ok:false or an invalid payload, the step fails
-      immediately without waiting this long (saves runner minutes).
-    required: false
-    default: ''
-  log-level:
-    description: Agent log level written to stderr (debug, info, warn, error).
-    required: false
-    default: info
-  report-job-summary:
-    description: If true, post step merges the workspace detect log into the job Summary tab.
-    required: false
-    default: 'true'
-  report-pr-summary:
-    description: >-
-      If true, post step comments the digest on the pull request (pull_request events only). Requires github-token.
-    required: false
-    default: 'false'
-  feature-gates:
-    description: >-
-      Optional key=value pairs (comma-separated) passed through to the agent as COLDSTEP_FEATURE_GATES for experiments
-      (e.g. proc_tree=1 for sched_process_fork, tls_sni=1 for TLS ClientHello SNI JSONL/digest).
-    required: false
-    default: ''
+
   detect-profile:
     description: >-
-      Detect mode only: standard (default) or enhanced. Enhanced merges default feature gates (proc_tree, tls_sni, fs_events) when each key is unset, and sets COLDSTEP_DETECT_PROFILE for the agent. Use the same value when running coldstep-report build-model (COLDSTEP_DETECT_PROFILE) so integrity scoring matches the run.
+      Detect mode only: standard (default) or enhanced. Enhanced merges default feature gates
+      (proc_tree=1, tls_sni=1, fs_events=1) when each key is unset in feature-gates,
+      and sets COLDSTEP_DETECT_PROFILE for the agent. Use the same value when running
+      coldstep-report build-model (COLDSTEP_DETECT_PROFILE) so integrity scoring matches the run.
     required: false
     default: standard
-  release-path:
+
+  report:
     description: >-
-      Optional path to a prebuilt coldstep binary (debug). When set and the file exists, skips building from source on the runner.
+      Where to post the detect digest. job-summary (default): append to the job Summary tab.
+      pr-comment: post as a PR comment (pull_request events only; requires github-token).
+      both: job summary and PR comment.
+      none: discard the digest.
+      Deprecated report-job-summary and report-pr-summary inputs override this if set explicitly.
+    required: false
+    default: job-summary
+
+  fail-on-error:
+    description: >-
+      If true, fail when the agent never reports operational readiness after startup attach succeeds.
+      Defend mode defaults to true when this input is not set explicitly.
+      Detect requires sched_process_exec; connect/sendto/HTTP/DNS sniff are best-effort.
+      Defend additionally requires syscall tracing and cgroup programs.
     required: false
     default: ''
-  smoke-test-egress:
-    description: >-
-      Default false. When true, fire short IPv4 UDP sendto and cleartext HTTP sendto probes after the agent starts
-      so the digest and workspace JSONL commonly show udp/http rows on ubuntu-latest (opt-in extra egress).
-    required: false
-    default: 'false'
-  io-uring-disable:
-    description: >-
-      When true (default), disables io_uring on the runner via sysctl (io_uring_disabled=2) before
-      the agent starts. io_uring operations bypass syscall-based eBPF hooks entirely; disabling it
-      closes the single largest evasion vector for CI workloads that do not need io_uring.
-    required: false
-    default: 'true'
+
+  # --- Advanced inputs (document in Advanced section) ---
+
   signing-key:
     description: >-
       Optional base64-encoded Ed25519 seed (32 bytes) or private key (64 bytes) for telemetry signing.
       When set, every emitted JSONL event is signed.
     required: false
     default: ''
+
+  log-level:
+    description: Agent log level written to stderr (debug, info, warn, error).
+    required: false
+    default: info
+
+  github-token:
+    description: >-
+      GitHub token used when report is pr-comment or both to post a PR comment
+      (pull_request workflows only).
+    required: false
+    default: ${{ github.token }}
+
+  ignored-nets:
+    description: >-
+      Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores,
+      unless no-default-ignored-nets is true. Maximum 128 merged CIDRs. Also accepts entries via allow
+      input prefixed with ! (e.g. !10.0.0.0/8). Merged with ignored-nets-file.
+    required: false
+    default: ''
+
+  ignored-nets-file:
+    description: >-
+      Optional comma-separated workspace text files for additional ignored CIDRs (same line/comment rules as allow-file).
+    required: false
+    default: ''
+
   bootstrap-allowlist:
     description: >-
       Default false. When true, merge vendored bootstrap packs from scripts/coldstep_bootstrap/
-      (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into allowed-domains and allowed-ips after inline
-      and workspace file merges. Opt-in only — review upgrades when pinning coldstep-io/coldstep tags.
+      (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into the allowlist. Opt-in only —
+      review upgrades when pinning coldstep-io/coldstep tags.
     required: false
     default: 'false'
-runs:
-  using: composite
-  steps:
-    - name: Coldstep start
-      if: ${{ inputs.phase == 'start' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        AP="${GITHUB_ACTION_PATH:-$PWD}"
-        BIN="${AP}/bin/coldstep-action"
-        if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
-        fi
-        cmd=("${BIN}" start
-          --mode "${{ inputs.mode }}"
-          --detect-profile "${{ inputs.detect-profile }}"
-          --allowed-domains "${{ inputs.allowed-domains }}"
-          --allowed-domains-file "${{ inputs.allowed-domains-file }}"
-          --allowed-hosts "${{ inputs.allowed-hosts }}"
-          --allowed-hosts-file "${{ inputs.allowed-hosts-file }}"
-          --allowed-ips "${{ inputs.allowed-ips }}"
-          --allowed-ips-file "${{ inputs.allowed-ips-file }}"
-          --ignored-ip-nets "${{ inputs.ignored-ip-nets }}"
-          --ignored-ip-nets-file "${{ inputs.ignored-ip-nets-file }}"
-          --no-default-ignored-nets "${{ inputs.no-default-ignored-nets }}"
-          --log-level "${{ inputs.log-level }}"
-          --feature-gates "${{ inputs.feature-gates }}"
-          --release-path "${{ inputs.release-path }}"
-          --fail-on-error "${{ inputs.fail-on-error }}"
-          --smoke-test-egress "${{ inputs.smoke-test-egress }}"
-          --io-uring-disable "${{ inputs.io-uring-disable }}"
-          --signing-key "${{ inputs.signing-key }}"
-          --report-job-summary "${{ inputs.report-job-summary }}"
-          --bootstrap-allowlist "${{ inputs.bootstrap-allowlist }}")
-        if [[ -n "${{ inputs.ready-timeout-seconds }}" ]]; then
-          cmd+=(--ready-timeout-seconds "${{ inputs.ready-timeout-seconds }}")
-        fi
-        "${cmd[@]}"
 
-    - name: Coldstep stop
-      if: ${{ inputs.phase == 'stop' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        AP="${GITHUB_ACTION_PATH:-$PWD}"
-        BIN="${AP}/bin/coldstep-action"
-        if [[ ! -x "${BIN}" ]]; then
-          bash "${AP}/scripts/build-agent-linux.sh" "${AP}"
-        fi
-        "${BIN}" stop \
-          --fail-on-error "${{ inputs.fail-on-error }}" \
-          --report-job-summary "${{ inputs.report-job-summary }}" \
-          --report-pr-summary "${{ inputs.report-pr-summary }}" \
-          --github-token "${{ inputs.github-token }}"
+  no-default-ignored-nets:
+    description: >-
+      When true, do not merge implicit 10.0.0.0/8 and 172.16.0.0/12; only ignored-nets is used (may be empty).
+    required: false
+    default: 'false'
+
+  ready-timeout-seconds:
+    description: >-
+      Only when fail-on-error is true: maximum seconds to wait for .coldstep-ready.json with ok:true (default 1500).
+      Values are clamped between 60 and 2700. If the agent writes ok:false or an invalid payload, the step fails
+      immediately without waiting (saves runner minutes).
+    required: false
+    default: ''
+
+  # --- Internal / deprecated (do not document in README) ---
+
+  phase:
+    description: >-
+      Deprecated: use the pre/post lifecycle instead (single uses: block per job).
+      Legacy composite-action phase. When set to start, main.js runs start logic.
+      When set to stop, main.js runs stop logic. pre.js and post.js are no-ops.
+    required: false
+    default: ''
+
+  allowed-domains:
+    description: 'Deprecated: use allow.'
+    required: false
+    default: ''
+
+  allowed-domains-file:
+    description: 'Deprecated: use allow-file.'
+    required: false
+    default: ''
+
+  allowed-hosts:
+    description: 'Deprecated: use allow.'
+    required: false
+    default: ''
+
+  allowed-hosts-file:
+    description: 'Deprecated: use allow-file.'
+    required: false
+    default: ''
+
+  allowed-ips:
+    description: 'Deprecated: use allow.'
+    required: false
+    default: ''
+
+  allowed-ips-file:
+    description: 'Deprecated: use allow-file.'
+    required: false
+    default: ''
+
+  ignored-ip-nets:
+    description: 'Deprecated: use ignored-nets.'
+    required: false
+    default: ''
+
+  ignored-ip-nets-file:
+    description: 'Deprecated: use ignored-nets-file.'
+    required: false
+    default: ''
+
+  report-job-summary:
+    description: 'Deprecated: use report. When set explicitly, overrides the report input for job summary behavior.'
+    required: false
+    default: ''
+
+  report-pr-summary:
+    description: 'Deprecated: use report. When set explicitly, overrides the report input for PR comment behavior.'
+    required: false
+    default: ''
+
+  feature-gates:
+    description: 'Deprecated: use detect-profile. Optional key=value pairs (comma-separated) for experiments. Merged with detect-profile gates.'
+    required: false
+    default: ''
+
+  release-path:
+    description: 'Internal debug: path to a prebuilt coldstep binary. When set and the file exists, skips building from source.'
+    required: false
+    default: ''
+
+  smoke-test-egress:
+    description: >-
+      Internal. When true, fire short IPv4 UDP sendto and cleartext HTTP probes after the agent starts
+      so the digest commonly shows udp/http rows on ubuntu-latest (opt-in extra egress).
+    required: false
+    default: 'false'
+
+  io-uring-disable:
+    description: >-
+      Internal. When true (default), disables io_uring via sysctl before the agent starts.
+      io_uring operations bypass syscall-based eBPF hooks; disabling it closes the single
+      largest evasion vector for CI workloads that do not need io_uring.
+    required: false
+    default: 'true'
+
+runs:
+  using: node24
+  pre: dist/pre/index.js
+  main: dist/main/index.js
+  post: dist/post/index.js
