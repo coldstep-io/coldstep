@@ -1,13 +1,13 @@
 /*
- * BPF LSM enforcement for mode: enforce — IPv4 only (socket_connect, socket_sendmsg).
- * Provides robust enforcement by hooking into the Linux Security Module (LSM) framework.
+ * BPF LSM defend for mode: defend — IPv4 only (socket_connect, socket_sendmsg).
+ * Provides robust defense by hooking into the Linux Security Module (LSM) framework.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
 #include "trace_connect_obs.h"
-#include "enforce_lpm_key.h"
+#include "defend_lpm_key.h"
 #include "dns_cache.h"
 #include "deny_event.h"
 
@@ -29,9 +29,9 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 #define EPERM 1
 #endif
 
-#define COLDSTEP_ENFORCE_KEY_MODE 0
-#define COLDSTEP_ENFORCE_MODE_DETECT 0
-#define COLDSTEP_ENFORCE_MODE_ENFORCE 1
+#define COLDSTEP_DEFEND_KEY_MODE 0
+#define COLDSTEP_DEFEND_MODE_DETECT 0
+#define COLDSTEP_DEFEND_MODE_DEFEND 1
 
 #define COLDSTEP_PROTO_TCP 1
 #define COLDSTEP_PROTO_UDP 2
@@ -58,7 +58,7 @@ struct {
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
-} lsm_enforce_cfg SEC(".maps");
+} lsm_defend_cfg SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_LPM_TRIE);
@@ -76,17 +76,17 @@ struct {
 	__type(value, __u8);
 } lsm_ignored_ipv4_lpm SEC(".maps");
 
-#define CS_EF_RB_DENY lsm_deny_events
-#define CS_EF_PC_DENY_FAIL lsm_deny_reserve_failures
-#define CS_EF_ARR_ENFORCE_CFG lsm_enforce_cfg
-#define CS_EF_TRIE_ALLOWED lsm_allowed_ipv4
-#define CS_EF_TRIE_IGNORED lsm_ignored_ipv4_lpm
-#include "enforce_policy.inc"
-#undef CS_EF_RB_DENY
-#undef CS_EF_PC_DENY_FAIL
-#undef CS_EF_ARR_ENFORCE_CFG
-#undef CS_EF_TRIE_ALLOWED
-#undef CS_EF_TRIE_IGNORED
+#define CS_DEF_RB_DENY lsm_deny_events
+#define CS_DEF_PC_DENY_FAIL lsm_deny_reserve_failures
+#define CS_DEF_ARR_DEFEND_CFG lsm_defend_cfg
+#define CS_DEF_TRIE_ALLOWED lsm_allowed_ipv4
+#define CS_DEF_TRIE_IGNORED lsm_ignored_ipv4_lpm
+#include "defend_policy.inc"
+#undef CS_DEF_RB_DENY
+#undef CS_DEF_PC_DENY_FAIL
+#undef CS_DEF_ARR_DEFEND_CFG
+#undef CS_DEF_TRIE_ALLOWED
+#undef CS_DEF_TRIE_IGNORED
 
 /*
  * LSM hooks return 0 to allow, -EPERM to deny.
@@ -94,7 +94,7 @@ struct {
 SEC("lsm/socket_connect")
 int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, int addrlen)
 {
-	if (!enforcement_enabled())
+	if (!defense_enabled())
 		return 0;
 	if (!address)
 		return 0;
@@ -139,7 +139,7 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 SEC("lsm/socket_sendmsg")
 int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int size)
 {
-	if (!enforcement_enabled())
+	if (!defense_enabled())
 		return 0;
 
 	if (!msg)

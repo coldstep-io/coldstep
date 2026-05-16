@@ -144,7 +144,7 @@ func reconcileLPMMap(m *ebpf.Map, expected map[[8]byte]struct{}) (added int, rem
 }
 
 // rearmAllowedFromSnapshot reconciles the BPF allowed_ipv4 LPM trie with the
-// compiled enforce snapshot (and any literal CIDRs from policy).
+// compiled defend snapshot (and any literal CIDRs from policy).
 func rearmAllowedFromSnapshot(allowedMap *ebpf.Map, compiled policy.CompileResult, pol *policy.Policy) (added int, removed int, err error) {
 	expected := expectedAllowedKeys(compiled, pol)
 	return reconcileLPMMap(allowedMap, expected)

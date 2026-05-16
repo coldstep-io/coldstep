@@ -333,7 +333,7 @@ func runStop(cfg stopConfig) error {
 	if cfg.ReportJobSummary {
 		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
 			safe := sanitizeDigestForMarkdown(body)
-			block := "## Coldstep - digest (exec / network / enforcement)\n\n" + safe
+			block := "## Coldstep - digest (exec / network / defend)\n\n" + safe
 			if !strings.HasSuffix(block, "\n") {
 				block += "\n"
 			}

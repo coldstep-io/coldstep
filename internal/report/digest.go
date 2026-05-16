@@ -86,7 +86,7 @@ type FSDigestRow struct {
 	Path string
 }
 
-// DenyDigestRow is the first denied egress action shown in the enforcement section.
+// DenyDigestRow is the first denied egress action shown in the defend section.
 type DenyDigestRow struct {
 	TS       string
 	PID      uint32
@@ -151,11 +151,11 @@ type DigestInput struct {
 	FSDegradedHook bool
 	FSReaderErrors int
 
-	EnforcementMode                string
-	EnforcementAllowlistSize       int
-	EnforcementDenyCount           int
-	EnforcementDenyReserveFailures int
-	EnforcementFirstDeny           *DenyDigestRow
+	DefendMode                string
+	DefendAllowlistSize       int
+	DefendDenyCount           int
+	DefendDenyReserveFailures int
+	DefendFirstDeny           *DenyDigestRow
 
 	Connect4TupleUpdateFailures   int
 	UDPRingbufReserveFailures     int
@@ -274,20 +274,16 @@ func buildHotEgressList(in DigestInput) []hotEgressAgg {
 
 func isBlockingDigestMode(m string) bool {
 	m = strings.TrimSpace(m)
-	if strings.EqualFold(m, "enforce") || strings.EqualFold(m, "defend") {
+	if strings.EqualFold(m, "defend") {
 		return true
 	}
-	return strings.HasPrefix(strings.ToLower(m), "enforce+")
+	return strings.HasPrefix(strings.ToLower(m), "defend+")
 }
 
 func digestModeCell(m string) string {
 	m = strings.TrimSpace(m)
 	if m == "" {
 		return "detect"
-	}
-	lm := strings.ToLower(m)
-	if lm == "enforce" || strings.HasPrefix(lm, "enforce+") {
-		return "defend"
 	}
 	return m
 }
@@ -340,14 +336,14 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	b.WriteString("| Question | Answer |\n|:--|:--|\n")
 
 	mode := "detect"
-	if isBlockingDigestMode(in.EnforcementMode) {
+	if isBlockingDigestMode(in.DefendMode) {
 		mode = "defend"
 	}
 	b.WriteString(fmt.Sprintf("| **Mode** | `%s`", sanitizeCell(mode)))
-	if isBlockingDigestMode(in.EnforcementMode) {
-		b.WriteString(fmt.Sprintf(" — **deny events:** %d", in.EnforcementDenyCount))
-		if in.EnforcementDenyReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf(" (**+%d** deny reserve failures)", in.EnforcementDenyReserveFailures))
+	if isBlockingDigestMode(in.DefendMode) {
+		b.WriteString(fmt.Sprintf(" — **deny events:** %d", in.DefendDenyCount))
+		if in.DefendDenyReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf(" (**+%d** deny reserve failures)", in.DefendDenyReserveFailures))
 		}
 	}
 	b.WriteString(" |\n")
@@ -487,7 +483,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 
 	var b strings.Builder
-	if isBlockingDigestMode(in.EnforcementMode) {
+	if isBlockingDigestMode(in.DefendMode) {
 		b.WriteString("## Coldstep · defend\n\n")
 		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
 		b.WriteString("<sub>Defend mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
@@ -710,20 +706,20 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("\n")
 	}
 
-	if in.EnforcementMode != "" || in.EnforcementAllowlistSize > 0 || in.EnforcementDenyCount > 0 || in.EnforcementDenyReserveFailures > 0 || in.EnforcementFirstDeny != nil {
-		b.WriteString("### Enforcement\n\n")
+	if in.DefendMode != "" || in.DefendAllowlistSize > 0 || in.DefendDenyCount > 0 || in.DefendDenyReserveFailures > 0 || in.DefendFirstDeny != nil {
+		b.WriteString("### Defend\n\n")
 		b.WriteString("| Field | Value |\n|:--|:--|\n")
-		mode := digestModeCell(in.EnforcementMode)
+		mode := digestModeCell(in.DefendMode)
 		b.WriteString(fmt.Sprintf("| Mode | `%s` |\n", sanitizeCell(mode)))
-		b.WriteString(fmt.Sprintf("| Allowlist size | %d |\n", in.EnforcementAllowlistSize))
-		b.WriteString(fmt.Sprintf("| Deny count | %d |\n", in.EnforcementDenyCount))
-		if in.EnforcementDenyReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf("| Deny ringbuf reserve failures (blocked, no JSONL) | %d |\n", in.EnforcementDenyReserveFailures))
+		b.WriteString(fmt.Sprintf("| Allowlist size | %d |\n", in.DefendAllowlistSize))
+		b.WriteString(fmt.Sprintf("| Deny count | %d |\n", in.DefendDenyCount))
+		if in.DefendDenyReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf("| Deny ringbuf reserve failures (blocked, no JSONL) | %d |\n", in.DefendDenyReserveFailures))
 		}
 		b.WriteString("\n")
 
-		if in.EnforcementFirstDeny != nil {
-			row := in.EnforcementFirstDeny
+		if in.DefendFirstDeny != nil {
+			row := in.DefendFirstDeny
 			b.WriteString("**First deny**\n\n")
 			b.WriteString("| Time (UTC) | PID | Comm | Protocol | Remote | Reason |\n|:--|--:|:-|:-|:-|:-|\n")
 			b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | `%s:%d` | `%s` |\n\n",

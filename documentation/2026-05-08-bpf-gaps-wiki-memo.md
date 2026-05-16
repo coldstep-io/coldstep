@@ -16,9 +16,9 @@ HTTP and TLS sniff use bounded `bpf_probe_read_user` patterns. Multi-buffer scat
 
 **Backlog refs:** BG-02.
 
-## Theme: Enforcement vs detect
+## Theme: Defend vs detect
 
-Cgroup programs (`trace_enforce.bpf.c`) and LSM (`trace_lsm_enforce.bpf.c`) enforce IPv4 allowlist semantics separately from syscall telemetry; shared helpers live in `bpf/enforce_policy.inc`. Parity gaps (for example hook coverage vs detect paths) should be tracked as explicit decisions, not assumed.
+Cgroup programs (`trace_defend.bpf.c`) and LSM (`trace_lsm_defend.bpf.c`) enforce IPv4 allowlist semantics separately from syscall telemetry; shared helpers live in `bpf/defend_policy.inc`. Parity gaps (for example hook coverage vs detect paths) should be tracked as explicit decisions, not assumed.
 
 **Backlog refs:** (future items; tie to defend-mode CI).
 

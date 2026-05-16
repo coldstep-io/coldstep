@@ -10,7 +10,7 @@
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
  * (structural layout similar to separate tcp/udp/http probe sources).
  *
- * cgroup enforcement lives in bpf/trace_enforce.bpf.c (internal/bpf/traceenforce).
+ * cgroup defend lives in bpf/trace_defend.bpf.c (internal/bpf/tracedefend).
  */
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>

@@ -1,8 +1,8 @@
 //go:build ignore
 
-// run_bpf2go.go — generate-time helper for tracelsmenforce.
+// run_bpf2go.go — generate-time helper for tracelsmdefend.
 //
-// trace_lsm_enforce.bpf.c includes bpf/trace_connect_obs.h (read_ipv4_sockaddr).
+// trace_lsm_defend.bpf.c includes bpf/trace_connect_obs.h (read_ipv4_sockaddr).
 // That header keys syscall constants off bpf_target_* from bpf_tracing.h, which
 // requires -D__TARGET_ARCH_x86 or -D__TARGET_ARCH_arm64 from the bpf2go clang flags.
 package main
@@ -42,8 +42,8 @@ func main() {
 		"-no-strip",
 		"-target", "bpfel,bpfeb",
 		"-cflags", cflags,
-		"Tracelsmenforce",
-		filepath.Join(repoRoot, "bpf", "trace_lsm_enforce.bpf.c"),
+		"Tracelsmdefend",
+		filepath.Join(repoRoot, "bpf", "trace_lsm_defend.bpf.c"),
 		"--",
 	}
 	args = append(args, extra...)

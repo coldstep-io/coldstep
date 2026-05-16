@@ -6,7 +6,7 @@
 // which is a stable kernel tracepoint (not a syscall raw_tp), so no
 // architecture-specific syscall-number constants are required.
 //
-// See internal/bpf/traceenforce/gen.go for an explanation of the two
+// See internal/bpf/tracedefend/gen.go for an explanation of the two
 // loader patterns used in this repo.
 package traceexec
 
