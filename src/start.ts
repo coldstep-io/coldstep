@@ -265,8 +265,15 @@ export async function startAgent(): Promise<void> {
     detached: true,
     stdio,
   });
-  child.once('error', (err: Error) => {
-    spawnErr = err;
+  // Wait for either a successful 'spawn' or an 'error' event, with a 200 ms
+  // fallback so a slow kernel error path doesn't stall startup indefinitely.
+  await new Promise<void>((resolve) => {
+    child.once('spawn', resolve);
+    child.once('error', (err: Error) => {
+      spawnErr = err;
+      resolve();
+    });
+    setTimeout(resolve, 200);
   });
   if (stderrFd !== undefined) {
     try {
@@ -275,13 +282,16 @@ export async function startAgent(): Promise<void> {
       /* ignore */
     }
   }
+  if (spawnErr !== undefined) {
+    core.setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+    return;
+  }
   if (child.pid === undefined) {
     core.setFailed('coldstep: failed to spawn agent (no pid — check sudo and that the binary exists)');
     return;
   }
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  if (spawnErr !== undefined) {
-    core.setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+  if (child.exitCode !== null) {
+    core.setFailed(`coldstep: agent exited immediately with code ${child.exitCode}`);
     return;
   }
   child.unref();

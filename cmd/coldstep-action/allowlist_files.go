@@ -71,6 +71,12 @@ func mergeInlineAndAllowlistFiles(workspaceRoot, inline, filesCSV string) (strin
 		if err != nil {
 			return "", fmt.Errorf("read allowlist file %q: %w", rel, err)
 		}
+		// TOCTOU mitigation: verify the symlink still resolves to the same path
+		// after reading — if it changed, reject to avoid acting on swapped content.
+		full2, err2 := resolvePathUnderWorkspace(wsAbs, rel)
+		if err2 != nil || full2 != full {
+			return "", fmt.Errorf("allowlist file %q: path changed after read (possible symlink swap)", rel)
+		}
 		fileTokens = append(fileTokens, parseAllowlistFileBody(body)...)
 	}
 	inlineTok := splitAllowInlineTokens(inline)
