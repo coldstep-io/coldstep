@@ -155,8 +155,8 @@ func TestLoadFromEnv_DefendNormalizesToEnforce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Mode != ModeEnforce {
-		t.Fatalf("mode: got %q want %q", c.Mode, ModeEnforce)
+	if c.Mode != ModeDefend {
+		t.Fatalf("mode: got %q want %q", c.Mode, ModeDefend)
 	}
 }
 
@@ -231,7 +231,7 @@ func TestPublicMode(t *testing.T) {
 	if got := (Config{Mode: ModeDetect}).PublicMode(); got != "detect" {
 		t.Fatalf("detect PublicMode: got %q", got)
 	}
-	if got := (Config{Mode: ModeEnforce}).PublicMode(); got != "defend" {
+	if got := (Config{Mode: ModeDefend}).PublicMode(); got != "defend" {
 		t.Fatalf("enforce PublicMode: got %q want defend", got)
 	}
 }

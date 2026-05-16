@@ -11,7 +11,7 @@ Two runtime modes (the only `mode:` values; `enforce` is rejected at input parsi
 - **`detect`** (default) — observe-only telemetry.
 - **`defend`** — block non-allowlisted IPv4 egress via cgroup `connect4`/`sendmsg4` (+ BPF LSM where available). Requires a non-empty effective allowlist.
 
-Internally the config enum still uses `ModeEnforce` (`internal/config/config.go`) as the value `defend` maps to — do not let that mislead you into accepting `enforce` as a public input. Older JSONL artifacts may show `"mode":"enforce"`; that is legacy data only.
+The config enum (`internal/config/config.go`) uses `ModeDefend` with the underlying string value `"defend"` — public input and internal value match. Older JSONL artifacts may show `"mode":"enforce"`; that is legacy data only, and `internal/report/digest.go` still parses it for replay.
 
 ## Build and dev commands
 
@@ -71,9 +71,9 @@ Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`
 
 ### Composite lifecycle (`action.yml`)
 
-`runs.using: node24` with `pre` / `main` / `post` JS entrypoints in `dist/`. The TS layer (`src/pre.ts`, `src/main.ts`, `src/post.ts`, `src/start.ts`, `src/stop.ts`, `src/shared.ts`) is a thin orchestrator — `pre.ts` starts the agent, `post.ts` stops it. `main.ts` keeps backward compat with the older `phase: start` / `phase: stop` flow where consumers had two `uses:` blocks; `phase` is now marked deprecated in `action.yml`.
+`runs.using: node24` with `pre` / `main` / `post` JS entrypoints in `dist/`. The TS layer (`src/pre.ts`, `src/main.ts`, `src/post.ts`, `src/start.ts`, `src/stop.ts`, `src/shared.ts`) is a thin orchestrator — `pre.ts` starts the agent, `post.ts` stops it. `main.ts` is a status-check stub when no `phase` is set; in-repo CI workflows (`uses: ./`) set `phase: start` / `phase: stop` because local refs do not fire node24 pre/post hooks. Consumer workflows pin a published tag and use a single block.
 
-`action.yml` exposes a small set of current inputs (`mode`, `allow`, `allow-file`, `detect-profile`, `report`, `fail-on-error`, `signing-key`, `log-level`, `ignored-nets[-file]`, `bootstrap-allowlist`, `no-default-ignored-nets`, `ready-timeout-seconds`, `github-token`) plus a larger block of **deprecated** inputs kept for backward compatibility (`allowed-domains`, `allowed-hosts`, `allowed-ips`, `feature-gates`, `report-job-summary`, `report-pr-summary`, `phase`, `smoke-test-egress`, `io-uring-disable`, `release-path`). When adding inputs, follow that split — document current inputs in README/QUICK_START and leave the deprecated ones untouched unless removing.
+`action.yml` inputs: `mode`, `allow`, `allow-file`, `detect-profile`, `report`, `fail-on-error`, `signing-key`, `log-level`, `ignored-nets[-file]`, `bootstrap-allowlist`, `no-default-ignored-nets`, `ready-timeout-seconds`, `github-token`. Internal-only: `phase`, `release-path`, `smoke-test-egress`, `io-uring-disable`. The previous deprecated aliases (`allowed-domains*`, `allowed-hosts*`, `allowed-ips*`, `ignored-ip-nets*`, `report-job-summary`, `report-pr-summary`, `feature-gates`) were removed — use the unified inputs.
 
 **Composite manifest rule:** GitHub only loads a repo-root composite from `action.yml` or `action.yaml`. Do not rename it.
 
@@ -94,7 +94,7 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 
 `internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep-action` from action inputs):
 
-- `CI_GUARD_MODE=enforce` is **rejected** (returns an error). `defend` maps internally to `ModeEnforce`. Detect is default.
+- `CI_GUARD_MODE=enforce` is **rejected** (returns an error). `defend` maps to `ModeDefend`. Detect is default.
 - `defend` mode also requires `COLDSTEP_ALLOWED_DOMAINS` to be non-empty.
 - Output paths default under `$GITHUB_WORKSPACE` and are overrideable: `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`, `COLDSTEP_AGENT_STATUS`, `COLDSTEP_CGROUP_PATH`, `COLDSTEP_SIGNING_KEY`.
 

@@ -13,8 +13,8 @@ import (
 type Mode string
 
 const (
-	ModeDetect  Mode = "detect"
-	ModeEnforce Mode = "enforce"
+	ModeDetect Mode = "detect"
+	ModeDefend Mode = "defend"
 )
 
 type Config struct {
@@ -82,10 +82,7 @@ func LoadFromEnv() (Config, error) {
 		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
 	}
 	mode := Mode(rawLower)
-	if mode == "defend" {
-		mode = ModeEnforce
-	}
-	if mode != ModeDetect && mode != ModeEnforce {
+	if mode != ModeDetect && mode != ModeDefend {
 		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
 	}
 
@@ -97,7 +94,7 @@ func LoadFromEnv() (Config, error) {
 		detectLog = defaultUnderWorkspace(".coldstep-detect.md")
 	}
 	allowedDomains := normalizeDomains(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
-	if mode == ModeEnforce && len(allowedDomains) == 0 {
+	if mode == ModeDefend && len(allowedDomains) == 0 {
 		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
 	}
 
@@ -195,10 +192,6 @@ func (c Config) Policy() (*policy.Policy, error) {
 }
 
 // PublicMode returns the user-facing mode label for JSONL and digest ("detect" | "defend").
-// Blocking behavior still uses [ModeEnforce] internally.
 func (c Config) PublicMode() string {
-	if c.Mode == ModeEnforce {
-		return "defend"
-	}
 	return string(c.Mode)
 }

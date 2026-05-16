@@ -23689,34 +23689,16 @@ function readAgentReadyOk(statusPath) {
 }
 function resolveReportFlags() {
   const report = (getInput("report") || "job-summary").trim().toLowerCase();
-  let reportJobSummary;
-  let reportPRSummary;
   switch (report) {
     case "pr-comment":
-      reportJobSummary = false;
-      reportPRSummary = true;
-      break;
+      return { reportJobSummary: false, reportPRSummary: true };
     case "both":
-      reportJobSummary = true;
-      reportPRSummary = true;
-      break;
+      return { reportJobSummary: true, reportPRSummary: true };
     case "none":
-      reportJobSummary = false;
-      reportPRSummary = false;
-      break;
+      return { reportJobSummary: false, reportPRSummary: false };
     default:
-      reportJobSummary = true;
-      reportPRSummary = false;
+      return { reportJobSummary: true, reportPRSummary: false };
   }
-  const oldJobSummary = getInput("report-job-summary");
-  const oldPRSummary = getInput("report-pr-summary");
-  if (oldJobSummary !== "") {
-    reportJobSummary = ["true", "1", "yes", "on"].includes(oldJobSummary.toLowerCase());
-  }
-  if (oldPRSummary !== "") {
-    reportPRSummary = ["true", "1", "yes", "on"].includes(oldPRSummary.toLowerCase());
-  }
-  return { reportJobSummary, reportPRSummary };
 }
 
 // src/stop.ts
@@ -23783,13 +23765,13 @@ async function maybePostPRSummary(body, reportPRSummary) {
   if (body.trim() === "") return;
   const token = (getInput("github-token") || process.env.GITHUB_TOKEN || "").trim();
   if (!token) {
-    warning("report-pr-summary: missing github-token");
+    warning("report pr-comment: missing github-token");
     return;
   }
   const ctx = context2;
   const pr = ctx.payload.pull_request;
   if (!pr || typeof pr.number !== "number") {
-    info("report-pr-summary: not a pull_request event; skipping");
+    info("report pr-comment: not a pull_request event; skipping");
     return;
   }
   const max = 65e3;
@@ -23825,7 +23807,7 @@ async function finalizeDigestAndNotifications(reportJobSummary, reportPRSummary)
   try {
     await maybePostPRSummary(digestBody, reportPRSummary);
   } catch (e) {
-    warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+    warning(`report pr-comment: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 function parseAgentPidFromFile(contents) {
