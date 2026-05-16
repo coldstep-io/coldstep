@@ -41,7 +41,7 @@ func TestRenderSummaryAppendsHeader(t *testing.T) {
 	tmp := t.TempDir()
 	in := writeModelMapFixture(t, tmp, map[string]any{
 		"egress_sankey": []any{
-			map[string]any{"source": "github.com", "target": "allowed", "value": 12, "indicators": []any{"140.82.121.4"}},
+			map[string]any{"source": "github.com", "target": "allowed", "value": 12, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
 		},
 	})
 	summary := filepath.Join(tmp, "summary.md")
@@ -57,11 +57,35 @@ func TestRenderSummaryAppendsHeader(t *testing.T) {
 	}
 }
 
+func TestRenderSummaryShowsProtocolAndPort(t *testing.T) {
+	tmp := t.TempDir()
+	in := writeModelMapFixture(t, tmp, map[string]any{
+		"egress_sankey": []any{
+			map[string]any{"source": "github.com", "target": "allowed", "value": 5, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
+		},
+	})
+	summary := filepath.Join(tmp, "summary.md")
+	if err := renderSummary([]string{"--in=" + in, "--summary=" + summary}); err != nil {
+		t.Fatalf("renderSummary: %v", err)
+	}
+	raw, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "tcp") {
+		t.Fatalf("missing protocol 'tcp' in summary: %s", body)
+	}
+	if !strings.Contains(body, "443") {
+		t.Fatalf("missing port '443' in summary: %s", body)
+	}
+}
+
 func TestRenderSummaryWarningForUnidentified(t *testing.T) {
 	tmp := t.TempDir()
 	in := writeModelMapFixture(t, tmp, map[string]any{
 		"egress_sankey": []any{
-			map[string]any{"source": "93.184.216.34", "target": "", "value": 3, "indicators": []any{"93.184.216.34"}},
+			map[string]any{"source": "93.184.216.34", "target": "", "value": 3, "protocol": "tcp", "port": 443, "indicators": []any{"93.184.216.34"}},
 		},
 	})
 	summary := filepath.Join(tmp, "summary.md")
@@ -85,7 +109,7 @@ func TestRenderSummaryNoWarningWhenAllAllowed(t *testing.T) {
 	tmp := t.TempDir()
 	in := writeModelMapFixture(t, tmp, map[string]any{
 		"egress_sankey": []any{
-			map[string]any{"source": "github.com", "target": "allowed", "value": 5, "indicators": []any{"140.82.121.4"}},
+			map[string]any{"source": "github.com", "target": "allowed", "value": 5, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
 		},
 	})
 	summary := filepath.Join(tmp, "summary.md")

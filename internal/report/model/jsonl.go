@@ -88,3 +88,22 @@ func (e Event) AsString(key string) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+// AsFloat safely extracts a numeric field from an Event; returns 0 if missing or wrong type.
+// JSON numbers unmarshal into float64 when the target is interface{}.
+func (e Event) AsFloat(key string) float64 {
+	v, ok := e[key]
+	if !ok {
+		return 0
+	}
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return 0
+	}
+}

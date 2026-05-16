@@ -49,6 +49,8 @@ type SankeyEdge struct {
 	Target     string   `json:"target"`
 	Value      int      `json:"value"`
 	Indicators []string `json:"indicators"`
+	Protocol   string   `json:"protocol,omitempty"`
+	Port       int      `json:"port,omitempty"`
 }
 
 type DiffPayload struct {
