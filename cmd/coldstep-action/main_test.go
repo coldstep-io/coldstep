@@ -288,8 +288,8 @@ func TestClassifyReadyStatus(t *testing.T) {
 		{"", false, false, true, false},
 		{"  \n ", false, false, true, false},
 		{`not-json`, false, false, true, false},
-		{`{"ok":"no"}`, false, false, true, false},   // non-bool ok → malformed, not explicitFail (Fix 4)
-		{`{"ok":null}`, false, false, true, false},  // null ok → malformed, not explicitFail (Fix 4)
+		{`{"ok":"no"}`, false, false, true, false}, // non-bool ok → malformed, not explicitFail (Fix 4)
+		{`{"ok":null}`, false, false, true, false}, // null ok → malformed, not explicitFail (Fix 4)
 	}
 	oversized := bytes.Repeat([]byte("x"), maxReadyStatusJSONBytes+1)
 	r, f, m, i := classifyReadyStatus(oversized)
