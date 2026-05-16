@@ -9,13 +9,12 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
-import { agentStatusPath, readAgentReadyOk } from './shared';
+import { actionRootPath, agentStatusPath, readAgentReadyOk } from './shared';
 import { startAgent } from './start';
 import { stopAgent } from './stop';
 
 async function statusCheck(): Promise<void> {
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   const pidFile = path.join(baseDir, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('coldstep: pid file not found — agent may not have started in pre hook');
