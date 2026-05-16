@@ -192,7 +192,7 @@ jobs:
           phase: start
           mode: detect
           detect-profile: enhanced
-          allowed-hosts: theclouddj.com, *.ubuntu.com
+          allow: theclouddj.com, *.ubuntu.com
 
       - name: Install runtime probes
         run: |
@@ -231,7 +231,7 @@ jobs:
         uses: ./
         with:
           phase: stop
-          report-job-summary: 'false'
+          report: none
           fail-on-error: 'false'
 
       - name: Build report model
@@ -442,9 +442,12 @@ jobs:
           mode: defend
           fail-on-error: 'true'
           release-path: bin/coldstep
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
-          allowed-ips: 1.1.1.1
+          allow: |
+            theclouddj.com
+            *.ubuntu.com
+            archive.ubuntu.com
+            azure.archive.ubuntu.com
+            1.1.1.1
 
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
@@ -484,7 +487,7 @@ jobs:
         uses: ./
         with:
           phase: stop
-          report-job-summary: 'false'
+          report: none
           fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
