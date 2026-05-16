@@ -164,6 +164,89 @@ func TestRun_TCPConnectLogged(t *testing.T) {
 	}
 }
 
+func TestRun_DefendModeBlockedConnectEmitsDenyJSONL(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+	dir := t.TempDir()
+	detect := filepath.Join(dir, "detect.md")
+	events := filepath.Join(dir, ".coldstep-events.jsonl")
+	summary := filepath.Join(dir, "summary.md")
+	ready := filepath.Join(dir, ".coldstep-ready.json")
+	if err := os.WriteFile(detect, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(summary, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	t.Setenv("CI_GUARD_MODE", "defend")
+	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "localhost")
+	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
+	t.Setenv("COLDSTEP_ALLOWED_IPS", "127.0.0.1/32")
+	t.Setenv("GITHUB_STEP_SUMMARY", summary)
+	t.Setenv("COLDSTEP_DETECT_LOG", detect)
+	t.Setenv("COLDSTEP_EVENTS_LOG", events)
+	t.Setenv("COLDSTEP_AGENT_STATUS", ready)
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(ctx, cfg) }()
+
+	// Wait for readiness — with the fix, this flips true only after the deny
+	// reader goroutine is alive, so a connect issued right after won't race the reader.
+	readyDeadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(readyDeadline) {
+		b, rerr := os.ReadFile(ready)
+		if rerr == nil && bytes.Contains(b, []byte(`"ok":true`)) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// 8.8.8.8 is outside the default ignored RFC1918 ranges (10/8, 172.16/12) and outside
+	// the 127.0.0.1/32 allowlist, so the cgroup enforce hook should block this connect
+	// with EPERM and emit a deny event on the deny_events ringbuf.
+	if conn, derr := net.DialTimeout("tcp", "8.8.8.8:53", 1*time.Second); derr == nil {
+		_ = conn.Close()
+	}
+
+	// Poll JSONL for a deny row (drain margin separate from fix 3's stop.ts pid-exit wait).
+	denyDeadline := time.Now().Add(3 * time.Second)
+	var data []byte
+	sawDeny := false
+	for time.Now().Before(denyDeadline) {
+		data, _ = os.ReadFile(events)
+		if bytes.Contains(data, []byte(`"type":"deny"`)) {
+			sawDeny = true
+			break
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	cancel()
+	if rerr := <-errCh; rerr != nil && rerr != context.Canceled {
+		t.Fatalf("Run: %v", rerr)
+	}
+
+	if !sawDeny {
+		// Re-read after cancel in case the agent flushed on shutdown.
+		data, _ = os.ReadFile(events)
+		if !bytes.Contains(data, []byte(`"type":"deny"`)) {
+			t.Fatalf("expected a \"type\":\"deny\" JSONL row within 3s after blocked connect; got:\n%s", string(data))
+		}
+	}
+}
+
 func TestRun_ExecJSONLIncludesExePath(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root for BPF load")
