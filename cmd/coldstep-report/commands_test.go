@@ -40,13 +40,9 @@ func TestDiffSummaryWritesMarker(t *testing.T) {
 func TestRenderSummaryAppendsHeader(t *testing.T) {
 	tmp := t.TempDir()
 	in := writeModelMapFixture(t, tmp, map[string]any{
-		"capability_matrix": []any{
-			map[string]any{"status": "pass"},
-			map[string]any{"status": "fail"},
+		"egress_sankey": []any{
+			map[string]any{"source": "github.com", "target": "allowed", "value": 12, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
 		},
-		"capability_eval": map[string]any{"score": 80, "verdict": "warn"},
-		"diff":            map[string]any{"status": "ok", "traffic_new": []any{}, "traffic_gone": []any{}, "traffic_changed": []any{}},
-		"otx":             map[string]any{"summary": map[string]any{"malicious": 0, "clean": 1, "unidentified": 0}, "api_calls": 1},
 	})
 	summary := filepath.Join(tmp, "summary.md")
 	if err := renderSummary([]string{"--in=" + in, "--summary=" + summary}); err != nil {
@@ -56,8 +52,80 @@ func TestRenderSummaryAppendsHeader(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read summary: %v", err)
 	}
-	if !strings.Contains(string(raw), "## Coldstep detect - summary") {
+	if !strings.Contains(string(raw), "## Coldstep — egress baseline") {
 		t.Fatalf("missing summary header: %s", string(raw))
+	}
+}
+
+func TestRenderSummaryShowsProtocolAndPort(t *testing.T) {
+	tmp := t.TempDir()
+	in := writeModelMapFixture(t, tmp, map[string]any{
+		"egress_sankey": []any{
+			map[string]any{"source": "github.com", "target": "allowed", "value": 5, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
+		},
+	})
+	summary := filepath.Join(tmp, "summary.md")
+	if err := renderSummary([]string{"--in=" + in, "--summary=" + summary}); err != nil {
+		t.Fatalf("renderSummary: %v", err)
+	}
+	raw, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "tcp") {
+		t.Fatalf("missing protocol 'tcp' in summary: %s", body)
+	}
+	if !strings.Contains(body, "443") {
+		t.Fatalf("missing port '443' in summary: %s", body)
+	}
+}
+
+func TestRenderSummaryWarningForUnidentified(t *testing.T) {
+	tmp := t.TempDir()
+	in := writeModelMapFixture(t, tmp, map[string]any{
+		"egress_sankey": []any{
+			map[string]any{"source": "93.184.216.34", "target": "", "value": 3, "protocol": "tcp", "port": 443, "indicators": []any{"93.184.216.34"}},
+		},
+	})
+	summary := filepath.Join(tmp, "summary.md")
+	if err := renderSummary([]string{"--in=" + in, "--summary=" + summary}); err != nil {
+		t.Fatalf("renderSummary: %v", err)
+	}
+	raw, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	body := string(raw)
+	if !strings.Contains(body, "[!WARNING]") {
+		t.Fatalf("missing WARNING alert for unidentified host: %s", body)
+	}
+	if !strings.Contains(body, "### Unidentified") {
+		t.Fatalf("missing Unidentified section: %s", body)
+	}
+}
+
+func TestRenderSummaryNoWarningWhenAllAllowed(t *testing.T) {
+	tmp := t.TempDir()
+	in := writeModelMapFixture(t, tmp, map[string]any{
+		"egress_sankey": []any{
+			map[string]any{"source": "github.com", "target": "allowed", "value": 5, "protocol": "tcp", "port": 443, "indicators": []any{"140.82.121.4"}},
+		},
+	})
+	summary := filepath.Join(tmp, "summary.md")
+	if err := renderSummary([]string{"--in=" + in, "--summary=" + summary}); err != nil {
+		t.Fatalf("renderSummary: %v", err)
+	}
+	raw, err := os.ReadFile(summary)
+	if err != nil {
+		t.Fatalf("read summary: %v", err)
+	}
+	body := string(raw)
+	if strings.Contains(body, "[!WARNING]") {
+		t.Fatalf("unexpected WARNING alert when all hosts are allowed: %s", body)
+	}
+	if !strings.Contains(body, "### Allowed") {
+		t.Fatalf("missing Allowed section: %s", body)
 	}
 }
 
