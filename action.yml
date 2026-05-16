@@ -134,7 +134,7 @@ inputs:
     default: ''
 
   release-path:
-    description: 'Internal debug: path to a prebuilt coldstep binary. When set and the file exists, skips building from source.'
+    description: 'Internal debug: path to a prebuilt coldstep binary. When set and the file exists, skips downloading the published release asset.'
     required: false
     default: ''
 

@@ -4,6 +4,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {
   MAX_READY_STATUS_JSON_BYTES,
+  actionRootPath,
+  ensureColdstepBinary,
   inputBoolDefault,
   resolveAllowlist,
   resolveFeatureGates,
@@ -199,34 +201,32 @@ export async function startAgent(): Promise<void> {
     }
   }
 
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
+  const actionPath = actionRootPath();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path.join(baseDir, '.coldstep-detect.md');
-  // PID file lives in the workspace so bash steps can read it without knowing GITHUB_ACTION_PATH.
+  // PID file lives in the workspace so bash steps can read it without knowing the action path.
   const pidFile = path.join(baseDir, '.coldstep.pid');
-  const binPath = path.join(actionPath, 'bin', 'coldstep');
-  const script = path.join(actionPath, 'scripts', 'build-agent-linux.sh');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');
   const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
 
-  fs.mkdirSync(path.join(actionPath, 'bin'), { recursive: true });
   fs.writeFileSync(detectLog, '', 'utf8');
   if (fs.existsSync(agentStatus)) fs.unlinkSync(agentStatus);
 
   const stderrLog = path.join(baseDir, '.coldstep-agent.stderr.log');
   if (failOnError && fs.existsSync(stderrLog)) fs.unlinkSync(stderrLog);
 
+  let binPath: string;
   if (releasePath) {
     const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
     if (!fs.existsSync(src)) {
       core.setFailed(`release-path not found: ${src}`);
       return;
     }
-    fs.copyFileSync(src, binPath);
-    fs.chmodSync(binPath, 0o755);
+    binPath = src;
+    try { fs.chmodSync(binPath, 0o755); } catch { /* best-effort */ }
     core.info(`coldstep: using release-path binary ${src}`);
   } else {
-    execFileSync('bash', [script, actionPath], { stdio: 'inherit' });
+    binPath = await ensureColdstepBinary();
   }
 
   const allowlist = resolveAllowlist(baseDir);

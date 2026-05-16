@@ -32,7 +32,7 @@ var require_tunnel = __commonJS({
     var net = require("net");
     var tls = require("tls");
     var http = require("http");
-    var https = require("https");
+    var https2 = require("https");
     var events = require("events");
     var assert = require("assert");
     var util = require("util");
@@ -54,12 +54,12 @@ var require_tunnel = __commonJS({
     }
     function httpOverHttps2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = https.request;
+      agent.request = https2.request;
       return agent;
     }
     function httpsOverHttps2(options) {
       var agent = new TunnelingAgent(options);
-      agent.request = https.request;
+      agent.request = https2.request;
       agent.createSocket = createSecureSocket;
       agent.defaultPort = 443;
       return agent;
@@ -2071,9 +2071,9 @@ var require_dispatcher_base = __commonJS({
       }
       close(callback) {
         if (callback === void 0) {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             this.close((err, data) => {
-              return err ? reject(err) : resolve(data);
+              return err ? reject(err) : resolve2(data);
             });
           });
         }
@@ -2111,12 +2111,12 @@ var require_dispatcher_base = __commonJS({
           err = null;
         }
         if (callback === void 0) {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             this.destroy(err, (err2, data) => {
               return err2 ? (
                 /* istanbul ignore next: should never error */
                 reject(err2)
-              ) : resolve(data);
+              ) : resolve2(data);
             });
           });
         }
@@ -4383,8 +4383,8 @@ var require_util2 = __commonJS({
     function createDeferredPromise() {
       let res;
       let rej;
-      const promise = new Promise((resolve, reject) => {
-        res = resolve;
+      const promise = new Promise((resolve2, reject) => {
+        res = resolve2;
         rej = reject;
       });
       return { promise, resolve: res, reject: rej };
@@ -6525,12 +6525,12 @@ upgrade: ${upgrade}\r
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve;
+          callback = resolve2;
         }
       });
       socket.on("close", onDrain).on("drain", onDrain);
@@ -7167,12 +7167,12 @@ var require_client_h2 = __commonJS({
           cb();
         }
       }
-      const waitForDrain = () => new Promise((resolve, reject) => {
+      const waitForDrain = () => new Promise((resolve2, reject) => {
         assert(callback === null);
         if (socket[kError]) {
           reject(socket[kError]);
         } else {
-          callback = resolve;
+          callback = resolve2;
         }
       });
       h2stream.on("close", onDrain).on("drain", onDrain);
@@ -7649,16 +7649,16 @@ var require_client = __commonJS({
         return this[kNeedDrain] < 2;
       }
       async [kClose]() {
-        return new Promise((resolve) => {
+        return new Promise((resolve2) => {
           if (this[kSize]) {
-            this[kClosedResolve] = resolve;
+            this[kClosedResolve] = resolve2;
           } else {
-            resolve(null);
+            resolve2(null);
           }
         });
       }
       async [kDestroy](err) {
-        return new Promise((resolve) => {
+        return new Promise((resolve2) => {
           const requests = this[kQueue].splice(this[kPendingIdx]);
           for (let i = 0; i < requests.length; i++) {
             const request2 = requests[i];
@@ -7669,7 +7669,7 @@ var require_client = __commonJS({
               this[kClosedResolve]();
               this[kClosedResolve] = null;
             }
-            resolve(null);
+            resolve2(null);
           };
           if (this[kHTTPContext]) {
             this[kHTTPContext].destroy(err, callback);
@@ -7720,7 +7720,7 @@ var require_client = __commonJS({
         });
       }
       try {
-        const socket = await new Promise((resolve, reject) => {
+        const socket = await new Promise((resolve2, reject) => {
           client[kConnector]({
             host,
             hostname,
@@ -7732,7 +7732,7 @@ var require_client = __commonJS({
             if (err) {
               reject(err);
             } else {
-              resolve(socket2);
+              resolve2(socket2);
             }
           });
         });
@@ -8068,8 +8068,8 @@ var require_pool_base = __commonJS({
         if (this[kQueue].isEmpty()) {
           await Promise.all(this[kClients].map((c) => c.close()));
         } else {
-          await new Promise((resolve) => {
-            this[kClosedResolve] = resolve;
+          await new Promise((resolve2) => {
+            this[kClosedResolve] = resolve2;
           });
         }
       }
@@ -9284,7 +9284,7 @@ var require_readable = __commonJS({
         if (this._readableState.closeEmitted) {
           return null;
         }
-        return await new Promise((resolve, reject) => {
+        return await new Promise((resolve2, reject) => {
           if (this[kContentLength] > limit) {
             this.destroy(new AbortError());
           }
@@ -9297,7 +9297,7 @@ var require_readable = __commonJS({
             if (signal?.aborted) {
               reject(signal.reason ?? new AbortError());
             } else {
-              resolve(null);
+              resolve2(null);
             }
           }).on("error", noop3).on("data", function(chunk) {
             limit -= chunk.length;
@@ -9316,7 +9316,7 @@ var require_readable = __commonJS({
     }
     async function consume(stream, type) {
       assert(!stream[kConsume]);
-      return new Promise((resolve, reject) => {
+      return new Promise((resolve2, reject) => {
         if (isUnusable(stream)) {
           const rState = stream._readableState;
           if (rState.destroyed && rState.closeEmitted === false) {
@@ -9333,7 +9333,7 @@ var require_readable = __commonJS({
             stream[kConsume] = {
               type,
               stream,
-              resolve,
+              resolve: resolve2,
               reject,
               length: 0,
               body: []
@@ -9403,18 +9403,18 @@ var require_readable = __commonJS({
       return buffer;
     }
     function consumeEnd(consume2) {
-      const { type, body, resolve, stream, length } = consume2;
+      const { type, body, resolve: resolve2, stream, length } = consume2;
       try {
         if (type === "text") {
-          resolve(chunksDecode(body, length));
+          resolve2(chunksDecode(body, length));
         } else if (type === "json") {
-          resolve(JSON.parse(chunksDecode(body, length)));
+          resolve2(JSON.parse(chunksDecode(body, length)));
         } else if (type === "arrayBuffer") {
-          resolve(chunksConcat(body, length).buffer);
+          resolve2(chunksConcat(body, length).buffer);
         } else if (type === "blob") {
-          resolve(new Blob(body, { type: stream[kContentType] }));
+          resolve2(new Blob(body, { type: stream[kContentType] }));
         } else if (type === "bytes") {
-          resolve(chunksConcat(body, length));
+          resolve2(chunksConcat(body, length));
         }
         consumeFinish(consume2);
       } catch (err) {
@@ -9671,9 +9671,9 @@ var require_api_request = __commonJS({
     };
     function request2(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           request2.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -9896,9 +9896,9 @@ var require_api_stream = __commonJS({
     };
     function stream(opts, factory, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           stream.call(this, opts, factory, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10183,9 +10183,9 @@ var require_api_upgrade = __commonJS({
     };
     function upgrade(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           upgrade.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -10277,9 +10277,9 @@ var require_api_connect = __commonJS({
     };
     function connect(opts, callback) {
       if (callback === void 0) {
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve2, reject) => {
           connect.call(this, opts, (err, data) => {
-            return err ? reject(err) : resolve(data);
+            return err ? reject(err) : resolve2(data);
           });
         });
       }
@@ -14141,7 +14141,7 @@ var require_fetch = __commonJS({
       function dispatch({ body }) {
         const url = requestCurrentURL(request2);
         const agent = fetchParams.controller.dispatcher;
-        return new Promise((resolve, reject) => agent.dispatch(
+        return new Promise((resolve2, reject) => agent.dispatch(
           {
             path: url.pathname + url.search,
             origin: url.origin,
@@ -14217,7 +14217,7 @@ var require_fetch = __commonJS({
                 }
               }
               const onError = this.onError.bind(this);
-              resolve({
+              resolve2({
                 status,
                 statusText,
                 headersList,
@@ -14263,7 +14263,7 @@ var require_fetch = __commonJS({
               for (let i = 0; i < rawHeaders.length; i += 2) {
                 headersList.append(bufferToLowerCasedHeaderName(rawHeaders[i]), rawHeaders[i + 1].toString("latin1"), true);
               }
-              resolve({
+              resolve2({
                 status,
                 statusText: STATUS_CODES[status],
                 headersList,
@@ -17902,8 +17902,8 @@ var require_util8 = __commonJS({
       return true;
     }
     function delay(ms) {
-      return new Promise((resolve) => {
-        setTimeout(resolve, ms).unref();
+      return new Promise((resolve2) => {
+        setTimeout(resolve2, ms).unref();
       });
     }
     module2.exports = {
@@ -18707,11 +18707,11 @@ var require_lib = __commonJS({
     })();
     var __awaiter3 = exports2 && exports2.__awaiter || function(thisArg, _arguments, P, generator) {
       function adopt(value) {
-        return value instanceof P ? value : new P(function(resolve) {
-          resolve(value);
+        return value instanceof P ? value : new P(function(resolve2) {
+          resolve2(value);
         });
       }
-      return new (P || (P = Promise))(function(resolve, reject) {
+      return new (P || (P = Promise))(function(resolve2, reject) {
         function fulfilled(value) {
           try {
             step(generator.next(value));
@@ -18727,7 +18727,7 @@ var require_lib = __commonJS({
           }
         }
         function step(result) {
-          result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+          result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
         }
         step((generator = generator.apply(thisArg, _arguments || [])).next());
       });
@@ -18737,7 +18737,7 @@ var require_lib = __commonJS({
     exports2.getProxyUrl = getProxyUrl2;
     exports2.isHttps = isHttps;
     var http = __importStar(require("http"));
-    var https = __importStar(require("https"));
+    var https2 = __importStar(require("https"));
     var pm = __importStar(require_proxy());
     var tunnel2 = __importStar(require_tunnel2());
     var undici_1 = require_undici();
@@ -18814,26 +18814,26 @@ var require_lib = __commonJS({
       }
       readBody() {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2) => __awaiter3(this, void 0, void 0, function* () {
             let output = Buffer.alloc(0);
             this.message.on("data", (chunk) => {
               output = Buffer.concat([output, chunk]);
             });
             this.message.on("end", () => {
-              resolve(output.toString());
+              resolve2(output.toString());
             });
           }));
         });
       }
       readBodyBuffer() {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2) => __awaiter3(this, void 0, void 0, function* () {
             const chunks = [];
             this.message.on("data", (chunk) => {
               chunks.push(chunk);
             });
             this.message.on("end", () => {
-              resolve(Buffer.concat(chunks));
+              resolve2(Buffer.concat(chunks));
             });
           }));
         });
@@ -19041,14 +19041,14 @@ var require_lib = __commonJS({
        */
       requestRaw(info2, data) {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve, reject) => {
+          return new Promise((resolve2, reject) => {
             function callbackForResult(err, res) {
               if (err) {
                 reject(err);
               } else if (!res) {
                 reject(new Error("Unknown error"));
               } else {
-                resolve(res);
+                resolve2(res);
               }
             }
             this.requestRawWithCallback(info2, data, callbackForResult);
@@ -19126,7 +19126,7 @@ var require_lib = __commonJS({
         const info2 = {};
         info2.parsedUrl = requestUrl;
         const usingSsl = info2.parsedUrl.protocol === "https:";
-        info2.httpModule = usingSsl ? https : http;
+        info2.httpModule = usingSsl ? https2 : http;
         const defaultPort = usingSsl ? 443 : 80;
         info2.options = {};
         info2.options.host = info2.parsedUrl.hostname;
@@ -19249,7 +19249,7 @@ var require_lib = __commonJS({
         }
         if (!agent) {
           const options = { keepAlive: this._keepAlive, maxSockets };
-          agent = usingSsl ? new https.Agent(options) : new http.Agent(options);
+          agent = usingSsl ? new https2.Agent(options) : new http.Agent(options);
           this._agent = agent;
         }
         if (usingSsl && this._ignoreSslError) {
@@ -19292,12 +19292,12 @@ var require_lib = __commonJS({
         return __awaiter3(this, void 0, void 0, function* () {
           retryNumber = Math.min(ExponentialBackoffCeiling, retryNumber);
           const ms = ExponentialBackoffTimeSlice * Math.pow(2, retryNumber);
-          return new Promise((resolve) => setTimeout(() => resolve(), ms));
+          return new Promise((resolve2) => setTimeout(() => resolve2(), ms));
         });
       }
       _processResponse(res, options) {
         return __awaiter3(this, void 0, void 0, function* () {
-          return new Promise((resolve, reject) => __awaiter3(this, void 0, void 0, function* () {
+          return new Promise((resolve2, reject) => __awaiter3(this, void 0, void 0, function* () {
             const statusCode = res.message.statusCode || 0;
             const response = {
               statusCode,
@@ -19305,7 +19305,7 @@ var require_lib = __commonJS({
               headers: {}
             };
             if (statusCode === HttpCodes2.NotFound) {
-              resolve(response);
+              resolve2(response);
             }
             function dateTimeDeserializer(key, value) {
               if (typeof value === "string") {
@@ -19344,7 +19344,7 @@ var require_lib = __commonJS({
               err.result = response.result;
               reject(err);
             } else {
-              resolve(response);
+              resolve2(response);
             }
           }));
         });
@@ -19613,11 +19613,11 @@ var import_os = require("os");
 var import_fs = require("fs");
 var __awaiter = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve) {
-      resolve(value);
+    return value instanceof P ? value : new P(function(resolve2) {
+      resolve2(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve, reject) {
+  return new (P || (P = Promise))(function(resolve2, reject) {
     function fulfilled(value) {
       try {
         step(generator.next(value));
@@ -19633,7 +19633,7 @@ var __awaiter = function(thisArg, _arguments, P, generator) {
       }
     }
     function step(result) {
-      result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -19953,23 +19953,134 @@ var fs6 = __toESM(require("fs"));
 var path4 = __toESM(require("path"));
 
 // src/shared.ts
+var import_crypto = require("crypto");
 var fs3 = __toESM(require("fs"));
+var https = __toESM(require("https"));
+var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
+var COLDSTEP_BINARY_VERSION = "v0.2.1";
+var COLDSTEP_BINARY_SHA256 = "49bae9f1d34fe1f9fa4a50a2bcc2604b7d485836e3046a3bd718199b74d4d355";
+var COLDSTEP_BINARY_URL = `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
+function actionRootPath() {
+  return path.resolve(__dirname, "..", "..");
+}
 function inputBoolDefault(name, defaultVal) {
   const v = getInput(name);
   if (v === "") return defaultVal;
   return ["true", "1", "yes", "on"].includes(v.toLowerCase());
 }
 function detectLogPath() {
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   return path.join(baseDir, ".coldstep-detect.md");
 }
 function agentStatusPath() {
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   return path.join(baseDir, ".coldstep-ready.json");
+}
+function sha256File(p) {
+  const h = (0, import_crypto.createHash)("sha256");
+  h.update(fs3.readFileSync(p));
+  return h.digest("hex");
+}
+async function downloadToFile(url, destPath, maxRedirects = 5) {
+  return new Promise((resolve2, reject) => {
+    const visit = (current, remaining) => {
+      const req = https.get(current, (res) => {
+        const status = res.statusCode ?? 0;
+        if ((status === 301 || status === 302 || status === 307 || status === 308) && res.headers.location) {
+          res.resume();
+          if (remaining <= 0) {
+            reject(new Error(`too many redirects fetching ${url}`));
+            return;
+          }
+          const next = new URL(res.headers.location, current).toString();
+          visit(next, remaining - 1);
+          return;
+        }
+        if (status !== 200) {
+          res.resume();
+          reject(new Error(`HTTP ${status} fetching ${current}`));
+          return;
+        }
+        const tmp = `${destPath}.partial-${process.pid}-${Date.now()}`;
+        const out = fs3.createWriteStream(tmp, { mode: 493 });
+        res.pipe(out);
+        out.on("finish", () => {
+          out.close((err) => {
+            if (err) {
+              try {
+                fs3.unlinkSync(tmp);
+              } catch {
+              }
+              reject(err);
+              return;
+            }
+            try {
+              fs3.renameSync(tmp, destPath);
+              resolve2();
+            } catch (e) {
+              try {
+                fs3.unlinkSync(tmp);
+              } catch {
+              }
+              reject(e instanceof Error ? e : new Error(String(e)));
+            }
+          });
+        });
+        out.on("error", (err) => {
+          try {
+            fs3.unlinkSync(tmp);
+          } catch {
+          }
+          reject(err);
+        });
+      });
+      req.on("error", reject);
+      req.setTimeout(6e4, () => req.destroy(new Error(`timeout fetching ${current}`)));
+    };
+    visit(url, maxRedirects);
+  });
+}
+async function ensureColdstepBinary() {
+  if (process.arch !== "x64") {
+    throw new Error(`coldstep: unsupported arch ${process.arch} \u2014 only linux/amd64 is published`);
+  }
+  const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
+  const cacheDir = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION);
+  const binPath = path.join(cacheDir, "coldstep");
+  fs3.mkdirSync(cacheDir, { recursive: true });
+  if (fs3.existsSync(binPath)) {
+    const got2 = sha256File(binPath);
+    if (got2 === COLDSTEP_BINARY_SHA256) {
+      try {
+        fs3.chmodSync(binPath, 493);
+      } catch {
+      }
+      info(`coldstep: reusing cached binary ${binPath} (${COLDSTEP_BINARY_VERSION})`);
+      return binPath;
+    }
+    warning(`coldstep: cached binary sha mismatch (${got2}); re-downloading`);
+    try {
+      fs3.unlinkSync(binPath);
+    } catch {
+    }
+  }
+  info(`coldstep: downloading ${COLDSTEP_BINARY_VERSION} from ${COLDSTEP_BINARY_URL}`);
+  await downloadToFile(COLDSTEP_BINARY_URL, binPath);
+  const got = sha256File(binPath);
+  if (got !== COLDSTEP_BINARY_SHA256) {
+    try {
+      fs3.unlinkSync(binPath);
+    } catch {
+    }
+    throw new Error(
+      `coldstep: downloaded binary sha256 mismatch \u2014 expected ${COLDSTEP_BINARY_SHA256}, got ${got} (url=${COLDSTEP_BINARY_URL})`
+    );
+  }
+  fs3.chmodSync(binPath, 493);
+  info(`coldstep: binary ready at ${binPath}`);
+  return binPath;
 }
 function readAgentReadyOk(statusPath) {
   try {
@@ -20032,7 +20143,7 @@ function mergeUnique(...arrays) {
   return [...new Set(arrays.flat().filter(Boolean))].join(",");
 }
 function resolveAllowlist(baseDir) {
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
+  const actionPath = actionRootPath();
   const tokens = [
     ...splitTokens(getInput("allow")),
     ...readFileTokensSafe(getInput("allow-file"), baseDir)
@@ -20249,30 +20360,31 @@ async function startAgent() {
       );
     }
   }
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
+  const actionPath = actionRootPath();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path2.join(baseDir, ".coldstep-detect.md");
   const pidFile = path2.join(baseDir, ".coldstep.pid");
-  const binPath = path2.join(actionPath, "bin", "coldstep");
-  const script = path2.join(actionPath, "scripts", "build-agent-linux.sh");
   const agentStatus = path2.join(baseDir, ".coldstep-ready.json");
   const eventsLog = path2.join(baseDir, ".coldstep-events.jsonl");
-  fs4.mkdirSync(path2.join(actionPath, "bin"), { recursive: true });
   fs4.writeFileSync(detectLog, "", "utf8");
   if (fs4.existsSync(agentStatus)) fs4.unlinkSync(agentStatus);
   const stderrLog = path2.join(baseDir, ".coldstep-agent.stderr.log");
   if (failOnError && fs4.existsSync(stderrLog)) fs4.unlinkSync(stderrLog);
+  let binPath;
   if (releasePath) {
     const src = path2.isAbsolute(releasePath) ? releasePath : path2.join(baseDir, releasePath);
     if (!fs4.existsSync(src)) {
       setFailed(`release-path not found: ${src}`);
       return;
     }
-    fs4.copyFileSync(src, binPath);
-    fs4.chmodSync(binPath, 493);
+    binPath = src;
+    try {
+      fs4.chmodSync(binPath, 493);
+    } catch {
+    }
     info(`coldstep: using release-path binary ${src}`);
   } else {
-    (0, import_child_process.execFileSync)("bash", [script, actionPath], { stdio: "inherit" });
+    binPath = await ensureColdstepBinary();
   }
   const allowlist = resolveAllowlist(baseDir);
   const noDefaultIgnoredNets = inputBoolDefault("no-default-ignored-nets", false);
@@ -20308,13 +20420,13 @@ async function startAgent() {
     detached: true,
     stdio
   });
-  await new Promise((resolve) => {
-    child.once("spawn", resolve);
+  await new Promise((resolve2) => {
+    child.once("spawn", resolve2);
     child.once("error", (err) => {
       spawnErr = err;
-      resolve();
+      resolve2();
     });
-    setTimeout(resolve, 200);
+    setTimeout(resolve2, 200);
   });
   if (stderrFd !== void 0) {
     try {
@@ -20450,11 +20562,11 @@ var httpClient = __toESM(require_lib(), 1);
 var import_undici2 = __toESM(require_undici(), 1);
 var __awaiter2 = function(thisArg, _arguments, P, generator) {
   function adopt(value) {
-    return value instanceof P ? value : new P(function(resolve) {
-      resolve(value);
+    return value instanceof P ? value : new P(function(resolve2) {
+      resolve2(value);
     });
   }
-  return new (P || (P = Promise))(function(resolve, reject) {
+  return new (P || (P = Promise))(function(resolve2, reject) {
     function fulfilled(value) {
       try {
         step(generator.next(value));
@@ -20470,7 +20582,7 @@ var __awaiter2 = function(thisArg, _arguments, P, generator) {
       }
     }
     function step(result) {
-      result.done ? resolve(result.value) : adopt(result.value).then(fulfilled, rejected);
+      result.done ? resolve2(result.value) : adopt(result.value).then(fulfilled, rejected);
     }
     step((generator = generator.apply(thisArg, _arguments || [])).next());
   });
@@ -24283,8 +24395,7 @@ async function stopAgent() {
       setFailed("coldstep agent did not report ready (operational fail-on-error)");
     }
   }
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   const pidFile = path3.join(baseDir, ".coldstep.pid");
   if (!fs5.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
@@ -24323,8 +24434,7 @@ async function stopAgent() {
 
 // src/main.ts
 async function statusCheck() {
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   const pidFile = path4.join(baseDir, ".coldstep.pid");
   if (!fs6.existsSync(pidFile)) {
     warning("coldstep: pid file not found \u2014 agent may not have started in pre hook");
