@@ -6,6 +6,7 @@ import (
 	"html"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
@@ -36,125 +37,112 @@ func renderSummary(args []string) error {
 	if err != nil {
 		return err
 	}
+
+	type egressRow struct {
+		dst    string
+		hits   int
+		reason string
+	}
+	var allowed, unidentified, blocked []egressRow
+
+	if sankey, ok := sliceFromAny(m["egress_sankey"]); ok {
+		for _, raw := range sankey {
+			row, ok := mapFromAny(raw)
+			if !ok {
+				continue
+			}
+			dst, _ := stringFromAny(row["source"])
+			policy, _ := stringFromAny(row["target"])
+			hits := intFromAny(row["value"])
+			if dst == "" {
+				continue
+			}
+			tr := egressRow{dst: dst, hits: hits}
+			switch strings.ToLower(policy) {
+			case "allowed":
+				allowed = append(allowed, tr)
+			case "denied", "blocked", "deny":
+				tr.reason = policy
+				blocked = append(blocked, tr)
+			default:
+				unidentified = append(unidentified, tr)
+			}
+		}
+	}
+
+	sortRows := func(rows []egressRow) {
+		sort.Slice(rows, func(i, j int) bool {
+			if rows[i].hits != rows[j].hits {
+				return rows[i].hits > rows[j].hits
+			}
+			return rows[i].dst < rows[j].dst
+		})
+	}
+	sortRows(allowed)
+	sortRows(unidentified)
+	sortRows(blocked)
+
+	maliciousCount := 0
+	if rawOTX, ok := m["otx"]; ok {
+		if otx, ok := mapFromAny(rawOTX); ok {
+			if summary, ok := mapFromAny(otx["summary"]); ok {
+				maliciousCount = intFromAny(summary["malicious"])
+			}
+		}
+	}
+
 	f, err := os.OpenFile(outPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	score := 0
-	verdict := "unknown"
-	if ceval, ok := mapFromAny(m["capability_eval"]); ok {
-		score = intFromAny(ceval["score"])
-		if v, ok := stringFromAny(ceval["verdict"]); ok && v != "" {
-			verdict = v
-		}
+	const rowCap = 40
+	var sb strings.Builder
+
+	sb.WriteString("\n## Coldstep — egress baseline\n\n")
+
+	if len(unidentified) > 0 || maliciousCount > 0 {
+		fmt.Fprintf(&sb, "> [!WARNING]\n> %d unidentified / %d malicious destinations observed. Review before enabling defend mode.\n\n",
+			len(unidentified), maliciousCount)
 	}
 
-	passCount, warnCount, failCount := 0, 0, 0
-	if cells, ok := sliceFromAny(m["capability_matrix"]); ok {
-		for _, raw := range cells {
-			row, ok := mapFromAny(raw)
-			if !ok {
-				continue
-			}
-			status, _ := stringFromAny(row["status"])
-			switch status {
-			case "pass":
-				passCount++
-			case "warn":
-				warnCount++
-			case "fail":
-				failCount++
-			}
+	writeSection := func(heading string, rows []egressRow, showReason bool) {
+		if len(rows) == 0 {
+			return
 		}
-	}
-
-	diffLine := "unavailable"
-	if diff, ok := mapFromAny(m["diff"]); ok {
-		status, _ := stringFromAny(diff["status"])
-		switch status {
-		case "ok":
-			newN := lenSlice(diff["traffic_new"])
-			goneN := lenSlice(diff["traffic_gone"])
-			changedN := lenSlice(diff["traffic_changed"])
-			diffLine = fmt.Sprintf("ok - new=%d gone=%d changed=%d", newN, goneN, changedN)
-		default:
-			reason, _ := stringFromAny(diff["reason"])
-			if reason != "" {
-				diffLine = fmt.Sprintf("unavailable (%s)", reason)
+		fmt.Fprintf(&sb, "### %s\n\n", heading)
+		if showReason {
+			sb.WriteString("| Destination | Protocol | Port | Reason |\n")
+			sb.WriteString("|-------------|----------|------|--------|\n")
+		} else {
+			sb.WriteString("| Destination | Protocol | Port | Hits |\n")
+			sb.WriteString("|-------------|----------|------|------|\n")
+		}
+		limit := len(rows)
+		if limit > rowCap {
+			limit = rowCap
+		}
+		for _, r := range rows[:limit] {
+			if showReason {
+				fmt.Fprintf(&sb, "| `%s` | — | — | %s |\n", sanitize(r.dst), sanitize(r.reason))
+			} else {
+				fmt.Fprintf(&sb, "| `%s` | — | — | %d |\n", sanitize(r.dst), r.hits)
 			}
 		}
-	}
-
-	otxLine := "not present"
-	if rawOTX, ok := m["otx"]; ok {
-		if otx, ok := mapFromAny(rawOTX); ok {
-			if skipped, ok := boolFromAny(otx["skipped"]); ok && skipped {
-				reason, _ := stringFromAny(otx["skipped_reason"])
-				if reason == "" {
-					reason = "unknown"
-				}
-				otxLine = "skipped (" + reason + ")"
-			} else if summary, ok := mapFromAny(otx["summary"]); ok {
-				otxLine = fmt.Sprintf(
-					"queried=%d malicious=%d clean=%d unidentified=%d",
-					intFromAny(otx["api_calls"]),
-					intFromAny(summary["malicious"]),
-					intFromAny(summary["clean"]),
-					intFromAny(summary["unidentified"]),
-				)
-			}
+		if len(rows) > rowCap {
+			fmt.Fprintf(&sb, "\n_(%d more — see artifact)_\n", len(rows)-rowCap)
 		}
+		sb.WriteString("\n")
 	}
 
-	profileLine := "standard"
-	if run, ok := mapFromAny(m["run"]); ok {
-		if dp, ok := stringFromAny(run["detect_profile"]); ok && dp != "" {
-			profileLine = dp
-		}
-	}
+	writeSection("Allowed", allowed, false)
+	writeSection("Unidentified", unidentified, false)
+	writeSection("Blocked", blocked, true)
 
-	missingLine := ""
-	if ceval, ok := mapFromAny(m["capability_eval"]); ok {
-		if integ, ok := mapFromAny(ceval["integrity"]); ok {
-			if det, ok := mapFromAny(integ["details"]); ok {
-				if missing, ok := sliceFromAny(det["missing_types"]); ok {
-					parts := make([]string, 0, len(missing))
-					for _, x := range missing {
-						if s, ok := x.(string); ok && s != "" {
-							parts = append(parts, s)
-						}
-					}
-					missingLine = strings.Join(parts, ", ")
-				}
-			}
-		}
-	}
+	sb.WriteString("_Full telemetry in attached artifact. Add unidentified destinations to `allow:` to build your allowlist._\n")
 
-	integrityNote := ""
-	if strings.EqualFold(profileLine, "enhanced") {
-		integrityNote = "\n- **Integrity tier:** enhanced — scoring expects **udp**, **http**, **tls**, **proc_fork**, **fs_event** rows (plus meta/exec/tcp)."
-	}
-	missingBullet := ""
-	if missingLine != "" {
-		missingBullet = "\n- **Missing required event types:** " + sanitize(missingLine)
-	}
-
-	_, err = fmt.Fprintf(
-		f,
-		"\n## Coldstep detect - summary\n\n- **Detect profile:** %s%s\n- **Capabilities:** pass=%d warn=%d fail=%d\n- **Capability score:** %d/100 (%s)\n- **Baseline diff:** %s\n- **Threat intel (OTX):** %s%s\n",
-		sanitize(profileLine),
-		integrityNote,
-		passCount,
-		warnCount,
-		failCount,
-		score,
-		sanitize(verdict),
-		sanitize(diffLine),
-		sanitize(otxLine),
-		missingBullet,
-	)
+	_, err = f.WriteString(sb.String())
 	return err
 }
 
