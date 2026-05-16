@@ -39,6 +39,11 @@ func Bytes(path string, data []byte, perm os.FileMode) error {
 		return err
 	}
 	keepTmp = false
+	// Sync the parent directory to flush the rename into durable storage.
+	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
+		_ = dir.Sync()
+		_ = dir.Close()
+	}
 	if perm != 0 {
 		if err := os.Chmod(path, perm); err != nil {
 			return err

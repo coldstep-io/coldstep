@@ -167,6 +167,9 @@ func (p *Policy) IgnoredIPv4Nets() []*net.IPNet {
 }
 
 // AllowedDomains returns the exact allowed hostnames from the policy.
+// Wildcard entries (e.g. *.example.com) are NOT returned; the BPF allowed_domains
+// map uses exact-string lookup and cannot match wildcards. Use HasWildSuffixes to
+// detect wildcard entries and warn when enforce mode is active.
 func (p *Policy) AllowedDomains() []string {
 	if p == nil {
 		return nil
@@ -176,6 +179,13 @@ func (p *Policy) AllowedDomains() []string {
 		out = append(out, h)
 	}
 	return out
+}
+
+// HasWildSuffixes reports whether the policy contains any wildcard allowed-hosts entries
+// (e.g. *.example.com). These are matched by Classify but are NOT loaded into the BPF
+// allowed_domains map, so they have no effect in enforce/defend mode.
+func (p *Policy) HasWildSuffixes() bool {
+	return p != nil && len(p.wildSuffixes) > 0
 }
 
 // MergeLiteralAllowedIPv4Keys adds IPv4 addresses from COLDSTEP_ALLOWED_IPS-style policy entries
@@ -260,7 +270,7 @@ func (p *Policy) Classify(fqdn string, ip net.IP) Class {
 			return ClassAllowed
 		}
 		for _, suf := range p.wildSuffixes {
-			if fqdn == suf || hostMatchesWildcard(fqdn, suf) {
+			if hostMatchesWildcard(fqdn, suf) {
 				return ClassAllowed
 			}
 		}

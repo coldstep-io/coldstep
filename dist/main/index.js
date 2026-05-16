@@ -20348,8 +20348,13 @@ async function startAgent() {
     detached: true,
     stdio
   });
-  child.once("error", (err) => {
-    spawnErr = err;
+  await new Promise((resolve) => {
+    child.once("spawn", resolve);
+    child.once("error", (err) => {
+      spawnErr = err;
+      resolve();
+    });
+    setTimeout(resolve, 200);
   });
   if (stderrFd !== void 0) {
     try {
@@ -20357,13 +20362,16 @@ async function startAgent() {
     } catch {
     }
   }
+  if (spawnErr !== void 0) {
+    setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+    return;
+  }
   if (child.pid === void 0) {
     setFailed("coldstep: failed to spawn agent (no pid \u2014 check sudo and that the binary exists)");
     return;
   }
-  await new Promise((resolve) => setImmediate(resolve));
-  if (spawnErr !== void 0) {
-    setFailed(`coldstep: failed to spawn agent (${spawnErr.message})`);
+  if (child.exitCode !== null) {
+    setFailed(`coldstep: agent exited immediately with code ${child.exitCode}`);
     return;
   }
   child.unref();

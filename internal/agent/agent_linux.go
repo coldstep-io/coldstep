@@ -842,6 +842,12 @@ func Main() error {
 }
 
 func loadAllowedDomainsMap(m *ebpf.Map, pol *policy.Policy) error {
+	if pol != nil && pol.HasWildSuffixes() {
+		// The BPF allowed_domains map uses exact-string lookup; wildcard allowed-hosts
+		// entries (e.g. *.example.com) are not inserted and have no effect in enforce
+		// mode. Use allowed-domains or allowed-ips for BPF enforcement of those hosts.
+		slog.Warn("enforce mode: wildcard allowed-hosts entries are classify-only and will NOT be enforced by BPF; add matching allowed-domains or allowed-ips entries")
+	}
 	domains := pol.AllowedDomains()
 	for _, domain := range domains {
 		// Key is [256]byte (fixed size in BPF)
