@@ -163,7 +163,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// Enforce mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
 	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
-	if cfg.Mode == config.ModeEnforce {
+	if cfg.Mode == config.ModeDefend {
 		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
 			haveLSM = true
@@ -217,7 +217,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 		backend := chooseEnforceBackend(
 			enforceBackendConfig{
-				modeEnforce: cfg.Mode == config.ModeEnforce,
+				modeEnforce: cfg.Mode == config.ModeDefend,
 				haveLSM:     haveLSM,
 			},
 			lsmAttachErr,
@@ -304,7 +304,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
-		if cfg.Mode == config.ModeEnforce {
+		if cfg.Mode == config.ModeDefend {
 			// Keep the status file for the composite post step; main may have already saved
 			// saveState. Record operational failure explicitly instead of deleting the path.
 			_ = writeAgentStatus(cfg.AgentStatusPath, false)
@@ -320,7 +320,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
-		if cfg.Mode == config.ModeEnforce {
+		if cfg.Mode == config.ModeDefend {
 			if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 				return fmt.Errorf("agent ready status: %w", err)
 			}
@@ -344,7 +344,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	// Detect mode: ready after syscall trace initialized. Enforce mode wrote ready after syscall attach succeeds.
-	if cfg.Mode != config.ModeEnforce {
+	if cfg.Mode != config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
 		}
