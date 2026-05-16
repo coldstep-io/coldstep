@@ -9,10 +9,9 @@
 
 name: coldstep-demo
 
-# Demo uses the remote action ref (not `uses: ./`) so that the node24 pre/post lifecycle hooks fire.
-# GitHub Actions does not execute pre: and post: for local `uses: ./` references — only for
-# remote `owner/repo@ref` references. Published tags (e.g. v0.2.1) work the same way.
-# To test a branch, update COLDSTEP_ACTION_REF below to the branch name being validated.
+# Same-repo demo: use `uses: ./` after checkout so the job always loads repo-root `action.yml`
+# from the workflow ref. Published tags (e.g. v0.2.1) must also ship `action.yml` at the root
+# for `uses: coldstep-io/coldstep@TAG` to work elsewhere.
 
 on:
   workflow_dispatch:
@@ -83,10 +82,8 @@ jobs:
       - name: Build coldstep-report (Go only; agent from release)
         run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
-      # Single `uses:` block — pre hook starts the agent, post hook stops it and flushes the digest.
-      # Uses remote ref so that node24 pre/post hooks fire (local `uses: ./` suppresses them).
       - name: Coldstep (detect mode)
-        uses: coldstep-io/coldstep@claude/sharp-pare-41d3da
+        uses: ./
         with:
           mode: detect
           allow: theclouddj.com, *.ubuntu.com
@@ -355,11 +352,8 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      # Single `uses:` block — pre hook starts the agent, post hook stops it.
-      # Defend mode defaults fail-on-error to true (Change 5) — no need to set it explicitly.
-      # Uses remote ref so that node24 pre/post hooks fire (local `uses: ./` suppresses them).
       - name: Coldstep (defend mode)
-        uses: coldstep-io/coldstep@claude/sharp-pare-41d3da
+        uses: ./
         with:
           mode: defend
           # Unified allow input: domains, wildcard domains, and IPs in one place.
