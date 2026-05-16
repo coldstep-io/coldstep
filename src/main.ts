@@ -38,6 +38,10 @@ async function run(): Promise<void> {
     await startAgent();
   } else if (phase === 'stop') {
     await stopAgent();
+  } else if (core.getState('coldstep_defer_to_main') === 'true') {
+    // Pre deferred because release-path wasn't available yet; binary should exist now.
+    core.info('coldstep main: starting agent (deferred from pre — release-path now expected to be available)');
+    await startAgent();
   } else {
     await statusCheck();
   }

@@ -24352,6 +24352,9 @@ async function run() {
     await startAgent();
   } else if (phase === "stop") {
     await stopAgent();
+  } else if (getState("coldstep_defer_to_main") === "true") {
+    info("coldstep main: starting agent (deferred from pre \u2014 release-path now expected to be available)");
+    await startAgent();
   } else {
     await statusCheck();
   }
