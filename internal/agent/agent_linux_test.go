@@ -282,7 +282,7 @@ func TestRun_EnforceBackendMetadataReflectsActualBackend(t *testing.T) {
 			state.setModeAndAllowlist(enforceModeForBackend(outcome.backend), 1, 0)
 
 			in := buildDigestInput(
-				config.Config{Mode: config.ModeEnforce},
+				config.Config{Mode: config.ModeDefend},
 				stats,
 				[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
 				nil, nil, nil, nil, nil,
@@ -314,7 +314,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := compileEnforceAllowlist(ctx, config.Config{
-		Mode:           config.ModeEnforce,
+		Mode:           config.ModeDefend,
 		AllowedDomains: nil,
 	}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "requires non-empty allowlist") {
@@ -322,7 +322,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	}
 
 	_, err = compileEnforceAllowlist(ctx, config.Config{
-		Mode:           config.ModeEnforce,
+		Mode:           config.ModeDefend,
 		AllowedDomains: []string{" ", "\t"},
 	}, nil, 1)
 	if err == nil || !strings.Contains(err.Error(), "requires non-empty allowlist") {
@@ -333,7 +333,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 		return nil, nil
 	}
 	_, err = compileEnforceAllowlist(ctx, config.Config{
-		Mode:           config.ModeEnforce,
+		Mode:           config.ModeDefend,
 		AllowedDomains: []string{"example.com"},
 	}, resolver, 1)
 	if err == nil || !strings.Contains(err.Error(), "effective allowlist is empty") {
@@ -341,7 +341,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	}
 
 	res, err := compileEnforceAllowlist(ctx, config.Config{
-		Mode:           config.ModeEnforce,
+		Mode:           config.ModeDefend,
 		AllowedDomains: []string{"example.com"},
 		AllowedIPs:     "1.1.1.1",
 	}, resolver, 1)
@@ -361,7 +361,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 
@@ -419,7 +419,7 @@ func TestAppendDenyFromRaw_MatchKindDNSCache(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 	dc := NewDNSCache()
@@ -447,7 +447,7 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 	var seq telemetry.SeqGen
@@ -483,7 +483,7 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 
 func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	t.Parallel()
-	cfg := config.Config{Mode: config.ModeEnforce}
+	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
@@ -496,7 +496,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 
 func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	t.Parallel()
-	cfg := config.Config{Mode: config.ModeEnforce}
+	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
@@ -520,7 +520,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 	if err := os.Mkdir(blocked, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	cfg := config.Config{Mode: config.ModeEnforce, EventsLogPath: blocked}
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: blocked}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()
@@ -538,7 +538,7 @@ func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 	var seq telemetry.SeqGen
@@ -559,7 +559,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: blocked,
 	}
 	var seq telemetry.SeqGen
@@ -589,7 +589,7 @@ func TestBpfDetail_TruncatesUTF8WithoutSplittingRune(t *testing.T) {
 
 func TestDigestEnforcementLabel(t *testing.T) {
 	t.Parallel()
-	enforceCfg := config.Config{Mode: config.ModeEnforce}
+	enforceCfg := config.Config{Mode: config.ModeDefend}
 	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{}); got != "defend" {
 		t.Fatalf("empty snap with enforce cfg: got %q want defend", got)
 	}
@@ -728,6 +728,47 @@ func TestLoadIgnoredLPMMap_NoProgrammableIPv4ReturnsError(t *testing.T) {
 	}
 }
 
+func TestBuildAllowedLPMPlan_DeduplicatesAcrossIPAndCIDR(t *testing.T) {
+	ipKeys := map[[4]byte]struct{}{
+		{1, 1, 1, 1}: {},
+		{1, 1, 1, 2}: {},
+	}
+	_, cidr32a, err := net.ParseCIDR("1.1.1.1/32")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, cidr24, err := net.ParseCIDR("1.1.1.0/24")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	plan, err := buildAllowedLPMPlan("allowed_ipv4", ipKeys, []*net.IPNet{cidr32a, cidr24})
+	if err != nil {
+		t.Fatalf("buildAllowedLPMPlan: %v", err)
+	}
+	// 1.1.1.1/32 exists in both ipKeys and literal nets; should be counted once.
+	if plan.totalEntries != 3 {
+		t.Fatalf("totalEntries=%d want 3", plan.totalEntries)
+	}
+}
+
+func TestBuildAllowedLPMPlan_RejectsMalformedCIDRInput(t *testing.T) {
+	ipKeys := map[[4]byte]struct{}{
+		{1, 1, 1, 1}: {},
+	}
+	invalid := &net.IPNet{
+		IP:   net.ParseIP("2001:db8::"),
+		Mask: net.CIDRMask(64, 128),
+	}
+	_, err := buildAllowedLPMPlan("allowed_ipv4", ipKeys, []*net.IPNet{invalid})
+	if err == nil {
+		t.Fatal("expected malformed CIDR error")
+	}
+	if !strings.Contains(err.Error(), "non-IPv4 CIDR") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 // B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadEnforceMaps.
 func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
 	spec := &ebpf.MapSpec{
@@ -839,7 +880,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 
@@ -1084,7 +1125,7 @@ func TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder(t *testing.T) {
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
 	cfg := config.Config{
-		Mode:          config.ModeEnforce,
+		Mode:          config.ModeDefend,
 		EventsLogPath: events,
 	}
 	var seq telemetry.SeqGen
@@ -1149,7 +1190,7 @@ func TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder(t *testing.T) {
 // the number of JSONL lines actually written. State.noteDeny still fires regardless.
 func TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq(t *testing.T) {
 	t.Parallel()
-	cfg := config.Config{Mode: config.ModeEnforce}
+	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 	state := newEnforcementState()

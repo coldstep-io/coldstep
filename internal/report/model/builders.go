@@ -112,10 +112,8 @@ func BuildTimeline(events []Event) []TimelineBucket {
 
 func BuildEgressSankey(events []Event) []SankeyEdge {
 	type key struct {
-		Source   string
-		Target   string
-		Protocol string
-		Port     int
+		Source, Target, Protocol string
+		Port                     int
 	}
 	values := map[key]int{}
 	indicators := map[key]map[string]struct{}{}
@@ -134,11 +132,21 @@ func BuildEgressSankey(events []Event) []SankeyEdge {
 			host = "unknown"
 		}
 		policy := e.AsString("policy")
+		var protocol string
+		switch typ {
+		case "tcp", "tls", "udp", "http":
+			protocol = typ
+		case "deny":
+			protocol = e.AsString("protocol")
+			if protocol == "" {
+				protocol = "tcp"
+			}
+		}
 		port := int(e.AsFloat("dport"))
 		if port == 0 {
 			port = int(e.AsFloat("port"))
 		}
-		k := key{Source: host, Target: policy, Protocol: typ, Port: port}
+		k := key{Source: host, Target: policy, Protocol: protocol, Port: port}
 		values[k]++
 		if indicators[k] == nil {
 			indicators[k] = map[string]struct{}{}
@@ -157,10 +165,10 @@ func BuildEgressSankey(events []Event) []SankeyEdge {
 		out = append(out, SankeyEdge{
 			Source:     k.Source,
 			Target:     k.Target,
-			Value:      v,
-			Indicators: inds,
 			Protocol:   k.Protocol,
 			Port:       k.Port,
+			Value:      v,
+			Indicators: inds,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool {

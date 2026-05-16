@@ -4,12 +4,14 @@ End-to-end MCP stdio proof against the Docker image (no mocks):
 
 spawn `docker run --rm -i <image>`, run MCP initialize + tools/list + tools/call,
 using real bytes read from bpf/trace_connect.bpf.c in this repo.
-Requires: Docker, Python with `mcp` + `anyio` on the host (same stack Cursor-style clients use).
+Requires: Docker (or a `docker info`-compatible CLI), Python with `mcp` + `anyio`.
+Set environment variable `DOCKER` to use podman or another drop-in (default: docker).
 """
 
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -20,6 +22,7 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 IMAGE_TAG = os.environ.get("IMAGE_TAG", "coldstep-code-review-mcp:smoke")
+DOCKER_BIN = os.environ.get("DOCKER", "docker")
 
 
 def _bpf_snippet() -> str:
@@ -37,9 +40,22 @@ def _tool_text(result: types.CallToolResult) -> str:
 
 
 async def _run() -> None:
+    try:
+        subprocess.run(
+            [DOCKER_BIN, "info"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=120,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        raise SystemExit(
+            f"'{DOCKER_BIN}' daemon not reachable ({DOCKER_BIN} info failed); start the engine and retry."
+        ) from e
+
     snippet = _bpf_snippet()
     server = StdioServerParameters(
-        command="docker",
+        command=DOCKER_BIN,
         args=["run", "--rm", "-i", IMAGE_TAG],
     )
     async with stdio_client(server) as (read, write):

@@ -23,7 +23,7 @@ func TestRun_StartupMemlockInitInvoked(t *testing.T) {
 		return nil
 	}
 
-	err := Run(context.Background(), config.Config{Mode: config.ModeEnforce})
+	err := Run(context.Background(), config.Config{Mode: config.ModeDefend})
 	if called != 1 {
 		t.Fatalf("removeMemlockRlimit called %d times, want 1", called)
 	}

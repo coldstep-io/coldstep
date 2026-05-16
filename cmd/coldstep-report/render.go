@@ -305,11 +305,6 @@ func stringFromAny(v any) (string, bool) {
 	return strings.TrimSpace(s), true
 }
 
-func boolFromAny(v any) (bool, bool) {
-	b, ok := v.(bool)
-	return b, ok
-}
-
 func intFromAny(v any) int {
 	switch n := v.(type) {
 	case int:
@@ -331,11 +326,4 @@ func mapFromAny(v any) (map[string]any, bool) {
 func sliceFromAny(v any) ([]any, bool) {
 	s, ok := v.([]any)
 	return s, ok
-}
-
-func lenSlice(v any) int {
-	if s, ok := sliceFromAny(v); ok {
-		return len(s)
-	}
-	return 0
 }

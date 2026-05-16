@@ -295,7 +295,11 @@ func queryOTXIndicator(client *http.Client, apiKey, indicatorType, indicator str
 	if err != nil {
 		return "unidentified", "", 0, err
 	}
-	defer resp.Body.Close()
+	defer func() {
+		// Drain up to cap so the shared transport can reuse keep-alive connections on non-200 responses.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, otxMaxResponseJSONBytes))
+		_ = resp.Body.Close()
+	}()
 
 	switch resp.StatusCode {
 	case http.StatusForbidden:

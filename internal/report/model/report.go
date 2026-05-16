@@ -47,10 +47,10 @@ type TimelineBucket struct {
 type SankeyEdge struct {
 	Source     string   `json:"source"`
 	Target     string   `json:"target"`
-	Value      int      `json:"value"`
-	Indicators []string `json:"indicators"`
 	Protocol   string   `json:"protocol,omitempty"`
 	Port       int      `json:"port,omitempty"`
+	Value      int      `json:"value"`
+	Indicators []string `json:"indicators"`
 }
 
 type DiffPayload struct {
