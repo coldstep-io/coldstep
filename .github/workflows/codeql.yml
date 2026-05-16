@@ -1,0 +1,42 @@
+# CodeQL SAST for Go and JS/TS. The Go matrix needs build-agent-linux.sh to run
+# before autobuild because the agent depends on bpf2go-generated bindings that
+# aren't checked in — same prerequisite as the unit job in coldstep-ci-runner.yml.
+
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '0 8 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [go, javascript-typescript]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        if: matrix.language == 'go'
+        with:
+          go-version-file: go.mod
+      - name: Prepare BPF and generated Go
+        if: matrix.language == 'go'
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+      - uses: github/codeql-action/init@ce28f5bb42b1c9b506d3b01b59e65d8f3f1a5ee6  # v3
+        with:
+          languages: ${{ matrix.language }}
+      - uses: github/codeql-action/autobuild@ce28f5bb42b1c9b506d3b01b59e65d8f3f1a5ee6  # v3
+      - uses: github/codeql-action/analyze@ce28f5bb42b1c9b506d3b01b59e65d8f3f1a5ee6  # v3
+        with:
+          category: "/language:${{ matrix.language }}"

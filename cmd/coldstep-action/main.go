@@ -167,7 +167,8 @@ func runStart(cfg startConfig) error {
 	if err := os.MkdirAll(filepath.Join(actionPath, "bin"), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(detectLog, []byte{}, 0o644); err != nil {
+	// 0o644: detect log is read by the GitHub Actions runner for step summary output.
+	if err := os.WriteFile(detectLog, []byte{}, 0o644); err != nil { //nolint:gosec // G306: CI log file, must be runner-readable
 		return err
 	}
 	_ = os.Remove(agentStatus)
@@ -192,7 +193,7 @@ func runStart(cfg startConfig) error {
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(binPath, raw, 0o755); err != nil {
+		if err := os.WriteFile(binPath, raw, 0o755); err != nil { //nolint:gosec // G306: agent binary, must be executable
 			return err
 		}
 	} else {
@@ -284,7 +285,7 @@ func runStart(cfg startConfig) error {
 			_ = p.Signal(syscall.SIGTERM)
 		}
 	}
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil { //nolint:gosec // G306: PID file, conventionally world-readable
 		stopAgent()
 		return err
 	}
@@ -300,7 +301,7 @@ func runStart(cfg startConfig) error {
 			stopAgent()
 			return fmt.Errorf("coldstep agent did not report ready (%s)", outcome)
 		}
-		if err := os.WriteFile(readyMarker, []byte("true"), 0o644); err != nil {
+		if err := os.WriteFile(readyMarker, []byte("true"), 0o644); err != nil { //nolint:gosec // G306: ready marker, conventionally world-readable
 			stopAgent()
 			return err
 		}

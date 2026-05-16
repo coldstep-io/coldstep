@@ -1,0 +1,13 @@
+linters:
+  enable:
+    - gosec
+    - staticcheck
+    - govet
+    - errcheck
+    - ineffassign
+    - misspell
+
+issues:
+  exclude-rules:
+    - path: "_test\\.go"
+      linters: [gosec]
