@@ -23765,7 +23765,7 @@ function flushDetectLogToJobSummary(body) {
     discardDigestFileIfPresent();
     return;
   }
-  const block = "## Coldstep - digest (exec / network / enforcement)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
+  const block = "## Coldstep - digest (exec / network / defend)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
     fs3.appendFileSync(summaryPath, block, "utf8");
   } catch (e) {

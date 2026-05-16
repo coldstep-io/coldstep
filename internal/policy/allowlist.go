@@ -24,7 +24,7 @@ const coldstepDomainLookupAttemptTimeout = 25 * time.Second
 // resolutions across the whole allowlist compile, preventing fork-bomb of
 // goroutines for large allowlists (Theme F of the 2026-04-18 review).
 //
-// Pre-PR-F the code spawned `len(domains)` goroutines unbounded; an enforce
+// Pre-PR-F the code spawned `len(domains)` goroutines unbounded; a defend
 // allowlist with 500+ entries (e.g. typical SaaS dependency surface) would
 // trigger 500 simultaneous net.Resolver.LookupIP calls, each with its own
 // /etc/resolv.conf reads + UDP socket + retry timer. That overwhelms the
@@ -89,7 +89,7 @@ type CompileResult struct {
 
 // CompileDomainAllowlist normalizes and resolves domain allowlist entries.
 // Resolution is performed concurrently (one goroutine per domain) to avoid
-// O(n) sequential latency when enforce mode has a large allowlist.
+// O(n) sequential latency when defend mode has a large allowlist.
 func CompileDomainAllowlist(ctx context.Context, domains []string, resolver LookupIPFunc, maxAttempts int) CompileResult {
 	if resolver == nil {
 		resolver = net.DefaultResolver.LookupIP

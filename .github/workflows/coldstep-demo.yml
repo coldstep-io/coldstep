@@ -1,8 +1,8 @@
 # Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
 #
 # Job `defend-mode` (defend mode — CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
-# agent (stub DNS / mirrors break once enforce is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
-# after enforce. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
+# agent (stub DNS / mirrors break once defend is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
+# after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
 # (`supply-chain-attest.yml`). Both jobs pass `release-path`; report tooling uses `build-coldstep-report-linux.sh`.
@@ -330,8 +330,8 @@ jobs:
       - name: Build coldstep-report (Go only; agent from release)
         run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
-      # apt and stub-resolver DNS must run before enforce: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
-      - name: Install runtime probes (before enforce so mirrors/DNS still work)
+      # apt and stub-resolver DNS must run before defend: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
+      - name: Install runtime probes (before defend so mirrors/DNS still work)
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
@@ -345,7 +345,7 @@ jobs:
           command -v nmap
           command -v curl
 
-      - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
+      - name: Pin theclouddj.com for nmap (avoid stub DNS once defend is running)
         run: |
           set -euo pipefail
           ip=$(dig +short theclouddj.com A | awk 'NF{print; exit}')
@@ -370,12 +370,12 @@ jobs:
         run: |
           set -euo pipefail
           if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
-            echo "expected allowlisted IP connect to succeed under enforce allowlist"
+            echo "expected allowlisted IP connect to succeed under defend allowlist"
             exit 1
           fi
 
       # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
-      # connect is deterministically not allowlisted and cgroup enforce blocks AF_INET :443.
+      # connect is deterministically not allowlisted and cgroup defend blocks AF_INET :443.
       - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
         run: |
           set -euo pipefail
@@ -385,7 +385,7 @@ jobs:
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
-            echo "expected curl to example.com to fail under enforce allowlist"
+            echo "expected curl to example.com to fail under defend allowlist"
             exit 1
           fi
 
@@ -393,7 +393,7 @@ jobs:
         run: |
           set -euo pipefail
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
-            echo "expected direct IP connect to be blocked under enforce allowlist"
+            echo "expected direct IP connect to be blocked under defend allowlist"
             exit 1
           fi
 
@@ -405,8 +405,8 @@ jobs:
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
           test -f "$f"
           test -f "$j"
-          if ! grep -q '### Enforcement' "$f"; then
-            echo "::warning::enforcement section marker missing in digest; continuing while JSONL deny assertions follow CI variance rules"
+          if ! grep -q '### Defend' "$f"; then
+            echo "::warning::defend section marker missing in digest; continuing while JSONL deny assertions follow CI variance rules"
           fi
           if grep -q '"type":"deny"' "$j"; then
             grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
@@ -428,7 +428,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Enforce smoke"
+            echo "## Defend smoke"
             echo ""
             echo "- **Result:** prior steps asserted allowlist / URL block / IP deny telemetry. See **Show deny lines (debug)** in the log for raw \`deny\` JSONL rows."
           } >> "${GITHUB_STEP_SUMMARY}"

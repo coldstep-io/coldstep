@@ -20,27 +20,27 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracedefend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceenforce"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmenforce"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmdefend"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
-func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver policy.LookupIPFunc, maxAttempts int) (policy.CompileResult, error) {
-	if cfg.Mode != config.ModeEnforce {
+func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver policy.LookupIPFunc, maxAttempts int) (policy.CompileResult, error) {
+	if cfg.Mode != config.ModeDefend {
 		return policy.CompileResult{}, nil
 	}
 	if len(cfg.AllowedDomains) == 0 {
-		return policy.CompileResult{}, fmt.Errorf("enforce mode requires non-empty allowlist")
+		return policy.CompileResult{}, fmt.Errorf("defend mode requires non-empty allowlist")
 	}
 	compiled := policy.CompileDomainAllowlist(ctx, cfg.AllowedDomains, resolver, maxAttempts)
 	if len(compiled.Domains) == 0 {
-		return policy.CompileResult{}, fmt.Errorf("enforce mode requires non-empty allowlist after normalization")
+		return policy.CompileResult{}, fmt.Errorf("defend mode requires non-empty allowlist after normalization")
 	}
 	pol, perr := cfg.Policy()
 	if perr != nil {
@@ -48,7 +48,7 @@ func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver po
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
 	if compiled.AllowedIPv4.Len() == 0 {
-		msg := "enforce allowlist effective allowlist is empty (no IPv4 A-record resolutions; add literals to allowed-ips if needed)"
+		msg := "defend allowlist effective allowlist is empty (no IPv4 A-record resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
 		}
@@ -110,8 +110,8 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 // Any other Lookup error (map closed, wrong type, EBADF, program unloaded) is logged at WARN and
 // surfaced as zero so digest rendering keeps progressing — losing the distinction between "counter
 // is genuinely zero" and "map is unreadable" was the M-07 anti-pattern. The H-05 instance of this
-// pattern (enforce_cfg) is owned by Group A; this helper deliberately stays scoped to read-only
-// counter maps and never touches enforcement state.
+// pattern (defend_cfg) is owned by Group A; this helper deliberately stays scoped to read-only
+// counter maps and never touches defend state.
 func readUint32CounterMap(m *ebpf.Map, helperName string) int {
 	if m == nil {
 		return 0
@@ -151,7 +151,7 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	return n
 }
 
-func readDenyReserveFailureCount(objs *traceenforce.TraceenforceObjects) int {
+func readDenyReserveFailureCount(objs *tracedefend.TracedefendObjects) int {
 	if objs == nil {
 		return 0
 	}
@@ -270,21 +270,21 @@ func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
 }
 
-func readLSMDenyReserveFailureCount(objs *tracelsmenforce.TracelsmenforceObjects) int {
+func readLSMDenyReserveFailureCount(objs *tracelsmdefend.TracelsmdefendObjects) int {
 	if objs == nil {
 		return 0
 	}
 	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
-func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("tracelsmenforce objects are required for enforce mode")
+		return 0, 0, fmt.Errorf("tracelsmdefend objects are required for defend mode")
 	}
 	keyMode := uint32(0)
-	modeEnforce := uint32(1)
-	if err := objs.LsmEnforceCfg.Update(&keyMode, &modeEnforce, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load lsm_enforce_cfg map: %w", err)
+	modeDefend := uint32(1)
+	if err := objs.LsmDefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
+		return 0, 0, fmt.Errorf("load lsm_defend_cfg map: %w", err)
 	}
 	ignoredCount := 0
 	if pol != nil {
@@ -310,12 +310,12 @@ func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled p
 		return 0, 0, err
 	}
 	totalEntries := plan.totalEntries
-	if totalEntries > policy.MaxAllowedEnforceIPv4Keys {
-		return 0, 0, fmt.Errorf("lsm_allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedEnforceIPv4Keys)
+	if totalEntries > policy.MaxAllowedDefendIPv4Keys {
+		return 0, 0, fmt.Errorf("lsm_allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedDefendIPv4Keys)
 	}
 
 	if totalEntries == 0 {
-		return 0, 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
+		return 0, 0, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
 	}
 
 	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, plan); err != nil {
@@ -329,21 +329,21 @@ func loadLSMEnforceMaps(objs *tracelsmenforce.TracelsmenforceObjects, compiled p
 	return totalEntries, ignoredCount, nil
 }
 
-// loadEnforceMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
+// loadDefendMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
 //
 // PR-G: allowed_ipv4 is now a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP
 // allowlist entries (resolved domain IPs + literal /32s from --allowed-ips)
 // are still programmed individually but with prefixlen=32. Literal CIDR
 // entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
 // single LPM key and cover every address inside the range.
-func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+func loadDefendMaps(objs *tracedefend.TracedefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("traceenforce objects are required for enforce mode")
+		return 0, 0, fmt.Errorf("tracedefend objects are required for defend mode")
 	}
 	keyMode := uint32(0)
-	modeEnforce := uint32(1)
-	if err := objs.EnforceCfg.Update(&keyMode, &modeEnforce, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load enforce_cfg map: %w", err)
+	modeDefend := uint32(1)
+	if err := objs.DefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
+		return 0, 0, fmt.Errorf("load defend_cfg map: %w", err)
 	}
 	ignoredCount := 0
 	if pol != nil {
@@ -369,12 +369,12 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 		return 0, 0, err
 	}
 	totalEntries := plan.totalEntries
-	if totalEntries > policy.MaxAllowedEnforceIPv4Keys {
-		return 0, 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedEnforceIPv4Keys)
+	if totalEntries > policy.MaxAllowedDefendIPv4Keys {
+		return 0, 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedDefendIPv4Keys)
 	}
 
 	if totalEntries == 0 {
-		return 0, 0, fmt.Errorf("enforce allowlist effective allowlist is empty (no map entries)")
+		return 0, 0, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
 	}
 
 	if err := loadAllowedLPMMap(objs.AllowedIpv4, plan); err != nil {
@@ -398,7 +398,7 @@ func loadEnforceMaps(objs *traceenforce.TraceenforceObjects, compiled policy.Com
 // are the prefix length in CPU/little-endian order (BPF_MAP_TYPE_LPM_TRIE
 // reads it as a u32) and bytes [4:8] are the network address in network byte
 // order. Don't reorder fields without also updating the BPF `struct ns_lpm4_key`
-// definition in bpf/trace_enforce.bpf.c — they share wire format.
+// definition in bpf/trace_defend.bpf.c — they share wire format.
 type allowedLPMPlan struct {
 	singleIPKeys [][8]byte
 	cidrKeys     [][8]byte
@@ -482,7 +482,7 @@ func loadAllowedLPMMap(m *ebpf.Map, plan allowedLPMPlan) error {
 	return nil
 }
 
-func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
+func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
 		return telemetry.DenyEvent{}, fmt.Errorf("decode deny event")
@@ -537,17 +537,17 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 }
 
 // testAppendDenySample exercises appendDenyFromRaw JSONL emission and returns a sentinel error
-// for unit tests. Production readDenyRing logs and skips decode/JSONL failures so enforcement
+// for unit tests. Production readDenyRing logs and skips decode/JSONL failures so defend
 // keeps running; successful denies still flow through appendDenyFromRaw unchanged.
-func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
+func testAppendDenySample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
 	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		return err
 	}
-	return newEnforceDenyError(deny)
+	return newDefendDenyError(deny)
 }
 
-func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
+func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) error {
 	// Long-running deny consumer: drain a short burst per kernel wakeup for JSONL, then keep
 	// reading. Do not fail-fast exit on the first deny — background egress on hosted runners can
 	// emit denies immediately while the GitHub Action is still polling .coldstep-ready.json, which
@@ -575,10 +575,10 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 			continue
 		}
 
-		drainUntil := time.Now().Add(enforceDenyDrainDuration)
+		drainUntil := time.Now().Add(defendDenyDrainDuration)
 		n := 1
-		for n < enforceDenyDrainMaxEvents && time.Now().Before(drainUntil) {
-			rd.SetDeadline(time.Now().Add(enforceDenyDrainReadSlice))
+		for n < defendDenyDrainMaxEvents && time.Now().Before(drainUntil) {
+			rd.SetDeadline(time.Now().Add(defendDenyDrainReadSlice))
 			rec2, err2 := rd.Read()
 			if err2 != nil {
 				if errors.Is(err2, ringbuf.ErrClosed) {
@@ -608,13 +608,13 @@ func readDenyRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, se
 }
 
 // processDenyRingSample handles one deny ringbuf payload. Decode or JSONL failures are logged and
-// dropped so readDenyRing never returns a fatal error (enforcement stays attached).
-func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *enforcementState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) {
+// dropped so readDenyRing never returns a fatal error (defend stays attached).
+func processDenyRingSample(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) {
 	deny, err := appendDenyFromRaw(cfg, raw, seq, jsonlMu, state, signer, hookFamily, dns)
 	if err != nil {
 		slog.Warn("deny ring sample skipped", "err", err, "raw_len", len(raw))
 		return
 	}
-	slog.Debug("enforce deny", "protocol", deny.Protocol, "dst", deny.Dst, "dport", deny.Dport,
+	slog.Debug("defend deny", "protocol", deny.Protocol, "dst", deny.Dst, "dport", deny.Dport,
 		"reason", deny.Reason, "comm", deny.Comm)
 }

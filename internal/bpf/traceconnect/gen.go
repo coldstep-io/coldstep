@@ -23,7 +23,7 @@
 //
 // Loaders that do NOT need per-arch flags (no syscall-NR dispatch) use the
 // simpler direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go …`
-// line in their own gen.go: traceenforce, traceexec, tracefork.
+// line in their own gen.go: tracedefend, traceexec, tracefork.
 package traceconnect
 
 //go:generate go run ./run_bpf2go.go

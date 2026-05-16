@@ -101,7 +101,7 @@ func TestEvaluateFailsWhenBPFTamperEventPresent(t *testing.T) {
 		{"type": "fs_event", "op": "chmod"},
 		{"type": "bpf_audit", "comm": "bpftool"},
 		// A real bpf_tamper event from watchMapIntegrity in agent_linux.go.
-		{"type": "bpf_tamper", "asset": "map:enforce_cfg", "error": "value mismatch", "expected": "1", "actual": "0"},
+		{"type": "bpf_tamper", "asset": "map:defend_cfg", "error": "value mismatch", "expected": "1", "actual": "0"},
 	}
 	eval := Evaluate(events)
 	if eval.Verdict != VerdictFail {
