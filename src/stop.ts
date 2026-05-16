@@ -137,6 +137,29 @@ function parseAgentPidFromFile(contents: string): number | null {
   return n;
 }
 
+// process.kill(pid, 0) returns true iff pid is alive (or returns EPERM, which still implies alive).
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e: unknown) {
+    const err = e as NodeJS.ErrnoException;
+    if (err.code === 'EPERM') return true;
+    return false;
+  }
+}
+
+// Wait up to timeoutMs for pid to exit. Polls cheaply on a fixed cadence so in-flight ringbuf
+// events have time to drain through readDenyRing's per-wakeup burst loop and reach JSONL before
+// finalizeDigestAndNotifications reads the file.
+async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
+
 export async function stopAgent(): Promise<void> {
   const { reportJobSummary, reportPRSummary } = resolveReportFlags();
 
@@ -172,14 +195,23 @@ export async function stopAgent(): Promise<void> {
   const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     core.warning('pid file has invalid contents; skipping SIGTERM (agent may still be running)');
+    await new Promise((r) => setTimeout(r, 400));
   } else {
+    let signaled = true;
     try {
       process.kill(pid, 'SIGTERM');
     } catch (e: unknown) {
       const err = e as NodeJS.ErrnoException;
+      signaled = false;
       if (err.code !== 'ESRCH') core.warning(`failed to signal pid ${pid}: ${e}`);
     }
+    if (signaled) {
+      // Wait for the agent to actually exit (or up to 3s) so in-flight ringbuf
+      // events flush through readDenyRing and land in JSONL before we read it.
+      await waitForProcessExit(pid, 3000);
+    } else {
+      await new Promise((r) => setTimeout(r, 400));
+    }
   }
-  await new Promise((r) => setTimeout(r, 400));
   await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);
 }

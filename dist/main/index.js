@@ -24289,6 +24289,23 @@ function parseAgentPidFromFile(contents) {
   if (!Number.isInteger(n) || n <= 0) return null;
   return n;
 }
+function isProcessAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (e) {
+    const err = e;
+    if (err.code === "EPERM") return true;
+    return false;
+  }
+}
+async function waitForProcessExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return;
+    await new Promise((r) => setTimeout(r, 100));
+  }
+}
 async function stopAgent() {
   const { reportJobSummary, reportPRSummary } = resolveReportFlags();
   const failOnError = getInput("fail-on-error") !== "" ? ["true", "1", "yes", "on"].includes(getInput("fail-on-error").toLowerCase()) : false;
@@ -24317,15 +24334,22 @@ async function stopAgent() {
   const pid = parseAgentPidFromFile(pidContents);
   if (pid === null) {
     warning("pid file has invalid contents; skipping SIGTERM (agent may still be running)");
+    await new Promise((r) => setTimeout(r, 400));
   } else {
+    let signaled = true;
     try {
       process.kill(pid, "SIGTERM");
     } catch (e) {
       const err = e;
+      signaled = false;
       if (err.code !== "ESRCH") warning(`failed to signal pid ${pid}: ${e}`);
     }
+    if (signaled) {
+      await waitForProcessExit(pid, 3e3);
+    } else {
+      await new Promise((r) => setTimeout(r, 400));
+    }
   }
-  await new Promise((r) => setTimeout(r, 400));
   await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);
 }
 
