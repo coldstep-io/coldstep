@@ -9,6 +9,7 @@
 import * as core from '@actions/core';
 import * as fs from 'fs';
 import * as path from 'path';
+import { actionRootPath } from './shared';
 import { startAgent } from './start';
 
 const phase = core.getInput('phase').trim().toLowerCase();
@@ -18,8 +19,7 @@ if (phase !== '') {
   // New-style: check whether we can start now or must defer.
   const releasePath = core.getInput('release-path').trim();
   if (releasePath) {
-    const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-    const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+    const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
     const src = path.isAbsolute(releasePath) ? releasePath : path.join(baseDir, releasePath);
     if (!fs.existsSync(src)) {
       // Binary isn't available yet (pre runs before checkout / download steps).
