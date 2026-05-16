@@ -202,7 +202,8 @@ export async function startAgent(): Promise<void> {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path.join(baseDir, '.coldstep-detect.md');
-  const pidFile = path.join(actionPath, '.coldstep.pid');
+  // PID file lives in the workspace so bash steps can read it without knowing GITHUB_ACTION_PATH.
+  const pidFile = path.join(baseDir, '.coldstep.pid');
   const binPath = path.join(actionPath, 'bin', 'coldstep');
   const script = path.join(actionPath, 'scripts', 'build-agent-linux.sh');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');

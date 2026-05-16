@@ -15,7 +15,8 @@ import { stopAgent } from './stop';
 
 async function statusCheck(): Promise<void> {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const pidFile = path.join(actionPath, '.coldstep.pid');
+  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const pidFile = path.join(baseDir, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('coldstep: pid file not found — agent may not have started in pre hook');
     return;

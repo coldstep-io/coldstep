@@ -23845,7 +23845,8 @@ async function stopAgent() {
     }
   }
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const pidFile = path2.join(actionPath, ".coldstep.pid");
+  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const pidFile = path2.join(baseDir, ".coldstep.pid");
   if (!fs3.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
     await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);

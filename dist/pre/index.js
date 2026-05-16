@@ -19371,7 +19371,7 @@ async function startAgent() {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path2.join(baseDir, ".coldstep-detect.md");
-  const pidFile = path2.join(actionPath, ".coldstep.pid");
+  const pidFile = path2.join(baseDir, ".coldstep.pid");
   const binPath = path2.join(actionPath, "bin", "coldstep");
   const script = path2.join(actionPath, "scripts", "build-agent-linux.sh");
   const agentStatus = path2.join(baseDir, ".coldstep-ready.json");

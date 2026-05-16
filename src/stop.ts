@@ -153,7 +153,9 @@ export async function stopAgent(): Promise<void> {
   }
 
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const pidFile = path.join(actionPath, '.coldstep.pid');
+  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  // PID file is in the workspace (matches start.ts) so bash steps can read it too.
+  const pidFile = path.join(baseDir, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('pid file missing; agent may not have started');
     await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);

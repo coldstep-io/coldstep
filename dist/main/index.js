@@ -20292,7 +20292,7 @@ async function startAgent() {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path2.join(baseDir, ".coldstep-detect.md");
-  const pidFile = path2.join(actionPath, ".coldstep.pid");
+  const pidFile = path2.join(baseDir, ".coldstep.pid");
   const binPath = path2.join(actionPath, "bin", "coldstep");
   const script = path2.join(actionPath, "scripts", "build-agent-linux.sh");
   const agentStatus = path2.join(baseDir, ".coldstep-ready.json");
@@ -24299,7 +24299,8 @@ async function stopAgent() {
     }
   }
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const pidFile = path3.join(actionPath, ".coldstep.pid");
+  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const pidFile = path3.join(baseDir, ".coldstep.pid");
   if (!fs5.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
     await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);
@@ -24331,7 +24332,8 @@ async function stopAgent() {
 // src/main.ts
 async function statusCheck() {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const pidFile = path4.join(actionPath, ".coldstep.pid");
+  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const pidFile = path4.join(baseDir, ".coldstep.pid");
   if (!fs6.existsSync(pidFile)) {
     warning("coldstep: pid file not found \u2014 agent may not have started in pre hook");
     return;

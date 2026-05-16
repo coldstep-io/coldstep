@@ -144,6 +144,15 @@ jobs:
           set -euo pipefail
           f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+          # The agent finalizes the digest at SIGTERM, not continuously. Stop it now so the digest
+          # is complete before we check it. post.js will handle the already-dead process gracefully.
+          if CS_PID="$(cat "${GITHUB_WORKSPACE}/.coldstep.pid" 2>/dev/null)"; then
+            sudo kill -s SIGTERM "${CS_PID}" 2>/dev/null || true
+            for _i in 1 2 3 4 5 6 7 8; do
+              sleep 1
+              sudo kill -0 "${CS_PID}" 2>/dev/null || break
+            done
+          fi
           test -f "$f"
           test -f "$j"
           # Drain delay + retries: tls_sni rows can lag ringbuf flush on hosted runners (same class as fs_event variance).
