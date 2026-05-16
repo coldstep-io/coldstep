@@ -86,6 +86,9 @@ jobs:
         uses: ./
         with:
           mode: detect
+          # phase: start forces main.js to call startAgent() — required because
+          # node24 pre hooks do not fire for local `uses: ./` refs in this project's CI.
+          phase: start
           allow: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
           detect-profile: enhanced
@@ -356,6 +359,9 @@ jobs:
         uses: ./
         with:
           mode: defend
+          # phase: start forces main.js to call startAgent() — required because
+          # node24 pre hooks do not fire for local `uses: ./` refs in this project's CI.
+          phase: start
           # Unified allow input: domains, wildcard domains, and IPs in one place.
           allow: theclouddj.com, *.ubuntu.com, archive.ubuntu.com, azure.archive.ubuntu.com, 1.1.1.1
           release-path: bin/coldstep
