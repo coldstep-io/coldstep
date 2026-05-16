@@ -51,9 +51,9 @@ jobs:
       COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
 
@@ -280,7 +280,7 @@ jobs:
 
       - name: Persist detect JSONL baseline artifact
         if: always()
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f  # v6
         with:
           name: coldstep-events-baseline-${{ env.NS_RUNNER_LABEL }}
           path: ${{ github.workspace }}/.coldstep-events.jsonl
@@ -302,9 +302,9 @@ jobs:
       # Align with coldstep-ci-runner defend-mode: release-binary smoke can miss deny JSONL on some runners.
       COLDSTEP_DEFEND_DENY_JSONL_STRICT: "0"
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
 
