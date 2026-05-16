@@ -84,17 +84,18 @@ jobs:
       - name: Build coldstep-report (Go only; agent from release)
         run: bash scripts/build-coldstep-report-linux.sh "${GITHUB_WORKSPACE}"
 
-      - name: Start Coldstep (detect mode)
+      # Single `uses:` block — pre hook starts the agent, post hook stops it and flushes the digest.
+      - name: Coldstep (detect mode)
         uses: ./
         with:
-          phase: start
           mode: detect
-          allowed-hosts: theclouddj.com, *.ubuntu.com
+          allow: theclouddj.com, *.ubuntu.com
           # Exercise all detect-time capabilities in one demo run.
-          feature-gates: proc_tree=1,tls_sni=1,fs_events=1
+          detect-profile: enhanced
           release-path: bin/coldstep
-          # Extra UDP/HTTP probes after attach — improves baseline JSONL on ubuntu-latest (TLS still from curl/openssl below).
+          # Extra UDP/HTTP probes after attach — improves baseline JSONL on ubuntu-latest.
           smoke-test-egress: 'true'
+          report: job-summary
 
       - name: Install runtime probes
         run: |
@@ -137,13 +138,6 @@ jobs:
           chmod 600 "${TMP_B}"
           rm -f "${TMP_B}" || true
           rmdir "${TMP_FS_DIR}" || true
-
-      - name: Stop Coldstep (flush digest to workspace)
-        uses: ./
-        with:
-          phase: stop
-          report-job-summary: 'false'
-          fail-on-error: 'false'
 
       - name: Verify detect capabilities and write visual summary
         run: |
@@ -340,17 +334,16 @@ jobs:
           test -n "${ip}"
           echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
 
-      - name: Start Coldstep (defend — blocks non-allowlisted IPv4 egress)
+      # Single `uses:` block — pre hook starts the agent, post hook stops it.
+      # Defend mode defaults fail-on-error to true (Change 5) — no need to set it explicitly.
+      - name: Coldstep (defend mode)
         uses: ./
         with:
-          phase: start
           mode: defend
-          fail-on-error: 'true'
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          # Enforce BPF map is built from A records; include mirrors apt uses on ubuntu-latest.
-          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
-          allowed-ips: 1.1.1.1
+          # Unified allow input: domains, wildcard domains, and IPs in one place.
+          allow: theclouddj.com, *.ubuntu.com, archive.ubuntu.com, azure.archive.ubuntu.com, 1.1.1.1
           release-path: bin/coldstep
+          report: none
 
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
@@ -387,13 +380,6 @@ jobs:
             echo "expected direct IP connect to be blocked under enforce allowlist"
             exit 1
           fi
-
-      - name: Stop Coldstep (flush digest to workspace)
-        uses: ./
-        with:
-          phase: stop
-          report-job-summary: 'false'
-          fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |

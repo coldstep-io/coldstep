@@ -1,10 +1,10 @@
 {
   "name": "coldstep-action",
-  "description": "Legacy esbuild bundles for CodeQL and optional maintenance; the published composite action uses Go (action.yml, bin/coldstep-action).",
+  "description": "Node20 GitHub Action bundles for coldstep pre/main/post lifecycle.",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/main/index.js && esbuild src/post.ts --bundle --platform=node --target=node24 --format=cjs --sourcemap --outfile=dist/post/index.js"
+    "build": "esbuild src/pre.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --outfile=dist/pre/index.js && esbuild src/main.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --outfile=dist/main/index.js && esbuild src/post.ts --bundle --platform=node --target=node20 --format=cjs --sourcemap --outfile=dist/post/index.js"
   },
   "dependencies": {
     "@actions/core": "^3.0.1",
