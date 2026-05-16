@@ -202,7 +202,7 @@ inputs:
     default: 'true'
 
 runs:
-  using: node20
+  using: node24
   pre: dist/pre/index.js
   main: dist/main/index.js
   post: dist/post/index.js
