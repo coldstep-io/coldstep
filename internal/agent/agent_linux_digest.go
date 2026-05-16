@@ -53,7 +53,7 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 
 // digestEnforcementLabel maps internal enforcement snapshot + config to the digest/JSONL-facing mode name.
 func digestEnforcementLabel(cfg config.Config, snap enforcementSnapshot) string {
-	if cfg.Mode != config.ModeEnforce {
+	if cfg.Mode != config.ModeDefend {
 		return snap.mode
 	}
 	if strings.TrimSpace(snap.mode) != "" {

@@ -4,8 +4,45 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
+
+var ipv4LiteralOrCIDR = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$`)
+
+type classifiedAllow struct {
+	domains     []string
+	hosts       []string
+	ips         []string
+	ignoredNets []string
+}
+
+// classifyAllowTokens splits unified allow-list tokens into per-type buckets.
+// Plain or wildcard domains go to both hosts and domains; IPv4 literals/CIDRs
+// go to ips; a leading `!` on an IPv4 CIDR routes it to ignoredNets.
+func classifyAllowTokens(tokens []string) classifiedAllow {
+	var c classifiedAllow
+	for _, t := range tokens {
+		t = strings.TrimSpace(t)
+		if t == "" {
+			continue
+		}
+		if strings.HasPrefix(t, "!") {
+			inner := strings.TrimPrefix(t, "!")
+			if ipv4LiteralOrCIDR.MatchString(inner) {
+				c.ignoredNets = append(c.ignoredNets, inner)
+			}
+			continue
+		}
+		if ipv4LiteralOrCIDR.MatchString(t) {
+			c.ips = append(c.ips, t)
+		} else {
+			c.hosts = append(c.hosts, t)
+			c.domains = append(c.domains, t)
+		}
+	}
+	return c
+}
 
 func truthyInput(s string) bool {
 	v := strings.TrimSpace(strings.ToLower(s))
@@ -99,23 +136,17 @@ func parseAllowlistFileBody(data []byte) []string {
 	return out
 }
 
-// appendBootstrapTokens merges tokens from bootstrapPath into existing comma-separated allowlist.
-// If the file is missing, returns existing unchanged (older bundles may omit the directory).
-func appendBootstrapTokens(existingCSV, bootstrapPath string) (string, error) {
+// readBootstrapTokens parses the vendored allowlist file at bootstrapPath.
+// Returns nil if the file is missing — older bundles may omit the directory.
+func readBootstrapTokens(bootstrapPath string) ([]string, error) {
 	body, err := os.ReadFile(bootstrapPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return existingCSV, nil
+			return nil, nil
 		}
-		return "", err
+		return nil, err
 	}
-	tok := parseAllowlistFileBody(body)
-	if len(tok) == 0 {
-		return existingCSV, nil
-	}
-	prefix := splitAllowInlineTokens(existingCSV)
-	all := append(append([]string{}, prefix...), tok...)
-	return strings.Join(all, ","), nil
+	return parseAllowlistFileBody(body), nil
 }
 
 func resolvePathUnderWorkspace(workspaceAbs, userPath string) (string, error) {
