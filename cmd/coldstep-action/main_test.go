@@ -181,19 +181,19 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	}
 }
 
-func TestParseStartFlags_AllowlistFiles(t *testing.T) {
+func TestParseStartFlags_AllowFile(t *testing.T) {
 	cfg, err := parseStartFlags([]string{
-		"--allowed-domains-file", ".github/coldstep/a.txt,.github/coldstep/b.txt",
-		"--allowed-ips-file", "policy/extra-ips.txt",
+		"--allow", "example.com,1.2.3.4",
+		"--allow-file", ".github/coldstep/a.txt,.github/coldstep/b.txt",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AllowedDomainsFile != ".github/coldstep/a.txt,.github/coldstep/b.txt" {
-		t.Errorf("domains file: %q", cfg.AllowedDomainsFile)
+	if cfg.Allow != "example.com,1.2.3.4" {
+		t.Errorf("allow: %q", cfg.Allow)
 	}
-	if cfg.AllowedIPsFile != "policy/extra-ips.txt" {
-		t.Errorf("ips file: %q", cfg.AllowedIPsFile)
+	if cfg.AllowFile != ".github/coldstep/a.txt,.github/coldstep/b.txt" {
+		t.Errorf("allow-file: %q", cfg.AllowFile)
 	}
 }
 
@@ -212,11 +212,33 @@ func TestParseStopFlags_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !cfg.ReportJobSummary {
-		t.Error("expected report-job-summary default=true")
+	if cfg.Report != "job-summary" {
+		t.Errorf("expected report default=job-summary, got %q", cfg.Report)
 	}
-	if cfg.ReportPRSummary {
-		t.Error("expected report-pr-summary default=false")
+	jobSummary, prSummary := parseReportFlags(cfg.Report)
+	if !jobSummary || prSummary {
+		t.Errorf("default report flags: jobSummary=%v prSummary=%v", jobSummary, prSummary)
+	}
+}
+
+func TestParseReportFlags(t *testing.T) {
+	cases := []struct {
+		in            string
+		jobSum, prSum bool
+	}{
+		{"", true, false},
+		{"job-summary", true, false},
+		{"pr-comment", false, true},
+		{"both", true, true},
+		{"none", false, false},
+		{"BOTH", true, true},
+		{"unrecognized", true, false},
+	}
+	for _, c := range cases {
+		js, ps := parseReportFlags(c.in)
+		if js != c.jobSum || ps != c.prSum {
+			t.Errorf("parseReportFlags(%q): got (%v,%v) want (%v,%v)", c.in, js, ps, c.jobSum, c.prSum)
+		}
 	}
 }
 
@@ -266,7 +288,8 @@ func TestClassifyReadyStatus(t *testing.T) {
 		{"", false, false, true, false},
 		{"  \n ", false, false, true, false},
 		{`not-json`, false, false, true, false},
-		{`{"ok":"no"}`, false, true, false, false},
+		{`{"ok":"no"}`, false, false, true, false}, // non-bool ok → malformed, not explicitFail (Fix 4)
+		{`{"ok":null}`, false, false, true, false}, // null ok → malformed, not explicitFail (Fix 4)
 	}
 	oversized := bytes.Repeat([]byte("x"), maxReadyStatusJSONBytes+1)
 	r, f, m, i := classifyReadyStatus(oversized)

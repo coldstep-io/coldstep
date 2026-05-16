@@ -116,68 +116,20 @@ inputs:
     required: false
     default: ''
 
-  # --- Internal / deprecated (do not document in README) ---
+  # --- Internal (do not document in README) ---
+  #
+  # phase is the only legacy lifecycle input still supported. The in-repo CI
+  # workflows use `uses: ./` (local refs do not fire node24 pre/post hooks),
+  # so they call `phase: start` / `phase: stop` manually. Consumer workflows
+  # should omit phase and let the action's pre/post lifecycle handle start/stop.
 
   phase:
     description: >-
-      Deprecated: use the pre/post lifecycle instead (single uses: block per job).
-      Legacy composite-action phase. When set to start, main.js runs start logic.
-      When set to stop, main.js runs stop logic. pre.js and post.js are no-ops.
-    required: false
-    default: ''
-
-  allowed-domains:
-    description: 'Deprecated: use allow.'
-    required: false
-    default: ''
-
-  allowed-domains-file:
-    description: 'Deprecated: use allow-file.'
-    required: false
-    default: ''
-
-  allowed-hosts:
-    description: 'Deprecated: use allow.'
-    required: false
-    default: ''
-
-  allowed-hosts-file:
-    description: 'Deprecated: use allow-file.'
-    required: false
-    default: ''
-
-  allowed-ips:
-    description: 'Deprecated: use allow.'
-    required: false
-    default: ''
-
-  allowed-ips-file:
-    description: 'Deprecated: use allow-file.'
-    required: false
-    default: ''
-
-  ignored-ip-nets:
-    description: 'Deprecated: use ignored-nets.'
-    required: false
-    default: ''
-
-  ignored-ip-nets-file:
-    description: 'Deprecated: use ignored-nets-file.'
-    required: false
-    default: ''
-
-  report-job-summary:
-    description: 'Deprecated: use report. When set explicitly, overrides the report input for job summary behavior.'
-    required: false
-    default: ''
-
-  report-pr-summary:
-    description: 'Deprecated: use report. When set explicitly, overrides the report input for PR comment behavior.'
-    required: false
-    default: ''
-
-  feature-gates:
-    description: 'Deprecated: use detect-profile. Optional key=value pairs (comma-separated) for experiments. Merged with detect-profile gates.'
+      Legacy lifecycle. Omit for the standard pre/post pattern (single uses:
+      block per job). Set to start to invoke main as start logic, stop to
+      invoke main as stop logic — required when consuming the action via a
+      local `uses: ./` reference, since GitHub Actions does not fire node24
+      pre/post hooks for local refs.
     required: false
     default: ''
 

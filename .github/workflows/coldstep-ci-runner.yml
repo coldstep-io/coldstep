@@ -192,7 +192,7 @@ jobs:
           phase: start
           mode: detect
           detect-profile: enhanced
-          allowed-hosts: theclouddj.com, *.ubuntu.com
+          allow: theclouddj.com, *.ubuntu.com
 
       - name: Install runtime probes
         run: |
@@ -231,7 +231,7 @@ jobs:
         uses: ./
         with:
           phase: stop
-          report-job-summary: 'false'
+          report: none
           fail-on-error: 'false'
 
       - name: Build report model
@@ -442,9 +442,12 @@ jobs:
           mode: defend
           fail-on-error: 'true'
           release-path: bin/coldstep
-          allowed-hosts: theclouddj.com, *.ubuntu.com
-          allowed-domains: theclouddj.com archive.ubuntu.com azure.archive.ubuntu.com
-          allowed-ips: 1.1.1.1
+          allow: |
+            theclouddj.com
+            *.ubuntu.com
+            archive.ubuntu.com
+            azure.archive.ubuntu.com
+            1.1.1.1
 
       - name: Allowed target — nmap port 80 (theclouddj.com)
         run: |
@@ -480,24 +483,22 @@ jobs:
             exit 1
           fi
 
-      - name: Stop Coldstep (flush digest to workspace)
+      - name: Stop Coldstep (flush digest to Job Summary)
         uses: ./
         with:
           phase: stop
-          report-job-summary: 'false'
+          report: job-summary
           fail-on-error: 'true'
 
       - name: Settle then verify deny telemetry
         run: |
           set -euo pipefail
           sleep 2
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
+          # `.coldstep-detect.md` is consumed and unlinked by the stop step
+          # (it appends the digest to GITHUB_STEP_SUMMARY before deleting),
+          # so only the events JSONL is asserted here.
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
           test -f "$j"
-          if ! grep -q '### Enforcement' "$f"; then
-            echo "::warning::enforcement section marker missing in digest; continuing while JSONL deny assertions remain strict"
-          fi
           if grep -q '"type":"deny"' "$j"; then
             grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
             grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }

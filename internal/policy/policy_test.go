@@ -179,8 +179,8 @@ func TestParse_WildcardHost(t *testing.T) {
 	if g := p.Classify("a.b.example.com", net.IPv4(1, 1, 1, 1)); g != ClassNotListed {
 		t.Fatalf("got %q want not_listed (multi-level)", g)
 	}
-	if g := p.Classify("example.com", net.IPv4(1, 1, 1, 1)); g != ClassAllowed {
-		t.Fatalf("apex should match suffix entry: got %q", g)
+	if g := p.Classify("example.com", net.IPv4(1, 1, 1, 1)); g != ClassNotListed {
+		t.Fatalf("bare apex must not match wildcard suffix: got %q want not_listed", g)
 	}
 }
 

@@ -173,7 +173,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// Enforce mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
 	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
-	if cfg.Mode == config.ModeEnforce {
+	if cfg.Mode == config.ModeDefend {
 		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
 			haveLSM = true
@@ -230,7 +230,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 		backend := chooseEnforceBackend(
 			enforceBackendConfig{
-				modeEnforce: cfg.Mode == config.ModeEnforce,
+				modeEnforce: cfg.Mode == config.ModeDefend,
 				haveLSM:     haveLSM,
 			},
 			lsmAttachErr,
@@ -322,7 +322,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
-		if cfg.Mode == config.ModeEnforce {
+		if cfg.Mode == config.ModeDefend {
 			// Keep the status file for the composite post step; main may have already saved
 			// saveState. Record operational failure explicitly instead of deleting the path.
 			_ = writeAgentStatus(cfg.AgentStatusPath, false)
@@ -338,7 +338,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
-		// Enforce mode readiness is written after the deny reader goroutine launches
+		// Defend mode readiness is written after the deny reader goroutine launches
 		// (further below); writing it here would race the action's probe steps, which
 		// run as soon as readiness is set, against the reader being alive.
 		defer syscallObjs.Close()
@@ -359,9 +359,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// Ring readers are closed exactly once via closeSyscallReaders (runCtx shutdown goroutine + defer).
 	}
 
-	// Detect mode: ready after syscall trace initialized. Enforce mode defers readiness
+	// Detect mode: ready after syscall trace initialized. Defend mode defers readiness
 	// until after the deny reader goroutine is launched (further below).
-	if cfg.Mode != config.ModeEnforce {
+	if cfg.Mode != config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
 		}
@@ -836,11 +836,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
-	// Enforce-mode readiness: write only after the deny reader goroutine(s) are alive,
+	// Defend-mode readiness: write only after the deny reader goroutine(s) are alive,
 	// so the GitHub Action's probe steps (which start as soon as readiness flips) cannot
 	// race the reader being attached. Detect-mode readiness was written above.
 	var readyErr error
-	if cfg.Mode == config.ModeEnforce {
+	if cfg.Mode == config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			readyErr = fmt.Errorf("agent ready status: %w", err)
 			runCancel()
@@ -878,6 +878,12 @@ func Main() error {
 }
 
 func loadAllowedDomainsMap(m *ebpf.Map, pol *policy.Policy) error {
+	if pol != nil && pol.HasWildSuffixes() {
+		// The BPF allowed_domains map uses exact-string lookup; wildcard allowed-hosts
+		// entries (e.g. *.example.com) are not inserted and have no effect in enforce
+		// mode. Use allowed-domains or allowed-ips for BPF enforcement of those hosts.
+		slog.Warn("enforce mode: wildcard allowed-hosts entries are classify-only and will NOT be enforced by BPF; add matching allowed-domains or allowed-ips entries")
+	}
 	domains := pol.AllowedDomains()
 	for _, domain := range domains {
 		// Key is [256]byte (fixed size in BPF)
