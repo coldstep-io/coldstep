@@ -88,3 +88,16 @@ func (e Event) AsString(key string) string {
 	}
 	return strings.TrimSpace(s)
 }
+
+// AsFloat safely extracts a numeric field from an Event; returns 0 if missing or wrong type.
+func (e Event) AsFloat(key string) float64 {
+	v, ok := e[key]
+	if !ok {
+		return 0
+	}
+	f, ok := v.(float64)
+	if !ok {
+		return 0
+	}
+	return f
+}

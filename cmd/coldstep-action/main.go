@@ -204,6 +204,12 @@ func runStart(cfg startConfig) error {
 		}
 	}
 
+	// Prefer env var for signing-key so it never appears in /proc/<pid>/cmdline.
+	// --signing-key flag still works for direct binary invocation.
+	if cfg.SigningKey == "" {
+		cfg.SigningKey = os.Getenv("COLDSTEP_SIGNING_KEY")
+	}
+
 	mode, err := normalizeCompositeMode(cfg.Mode)
 	if err != nil {
 		return err
@@ -450,9 +456,12 @@ func classifyReadyStatus(raw []byte) (ready, explicitFail, malformed, incomplete
 	if !hasOk {
 		return false, false, false, true
 	}
+	if bytes.Equal(val, []byte("null")) {
+		return false, false, true, false // null ok field is malformed, not explicit-fail
+	}
 	var okBool bool
 	if err := json.Unmarshal(val, &okBool); err != nil {
-		return false, true, false, false
+		return false, false, true, false // malformed, not explicit-fail
 	}
 	if okBool {
 		return true, false, false, false

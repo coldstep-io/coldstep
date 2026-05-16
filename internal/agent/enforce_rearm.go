@@ -119,17 +119,8 @@ func reconcileLPMMap(m *ebpf.Map, expected map[[8]byte]struct{}) (added int, rem
 		return 0, 0, fmt.Errorf("iterate map: %w", iterErr)
 	}
 
-	for i := range stale {
-		dk := stale[i]
-		if delErr := m.Delete(&dk); delErr != nil {
-			if errors.Is(delErr, ebpf.ErrKeyNotExist) {
-				continue
-			}
-			return 0, removed, fmt.Errorf("delete map key: %w", delErr)
-		}
-		removed++
-	}
-
+	// Insert expected entries first so there is no window where a legitimate
+	// IP is absent from the map (stale entries are harmless; missing entries deny).
 	val := uint8(1)
 	for ek := range expected {
 		key := ek
@@ -139,6 +130,17 @@ func reconcileLPMMap(m *ebpf.Map, expected map[[8]byte]struct{}) (added int, rem
 		if _, alreadyPresent := existing[ek]; !alreadyPresent {
 			added++
 		}
+	}
+
+	for i := range stale {
+		dk := stale[i]
+		if delErr := m.Delete(&dk); delErr != nil {
+			if errors.Is(delErr, ebpf.ErrKeyNotExist) {
+				continue
+			}
+			return added, removed, fmt.Errorf("delete map key: %w", delErr)
+		}
+		removed++
 	}
 	return added, removed, nil
 }

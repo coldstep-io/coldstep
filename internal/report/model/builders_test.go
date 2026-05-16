@@ -2,6 +2,7 @@ package model
 
 import (
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -183,6 +184,34 @@ func TestEgressSankeyIncludesDstAndHostIndicators(t *testing.T) {
 	}
 	if !containsString(edges[0].Indicators, "edge.example") {
 		t.Errorf("indicators %v missing host indicator", edges[0].Indicators)
+	}
+	if edges[0].Protocol != "tls" {
+		t.Errorf("protocol = %q; want tls", edges[0].Protocol)
+	}
+}
+
+func TestEgressSankeyProtocolAndPortDistinct(t *testing.T) {
+	events := []Event{
+		{"type": "tcp", "dst": "1.2.3.4", "dport": float64(443), "policy": "allowed"},
+		{"type": "tcp", "dst": "1.2.3.4", "dport": float64(80), "policy": "allowed"},
+		{"type": "tls", "dst": "1.2.3.4", "dport": float64(443), "sni": "example.com", "policy": "allowed"},
+	}
+	edges := BuildEgressSankey(events)
+	if got, want := len(edges), 3; got != want {
+		t.Fatalf("edge count = %d; want %d (distinct protocol+port combos)", got, want)
+	}
+	byProtoPort := map[string]SankeyEdge{}
+	for _, e := range edges {
+		byProtoPort[e.Protocol+":"+strconv.Itoa(e.Port)] = e
+	}
+	if e, ok := byProtoPort["tcp:443"]; !ok || e.Protocol != "tcp" || e.Port != 443 {
+		t.Errorf("missing or wrong tcp:443 edge: %+v", byProtoPort)
+	}
+	if e, ok := byProtoPort["tcp:80"]; !ok || e.Protocol != "tcp" || e.Port != 80 {
+		t.Errorf("missing or wrong tcp:80 edge: %+v", byProtoPort)
+	}
+	if e, ok := byProtoPort["tls:443"]; !ok || e.Protocol != "tls" || e.Port != 443 {
+		t.Errorf("missing or wrong tls:443 edge: %+v", byProtoPort)
 	}
 }
 

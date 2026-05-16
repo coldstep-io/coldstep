@@ -96,10 +96,9 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 		programmed++
 	}
 	if programmed == 0 {
-		return 0, fmt.Errorf(
-			"ignored_ipv4_lpm: no entries programmed from %d configured CIDR(s) (need usable IPv4 prefixes for this LPM map)",
-			len(nets),
-		)
+		slog.Warn("ignored_ipv4_lpm: 0 entries programmed (all filtered); continuing without ignored-nets enforcement",
+			"configured", len(nets))
+		return 0, nil
 	}
 	return programmed, nil
 }
