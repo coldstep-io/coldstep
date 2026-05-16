@@ -186,6 +186,65 @@ func TestEgressSankeyIncludesDstAndHostIndicators(t *testing.T) {
 	}
 }
 
+func TestEgressSankeyIncludesProtocolAndPort(t *testing.T) {
+	events := []Event{
+		{"type": "tcp", "dst": "1.1.1.1", "fqdn": "one.example", "policy": "allowed", "dport": float64(443)},
+		{"type": "tls", "dst": "2.2.2.2", "sni": "two.example", "policy": "allowed", "dport": float64(443)},
+		{"type": "udp", "dst": "8.8.8.8", "fqdn": "dns.example", "dport": float64(53)},
+	}
+	edges := BuildEgressSankey(events)
+	bySource := map[string]SankeyEdge{}
+	for _, e := range edges {
+		bySource[e.Source] = e
+	}
+
+	tcpEdge, ok := bySource["one.example"]
+	if !ok {
+		t.Fatal("missing edge for one.example")
+	}
+	if got, want := tcpEdge.Protocol, "tcp"; got != want {
+		t.Errorf("tcp edge Protocol = %q; want %q", got, want)
+	}
+	if got, want := tcpEdge.Port, 443; got != want {
+		t.Errorf("tcp edge Port = %d; want %d", got, want)
+	}
+
+	tlsEdge, ok := bySource["two.example"]
+	if !ok {
+		t.Fatal("missing edge for two.example")
+	}
+	if got, want := tlsEdge.Protocol, "tls"; got != want {
+		t.Errorf("tls edge Protocol = %q; want %q", got, want)
+	}
+	if got, want := tlsEdge.Port, 443; got != want {
+		t.Errorf("tls edge Port = %d; want %d", got, want)
+	}
+
+	udpEdge, ok := bySource["dns.example"]
+	if !ok {
+		t.Fatal("missing edge for dns.example")
+	}
+	if got, want := udpEdge.Protocol, "udp"; got != want {
+		t.Errorf("udp edge Protocol = %q; want %q", got, want)
+	}
+	if got, want := udpEdge.Port, 53; got != want {
+		t.Errorf("udp edge Port = %d; want %d", got, want)
+	}
+}
+
+func TestEgressSankeySplitsRowsByProtocolAndPort(t *testing.T) {
+	// Same host, same policy, different protocol+port → separate edges.
+	events := []Event{
+		{"type": "tcp", "fqdn": "multi.example", "dport": float64(443)},
+		{"type": "tcp", "fqdn": "multi.example", "dport": float64(80)},
+		{"type": "udp", "fqdn": "multi.example", "dport": float64(443)},
+	}
+	edges := BuildEgressSankey(events)
+	if got, want := len(edges), 3; got != want {
+		t.Errorf("edge count = %d; want %d (one per protocol+port combo)", got, want)
+	}
+}
+
 func containsString(items []string, target string) bool {
 	for _, item := range items {
 		if item == target {

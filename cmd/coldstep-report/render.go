@@ -39,9 +39,10 @@ func renderSummary(args []string) error {
 	}
 
 	type egressRow struct {
-		dst    string
-		hits   int
-		reason string
+		dst     string
+		hits    int
+		reason  string
+		rawEdge map[string]any
 	}
 	var allowed, unidentified, blocked []egressRow
 
@@ -57,7 +58,7 @@ func renderSummary(args []string) error {
 			if dst == "" {
 				continue
 			}
-			tr := egressRow{dst: dst, hits: hits}
+			tr := egressRow{dst: dst, hits: hits, rawEdge: row}
 			switch strings.ToLower(policy) {
 			case "allowed":
 				allowed = append(allowed, tr)
@@ -124,10 +125,19 @@ func renderSummary(args []string) error {
 			limit = rowCap
 		}
 		for _, r := range rows[:limit] {
+			proto, _ := stringFromAny(r.rawEdge["protocol"])
+			if proto == "" {
+				proto = "—"
+			}
+			port := intFromAny(r.rawEdge["port"])
+			portStr := "—"
+			if port > 0 {
+				portStr = fmt.Sprintf("%d", port)
+			}
 			if showReason {
-				fmt.Fprintf(&sb, "| `%s` | — | — | %s |\n", sanitize(r.dst), sanitize(r.reason))
+				fmt.Fprintf(&sb, "| `%s` | %s | %s | %s |\n", sanitize(r.dst), sanitize(proto), portStr, sanitize(r.reason))
 			} else {
-				fmt.Fprintf(&sb, "| `%s` | — | — | %d |\n", sanitize(r.dst), r.hits)
+				fmt.Fprintf(&sb, "| `%s` | %s | %s | %d |\n", sanitize(r.dst), sanitize(proto), portStr, r.hits)
 			}
 		}
 		if len(rows) > rowCap {
