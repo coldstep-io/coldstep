@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
-import { agentStatusPath, detectLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
+import { actionRootPath, agentStatusPath, detectLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
 
 const MAX_DIGEST_LINE_UNITS = 4096;
 
@@ -175,8 +175,7 @@ export async function stopAgent(): Promise<void> {
     }
   }
 
-  const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   // PID file is in the workspace (matches start.ts) so bash steps can read it too.
   const pidFile = path.join(baseDir, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
