@@ -186,6 +186,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The action now downloads only the coldstep agent binary from releases; the report tool
+      # used by detect-mode steps below is pure Go and can be built locally without the BPF toolchain.
+      - name: Build coldstep-report
+        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-report ./cmd/coldstep-report
+
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
