@@ -82,13 +82,13 @@ async function maybePostPRSummary(body: string, reportPRSummary: boolean): Promi
   if (body.trim() === '') return;
   const token = (core.getInput('github-token') || process.env.GITHUB_TOKEN || '').trim();
   if (!token) {
-    core.warning('report-pr-summary: missing github-token');
+    core.warning('report pr-comment: missing github-token');
     return;
   }
   const ctx = github.context;
   const pr = ctx.payload.pull_request;
   if (!pr || typeof pr.number !== 'number') {
-    core.info('report-pr-summary: not a pull_request event; skipping');
+    core.info('report pr-comment: not a pull_request event; skipping');
     return;
   }
   const max = 65000;
@@ -125,7 +125,7 @@ async function finalizeDigestAndNotifications(reportJobSummary: boolean, reportP
   try {
     await maybePostPRSummary(digestBody, reportPRSummary);
   } catch (e) {
-    core.warning(`report-pr-summary: ${e instanceof Error ? e.message : String(e)}`);
+    core.warning(`report pr-comment: ${e instanceof Error ? e.message : String(e)}`);
   }
 }
 
