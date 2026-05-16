@@ -33,17 +33,12 @@ const (
 
 type startConfig struct {
 	Mode                 string
-	AllowedDomains       string
-	AllowedDomainsFile   string
-	AllowedHosts         string
-	AllowedHostsFile     string
-	AllowedIPs           string
-	AllowedIPsFile       string
-	IgnoredIPNets        string
-	IgnoredIPNetsFile    string
+	Allow                string
+	AllowFile            string
+	IgnoredNets          string
+	IgnoredNetsFile      string
 	NoDefaultIgnoredNets bool
 	LogLevel             string
-	FeatureGates         string
 	DetectProfile        string
 	ReleasePath          string
 	FailOnError          bool
@@ -51,15 +46,14 @@ type startConfig struct {
 	SmokeTestEgress      bool
 	IoUringDisable       bool
 	SigningKey           string
-	ReportJobSummary     bool
+	Report               string
 	BootstrapAllowlist   string
 }
 
 type stopConfig struct {
-	FailOnError      bool
-	ReportJobSummary bool
-	ReportPRSummary  bool
-	GithubToken      string
+	FailOnError bool
+	Report      string
+	GithubToken string
 }
 
 func main() {
@@ -91,17 +85,12 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.SetOutput(io.Discard)
 	cfg := startConfig{}
 	fs.StringVar(&cfg.Mode, "mode", "detect", "")
-	fs.StringVar(&cfg.AllowedDomains, "allowed-domains", "", "")
-	fs.StringVar(&cfg.AllowedDomainsFile, "allowed-domains-file", "", "")
-	fs.StringVar(&cfg.AllowedHosts, "allowed-hosts", "", "")
-	fs.StringVar(&cfg.AllowedHostsFile, "allowed-hosts-file", "", "")
-	fs.StringVar(&cfg.AllowedIPs, "allowed-ips", "", "")
-	fs.StringVar(&cfg.AllowedIPsFile, "allowed-ips-file", "", "")
-	fs.StringVar(&cfg.IgnoredIPNets, "ignored-ip-nets", "", "")
-	fs.StringVar(&cfg.IgnoredIPNetsFile, "ignored-ip-nets-file", "", "")
+	fs.StringVar(&cfg.Allow, "allow", "", "")
+	fs.StringVar(&cfg.AllowFile, "allow-file", "", "")
+	fs.StringVar(&cfg.IgnoredNets, "ignored-nets", "", "")
+	fs.StringVar(&cfg.IgnoredNetsFile, "ignored-nets-file", "", "")
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
-	fs.StringVar(&cfg.FeatureGates, "feature-gates", "", "")
 	fs.StringVar(&cfg.DetectProfile, "detect-profile", "standard", "")
 	fs.StringVar(&cfg.ReleasePath, "release-path", "", "")
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
@@ -109,7 +98,7 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.BoolVar(&cfg.SmokeTestEgress, "smoke-test-egress", false, "")
 	fs.BoolVar(&cfg.IoUringDisable, "io-uring-disable", true, "")
 	fs.StringVar(&cfg.SigningKey, "signing-key", "", "")
-	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
+	fs.StringVar(&cfg.Report, "report", "job-summary", "")
 	fs.StringVar(&cfg.BootstrapAllowlist, "bootstrap-allowlist", "false", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -122,13 +111,27 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.SetOutput(io.Discard)
 	cfg := stopConfig{}
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
-	fs.BoolVar(&cfg.ReportJobSummary, "report-job-summary", true, "")
-	fs.BoolVar(&cfg.ReportPRSummary, "report-pr-summary", false, "")
+	fs.StringVar(&cfg.Report, "report", "job-summary", "")
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// parseReportFlags maps the unified `report` input to per-surface booleans
+// for runStop. Defaults to job-summary when the input is empty.
+func parseReportFlags(report string) (jobSummary, prSummary bool) {
+	switch strings.ToLower(strings.TrimSpace(report)) {
+	case "pr-comment":
+		return false, true
+	case "both":
+		return true, true
+	case "none":
+		return false, false
+	default: // "" or "job-summary"
+		return true, false
+	}
 }
 
 // normalizeCompositeMode maps user-facing mode names to CI_GUARD_MODE (detect or defend).
@@ -212,53 +215,54 @@ func runStart(cfg startConfig) error {
 		return err
 	}
 
-	domainsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedDomains, cfg.AllowedDomainsFile)
+	allowMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.Allow, cfg.AllowFile)
 	if err != nil {
 		return err
 	}
-	hostsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedHosts, cfg.AllowedHostsFile)
+	allow := classifyAllowTokens(splitAllowInlineTokens(allowMerged))
+
+	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredNets, cfg.IgnoredNetsFile)
 	if err != nil {
 		return err
 	}
-	ipsMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.AllowedIPs, cfg.AllowedIPsFile)
-	if err != nil {
-		return err
-	}
-	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredIPNets, cfg.IgnoredIPNetsFile)
-	if err != nil {
-		return err
-	}
+	allow.ignoredNets = append(allow.ignoredNets, splitAllowInlineTokens(ignoredMerged)...)
 
 	if truthyInput(cfg.BootstrapAllowlist) {
-		dPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-domains-v1.txt")
-		iPath := filepath.Join(actionPath, "scripts", "coldstep_bootstrap", "allowlist-ips-v1.txt")
-		var merr error
-		domainsMerged, merr = appendBootstrapTokens(domainsMerged, dPath)
-		if merr != nil {
-			return merr
+		bsDir := filepath.Join(actionPath, "scripts", "coldstep_bootstrap")
+		bsDomains, err := readBootstrapTokens(filepath.Join(bsDir, "allowlist-domains-v1.txt"))
+		if err != nil {
+			return err
 		}
-		ipsMerged, merr = appendBootstrapTokens(ipsMerged, iPath)
-		if merr != nil {
-			return merr
+		bsIPs, err := readBootstrapTokens(filepath.Join(bsDir, "allowlist-ips-v1.txt"))
+		if err != nil {
+			return err
 		}
+		allow.domains = append(allow.domains, bsDomains...)
+		allow.hosts = append(allow.hosts, bsDomains...)
+		allow.ips = append(allow.ips, bsIPs...)
+	}
+
+	detectProfile := strings.ToLower(strings.TrimSpace(cfg.DetectProfile))
+	featureGates := ""
+	if detectProfile == "enhanced" {
+		featureGates = "proc_tree=1,tls_sni=1,fs_events=1"
 	}
 
 	childEnv := os.Environ()
 	childEnv = append(childEnv,
 		"GITHUB_WORKSPACE="+baseDir,
 		"COLDSTEP_DETECT_LOG="+detectLog,
-		"COLDSTEP_ALLOWED_DOMAINS="+domainsMerged,
-		"COLDSTEP_ALLOWED_HOSTS="+hostsMerged,
-		"COLDSTEP_ALLOWED_IPS="+ipsMerged,
-		"COLDSTEP_IGNORED_IP_NETS="+ignoredMerged,
+		"COLDSTEP_ALLOWED_DOMAINS="+strings.Join(allow.domains, ","),
+		"COLDSTEP_ALLOWED_HOSTS="+strings.Join(allow.hosts, ","),
+		"COLDSTEP_ALLOWED_IPS="+strings.Join(allow.ips, ","),
+		"COLDSTEP_IGNORED_IP_NETS="+strings.Join(allow.ignoredNets, ","),
 		"COLDSTEP_NO_DEFAULT_IGNORED_NETS="+boolString(cfg.NoDefaultIgnoredNets),
-		"COLDSTEP_FEATURE_GATES="+cfg.FeatureGates,
-		"COLDSTEP_DETECT_PROFILE="+strings.TrimSpace(cfg.DetectProfile),
+		"COLDSTEP_FEATURE_GATES="+featureGates,
+		"COLDSTEP_DETECT_PROFILE="+detectProfile,
 		"CI_GUARD_MODE="+mode,
 		"COLDSTEP_LOG_LEVEL="+cfg.LogLevel,
 		"COLDSTEP_AGENT_STATUS="+agentStatus,
 		"COLDSTEP_SIGNING_KEY="+cfg.SigningKey,
-		"COLDSTEP_REPORT_JOB_SUMMARY="+boolString(cfg.ReportJobSummary),
 	)
 
 	cmd := exec.Command("sudo", "-E", binPath, "run")
@@ -336,7 +340,9 @@ func runStop(cfg stopConfig) error {
 		body = string(raw)
 	}
 
-	if cfg.ReportJobSummary {
+	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)
+
+	if reportJobSummary {
 		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
 			safe := sanitizeDigestForMarkdown(body)
 			block := "## Coldstep - digest (exec / network / enforcement)\n\n" + safe
@@ -361,14 +367,14 @@ func runStop(cfg stopConfig) error {
 	// `List workspace outputs`, `coldstep-report build-model`, etc.) read it
 	// after Stop. The runner is ephemeral, so cleanup is not needed.
 
-	if cfg.ReportPRSummary && strings.TrimSpace(body) != "" {
+	if reportPRSummary && strings.TrimSpace(body) != "" {
 		token := strings.TrimSpace(cfg.GithubToken)
 		if token == "" {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token != "" {
 			if err := postPRComment(token, sanitizeDigestForMarkdown(body)); err != nil {
-				fmt.Fprintf(os.Stderr, "coldstep: report-pr-summary: %v\n", err)
+				fmt.Fprintf(os.Stderr, "coldstep: report pr-comment: %v\n", err)
 			}
 		}
 	}

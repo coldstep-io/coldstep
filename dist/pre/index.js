@@ -19146,11 +19146,11 @@ function mergeUnique(...arrays) {
 }
 function resolveAllowlist(baseDir) {
   const actionPath = process.env.GITHUB_ACTION_PATH || process.cwd();
-  const newTokens = [
+  const tokens = [
     ...splitTokens(getInput("allow")),
     ...readFileTokensSafe(getInput("allow-file"), baseDir)
   ];
-  const parsed = classifyTokens(newTokens);
+  const parsed = classifyTokens(tokens);
   if (inputBoolDefault("bootstrap-allowlist", false)) {
     const bsDir = path.join(actionPath, "scripts", "coldstep_bootstrap");
     const bsDomains = readSingleFileSafe(path.join(bsDir, "allowlist-domains-v1.txt"));
@@ -19159,43 +19159,21 @@ function resolveAllowlist(baseDir) {
     const bsIPs = readSingleFileSafe(path.join(bsDir, "allowlist-ips-v1.txt"));
     parsed.allowedIPs.push(...bsIPs);
   }
-  const oldDomains = splitTokens(getInput("allowed-domains"));
-  const oldDomainsFile = readFileTokensSafe(getInput("allowed-domains-file"), baseDir);
-  const oldHosts = splitTokens(getInput("allowed-hosts"));
-  const oldHostsFile = readFileTokensSafe(getInput("allowed-hosts-file"), baseDir);
-  const oldIPs = splitTokens(getInput("allowed-ips"));
-  const oldIPsFile = readFileTokensSafe(getInput("allowed-ips-file"), baseDir);
-  const ignoredNetsRaw = getInput("ignored-nets") || getInput("ignored-ip-nets");
-  const ignoredNetsFileRaw = getInput("ignored-nets-file") || getInput("ignored-ip-nets-file");
-  const oldIgnoredNets = splitTokens(ignoredNetsRaw);
-  const oldIgnoredNetsFile = readFileTokensSafe(ignoredNetsFileRaw, baseDir);
+  const ignoredNetsTokens = [
+    ...splitTokens(getInput("ignored-nets")),
+    ...readFileTokensSafe(getInput("ignored-nets-file"), baseDir)
+  ];
   return {
-    allowedIPs: mergeUnique(parsed.allowedIPs, oldIPs, oldIPsFile),
-    ignoredNets: mergeUnique(parsed.ignoredNets, oldIgnoredNets, oldIgnoredNetsFile),
-    allowedHosts: mergeUnique(parsed.allowedHosts, oldHosts, oldHostsFile),
-    allowedDomains: mergeUnique(parsed.allowedDomains, oldDomains, oldDomainsFile)
+    allowedIPs: mergeUnique(parsed.allowedIPs),
+    ignoredNets: mergeUnique(parsed.ignoredNets, ignoredNetsTokens),
+    allowedHosts: mergeUnique(parsed.allowedHosts),
+    allowedDomains: mergeUnique(parsed.allowedDomains)
   };
 }
 function resolveFeatureGates() {
   const detectProfile = (getInput("detect-profile") || "standard").trim().toLowerCase();
-  const featureGatesRaw = getInput("feature-gates").trim();
-  const gates = /* @__PURE__ */ new Map();
-  if (featureGatesRaw) {
-    for (const gate of featureGatesRaw.split(",").map((g) => g.trim()).filter(Boolean)) {
-      const eq = gate.indexOf("=");
-      if (eq >= 0) {
-        gates.set(gate.slice(0, eq).trim(), gate.slice(eq + 1).trim());
-      } else {
-        gates.set(gate, "1");
-      }
-    }
-  }
-  if (detectProfile === "enhanced") {
-    for (const [k, v] of [["proc_tree", "1"], ["tls_sni", "1"], ["fs_events", "1"]]) {
-      if (!gates.has(k)) gates.set(k, v);
-    }
-  }
-  return Array.from(gates.entries()).map(([k, v]) => `${k}=${v}`).join(",");
+  if (detectProfile !== "enhanced") return "";
+  return "proc_tree=1,tls_sni=1,fs_events=1";
 }
 function resolveFailOnError(mode) {
   const raw = getInput("fail-on-error");

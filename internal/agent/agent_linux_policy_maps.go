@@ -32,7 +32,7 @@ import (
 )
 
 func compileEnforceAllowlist(ctx context.Context, cfg config.Config, resolver policy.LookupIPFunc, maxAttempts int) (policy.CompileResult, error) {
-	if cfg.Mode != config.ModeEnforce {
+	if cfg.Mode != config.ModeDefend {
 		return policy.CompileResult{}, nil
 	}
 	if len(cfg.AllowedDomains) == 0 {
