@@ -121,46 +121,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
 
-	var connRd, udpRd, httpRd, tlsRd *ringbuf.Reader
-	var syscallReadersOnce sync.Once
-	closeSyscallReaders := func() {
-		syscallReadersOnce.Do(func() {
-			if connRd != nil {
-				_ = connRd.Close()
-			}
-			if udpRd != nil {
-				_ = udpRd.Close()
-			}
-			if httpRd != nil {
-				_ = httpRd.Close()
-			}
-			if tlsRd != nil {
-				_ = tlsRd.Close()
-			}
-		})
-	}
-	defer closeSyscallReaders()
+	var connRd, udpRd, httpRd, tlsRd ringReader
+	defer connRd.Close()
+	defer udpRd.Close()
+	defer httpRd.Close()
+	defer tlsRd.Close()
 
-	var denyRd *ringbuf.Reader
-	var denyRdOnce sync.Once
-	closeDenyRd := func() {
-		denyRdOnce.Do(func() {
-			if denyRd != nil {
-				_ = denyRd.Close()
-			}
-		})
-	}
-	defer closeDenyRd()
-	var lsmDenyRd *ringbuf.Reader
-	var lsmDenyRdOnce sync.Once
-	closeLsmDenyRd := func() {
-		lsmDenyRdOnce.Do(func() {
-			if lsmDenyRd != nil {
-				_ = lsmDenyRd.Close()
-			}
-		})
-	}
-	defer closeLsmDenyRd()
+	var denyRd ringReader
+	defer denyRd.Close()
+	var lsmDenyRd ringReader
+	defer lsmDenyRd.Close()
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
 	var defendObjs tracedefend.TracedefendObjects
@@ -217,7 +187,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					// some kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but
 					// never fire — `lsm_deny_events` then stays empty even though
 					// cgroup is defending.
-					lsmDenyRd = rd
+					lsmDenyRd.R = rd
 					defer func() {
 						defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
 						_ = lsmObjs.Close()
@@ -259,11 +229,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return loadErr
 		}
 		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
-		var err error
-		denyRd, err = ringbuf.NewReader(defendObjs.DenyEvents)
+		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
 			return fmt.Errorf("ringbuf reader deny: %w", err)
 		}
+		denyRd.R = rd
 
 		cgPath := cfg.CgroupAttachPath
 		if cgPath == "" {
@@ -305,19 +275,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer execLnk.Close()
 	bpfSt[0] = telemetry.BPFStatus{Name: "sched_process_exec", OK: true}
 
-	execRd, err := ringbuf.NewReader(execObjs.Events)
-	if err != nil {
-		return fmt.Errorf("ringbuf reader exec: %w", err)
-	}
-	// execRd is normally closed when runCtx is cancelled (see goroutine below). Any return
-	// before that goroutine is registered would otherwise leak the reader (e.g. defend mode
-	// when syscall trace attach fails, or defend BPF/map/attach errors).
-	closeExecRdOnEarlyExit := true
-	defer func() {
-		if closeExecRdOnEarlyExit {
-			_ = execRd.Close()
+	var execRd ringReader
+	{
+		rd, err := ringbuf.NewReader(execObjs.Events)
+		if err != nil {
+			return fmt.Errorf("ringbuf reader exec: %w", err)
 		}
-	}()
+		execRd.R = rd
+	}
+	// execRd is normally closed by the runCtx shutdown goroutine. The defer here covers
+	// any return before that goroutine is registered (e.g. defend mode when syscall trace
+	// attach fails). ringReader.Close is once-guarded, so the double defer is safe.
+	defer execRd.Close()
 
 	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
@@ -329,7 +298,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("defend mode requires syscall trace attach: %w", err)
 		}
 	} else {
-		connRd, udpRd, httpRd, tlsRd, syscallObjs, syscallLnk = cR, uR, hR, tR, objs, lnk
+		connRd.R, udpRd.R, httpRd.R, tlsRd.R = cR, uR, hR, tR
+		syscallObjs, syscallLnk = objs, lnk
 		syscallOK := true
 		syscallDetail := ""
 		if tlsCfgFailed {
@@ -356,7 +326,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setIoUringSetupObserved(readIoUringSetupObservedCount(syscallObjs))
 			}
 		}()
-		// Ring readers are closed exactly once via closeSyscallReaders (runCtx shutdown goroutine + defer).
+		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
 	}
 
 	// Detect mode: ready after syscall trace initialized. Defend mode defers readiness
@@ -367,16 +337,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
-	var dnsRd *ringbuf.Reader
-	var dnsRdOnce sync.Once
-	closeDNSRd := func() {
-		dnsRdOnce.Do(func() {
-			if dnsRd != nil {
-				_ = dnsRd.Close()
-			}
-		})
-	}
-	defer closeDNSRd()
+	var dnsRd ringReader
+	defer dnsRd.Close()
 
 	var dnsObjs *tracedns.TracednsObjects
 	var dnsLnkEnter, dnsLnkExit link.Link
@@ -384,7 +346,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		slog.Info("dns reply sniffing disabled", "err", err)
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: false, Detail: bpfDetail(err)}
 	} else {
-		dnsRd, dnsObjs, dnsLnkEnter, dnsLnkExit = rd, objs, le, lx
+		dnsRd.R = rd
+		dnsObjs, dnsLnkEnter, dnsLnkExit = objs, le, lx
 		// Register every live dns_cache map so userspace DNS observations
 		// flow into all in-kernel programs that consult dns_cache for
 		// late-binding IP -> FQDN attribution. Defend/LSM collections each
@@ -413,29 +376,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
-	var bpfAuditRd *ringbuf.Reader
-	var bpfAuditRdOnce sync.Once
-	closeBPFAuditRd := func() {
-		bpfAuditRdOnce.Do(func() {
-			if bpfAuditRd != nil {
-				_ = bpfAuditRd.Close()
-			}
-		})
-	}
-	defer closeBPFAuditRd()
+	var bpfAuditRd ringReader
+	defer bpfAuditRd.Close()
 	var bpfAuditObjs *tracebpfaudit.TracebpfauditObjects
 	var bpfAuditLnk link.Link
 
-	var forkRd *ringbuf.Reader
-	var forkRdOnce sync.Once
-	closeForkRd := func() {
-		forkRdOnce.Do(func() {
-			if forkRd != nil {
-				_ = forkRd.Close()
-			}
-		})
-	}
-	defer closeForkRd()
+	var forkRd ringReader
+	defer forkRd.Close()
 	var forkObjs *tracefork.TraceforkObjects
 	var forkLnk link.Link
 	if procTreeGate {
@@ -467,14 +414,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 					forkObjs = nil
 					forkLnk = nil
 				} else {
-					forkRd = rd
+					forkRd.R = rd
 					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: true})
 					slog.Info("tracing sched_process_fork (process tree)")
 					defer func() {
 						if forkObjs != nil {
 							stats.setForkRingbufReserveFailures(readForkRingbufReserveFailureCount(forkObjs))
 						}
-						closeForkRd()
+						forkRd.Close()
 						if forkLnk != nil {
 							_ = forkLnk.Close()
 						}
@@ -487,16 +434,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
-	var fsRd *ringbuf.Reader
-	var fsRdOnce sync.Once
-	closeFsRd := func() {
-		fsRdOnce.Do(func() {
-			if fsRd != nil {
-				_ = fsRd.Close()
-			}
-		})
-	}
-	defer closeFsRd()
+	var fsRd ringReader
+	defer fsRd.Close()
 
 	var fsObjs *tracefs.TracefsObjects
 	var fsLnk link.Link
@@ -534,7 +473,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					fsObjs = nil
 					fsLnk = nil
 				} else {
-					fsRd = rd
+					fsRd.R = rd
 					fsOK := true
 					fsDetail := ""
 					if fsCfgErr != nil {
@@ -550,7 +489,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 						if fsObjs != nil {
 							stats.setFSRingbufReserveFailures(readFSRingbufReserveFailureCount(fsObjs))
 						}
-						closeFsRd()
+						fsRd.Close()
 						if fsLnk != nil {
 							_ = fsLnk.Close()
 						}
@@ -570,7 +509,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		slog.Info("bpf audit trace disabled", "err", err)
 		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})
 	} else {
-		bpfAuditRd, bpfAuditObjs, bpfAuditLnk = bR, bO, bL
+		bpfAuditRd.R = bR
+		bpfAuditObjs, bpfAuditLnk = bO, bL
 		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
 		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
 		defer bpfAuditObjs.Close()
@@ -616,48 +556,51 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	go func() {
 		<-runCtx.Done()
-		_ = execRd.Close()
-		closeSyscallReaders()
-		closeDenyRd()
-		closeLsmDenyRd()
-		closeDNSRd()
-		closeBPFAuditRd()
-		closeForkRd()
-		closeFsRd()
+		execRd.Close()
+		connRd.Close()
+		udpRd.Close()
+		httpRd.Close()
+		tlsRd.Close()
+		denyRd.Close()
+		lsmDenyRd.Close()
+		dnsRd.Close()
+		bpfAuditRd.Close()
+		forkRd.Close()
+		fsRd.Close()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
 
 	// Each reader goroutine sends one error on exit; buffer must fit all sends before wg.Wait returns.
 	readerCount := 1
-	if forkRd != nil && forkBuf != nil && forkState != nil {
+	if forkRd.R != nil && forkBuf != nil && forkState != nil {
 		readerCount++
 	}
-	if fsRd != nil && fsRowBuf != nil && fsSt != nil {
+	if fsRd.R != nil && fsRowBuf != nil && fsSt != nil {
 		readerCount++
 	}
-	if connRd != nil {
+	if connRd.R != nil {
 		readerCount++
 	}
-	if udpRd != nil {
+	if udpRd.R != nil {
 		readerCount++
 	}
-	if httpRd != nil {
+	if httpRd.R != nil {
 		readerCount++
 	}
-	if tlsRd != nil {
+	if tlsRd.R != nil {
 		readerCount++
 	}
-	if denyRd != nil {
+	if denyRd.R != nil {
 		readerCount++
 	}
-	if lsmDenyRd != nil {
+	if lsmDenyRd.R != nil {
 		readerCount++
 	}
-	if dnsRd != nil {
+	if dnsRd.R != nil {
 		readerCount++
 	}
-	if bpfAuditRd != nil {
+	if bpfAuditRd.R != nil {
 		readerCount++
 	}
 	if hasDefend {
@@ -673,30 +616,30 @@ func Run(ctx context.Context, cfg config.Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errCh <- readExecRing(runCtx, cfg, execRd, stats, rows, &seq, &jsonlMu, signer)
+		errCh <- readExecRing(runCtx, cfg, execRd.R, stats, rows, &seq, &jsonlMu, signer)
 	}()
 
-	if forkRd != nil && forkBuf != nil && forkState != nil {
+	if forkRd.R != nil && forkBuf != nil && forkState != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readForkRing(runCtx, cfg, forkRd, stats, forkBuf, forkState, &seq, &jsonlMu, signer)
+			errCh <- readForkRing(runCtx, cfg, forkRd.R, stats, forkBuf, forkState, &seq, &jsonlMu, signer)
 		}()
 	}
 
-	if fsRd != nil && fsRowBuf != nil && fsSt != nil {
+	if fsRd.R != nil && fsRowBuf != nil && fsSt != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readFSRing(runCtx, cfg, fsRd, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer)
+			errCh <- readFSRing(runCtx, cfg, fsRd.R, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer)
 		}()
 	}
 
-	if connRd != nil {
+	if connRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readConnectRing(runCtx, cfg, connRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer)
+			errCh <- readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer)
 		}()
 	}
 
@@ -771,53 +714,53 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
-	if udpRd != nil {
+	if udpRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readUDPRing(runCtx, cfg, udpRd, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			errCh <- readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
-	if httpRd != nil {
+	if httpRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readHTTPRing(runCtx, cfg, httpRd, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			errCh <- readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
-	if tlsRd != nil {
+	if tlsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readTLSRing(runCtx, cfg, tlsRd, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			errCh <- readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
 		}()
 	}
-	if denyRd != nil {
+	if denyRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache)
+			errCh <- readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache)
 		}()
 	}
-	if lsmDenyRd != nil {
+	if lsmDenyRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache)
+			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd.R, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache)
 		}()
 	}
-	if dnsRd != nil {
+	if dnsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDNSRing(runCtx, dnsRd, dnsCache, stats)
+			errCh <- readDNSRing(runCtx, dnsRd.R, dnsCache, stats)
 		}()
 	}
-	if bpfAuditRd != nil {
+	if bpfAuditRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd, stats, &seq, &jsonlMu, signer)
+			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -854,7 +797,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	for err := range errCh {
 		retErr = preferRunError(retErr, err)
 	}
-	closeExecRdOnEarlyExit = false
 	if readyErr != nil {
 		return preferRunError(readyErr, retErr)
 	}
