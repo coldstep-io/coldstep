@@ -6,7 +6,7 @@
     <title>ColdStep — eBPF observability for GitHub-hosted Ubuntu runners</title>
     <meta
       name="description"
-      content="ColdStep is a GitHub Action and Linux eBPF agent for ubuntu-latest runners: detect mode, optional egress enforcement, and optional AlienVault OTX enrichment for detect HTML reports when OTX_API_KEY is set."
+      content="ColdStep is a GitHub Action and Linux eBPF agent for ubuntu-latest runners: detect mode for egress telemetry, defend mode for blocking non-allowlisted IPv4 egress, and optional AlienVault OTX enrichment for HTML reports."
     />
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -32,42 +32,60 @@
       </header>
 
       <main id="main">
-        <section class="hero" aria-labelledby="hero-heading">
-          <div class="hero-copy" data-reveal>
-            <h1 id="hero-heading">See what your CI actually touches.</h1>
-            <p class="hero-lede">
-              A composite GitHub Action and small Linux <strong>eBPF</strong> agent built for
-              <strong>GitHub-hosted Ubuntu</strong> runners. Record process and network signals in
-              <strong>detect</strong> mode, or optionally <strong>enforce</strong> an egress allowlist when you are
-              ready to harden the boundary.
-            </p>
-            <div class="hero-meta" role="list">
-              <span role="listitem">JSONL events</span>
-              <span role="listitem">Markdown digest</span>
-              <span role="listitem">Job Summary merge</span>
+        <div class="hero-section">
+          <div class="hero">
+            <div class="hero-copy" data-reveal>
+              <h1>See what your CI actually touches.</h1>
+              <p class="hero-lede">
+                A composite GitHub Action and Linux <strong>eBPF</strong> agent built for
+                <strong>GitHub-hosted Ubuntu</strong> runners. Start in <strong>detect</strong> mode to
+                baseline egress, then harden with <span class="hl">defend</span> mode and an explicit
+                allowlist.
+              </p>
+              <div class="hero-actions">
+                <a class="btn" href="https://github.com/coldstep-io/coldstep">View on GitHub</a>
+                <a class="btn btn--ghost" href="https://github.com/coldstep-io/coldstep/blob/main/QUICK_START.md">Quick start →</a>
+              </div>
+              <div class="hero-meta" role="list">
+                <span role="listitem">JSONL events</span>
+                <span role="listitem">Markdown digest</span>
+                <span role="listitem">Job Summary merge</span>
+              </div>
             </div>
+
+            <aside class="hero-panel" data-reveal aria-label="How ColdStep sits in CI">
+              <div class="panel-bar">
+                <span class="panel-dot panel-dot--r" aria-hidden="true"></span>
+                <span class="panel-dot panel-dot--y" aria-hidden="true"></span>
+                <span class="panel-dot panel-dot--g" aria-hidden="true"></span>
+                <span class="panel-label">runner surface</span>
+              </div>
+              <div class="panel-body">
+                <div class="pipeline-row">
+                  <span class="pill">pre</span>
+                  <span class="bar" aria-hidden="true"></span>
+                  <strong>checkout + agent start</strong>
+                </div>
+                <div class="pipeline-row">
+                  <span class="pill">bpf</span>
+                  <span class="bar" aria-hidden="true"></span>
+                  <strong>observe / defend</strong>
+                </div>
+                <div class="pipeline-row">
+                  <span class="pill">job</span>
+                  <span class="bar" aria-hidden="true"></span>
+                  <strong>your steps run</strong>
+                </div>
+                <div class="pipeline-row">
+                  <span class="pill">post</span>
+                  <span class="bar" aria-hidden="true"></span>
+                  <strong>digest + artifacts</strong>
+                </div>
+                <span class="panel-cursor" aria-hidden="true">$ coldstep status </span>
+              </div>
+            </aside>
           </div>
-          <aside class="hero-panel" data-reveal aria-label="How ColdStep sits in CI">
-            <p class="panel-label">Runner surface</p>
-            <div class="pipeline">
-              <div class="pipeline-row">
-                <span class="pill">checkout</span>
-                <span class="bar" aria-hidden="true"></span>
-                <strong>coldstep</strong>
-              </div>
-              <div class="pipeline-row">
-                <span class="pill">BPF load</span>
-                <span class="bar" aria-hidden="true"></span>
-                <strong>observe / defend</strong>
-              </div>
-              <div class="pipeline-row">
-                <span class="pill">your job</span>
-                <span class="bar" aria-hidden="true"></span>
-                <strong>artifacts + summary</strong>
-              </div>
-            </div>
-          </aside>
-        </section>
+        </div>
 
         <section class="section" aria-labelledby="features-heading">
           <h2 id="features-heading">Built for merge gates you can reason about</h2>
@@ -107,22 +125,24 @@
                 Copy
               </button>
             </header>
-            <pre><code id="yaml-snippet">name: coldstep
+            <pre id="yaml-snippet"><span class="kw">name</span><span class="pm">:</span> coldstep
 
-on:
-  push:
-  pull_request:
+<span class="kw">on</span><span class="pm">:</span>
+  push<span class="pm">:</span>
+  pull_request<span class="pm">:</span>
 
-env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+<span class="kw">env</span><span class="pm">:</span>
+  <span class="kv">FORCE_JAVASCRIPT_ACTIONS_TO_NODE24</span><span class="pm">:</span> <span class="st">true</span>
 
-jobs:
-  guard:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.4
-</code></pre>
+<span class="kw">jobs</span><span class="pm">:</span>
+  <span class="kv">guard</span><span class="pm">:</span>
+    <span class="kw">runs-on</span><span class="pm">:</span> <span class="st">ubuntu-latest</span>
+    <span class="kw">steps</span><span class="pm">:</span>
+      <span class="pm">-</span> <span class="kw">uses</span><span class="pm">:</span> <span class="st">actions/checkout@v4</span>
+      <span class="pm">-</span> <span class="kw">uses</span><span class="pm">:</span> <span class="st">coldstep-io/coldstep@v0.2.4</span>
+<span class="cm">        # mode: detect  (default — observe only)
+        # mode: defend  (block non-allowlisted IPv4 egress)</span>
+</pre>
           </div>
         </section>
 
@@ -134,18 +154,22 @@ jobs:
           </p>
           <div class="modes">
             <div class="mode">
-              <h3>Detect</h3>
+              <div class="mode-head">
+                <h3>Detect</h3>
+                <span class="mode-tag mode-tag--default">Default</span>
+              </div>
               <p>Observe and record. No egress blocking. Ideal for baselining and incident-friendly timelines.</p>
-              <span class="mode-tag">Default</span>
             </div>
             <div class="mode">
-              <h3>Defend</h3>
+              <div class="mode-head">
+                <h3>Defend</h3>
+                <span class="mode-tag mode-tag--opt-in">Opt-in</span>
+              </div>
               <p>
                 Block IPv4 egress outside your allowlist (cgroup <code>connect4</code> / <code>sendmsg4</code>, BPF
                 LSM where available). Requires a non-empty allowlist—this is a guardrail, not a surprise. IPv6 is
                 out of scope.
               </p>
-              <span class="mode-tag">Opt-in</span>
             </div>
           </div>
         </section>
@@ -228,9 +252,7 @@ jobs:
       (function () {
         var nodes = document.querySelectorAll("[data-reveal]");
         if (!("IntersectionObserver" in window)) {
-          nodes.forEach(function (n) {
-            n.classList.add("is-visible");
-          });
+          nodes.forEach(function (n) { n.classList.add("is-visible"); });
           return;
         }
         var io = new IntersectionObserver(
@@ -244,35 +266,23 @@ jobs:
           },
           { rootMargin: "0px 0px -8% 0px", threshold: 0.15 }
         );
-        nodes.forEach(function (n) {
-          io.observe(n);
-        });
+        nodes.forEach(function (n) { io.observe(n); });
       })();
 
       (function () {
         var btn = document.getElementById("copy-snippet");
-        var text = document.getElementById("yaml-snippet");
-        if (!btn || !text) return;
+        var pre = document.getElementById("yaml-snippet");
+        if (!btn || !pre) return;
         btn.addEventListener("click", function () {
-          var value = text.textContent || "";
+          var value = pre.textContent || "";
           function done(ok) {
             var prev = btn.textContent;
             btn.textContent = ok ? "Copied" : "Copy";
-            if (ok) {
-              window.setTimeout(function () {
-                btn.textContent = prev;
-              }, 1600);
-            }
+            if (ok) { window.setTimeout(function () { btn.textContent = prev; }, 1600); }
           }
           if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(value).then(function () {
-              done(true);
-            }, function () {
-              done(false);
-            });
-          } else {
-            done(false);
-          }
+            navigator.clipboard.writeText(value).then(function () { done(true); }, function () { done(false); });
+          } else { done(false); }
         });
       })();
     </script>
