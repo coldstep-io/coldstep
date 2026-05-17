@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-05-17
+
 ### Removed (breaking)
 
 - **`action.yml` inputs:** deprecated allowlist / report / feature-gate aliases removed. Consumers must migrate before the next tag:
@@ -38,6 +40,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **Defend mode cgroup attach:** BPF programs now attach to the cgroup v2 root (**`/sys/fs/cgroup`**) instead of the agent's own sub-cgroup. On GitHub-hosted runners the agent (launched via **`sudo`**) lands in a different cgroup than the job steps, so the previous sub-cgroup attach left all job traffic unprotected. Attaching to the root covers all descendant cgroups (PR **#122**).
 - **`scripts/check-encoding.sh`:** CI now also fails on UTF-8 **U+FFFD** replacement bytes (**`EF BF BD`**) in tracked sources (catches corrupt Unicode / paste damage).
 - **`coldstep-demo`:** defend-mode verification matches **`coldstep-ci-runner`** deny-JSONL variance rules (warn when absent unless **`COLDSTEP_DEFEND_DENY_JSONL_STRICT=1`**). Detect-mode: **`smoke-test-egress`**, OpenSSL **`s_client`** probes, longer TLS settle/retry, and digest fallback when **`tls`** JSONL is delayed but the Markdown digest still shows TLS context.
 - **BPF audit canary (CI):** defer **`raw_tp/sys_enter (bpf audit)`** attach until after fork/fs BPF loads so startup **`bpf(2)`** bursts do not fill the audit ringbuf before **`readBPFAuditRing`** runs (restores **`bpftool`** JSONL canaries on **`coldstep-redteam-ebpf`**).
