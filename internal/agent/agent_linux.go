@@ -259,6 +259,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("attach defend_sendmsg4: %w", err)
 		}
 		defer defendSendmsgLnk.Close()
+
+		// AttachCgroup returns once the program is bound, but on hosted runners the
+		// kernel has been observed to not yet enforce for newly-created sockets for
+		// ~1-3s afterward — so the first connect after .coldstep-ready.json was
+		// written could slip through. Block until a live probe deny is observed.
+		if err := probeDefendEnforcement(denyRd.R, defaultProbeTimeout); err != nil {
+			_ = writeAgentStatus(cfg.AgentStatusPath, false)
+			return fmt.Errorf("defend mode requires confirmed cgroup BPF enforcement: %w", err)
+		}
 	}
 
 	var execObjs traceexec.TraceexecObjects
