@@ -1,3 +1,24 @@
+// Command coldstep-action is the entry-point binary invoked by the GitHub
+// composite action wrapper.
+//
+// It owns two subcommands wired to the composite's pre/post phases:
+//
+//   - start: stages the agent binary (either prebuilt via --release-path or
+//     compiled by scripts/build-agent-linux.sh), resolves the merged
+//     allow / ignored-nets policy from inline + file inputs, then re-execs
+//     the agent under `sudo -E` so it can attach BPF programs. When
+//     --fail-on-error is set, start blocks until the agent writes a healthy
+//     .coldstep-ready.json (or returns an explicit not-ready / timeout /
+//     child-exit verdict).
+//
+//   - stop: SIGTERMs the agent via its pidfile, drains the on-disk digest,
+//     and emits the configured surfaces — GitHub Actions job summary, PR
+//     comment via the GitHub REST API, or both — depending on --report.
+//
+// All filesystem and subprocess inputs come from controlled sources
+// (GITHUB_ACTION_PATH / GITHUB_WORKSPACE / GITHUB_EVENT_PATH /
+// GITHUB_STEP_SUMMARY / GITHUB_REPOSITORY); see the gosec exclusions in
+// .github/workflows/coldstep-ci-runner.yml for the rationale.
 package main
 
 import (

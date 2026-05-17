@@ -803,6 +803,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 	return retErr
 }
 
+// Main is the entry-point used by cmd/coldstep when the agent re-execs
+// itself under sudo. It loads configuration from environment variables
+// (see config.LoadFromEnv), installs SIGINT/SIGTERM-aware cancellation,
+// and delegates to Run. A nil return signals normal shutdown; cancellation
+// via SIGINT/SIGTERM is intentionally collapsed to nil because the wrapper
+// process treats it as a graceful stop, not a failure.
 func Main() error {
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
