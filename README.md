@@ -105,6 +105,20 @@ The **post** step merges **`.coldstep-detect.md`** into the **Actions Summary** 
 
 Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
+### Suggested allowlist (`suggested-allow` output)
+
+After a **`detect`**-mode run, the post step reads **`.coldstep-events.jsonl`** and emits a ready-to-paste allowlist as both a **Job Summary** section ("**Suggested allowlist**") and an action output named **`suggested-allow`**. Hostnames observed via **DNS / SNI / HTTP Host** take priority over the raw IPs they resolved to, so the output stays stable across DNS rotation. The output is empty in defend mode or when no destinations were observed.
+
+```yaml
+- uses: coldstep-io/coldstep@main
+  id: coldstep
+  with:
+    mode: detect
+- run: echo "Add to allow: ${{ steps.coldstep.outputs.suggested-allow }}"
+```
+
+Typical workflow: run **`detect`** with this snippet across a few representative jobs, paste the union of `suggested-allow` outputs into your `allow:` input, then flip to **`mode: defend`** once the list is stable.
+
 ---
 
 ## Common inputs

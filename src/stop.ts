@@ -2,9 +2,18 @@ import * as core from '@actions/core';
 import * as github from '@actions/github';
 import * as fs from 'fs';
 import * as path from 'path';
-import { actionRootPath, agentStatusPath, detectLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
+import { actionRootPath, agentStatusPath, detectLogPath, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
 
 const MAX_DIGEST_LINE_UNITS = 4096;
+
+// Caps on JSONL ingestion for suggested-allow: stop reading at MAX_EVENTS_BYTES so a
+// pathological 10 GiB log can't OOM the runner, and at MAX_EVENTS_LINES so quadratic
+// parsing cost stays bounded. Both are generous for realistic CI workloads.
+const MAX_EVENTS_BYTES = 32 * 1024 * 1024;
+const MAX_EVENTS_LINES = 500_000;
+// Action outputs have a per-call size ceiling (envelope-encoded over the runner FD).
+// Cap the suggested-allow string so a sprawling run doesn't break the output write.
+const MAX_SUGGESTED_ALLOW_CHARS = 256 * 1024;
 
 function truncateLineUtf16(line: string, maxUnits: number): string {
   if (line.length <= maxUnits) return line;
@@ -115,6 +124,163 @@ async function maybePostPRSummary(body: string, reportPRSummary: boolean): Promi
   }
 }
 
+interface ObservedDestinations {
+  hosts: Set<string>;
+  ipsWithoutHost: Set<string>;
+}
+
+// Hostnames seen via DNS lookup, SNI, or HTTP Host header are preferred over the raw IP they
+// resolved to: a domain entry survives DNS rotation, while an IP entry pins the runner to whatever
+// load-balanced address the resolver returned on this run. So when an event line carries both a
+// hostname and a dst IP, we record the hostname and mark that IP as "covered" (not added on its own).
+// Lines that carry only a dst IP (no fqdn cache hit, no SNI, no Host header) contribute the IP.
+export function buildSuggestedAllowlist(jsonl: string): string {
+  const observed = collectObservedDestinations(jsonl);
+  const entries = [
+    ...[...observed.hosts].map((h) => h.toLowerCase()),
+    ...observed.ipsWithoutHost,
+  ];
+  const unique = [...new Set(entries)].filter((e) => e.length > 0).sort();
+  return unique.join(',');
+}
+
+function collectObservedDestinations(jsonl: string): ObservedDestinations {
+  const hosts = new Set<string>();
+  const ipsAll = new Set<string>();
+  const ipsCoveredByHost = new Set<string>();
+
+  if (jsonl === '') return { hosts, ipsWithoutHost: ipsAll };
+
+  const lines = jsonl.split('\n');
+  const max = Math.min(lines.length, MAX_EVENTS_LINES);
+  for (let i = 0; i < max; i++) {
+    const line = lines[i];
+    if (line === '' || line.charCodeAt(0) !== 0x7b /* '{' */) continue;
+    let ev: Record<string, unknown> | undefined;
+    try {
+      ev = JSON.parse(line) as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    if (!ev || typeof ev !== 'object') continue;
+    const host = pickHost(ev);
+    const dst = pickString(ev.dst);
+    if (host !== undefined) {
+      hosts.add(host);
+      if (dst !== undefined) ipsCoveredByHost.add(dst);
+    }
+    if (dst !== undefined) ipsAll.add(dst);
+  }
+
+  const ipsWithoutHost = new Set<string>();
+  for (const ip of ipsAll) {
+    if (!ipsCoveredByHost.has(ip)) ipsWithoutHost.add(ip);
+  }
+  return { hosts, ipsWithoutHost };
+}
+
+function pickHost(ev: Record<string, unknown>): string | undefined {
+  // Order matters: HTTP Host header is the most user-meaningful, SNI is the next-best signal for
+  // TLS traffic, and fqdn (TCP/UDP DNS-cache hit) is the fallback when no L7 metadata was captured.
+  const httpHost = pickString(ev.host);
+  if (httpHost !== undefined) return normalizeHost(httpHost);
+  const sni = pickString(ev.sni);
+  if (sni !== undefined) return normalizeHost(sni);
+  const fqdn = pickString(ev.fqdn);
+  if (fqdn !== undefined) return normalizeHost(fqdn);
+  return undefined;
+}
+
+function pickString(v: unknown): string | undefined {
+  if (typeof v !== 'string') return undefined;
+  const t = v.trim();
+  if (t === '') return undefined;
+  return t;
+}
+
+function normalizeHost(h: string): string {
+  // Strip ":port" suffix (HTTP Host may include it) without breaking bracketed IPv6 literals.
+  // IPv6 literals never enter the suggested allowlist today (agent is IPv4-only) but the guard is
+  // cheap insurance against future schema drift.
+  if (h.startsWith('[')) return h.toLowerCase();
+  const colon = h.indexOf(':');
+  const trimmed = colon === -1 ? h : h.slice(0, colon);
+  return trimmed.toLowerCase();
+}
+
+function readEventsJSONLCapped(): string {
+  const p = eventsLogPath();
+  if (!fs.existsSync(p)) return '';
+  try {
+    const stat = fs.statSync(p);
+    if (stat.size <= MAX_EVENTS_BYTES) return fs.readFileSync(p, 'utf8');
+    // Read only the first MAX_EVENTS_BYTES so this stays bounded. Truncate at the last newline
+    // so we don't hand half a JSON line to the parser.
+    const fd = fs.openSync(p, 'r');
+    try {
+      const buf = Buffer.alloc(MAX_EVENTS_BYTES);
+      const n = fs.readSync(fd, buf, 0, MAX_EVENTS_BYTES, 0);
+      const text = buf.slice(0, n).toString('utf8');
+      const lastNL = text.lastIndexOf('\n');
+      core.warning(
+        `suggested-allow: events log ${stat.size} bytes exceeds cap ${MAX_EVENTS_BYTES}; truncating at last newline`,
+      );
+      return lastNL === -1 ? '' : text.slice(0, lastNL + 1);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (e) {
+    core.warning(`suggested-allow: read failed (${e instanceof Error ? e.message : String(e)})`);
+    return '';
+  }
+}
+
+function emitSuggestedAllowlist(): void {
+  const mode = (core.getInput('mode') || 'detect').trim().toLowerCase();
+  if (mode !== 'detect') {
+    core.setOutput('suggested-allow', '');
+    return;
+  }
+  const jsonl = readEventsJSONLCapped();
+  if (jsonl === '') {
+    core.setOutput('suggested-allow', '');
+    return;
+  }
+  let allow = buildSuggestedAllowlist(jsonl);
+  if (allow === '') {
+    core.setOutput('suggested-allow', '');
+    return;
+  }
+  let truncated = false;
+  if (allow.length > MAX_SUGGESTED_ALLOW_CHARS) {
+    // Cut at the last comma so the output is still a valid allow-list with no half-entry trailing.
+    const cap = allow.lastIndexOf(',', MAX_SUGGESTED_ALLOW_CHARS);
+    allow = cap === -1 ? allow.slice(0, MAX_SUGGESTED_ALLOW_CHARS) : allow.slice(0, cap);
+    truncated = true;
+    core.warning(`suggested-allow: list exceeded ${MAX_SUGGESTED_ALLOW_CHARS} chars; truncated`);
+  }
+  core.setOutput('suggested-allow', allow);
+
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  const entries = allow.split(',').filter((e) => e.length > 0);
+  const block =
+    '## Suggested allowlist\n\n' +
+    'Copy these to your coldstep `allow:` input. Hostnames observed via DNS/SNI/HTTP take ' +
+    'priority over raw IPs.\n\n' +
+    '```\n' +
+    allow +
+    '\n```\n\n' +
+    `_${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` +
+    (truncated ? ' (truncated)' : '') +
+    '_\n\n';
+  try {
+    fs.appendFileSync(summaryPath, block, 'utf8');
+  } catch (e) {
+    core.warning(`suggested-allow: GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)})`);
+  }
+}
+
 async function finalizeDigestAndNotifications(reportJobSummary: boolean, reportPRSummary: boolean): Promise<void> {
   const digestBody = readDetectDigest();
   if (reportJobSummary) {
@@ -127,6 +293,7 @@ async function finalizeDigestAndNotifications(reportJobSummary: boolean, reportP
   } catch (e) {
     core.warning(`report pr-comment: ${e instanceof Error ? e.message : String(e)}`);
   }
+  emitSuggestedAllowlist();
 }
 
 function parseAgentPidFromFile(contents: string): number | null {

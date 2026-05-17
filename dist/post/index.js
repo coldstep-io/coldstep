@@ -3998,11 +3998,11 @@ var require_util2 = __commonJS({
     var { isUint8Array } = require("node:util/types");
     var { webidl } = require_webidl();
     var supportedHashes = [];
-    var crypto;
+    var crypto2;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
       const possibleRelevantHashes = ["sha256", "sha384", "sha512"];
-      supportedHashes = crypto.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
+      supportedHashes = crypto2.getHashes().filter((hash) => possibleRelevantHashes.includes(hash));
     } catch {
     }
     function responseURL(response) {
@@ -4275,7 +4275,7 @@ var require_util2 = __commonJS({
       }
     }
     function bytesMatch(bytes, metadataList) {
-      if (crypto === void 0) {
+      if (crypto2 === void 0) {
         return true;
       }
       const parsedMetadata = parseMetadata(metadataList);
@@ -4290,7 +4290,7 @@ var require_util2 = __commonJS({
       for (const item of metadata) {
         const algorithm = item.algo;
         const expectedValue = item.hash;
-        let actualValue = crypto.createHash(algorithm).update(bytes).digest("base64");
+        let actualValue = crypto2.createHash(algorithm).update(bytes).digest("base64");
         if (actualValue[actualValue.length - 1] === "=") {
           if (actualValue[actualValue.length - 2] === "=") {
             actualValue = actualValue.slice(0, -2);
@@ -5354,8 +5354,8 @@ var require_body = __commonJS({
     var { multipartFormDataParser } = require_formdata_parser();
     var random;
     try {
-      const crypto = require("node:crypto");
-      random = (max) => crypto.randomInt(0, max);
+      const crypto2 = require("node:crypto");
+      random = (max) => crypto2.randomInt(0, max);
     } catch {
       random = (max) => Math.floor(Math.random(max));
     }
@@ -16763,13 +16763,13 @@ var require_frame = __commonJS({
     "use strict";
     var { maxUnsigned16Bit } = require_constants5();
     var BUFFER_SIZE = 16386;
-    var crypto;
+    var crypto2;
     var buffer = null;
     var bufIdx = BUFFER_SIZE;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
     } catch {
-      crypto = {
+      crypto2 = {
         // not full compatibility, but minimum.
         randomFillSync: function randomFillSync(buffer2, _offset, _size) {
           for (let i = 0; i < buffer2.length; ++i) {
@@ -16782,7 +16782,7 @@ var require_frame = __commonJS({
     function generateMask() {
       if (bufIdx === BUFFER_SIZE) {
         bufIdx = 0;
-        crypto.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
+        crypto2.randomFillSync(buffer ??= Buffer.allocUnsafe(BUFFER_SIZE), 0, BUFFER_SIZE);
       }
       return [buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++], buffer[bufIdx++]];
     }
@@ -16854,9 +16854,9 @@ var require_connection = __commonJS({
     var { Headers: Headers2, getHeadersList } = require_headers();
     var { getDecodeSplit } = require_util2();
     var { WebsocketFrameSend } = require_frame();
-    var crypto;
+    var crypto2;
     try {
-      crypto = require("node:crypto");
+      crypto2 = require("node:crypto");
     } catch {
     }
     function establishWebSocketConnection(url, protocols, client, ws, onEstablish, options) {
@@ -16876,7 +16876,7 @@ var require_connection = __commonJS({
         const headersList = getHeadersList(new Headers2(options.headers));
         request2.headersList = headersList;
       }
-      const keyValue = crypto.randomBytes(16).toString("base64");
+      const keyValue = crypto2.randomBytes(16).toString("base64");
       request2.headersList.append("sec-websocket-key", keyValue);
       request2.headersList.append("sec-websocket-version", "13");
       for (const protocol of protocols) {
@@ -16906,7 +16906,7 @@ var require_connection = __commonJS({
             return;
           }
           const secWSAccept = response.headersList.get("Sec-WebSocket-Accept");
-          const digest = crypto.createHash("sha1").update(keyValue + uid).digest("base64");
+          const digest = crypto2.createHash("sha1").update(keyValue + uid).digest("base64");
           if (secWSAccept !== digest) {
             failWebsocketConnection(ws, "Incorrect hash received in Sec-WebSocket-Accept header.");
             return;
@@ -19522,8 +19522,36 @@ function escapeProperty(s) {
   return toCommandValue(s).replace(/%/g, "%25").replace(/\r/g, "%0D").replace(/\n/g, "%0A").replace(/:/g, "%3A").replace(/,/g, "%2C");
 }
 
+// node_modules/@actions/core/lib/file-command.js
+var crypto = __toESM(require("crypto"), 1);
+var fs = __toESM(require("fs"), 1);
+var os2 = __toESM(require("os"), 1);
+function issueFileCommand(command, message) {
+  const filePath = process.env[`GITHUB_${command}`];
+  if (!filePath) {
+    throw new Error(`Unable to find environment variable for file command ${command}`);
+  }
+  if (!fs.existsSync(filePath)) {
+    throw new Error(`Missing file at path: ${filePath}`);
+  }
+  fs.appendFileSync(filePath, `${toCommandValue(message)}${os2.EOL}`, {
+    encoding: "utf8"
+  });
+}
+function prepareKeyValueMessage(key, value) {
+  const delimiter = `ghadelimiter_${crypto.randomUUID()}`;
+  const convertedValue = toCommandValue(value);
+  if (key.includes(delimiter)) {
+    throw new Error(`Unexpected input: name should not contain the delimiter "${delimiter}"`);
+  }
+  if (convertedValue.includes(delimiter)) {
+    throw new Error(`Unexpected input: value should not contain the delimiter "${delimiter}"`);
+  }
+  return `${key}<<${delimiter}${os2.EOL}${convertedValue}${os2.EOL}${delimiter}`;
+}
+
 // node_modules/@actions/core/lib/core.js
-var os3 = __toESM(require("os"), 1);
+var os4 = __toESM(require("os"), 1);
 
 // node_modules/@actions/http-client/lib/index.js
 var tunnel = __toESM(require_tunnel2(), 1);
@@ -19868,10 +19896,10 @@ var _summary = new Summary();
 var import_os2 = __toESM(require("os"), 1);
 
 // node_modules/@actions/io/lib/io-util.js
-var fs = __toESM(require("fs"), 1);
-var { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs.promises;
+var fs2 = __toESM(require("fs"), 1);
+var { chmod, copyFile, lstat, mkdir, open, readdir, rename, rm, rmdir, stat, symlink, unlink } = fs2.promises;
 var IS_WINDOWS = process.platform === "win32";
-var READONLY = fs.constants.O_RDONLY;
+var READONLY = fs2.constants.O_RDONLY;
 
 // node_modules/@actions/exec/lib/toolrunner.js
 var IS_WINDOWS2 = process.platform === "win32";
@@ -19896,6 +19924,14 @@ function getInput(name, options) {
   }
   return val.trim();
 }
+function setOutput(name, value) {
+  const filePath = process.env["GITHUB_OUTPUT"] || "";
+  if (filePath) {
+    return issueFileCommand("OUTPUT", prepareKeyValueMessage(name, value));
+  }
+  process.stdout.write(os4.EOL);
+  issueCommand("set-output", { name }, toCommandValue(value));
+}
 function setFailed(message) {
   process.exitCode = ExitCode.Failure;
   error(message);
@@ -19907,7 +19943,7 @@ function warning(message, properties = {}) {
   issueCommand("warning", toCommandProperties(properties), message instanceof Error ? message.toString() : message);
 }
 function info(message) {
-  process.stdout.write(message + os3.EOL);
+  process.stdout.write(message + os4.EOL);
 }
 function getState(name) {
   return process.env[`STATE_${name}`] || "";
@@ -23659,11 +23695,11 @@ function getOctokit(token, options, ...additionalPlugins) {
 }
 
 // src/stop.ts
-var fs3 = __toESM(require("fs"));
+var fs4 = __toESM(require("fs"));
 var path2 = __toESM(require("path"));
 
 // src/shared.ts
-var fs2 = __toESM(require("fs"));
+var fs3 = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 var COLDSTEP_BINARY_VERSION = "v0.2.1";
@@ -23679,10 +23715,14 @@ function agentStatusPath() {
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   return path.join(baseDir, ".coldstep-ready.json");
 }
+function eventsLogPath() {
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
+  return path.join(baseDir, ".coldstep-events.jsonl");
+}
 function readAgentReadyOk(statusPath) {
   try {
-    if (!fs2.existsSync(statusPath)) return false;
-    const buf = fs2.readFileSync(statusPath);
+    if (!fs3.existsSync(statusPath)) return false;
+    const buf = fs3.readFileSync(statusPath);
     if (buf.length > MAX_READY_STATUS_JSON_BYTES) return false;
     const j = JSON.parse(buf.toString("utf8"));
     return j.ok === true;
@@ -23706,6 +23746,9 @@ function resolveReportFlags() {
 
 // src/stop.ts
 var MAX_DIGEST_LINE_UNITS = 4096;
+var MAX_EVENTS_BYTES = 32 * 1024 * 1024;
+var MAX_EVENTS_LINES = 5e5;
+var MAX_SUGGESTED_ALLOW_CHARS = 256 * 1024;
 function truncateLineUtf16(line, maxUnits) {
   if (line.length <= maxUnits) return line;
   let end = maxUnits;
@@ -23723,9 +23766,9 @@ function sanitizeDigestForMarkdown(body) {
 }
 function readDetectDigest() {
   const logPath = detectLogPath();
-  if (!fs3.existsSync(logPath)) return "";
+  if (!fs4.existsSync(logPath)) return "";
   try {
-    return fs3.readFileSync(logPath, "utf8");
+    return fs4.readFileSync(logPath, "utf8");
   } catch (e) {
     warning(`coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`);
     return "";
@@ -23733,9 +23776,9 @@ function readDetectDigest() {
 }
 function discardDigestFileIfPresent() {
   const logPath = detectLogPath();
-  if (!fs3.existsSync(logPath)) return;
+  if (!fs4.existsSync(logPath)) return;
   try {
-    fs3.unlinkSync(logPath);
+    fs4.unlinkSync(logPath);
   } catch (e) {
     warning(`coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`);
   }
@@ -23752,13 +23795,13 @@ function flushDetectLogToJobSummary(body) {
   }
   const block = "## Coldstep - digest (exec / network / defend)\n\n" + sanitizeDigestForMarkdown(body) + (body.endsWith("\n") ? "" : "\n");
   try {
-    fs3.appendFileSync(summaryPath, block, "utf8");
+    fs4.appendFileSync(summaryPath, block, "utf8");
   } catch (e) {
     warning(`GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${detectLogPath()}`);
     return;
   }
   try {
-    fs3.unlinkSync(detectLogPath());
+    fs4.unlinkSync(detectLogPath());
   } catch (e) {
     warning(`coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${detectLogPath()}`);
   }
@@ -23800,6 +23843,128 @@ async function maybePostPRSummary(body, reportPRSummary) {
     clearTimeout(timeoutId);
   }
 }
+function buildSuggestedAllowlist(jsonl) {
+  const observed = collectObservedDestinations(jsonl);
+  const entries = [
+    ...[...observed.hosts].map((h) => h.toLowerCase()),
+    ...observed.ipsWithoutHost
+  ];
+  const unique = [...new Set(entries)].filter((e) => e.length > 0).sort();
+  return unique.join(",");
+}
+function collectObservedDestinations(jsonl) {
+  const hosts = /* @__PURE__ */ new Set();
+  const ipsAll = /* @__PURE__ */ new Set();
+  const ipsCoveredByHost = /* @__PURE__ */ new Set();
+  if (jsonl === "") return { hosts, ipsWithoutHost: ipsAll };
+  const lines = jsonl.split("\n");
+  const max = Math.min(lines.length, MAX_EVENTS_LINES);
+  for (let i = 0; i < max; i++) {
+    const line = lines[i];
+    if (line === "" || line.charCodeAt(0) !== 123) continue;
+    let ev;
+    try {
+      ev = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    if (!ev || typeof ev !== "object") continue;
+    const host = pickHost(ev);
+    const dst = pickString(ev.dst);
+    if (host !== void 0) {
+      hosts.add(host);
+      if (dst !== void 0) ipsCoveredByHost.add(dst);
+    }
+    if (dst !== void 0) ipsAll.add(dst);
+  }
+  const ipsWithoutHost = /* @__PURE__ */ new Set();
+  for (const ip of ipsAll) {
+    if (!ipsCoveredByHost.has(ip)) ipsWithoutHost.add(ip);
+  }
+  return { hosts, ipsWithoutHost };
+}
+function pickHost(ev) {
+  const httpHost = pickString(ev.host);
+  if (httpHost !== void 0) return normalizeHost(httpHost);
+  const sni = pickString(ev.sni);
+  if (sni !== void 0) return normalizeHost(sni);
+  const fqdn = pickString(ev.fqdn);
+  if (fqdn !== void 0) return normalizeHost(fqdn);
+  return void 0;
+}
+function pickString(v) {
+  if (typeof v !== "string") return void 0;
+  const t = v.trim();
+  if (t === "") return void 0;
+  return t;
+}
+function normalizeHost(h) {
+  if (h.startsWith("[")) return h.toLowerCase();
+  const colon = h.indexOf(":");
+  const trimmed = colon === -1 ? h : h.slice(0, colon);
+  return trimmed.toLowerCase();
+}
+function readEventsJSONLCapped() {
+  const p = eventsLogPath();
+  if (!fs4.existsSync(p)) return "";
+  try {
+    const stat2 = fs4.statSync(p);
+    if (stat2.size <= MAX_EVENTS_BYTES) return fs4.readFileSync(p, "utf8");
+    const fd = fs4.openSync(p, "r");
+    try {
+      const buf = Buffer.alloc(MAX_EVENTS_BYTES);
+      const n = fs4.readSync(fd, buf, 0, MAX_EVENTS_BYTES, 0);
+      const text = buf.slice(0, n).toString("utf8");
+      const lastNL = text.lastIndexOf("\n");
+      warning(
+        `suggested-allow: events log ${stat2.size} bytes exceeds cap ${MAX_EVENTS_BYTES}; truncating at last newline`
+      );
+      return lastNL === -1 ? "" : text.slice(0, lastNL + 1);
+    } finally {
+      fs4.closeSync(fd);
+    }
+  } catch (e) {
+    warning(`suggested-allow: read failed (${e instanceof Error ? e.message : String(e)})`);
+    return "";
+  }
+}
+function emitSuggestedAllowlist() {
+  const mode = (getInput("mode") || "detect").trim().toLowerCase();
+  if (mode !== "detect") {
+    setOutput("suggested-allow", "");
+    return;
+  }
+  const jsonl = readEventsJSONLCapped();
+  if (jsonl === "") {
+    setOutput("suggested-allow", "");
+    return;
+  }
+  let allow = buildSuggestedAllowlist(jsonl);
+  if (allow === "") {
+    setOutput("suggested-allow", "");
+    return;
+  }
+  let truncated = false;
+  if (allow.length > MAX_SUGGESTED_ALLOW_CHARS) {
+    const cap = allow.lastIndexOf(",", MAX_SUGGESTED_ALLOW_CHARS);
+    allow = cap === -1 ? allow.slice(0, MAX_SUGGESTED_ALLOW_CHARS) : allow.slice(0, cap);
+    truncated = true;
+    warning(`suggested-allow: list exceeded ${MAX_SUGGESTED_ALLOW_CHARS} chars; truncated`);
+  }
+  setOutput("suggested-allow", allow);
+  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
+  if (!summaryPath) return;
+  const entries = allow.split(",").filter((e) => e.length > 0);
+  const block = "## Suggested allowlist\n\nCopy these to your coldstep `allow:` input. Hostnames observed via DNS/SNI/HTTP take priority over raw IPs.\n\n```\n" + allow + `
+\`\`\`
+
+_${entries.length} entr${entries.length === 1 ? "y" : "ies"}` + (truncated ? " (truncated)" : "") + "_\n\n";
+  try {
+    fs4.appendFileSync(summaryPath, block, "utf8");
+  } catch (e) {
+    warning(`suggested-allow: GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)})`);
+  }
+}
 async function finalizeDigestAndNotifications(reportJobSummary, reportPRSummary) {
   const digestBody = readDetectDigest();
   if (reportJobSummary) {
@@ -23812,6 +23977,7 @@ async function finalizeDigestAndNotifications(reportJobSummary, reportPRSummary)
   } catch (e) {
     warning(`report pr-comment: ${e instanceof Error ? e.message : String(e)}`);
   }
+  emitSuggestedAllowlist();
 }
 function parseAgentPidFromFile(contents) {
   const trimmed = contents.trim();
@@ -23848,14 +24014,14 @@ async function stopAgent() {
   }
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   const pidFile = path2.join(baseDir, ".coldstep.pid");
-  if (!fs3.existsSync(pidFile)) {
+  if (!fs4.existsSync(pidFile)) {
     warning("pid file missing; agent may not have started");
     await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);
     return;
   }
   let pidContents = "";
   try {
-    pidContents = fs3.readFileSync(pidFile, "utf8");
+    pidContents = fs4.readFileSync(pidFile, "utf8");
   } catch {
     warning("pid file disappeared before read; skipping SIGTERM (agent may still be running)");
     await finalizeDigestAndNotifications(reportJobSummary, reportPRSummary);

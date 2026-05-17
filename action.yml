@@ -153,6 +153,13 @@ inputs:
     required: false
     default: 'true'
 
+outputs:
+  suggested-allow:
+    description: >-
+      Comma-separated allowlist suggested from the destinations observed during a detect-mode run
+      (empty in defend mode or when no events were captured). Hostnames seen via DNS/SNI/HTTP take
+      priority over the raw IPs they resolved to. Paste directly into the action's `allow:` input.
+
 runs:
   using: node24
   pre: dist/pre/index.js
