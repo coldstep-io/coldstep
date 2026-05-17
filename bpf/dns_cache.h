@@ -7,7 +7,7 @@
 /*
  * dns_cache map: IPv4 -> FQDN (value char[256]).
  * Populated by userspace agent after parsing DNS responses.
- * Queried by BPF observability/enforcement programs for late-binding attribution.
+ * Queried by BPF observability/defense programs for late-binding attribution.
  */
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);

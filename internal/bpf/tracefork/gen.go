@@ -6,7 +6,7 @@
 // CO-RE on `struct task_struct *parent, *child` (TP_PROTO args), so no
 // architecture-specific syscall-number constants are required.
 //
-// See internal/bpf/traceenforce/gen.go for an explanation of the two
+// See internal/bpf/tracedefend/gen.go for an explanation of the two
 // loader patterns used in this repo.
 package tracefork
 

@@ -61,7 +61,7 @@ function flushDetectLogToJobSummary(body: string): void {
     return;
   }
   const block =
-    '## Coldstep - digest (exec / network / enforcement)\n\n' +
+    '## Coldstep - digest (exec / network / defend)\n\n' +
     sanitizeDigestForMarkdown(body) +
     (body.endsWith('\n') ? '' : '\n');
   try {

@@ -77,7 +77,7 @@ func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
 		4,
 		120,
 		state.snapshot(),
-		enforcementSnapshot{},
+		defendSnapshot{},
 		nil,
 		false,
 		forkSectionSnapshot{},
@@ -147,7 +147,7 @@ func TestRun_DroppedKinds_PropagateToDigestInput(t *testing.T) {
 		1,
 		120,
 		networkSectionSnapshot{},
-		enforcementSnapshot{},
+		defendSnapshot{},
 		nil,
 		false,
 		forkSectionSnapshot{},
@@ -182,7 +182,7 @@ func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
 		0,
 		120,
 		networkSectionSnapshot{},
-		enforcementSnapshot{},
+		defendSnapshot{},
 		nil,
 		false,
 		forkSectionSnapshot{},
@@ -213,7 +213,7 @@ func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 		1,
 		120,
 		networkSectionSnapshot{},
-		enforcementSnapshot{},
+		defendSnapshot{},
 		nil,
 		false,
 		forkSectionSnapshot{},
@@ -229,57 +229,57 @@ func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
 	}
 }
 
-func TestRun_EnforceBackendMetadataReflectsActualBackend(t *testing.T) {
+func TestRun_DefendBackendMetadataReflectsActualBackend(t *testing.T) {
 	t.Parallel()
 
 	cases := []struct {
 		name         string
-		cfg          enforceBackendConfig
+		cfg          defendBackendConfig
 		lsmAttachErr error
 		wantBackend  string
 		wantMode     string
 	}{
 		{
 			name: "lsm_backend",
-			cfg: enforceBackendConfig{
-				modeEnforce: true,
-				haveLSM:     true,
+			cfg: defendBackendConfig{
+				modeDefend: true,
+				haveLSM:    true,
 			},
-			wantBackend: enforceBackendLSM,
-			wantMode:    enforceModeLSM,
+			wantBackend: defendBackendLSM,
+			wantMode:    defendModeLSM,
 		},
 		{
 			name: "cgroup_fallback_after_lsm_attach_error",
-			cfg: enforceBackendConfig{
-				modeEnforce: true,
-				haveLSM:     true,
+			cfg: defendBackendConfig{
+				modeDefend: true,
+				haveLSM:    true,
 			},
 			lsmAttachErr: errors.New("lsm attach failed"),
-			wantBackend:  enforceBackendCgroup,
-			wantMode:     enforceModeCgroup,
+			wantBackend:  defendBackendCgroup,
+			wantMode:     defendModeCgroup,
 		},
 		{
 			name: "cgroup_backend_when_lsm_unavailable",
-			cfg: enforceBackendConfig{
-				modeEnforce: true,
-				haveLSM:     false,
+			cfg: defendBackendConfig{
+				modeDefend: true,
+				haveLSM:    false,
 			},
-			wantBackend: enforceBackendCgroup,
-			wantMode:    enforceModeCgroup,
+			wantBackend: defendBackendCgroup,
+			wantMode:    defendModeCgroup,
 		},
 	}
 
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
-			outcome := chooseEnforceBackend(tc.cfg, tc.lsmAttachErr)
+			outcome := chooseDefendBackend(tc.cfg, tc.lsmAttachErr)
 			if outcome.backend != tc.wantBackend {
 				t.Fatalf("backend=%q want %q", outcome.backend, tc.wantBackend)
 			}
 
 			stats := newRunStats()
-			state := newEnforcementState()
-			state.setModeAndAllowlist(enforceModeForBackend(outcome.backend), 1, 0)
+			state := newDefendState()
+			state.setModeAndAllowlist(defendModeForBackend(outcome.backend), 1, 0)
 
 			in := buildDigestInput(
 				config.Config{Mode: config.ModeDefend},
@@ -302,18 +302,18 @@ func TestRun_EnforceBackendMetadataReflectsActualBackend(t *testing.T) {
 				canarySnapshot{},
 			)
 
-			if in.EnforcementMode != tc.wantMode {
-				t.Fatalf("EnforcementMode=%q want %q", in.EnforcementMode, tc.wantMode)
+			if in.DefendMode != tc.wantMode {
+				t.Fatalf("DefendMode=%q want %q", in.DefendMode, tc.wantMode)
 			}
 		})
 	}
 }
 
-func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
+func TestRun_DefendAllowlistStartFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 
-	_, err := compileEnforceAllowlist(ctx, config.Config{
+	_, err := compileDefendAllowlist(ctx, config.Config{
 		Mode:           config.ModeDefend,
 		AllowedDomains: nil,
 	}, nil, 1)
@@ -321,7 +321,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 		t.Fatalf("expected non-empty allowlist error, got %v", err)
 	}
 
-	_, err = compileEnforceAllowlist(ctx, config.Config{
+	_, err = compileDefendAllowlist(ctx, config.Config{
 		Mode:           config.ModeDefend,
 		AllowedDomains: []string{" ", "\t"},
 	}, nil, 1)
@@ -332,7 +332,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	resolver := func(context.Context, string, string) ([]net.IP, error) {
 		return nil, nil
 	}
-	_, err = compileEnforceAllowlist(ctx, config.Config{
+	_, err = compileDefendAllowlist(ctx, config.Config{
 		Mode:           config.ModeDefend,
 		AllowedDomains: []string{"example.com"},
 	}, resolver, 1)
@@ -340,7 +340,7 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 		t.Fatalf("expected effective allowlist empty error, got %v", err)
 	}
 
-	res, err := compileEnforceAllowlist(ctx, config.Config{
+	res, err := compileDefendAllowlist(ctx, config.Config{
 		Mode:           config.ModeDefend,
 		AllowedDomains: []string{"example.com"},
 		AllowedIPs:     "1.1.1.1",
@@ -353,10 +353,10 @@ func TestRun_EnforceAllowlistStartFailures(t *testing.T) {
 	}
 }
 
-// TestRun_EnforceDenyEventEmission checks testAppendDenySample appends JSONL and returns the synthetic
-// "enforce deny" error shape used by unit tests. Production readDenyRing drains a short burst of
+// TestRun_DefendDenyEventEmission checks testAppendDenySample appends JSONL and returns the synthetic
+// "defend deny" error shape used by unit tests. Production readDenyRing drains a short burst of
 // denies, cancels the run context, then returns the same error shape (first deny fields).
-func TestRun_EnforceDenyEventEmission(t *testing.T) {
+func TestRun_DefendDenyEventEmission(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	events := filepath.Join(dir, "events.jsonl")
@@ -367,7 +367,7 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 
@@ -375,8 +375,8 @@ func TestRun_EnforceDenyEventEmission(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected deny to fail fast with error")
 	}
-	if !strings.Contains(err.Error(), "enforce deny") {
-		t.Fatalf("expected enforce deny error, got %v", err)
+	if !strings.Contains(err.Error(), "defend deny") {
+		t.Fatalf("expected defend deny error, got %v", err)
 	}
 
 	b, readErr := os.ReadFile(events)
@@ -427,7 +427,7 @@ func TestAppendDenyFromRaw_MatchKindDNSCache(t *testing.T) {
 
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 	raw := fillTestDenyRawV4(1, 2, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("9.9.9.9"), 443)
 	if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "lsm", dc); err != nil {
 		t.Fatal(err)
@@ -452,7 +452,7 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	rawTCP := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
@@ -486,7 +486,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	_, err := appendDenyFromRaw(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
@@ -499,7 +499,7 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
@@ -523,7 +523,7 @@ func TestAppendDenyFromRaw_JSONLWriteFailure(t *testing.T) {
 	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: blocked}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	raw := fillTestDenyRawV4(1, 1, "", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
 
@@ -543,7 +543,7 @@ func TestProcessDenyRingSample_InvalidRaw_NoNoteDeny(t *testing.T) {
 	}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	processDenyRingSample(cfg, []byte{0x01}, &seq, &jsonlMu, state, nil, "", nil)
 	if state.denyCount() != 0 {
@@ -564,7 +564,7 @@ func TestProcessDenyRingSample_JSONLPathIsDir_NoNoteDeny(t *testing.T) {
 	}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	raw := fillTestDenyRawV4(100, 200, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("10.0.0.1"), 443)
 
@@ -587,30 +587,30 @@ func TestBpfDetail_TruncatesUTF8WithoutSplittingRune(t *testing.T) {
 	}
 }
 
-func TestDigestEnforcementLabel(t *testing.T) {
+func TestDigestDefendLabel(t *testing.T) {
 	t.Parallel()
-	enforceCfg := config.Config{Mode: config.ModeDefend}
-	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{}); got != "defend" {
-		t.Fatalf("empty snap with enforce cfg: got %q want defend", got)
+	defendCfg := config.Config{Mode: config.ModeDefend}
+	if got := digestDefendLabel(defendCfg, defendSnapshot{}); got != "defend" {
+		t.Fatalf("empty snap with defend cfg: got %q want defend", got)
 	}
-	if got := digestEnforcementLabel(enforceCfg, enforcementSnapshot{mode: enforceModeCgroup}); got != enforceModeCgroup {
-		t.Fatalf("non-empty snap: got %q want %s", got, enforceModeCgroup)
+	if got := digestDefendLabel(defendCfg, defendSnapshot{mode: defendModeCgroup}); got != defendModeCgroup {
+		t.Fatalf("non-empty snap: got %q want %s", got, defendModeCgroup)
 	}
 	detectCfg := config.Config{Mode: config.ModeDetect}
-	if got := digestEnforcementLabel(detectCfg, enforcementSnapshot{mode: "x"}); got != "x" {
+	if got := digestDefendLabel(detectCfg, defendSnapshot{mode: "x"}); got != "x" {
 		t.Fatalf("detect cfg must pass through snap mode: got %q", got)
 	}
 }
 
-func TestRun_DetectModeUnchangedForEnforceAllowlistCompile(t *testing.T) {
+func TestRun_DetectModeUnchangedForDefendAllowlistCompile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	res, err := compileEnforceAllowlist(ctx, config.Config{
+	res, err := compileDefendAllowlist(ctx, config.Config{
 		Mode:           config.ModeDetect,
 		AllowedDomains: nil,
 	}, nil, 1)
 	if err != nil {
-		t.Fatalf("detect mode should not fail enforce preflight: %v", err)
+		t.Fatalf("detect mode should not fail defend preflight: %v", err)
 	}
 	if res.AllowedIPv4.Len() != 0 || len(res.Domains) != 0 || len(res.UnresolvedDomains) != 0 {
 		t.Fatalf("detect mode expected empty compile result, got %#v", res)
@@ -659,17 +659,17 @@ func TestRun_DenyMappings(t *testing.T) {
 	}
 }
 
-func TestPreferRunError_EnforceDenyWinsOverGeneric(t *testing.T) {
+func TestPreferRunError_DefendDenyWinsOverGeneric(t *testing.T) {
 	generic := fmt.Errorf("boom")
-	deny := newEnforceDenyError(telemetry.DenyEvent{
+	deny := newDefendDenyError(telemetry.DenyEvent{
 		Protocol: "tcp",
 		Dst:      "1.2.3.4",
 		Dport:    443,
 		Reason:   "dst_not_allowlisted",
 	})
 	got := preferRunError(generic, deny)
-	if !isEnforceDenyError(got) {
-		t.Fatalf("expected enforce deny to win, got %v", got)
+	if !isDefendDenyError(got) {
+		t.Fatalf("expected defend deny to win, got %v", got)
 	}
 }
 
@@ -769,7 +769,7 @@ func TestBuildAllowedLPMPlan_RejectsMalformedCIDRInput(t *testing.T) {
 	}
 }
 
-// B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadEnforceMaps.
+// B-SR-04: Map.Update failures must stay identifiable (prefix + CIDR + %w) for callers like loadDefendMaps.
 func TestLoadIgnoredLPMMap_MapUpdateFailureIsWrapped(t *testing.T) {
 	spec := &ebpf.MapSpec{
 		Name:       "coldstep_t_ign_lpm",
@@ -844,7 +844,7 @@ func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
 		0,
 		120,
 		networkSectionSnapshot{},
-		enforcementSnapshot{},
+		defendSnapshot{},
 		nil,
 		false,
 		forkSectionSnapshot{},
@@ -885,12 +885,12 @@ func TestCheckMapIntegrity(t *testing.T) {
 	}
 
 	// Create mock maps
-	enforceSpec := &ebpf.MapSpec{Name: "enforce_cfg", Type: ebpf.Array, KeySize: 4, ValueSize: 4, MaxEntries: 1}
-	enforceCfg, err := ebpf.NewMap(enforceSpec)
+	defendSpec := &ebpf.MapSpec{Name: "defend_cfg", Type: ebpf.Array, KeySize: 4, ValueSize: 4, MaxEntries: 1}
+	defendCfg, err := ebpf.NewMap(defendSpec)
 	if err != nil {
 		t.Skipf("skipping BPF map test: %v (likely missing CAP_BPF/CAP_SYS_ADMIN)", err)
 	}
-	defer enforceCfg.Close()
+	defer defendCfg.Close()
 
 	allowedSpec := &ebpf.MapSpec{Name: "allowed_ipv4", Type: ebpf.LPMTrie, KeySize: 8, ValueSize: 1, MaxEntries: 10, Flags: 1}
 	allowedIpv4, err := ebpf.NewMap(allowedSpec)
@@ -909,11 +909,11 @@ func TestCheckMapIntegrity(t *testing.T) {
 	// Initial state
 	key0 := uint32(0)
 	val1 := uint32(1)
-	_ = enforceCfg.Update(&key0, &val1, ebpf.UpdateAny)
+	_ = defendCfg.Update(&key0, &val1, ebpf.UpdateAny)
 
 	stats := newRunStats()
-	state := newEnforcementState()
-	state.setModeAndAllowlist("enforce", 2, 1) // Expected: 2 allowed, 1 ignored
+	state := newDefendState()
+	state.setModeAndAllowlist("defend", 2, 1) // Expected: 2 allowed, 1 ignored
 
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
@@ -925,7 +925,7 @@ func TestCheckMapIntegrity(t *testing.T) {
 	backoff := newIntegrityBackoff()
 
 	// 1. Initial check (mismatch expected)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected 2 failures (allowed=0, ignored=0), got %d", state.mapIntegrityFailureCount())
 	}
@@ -940,30 +940,30 @@ func TestCheckMapIntegrity(t *testing.T) {
 	kIgnored := [8]byte{24, 0, 0, 0, 10, 0, 0, 0}
 	_ = ignoredIpv4.Update(&kIgnored, &v, ebpf.UpdateAny)
 
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected failures to remain at 2 after clean check, got %d", state.mapIntegrityFailureCount())
 	}
 
-	// 3. Tamper with enforce_cfg
+	// 3. Tamper with defend_cfg
 	val0 := uint32(0)
-	_ = enforceCfg.Update(&key0, &val0, ebpf.UpdateAny)
-	checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
+	_ = defendCfg.Update(&key0, &val0, ebpf.UpdateAny)
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 3 {
-		t.Fatalf("expected 3 failures after enforce_cfg tampering, got %d", state.mapIntegrityFailureCount())
+		t.Fatalf("expected 3 failures after defend_cfg tampering, got %d", state.mapIntegrityFailureCount())
 	}
 
 	// Verify revert
 	var valCheck uint32
-	_ = enforceCfg.Lookup(&key0, &valCheck)
+	_ = defendCfg.Lookup(&key0, &valCheck)
 	if valCheck != 1 {
-		t.Fatalf("expected enforce_cfg to be reverted to 1, got %d", valCheck)
+		t.Fatalf("expected defend_cfg to be reverted to 1, got %d", valCheck)
 	}
 
 	// Verify JSONL
 	b, _ := os.ReadFile(events)
 	s := string(b)
-	if !strings.Contains(s, `"type":"bpf_tamper"`) || !strings.Contains(s, `"asset":"map:enforce_cfg"`) {
+	if !strings.Contains(s, `"type":"bpf_tamper"`) || !strings.Contains(s, `"asset":"map:defend_cfg"`) {
 		t.Fatalf("expected bpf_tamper event in JSONL, got:\n%s", s)
 	}
 }
@@ -1045,10 +1045,10 @@ func TestRearmAllowedFromSnapshot_RemovesTamperedAndRestoresMissing(t *testing.T
 func TestIntegrityBackoff_DeduplicatesAndClears(t *testing.T) {
 	t.Parallel()
 	b := newIntegrityBackoff()
-	if !b.noteFailure("map:enforce_cfg") {
+	if !b.noteFailure("map:defend_cfg") {
 		t.Fatal("first failure should escalate (true)")
 	}
-	if b.noteFailure("map:enforce_cfg") {
+	if b.noteFailure("map:defend_cfg") {
 		t.Fatal("immediate repeat should dedupe (false)")
 	}
 	if !b.noteFailure("map:allowed_ipv4") {
@@ -1056,8 +1056,8 @@ func TestIntegrityBackoff_DeduplicatesAndClears(t *testing.T) {
 	}
 
 	// clear() simulates a successful re-arm; the next failure escalates again.
-	b.clear("map:enforce_cfg")
-	if !b.noteFailure("map:enforce_cfg") {
+	b.clear("map:defend_cfg")
+	if !b.noteFailure("map:defend_cfg") {
 		t.Fatal("post-clear failure should re-escalate (true)")
 	}
 
@@ -1130,7 +1130,7 @@ func TestAppendDenyFromRaw_ConcurrentSeqMatchesFileOrder(t *testing.T) {
 	}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	const writers = 32
 	const perWriter = 8
@@ -1193,7 +1193,7 @@ func TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq(t *testing.T) {
 	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
-	state := newEnforcementState()
+	state := newDefendState()
 
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
 	for i := 0; i < 5; i++ {

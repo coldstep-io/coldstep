@@ -123,7 +123,7 @@ jobs:
           COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
         run: ./bin/coldstep-report build-model
 
-      - name: Enforce Anti-Blindness Gating
+      - name: Apply Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.fail_on_blindness == true
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json

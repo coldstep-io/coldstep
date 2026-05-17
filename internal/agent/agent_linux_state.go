@@ -199,11 +199,11 @@ const (
 	httpSniffEventHeaderSize = 34 // 4+4+16+4+2+_pad[2]+2 capture_len
 	tlsSniffEventHeaderSize  = 34 // same layout
 
-	// After the first enforce deny, read additional deny ringbuf records briefly so JSONL/digest
+	// After the first defend deny, read additional deny ringbuf records briefly so JSONL/digest
 	// capture a burst (e.g. TCP + UDP) before fail-fast shutdown.
-	enforceDenyDrainMaxEvents = 32
-	enforceDenyDrainDuration  = 1200 * time.Millisecond
-	enforceDenyDrainReadSlice = 50 * time.Millisecond
+	defendDenyDrainMaxEvents = 32
+	defendDenyDrainDuration  = 1200 * time.Millisecond
+	defendDenyDrainReadSlice = 50 * time.Millisecond
 
 	// Canary constants matching struct canary_event in trace_connect.bpf.c.
 	canaryMagic         uint32 = 0xCA1A1210
@@ -318,7 +318,7 @@ func (c *canaryState) checkAndRecordFailure() bool {
 	return false
 }
 
-type enforcementState struct {
+type defendState struct {
 	mu                     sync.Mutex
 	mode                   string
 	allowlistSize          int
@@ -330,7 +330,7 @@ type enforcementState struct {
 	firstDenyRowV          *report.DenyDigestRow
 }
 
-type enforcementSnapshot struct {
+type defendSnapshot struct {
 	mode                 string
 	allowlistSize        int
 	denyCount            int
@@ -339,54 +339,54 @@ type enforcementSnapshot struct {
 	firstDeny            *report.DenyDigestRow
 }
 
-type enforceBackendConfig struct {
-	modeEnforce bool
-	haveLSM     bool
+type defendBackendConfig struct {
+	modeDefend bool
+	haveLSM    bool
 }
 
-type enforceBackendOutcome struct {
+type defendBackendOutcome struct {
 	backend string
 }
 
 const (
-	enforceBackendDetect = "detect"
-	enforceBackendLSM    = "lsm"
-	enforceBackendCgroup = "cgroup"
+	defendBackendDetect = "detect"
+	defendBackendLSM    = "lsm"
+	defendBackendCgroup = "cgroup"
 
-	enforceModeLSM    = "enforce+lsm"
-	enforceModeCgroup = "enforce+cgroup"
+	defendModeLSM    = "defend+lsm"
+	defendModeCgroup = "defend+cgroup"
 )
 
-func chooseEnforceBackend(cfg enforceBackendConfig, lsmAttachErr error) enforceBackendOutcome {
-	if !cfg.modeEnforce {
-		return enforceBackendOutcome{backend: enforceBackendDetect}
+func chooseDefendBackend(cfg defendBackendConfig, lsmAttachErr error) defendBackendOutcome {
+	if !cfg.modeDefend {
+		return defendBackendOutcome{backend: defendBackendDetect}
 	}
 	if cfg.haveLSM && lsmAttachErr == nil {
-		return enforceBackendOutcome{backend: enforceBackendLSM}
+		return defendBackendOutcome{backend: defendBackendLSM}
 	}
-	return enforceBackendOutcome{backend: enforceBackendCgroup}
+	return defendBackendOutcome{backend: defendBackendCgroup}
 }
 
-func enforceModeForBackend(backend string) string {
-	if backend == enforceBackendLSM {
-		return enforceModeLSM
+func defendModeForBackend(backend string) string {
+	if backend == defendBackendLSM {
+		return defendModeLSM
 	}
-	return enforceModeCgroup
+	return defendModeCgroup
 }
 
-type enforceDenyError struct {
+type defendDenyError struct {
 	protocol string
 	dst      string
 	dport    uint16
 	reason   string
 }
 
-func (e enforceDenyError) Error() string {
-	return fmt.Sprintf("enforce deny: protocol=%s dst=%s dport=%d reason=%s", e.protocol, e.dst, e.dport, e.reason)
+func (e defendDenyError) Error() string {
+	return fmt.Sprintf("defend deny: protocol=%s dst=%s dport=%d reason=%s", e.protocol, e.dst, e.dport, e.reason)
 }
 
-func newEnforceDenyError(ev telemetry.DenyEvent) error {
-	return enforceDenyError{
+func newDefendDenyError(ev telemetry.DenyEvent) error {
+	return defendDenyError{
 		protocol: ev.Protocol,
 		dst:      ev.Dst,
 		dport:    ev.Dport,
@@ -394,16 +394,16 @@ func newEnforceDenyError(ev telemetry.DenyEvent) error {
 	}
 }
 
-func isEnforceDenyError(err error) bool {
-	var e enforceDenyError
+func isDefendDenyError(err error) bool {
+	var e defendDenyError
 	return errors.As(err, &e)
 }
 
-func newEnforcementState() *enforcementState {
-	return &enforcementState{}
+func newDefendState() *defendState {
+	return &defendState{}
 }
 
-func (s *enforcementState) setModeAndAllowlist(mode string, allowlistSize, ignoredSize int) {
+func (s *defendState) setModeAndAllowlist(mode string, allowlistSize, ignoredSize int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mode = mode
@@ -412,19 +412,19 @@ func (s *enforcementState) setModeAndAllowlist(mode string, allowlistSize, ignor
 	s.expectedIgnoredEntries = ignoredSize
 }
 
-func (s *enforcementState) addMapIntegrityFailure() {
+func (s *defendState) addMapIntegrityFailure() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.mapIntegrityFailures++
 }
 
-func (s *enforcementState) mapIntegrityFailureCount() int {
+func (s *defendState) mapIntegrityFailureCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.mapIntegrityFailures
 }
 
-func (s *enforcementState) noteDeny(row report.DenyDigestRow) {
+func (s *defendState) noteDeny(row report.DenyDigestRow) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.denyCountN++
@@ -434,13 +434,13 @@ func (s *enforcementState) noteDeny(row report.DenyDigestRow) {
 	}
 }
 
-func (s *enforcementState) denyCount() int {
+func (s *defendState) denyCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.denyCountN
 }
 
-func (s *enforcementState) firstDeny() *report.DenyDigestRow {
+func (s *defendState) firstDeny() *report.DenyDigestRow {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.firstDenyRowV == nil {
@@ -450,10 +450,10 @@ func (s *enforcementState) firstDeny() *report.DenyDigestRow {
 	return &cp
 }
 
-func (s *enforcementState) snapshot() enforcementSnapshot {
+func (s *defendState) snapshot() defendSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	out := enforcementSnapshot{
+	out := defendSnapshot{
 		mode:                 s.mode,
 		allowlistSize:        s.allowlistSize,
 		denyCount:            s.denyCountN,
@@ -467,7 +467,7 @@ func (s *enforcementState) snapshot() enforcementSnapshot {
 	return out
 }
 
-func (s *enforcementState) setDenyReserveFailures(n int) {
+func (s *defendState) setDenyReserveFailures(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.denyReserveFailuresN = n

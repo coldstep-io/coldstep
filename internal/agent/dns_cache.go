@@ -163,7 +163,7 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 		}
 		c.entries[ip] = dnsEntry{name: ans.name, expires: exp}
 
-		// Update BPF maps for in-kernel enrichment/enforcement.
+		// Update BPF maps for in-kernel enrichment/defense.
 		if len(c.bpfMaps) > 0 {
 			var bpfKey [4]byte
 			copy(bpfKey[:], ip[:])

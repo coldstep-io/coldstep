@@ -18,7 +18,7 @@ func TestLSMSendmsgExplicitDestinationUsesUserReadHelper(t *testing.T) {
 	}
 
 	repoRoot := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	sourcePath := filepath.Join(repoRoot, "bpf", "trace_lsm_enforce.bpf.c")
+	sourcePath := filepath.Join(repoRoot, "bpf", "trace_lsm_defend.bpf.c")
 
 	src, err := os.ReadFile(sourcePath)
 	if err != nil {
@@ -70,30 +70,30 @@ func extractBraceDelimitedBlock(text string) (string, error) {
 	return "", os.ErrInvalid
 }
 
-func TestEnforceBackendFallsBackToCgroupWhenLSMAttachFails(t *testing.T) {
-	outcome := chooseEnforceBackend(enforceBackendConfig{
-		modeEnforce: true,
-		haveLSM:     true,
+func TestDefendBackendFallsBackToCgroupWhenLSMAttachFails(t *testing.T) {
+	outcome := chooseDefendBackend(defendBackendConfig{
+		modeDefend: true,
+		haveLSM:    true,
 	}, errors.New("lsm attach failed"))
 	if outcome.backend != "cgroup" {
 		t.Fatalf("expected cgroup fallback, got %q", outcome.backend)
 	}
 }
 
-func TestEnforceBackendStaysLSMWhenAttachSucceeds(t *testing.T) {
-	outcome := chooseEnforceBackend(enforceBackendConfig{
-		modeEnforce: true,
-		haveLSM:     true,
+func TestDefendBackendStaysLSMWhenAttachSucceeds(t *testing.T) {
+	outcome := chooseDefendBackend(defendBackendConfig{
+		modeDefend: true,
+		haveLSM:    true,
 	}, nil)
 	if outcome.backend != "lsm" {
 		t.Fatalf("expected lsm backend, got %q", outcome.backend)
 	}
 }
 
-func TestEnforceBackendUsesCgroupWhenLSMUnavailable(t *testing.T) {
-	outcome := chooseEnforceBackend(enforceBackendConfig{
-		modeEnforce: true,
-		haveLSM:     false,
+func TestDefendBackendUsesCgroupWhenLSMUnavailable(t *testing.T) {
+	outcome := chooseDefendBackend(defendBackendConfig{
+		modeDefend: true,
+		haveLSM:    false,
 	}, nil)
 	if outcome.backend != "cgroup" {
 		t.Fatalf("expected cgroup backend without LSM, got %q", outcome.backend)

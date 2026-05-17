@@ -1,7 +1,7 @@
 name: Coldstep eBPF CI Egress
 author: coldstep.io
 description: >-
-  eBPF egress telemetry and optional cgroup enforcement for GitHub-hosted ubuntu-latest CI runners (v1).
+  eBPF egress telemetry and optional cgroup defend for GitHub-hosted ubuntu-latest CI runners (v1).
 branding:
   icon: shield
   color: blue

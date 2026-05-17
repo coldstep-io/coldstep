@@ -10,7 +10,7 @@ import (
 )
 
 // AttachPath returns the cgroup directory used for BPF cgroup attach.
-// On non-Linux builds this is only used by config parsing tests; enforcement runs on Linux only.
+// On non-Linux builds this is only used by config parsing tests; defense runs on Linux only.
 func AttachPath(override string) (string, error) {
 	o := strings.TrimSpace(override)
 	if o != "" {

@@ -146,7 +146,7 @@ func TestLoadFromEnv_DetectLogPath(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_DefendNormalizesToEnforce(t *testing.T) {
+func TestLoadFromEnv_DefendAccepted(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "defend")
 	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "example.com")
@@ -232,7 +232,7 @@ func TestPublicMode(t *testing.T) {
 		t.Fatalf("detect PublicMode: got %q", got)
 	}
 	if got := (Config{Mode: ModeDefend}).PublicMode(); got != "defend" {
-		t.Fatalf("enforce PublicMode: got %q want defend", got)
+		t.Fatalf("defend PublicMode: got %q want defend", got)
 	}
 }
 

@@ -52,7 +52,7 @@ func CheckRequiredTypes(events []model.Event, required []string) ([]model.Reason
 // CheckBPFTamper returns a hard-fail Reason when any bpf_tamper JSONL event
 // is present in the input stream. The agent emits bpf_tamper events from
 // watchMapIntegrity (`internal/agent/agent_linux.go`) whenever the in-kernel
-// enforce_cfg / allowed_ipv4 / ignored_ipv4_lpm maps drift from the
+// defend_cfg / allowed_ipv4 / ignored_ipv4_lpm maps drift from the
 // programmed snapshot. Surfacing the event here forces integrityScore to 0
 // so a report cannot show a healthy verdict while kernel-side policy is
 // eroding (M-12 anti-blindness gating).

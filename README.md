@@ -59,7 +59,7 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 
 | Topic | Detail |
 | :---- | :----- |
-| **IP versions** | **IPv6 is not supported.** Allowlists, cgroup enforcement, and syscall tracing targets in this repo are **IPv4 only**. |
+| **IP versions** | **IPv6 is not supported.** Allowlists, cgroup defense, and syscall tracing targets in this repo are **IPv4 only**. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
