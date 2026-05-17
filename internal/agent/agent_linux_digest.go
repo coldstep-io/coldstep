@@ -20,7 +20,7 @@ func preferRunError(current error, candidate error) error {
 	if current == nil {
 		return candidate
 	}
-	if isEnforceDenyError(candidate) && !isEnforceDenyError(current) {
+	if isDefendDenyError(candidate) && !isDefendDenyError(current) {
 		return candidate
 	}
 	return current
@@ -51,8 +51,8 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 	return gate && !hookDegraded(bpf, hookName)
 }
 
-// digestEnforcementLabel maps internal enforcement snapshot + config to the digest/JSONL-facing mode name.
-func digestEnforcementLabel(cfg config.Config, snap enforcementSnapshot) string {
+// digestDefendLabel maps internal defend snapshot + config to the digest/JSONL-facing mode name.
+func digestDefendLabel(cfg config.Config, snap defendSnapshot) string {
 	if cfg.Mode != config.ModeDefend {
 		return snap.mode
 	}
@@ -75,7 +75,7 @@ func buildDigestInput(
 	seqLast uint64,
 	maxRows int,
 	sectionState networkSectionSnapshot,
-	enforceState enforcementSnapshot,
+	defendState defendSnapshot,
 	forkEdges []proctree.Edge,
 	forkEdgesTrunc bool,
 	forkSnap forkSectionSnapshot,
@@ -120,11 +120,11 @@ func buildDigestInput(
 		HTTPReaderErrors:               sectionState.httpReadErrors + sectionState.httpDecodeErrors,
 		TLSDegradedHook:                hookDegraded(bpfSt, rawTPName),
 		TLSReaderErrors:                sectionState.tlsReadErrors + sectionState.tlsDecodeErrors,
-		EnforcementMode:                digestEnforcementLabel(cfg, enforceState),
-		EnforcementAllowlistSize:       enforceState.allowlistSize,
-		EnforcementDenyCount:           enforceState.denyCount,
-		EnforcementDenyReserveFailures: enforceState.denyReserveFailures,
-		EnforcementFirstDeny:           enforceState.firstDeny,
+		DefendMode:                     digestDefendLabel(cfg, defendState),
+		DefendAllowlistSize:            defendState.allowlistSize,
+		DefendDenyCount:                defendState.denyCount,
+		DefendDenyReserveFailures:      defendState.denyReserveFailures,
+		DefendFirstDeny:                defendState.firstDeny,
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
 		UDPRingbufReserveFailures:      stats.udpRingbufReserveFailures(),
 		DNSRingbufReserveFailures:      stats.dnsRingbufReserveFailures(),

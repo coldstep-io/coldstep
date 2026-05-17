@@ -72,8 +72,8 @@
 ## #7 — BG-06 — IPv6
 
 - **Theme:** Address family  
-- **Surface:** entire detect/enforce stack  
-- **Gap:** Explicitly unsupported across policy + BPF (`README` / enforce programs).  
+- **Surface:** entire detect/defend stack  
+- **Gap:** Explicitly unsupported across policy + BPF (`README` / defend programs).  
 - **Acceptance (draft):** Epic decomposition (tuple shapes, CI runners, policy trie types); out of scope for single PR.  
 - **Dependencies:** Product decision.
 

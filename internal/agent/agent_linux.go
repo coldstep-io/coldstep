@@ -23,12 +23,12 @@ import (
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracedefend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceenforce"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmenforce"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmdefend"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/proctree"
@@ -48,7 +48,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	maxRows := report.DefaultMaxRowsPerSection
 	rows := newRowBuffer(maxRows)
 	sectionState := newNetworkSectionState()
-	enforceState := newEnforcementState()
+	defendState := newDefendState()
 	canary := newCanaryState()
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
@@ -103,7 +103,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if fsSt != nil {
 				fsSnap = fsSt.snapshot()
 			}
-			in := buildDigestInput(cfg, stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), enforceState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
+			in := buildDigestInput(cfg, stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), defendState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
 			in.PolicyCounts = sum.PolicyCounts
 			if err := report.WriteDetectDigest(detectDest, in); err != nil {
 				slog.Warn("detect digest", "err", err)
@@ -113,7 +113,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	compileCtx, compileCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer compileCancel()
-	enforceCompiled, err := compileEnforceAllowlist(compileCtx, cfg, nil, 2)
+	defendCompiled, err := compileDefendAllowlist(compileCtx, cfg, nil, 2)
 	if err != nil {
 		return err
 	}
@@ -163,15 +163,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer closeLsmDenyRd()
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
-	var enforceObjs traceenforce.TraceenforceObjects
-	var lsmObjs *tracelsmenforce.TracelsmenforceObjects
-	var hasEnforce bool
+	var defendObjs tracedefend.TracedefendObjects
+	var lsmObjs *tracelsmdefend.TracelsmdefendObjects
+	var hasDefend bool
 	var hasLSM bool
-	var enforceConnectLnk link.Link
-	var enforceSendmsgLnk link.Link
+	var defendConnectLnk link.Link
+	var defendSendmsgLnk link.Link
 
-	// Enforce mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
-	// syscall egress tracing attaches (enforce requires it); sched_process_exec + raw_tp/sys_enter loads
+	// Defend mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
+	// syscall egress tracing attaches (defend requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
 	if cfg.Mode == config.ModeDefend {
 		haveLSM := false
@@ -181,12 +181,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		var lsmAttachErr error
 
 		if haveLSM {
-			lsmCandidate := new(tracelsmenforce.TracelsmenforceObjects)
-			if err := tracelsmenforce.LoadTracelsmenforceObjects(lsmCandidate, nil); err != nil {
-				return fmt.Errorf("load lsm enforce bpf objects: %w", err)
+			lsmCandidate := new(tracelsmdefend.TracelsmdefendObjects)
+			if err := tracelsmdefend.LoadTracelsmdefendObjects(lsmCandidate, nil); err != nil {
+				return fmt.Errorf("load lsm defend bpf objects: %w", err)
 			}
 
-			if _, _, loadErr := loadLSMEnforceMaps(lsmCandidate, enforceCompiled, pol); loadErr != nil {
+			if _, _, loadErr := loadLSMDefendMaps(lsmCandidate, defendCompiled, pol); loadErr != nil {
 				_ = lsmCandidate.Close()
 				return loadErr
 			}
@@ -216,10 +216,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 					// always reads from the cgroup ringbuf (attached below) because on
 					// some kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but
 					// never fire — `lsm_deny_events` then stays empty even though
-					// cgroup is enforcing.
+					// cgroup is defending.
 					lsmDenyRd = rd
 					defer func() {
-						enforceState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
+						defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
 						_ = lsmObjs.Close()
 					}()
 					defer lnk1.Close()
@@ -228,39 +228,39 @@ func Run(ctx context.Context, cfg config.Config) error {
 			}
 		}
 
-		backend := chooseEnforceBackend(
-			enforceBackendConfig{
-				modeEnforce: cfg.Mode == config.ModeDefend,
-				haveLSM:     haveLSM,
+		backend := chooseDefendBackend(
+			defendBackendConfig{
+				modeDefend: cfg.Mode == config.ModeDefend,
+				haveLSM:    haveLSM,
 			},
 			lsmAttachErr,
 		)
 		if lsmAttachErr != nil {
-			slog.Warn("lsm enforce attach failed; falling back to cgroup", "err", lsmAttachErr)
+			slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
 		}
 
-		// Always load and attach the cgroup enforce program, regardless of whether
-		// LSM also attached. The cgroup hook is the reliable always-on enforcement
+		// Always load and attach the cgroup defend program, regardless of whether
+		// LSM also attached. The cgroup hook is the reliable always-on defense
 		// path: LSM hooks may attach but never fire when the kernel's `lsm=` boot
 		// chain excludes BPF (Ubuntu 24.04 ships this way). The primary deny
 		// reader watches the cgroup `deny_events` ringbuf; the LSM ringbuf, when
 		// present, is drained by a separate reader.
-		if err := traceenforce.LoadTraceenforceObjects(&enforceObjs, nil); err != nil {
-			return fmt.Errorf("load enforce bpf objects: %w", err)
+		if err := tracedefend.LoadTracedefendObjects(&defendObjs, nil); err != nil {
+			return fmt.Errorf("load defend bpf objects: %w", err)
 		}
-		hasEnforce = true
+		hasDefend = true
 		defer func() {
-			enforceState.setDenyReserveFailures(readDenyReserveFailureCount(&enforceObjs))
-			_ = enforceObjs.Close()
+			defendState.setDenyReserveFailures(readDenyReserveFailureCount(&defendObjs))
+			_ = defendObjs.Close()
 		}()
 
-		allowlistSize, ignoredSize, loadErr := loadEnforceMaps(&enforceObjs, enforceCompiled, pol)
+		allowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
 		if loadErr != nil {
 			return loadErr
 		}
-		enforceState.setModeAndAllowlist(enforceModeForBackend(backend.backend), allowlistSize, ignoredSize)
+		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
 		var err error
-		denyRd, err = ringbuf.NewReader(enforceObjs.DenyEvents)
+		denyRd, err = ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
 			return fmt.Errorf("ringbuf reader deny: %w", err)
 		}
@@ -270,25 +270,25 @@ func Run(ctx context.Context, cfg config.Config) error {
 			cgPath = "/sys/fs/cgroup"
 		}
 
-		enforceConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
+		defendConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
 			Path:    cgPath,
 			Attach:  ebpf.AttachCGroupInet4Connect,
-			Program: enforceObjs.EnforceConnect4,
+			Program: defendObjs.DefendConnect4,
 		})
 		if err != nil {
-			return fmt.Errorf("attach enforce_connect4: %w", err)
+			return fmt.Errorf("attach defend_connect4: %w", err)
 		}
-		defer enforceConnectLnk.Close()
+		defer defendConnectLnk.Close()
 
-		enforceSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
+		defendSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
 			Path:    cgPath,
 			Attach:  ebpf.AttachCGroupUDP4Sendmsg,
-			Program: enforceObjs.EnforceSendmsg4,
+			Program: defendObjs.DefendSendmsg4,
 		})
 		if err != nil {
-			return fmt.Errorf("attach enforce_sendmsg4: %w", err)
+			return fmt.Errorf("attach defend_sendmsg4: %w", err)
 		}
-		defer enforceSendmsgLnk.Close()
+		defer defendSendmsgLnk.Close()
 	}
 
 	var execObjs traceexec.TraceexecObjects
@@ -310,8 +310,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("ringbuf reader exec: %w", err)
 	}
 	// execRd is normally closed when runCtx is cancelled (see goroutine below). Any return
-	// before that goroutine is registered would otherwise leak the reader (e.g. enforce mode
-	// when syscall trace attach fails, or enforce BPF/map/attach errors).
+	// before that goroutine is registered would otherwise leak the reader (e.g. defend mode
+	// when syscall trace attach fails, or defend BPF/map/attach errors).
 	closeExecRdOnEarlyExit := true
 	defer func() {
 		if closeExecRdOnEarlyExit {
@@ -326,7 +326,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			// Keep the status file for the composite post step; main may have already saved
 			// saveState. Record operational failure explicitly instead of deleting the path.
 			_ = writeAgentStatus(cfg.AgentStatusPath, false)
-			return fmt.Errorf("enforce mode requires syscall trace attach: %w", err)
+			return fmt.Errorf("defend mode requires syscall trace attach: %w", err)
 		}
 	} else {
 		connRd, udpRd, httpRd, tlsRd, syscallObjs, syscallLnk = cR, uR, hR, tR, objs, lnk
@@ -387,13 +387,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		dnsRd, dnsObjs, dnsLnkEnter, dnsLnkExit = rd, objs, le, lx
 		// Register every live dns_cache map so userspace DNS observations
 		// flow into all in-kernel programs that consult dns_cache for
-		// late-binding IP -> FQDN attribution. Enforce/LSM collections each
+		// late-binding IP -> FQDN attribution. Defend/LSM collections each
 		// instantiate their own dns_cache via dns_cache.h, so registering
-		// only the DNS-tracer instance previously left enforce decisions
+		// only the DNS-tracer instance previously left defend decisions
 		// blind to runtime DNS learning (M-14, paired with H-03's deletes).
 		dnsCacheMaps := []*ebpf.Map{dnsObjs.DnsCache}
-		if hasEnforce && enforceObjs.DnsCache != nil {
-			dnsCacheMaps = append(dnsCacheMaps, enforceObjs.DnsCache)
+		if hasDefend && defendObjs.DnsCache != nil {
+			dnsCacheMaps = append(dnsCacheMaps, defendObjs.DnsCache)
 		}
 		if hasLSM && lsmObjs != nil && lsmObjs.DnsCache != nil {
 			dnsCacheMaps = append(dnsCacheMaps, lsmObjs.DnsCache)
@@ -660,7 +660,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if bpfAuditRd != nil {
 		readerCount++
 	}
-	if hasEnforce {
+	if hasDefend {
 		readerCount++
 	}
 	if hasLSM {
@@ -796,14 +796,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, enforceState, signer, "cgroup", dnsCache)
+			errCh <- readDenyRing(runCtx, cfg, denyRd, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache)
 		}()
 	}
 	if lsmDenyRd != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd, &seq, &jsonlMu, enforceState, signer, "lsm", dnsCache)
+			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache)
 		}()
 	}
 	if dnsRd != nil {
@@ -821,18 +821,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
-	if hasEnforce {
+	if hasDefend {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, enforceObjs.EnforceCfg, enforceObjs.AllowedIpv4, enforceObjs.IgnoredIpv4Lpm, enforceCompiled, pol, stats, enforceState, &seq, &jsonlMu, signer)
+			errCh <- watchMapIntegrity(runCtx, cfg, defendObjs.DefendCfg, defendObjs.AllowedIpv4, defendObjs.IgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
 		}()
 	}
 	if hasLSM {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmEnforceCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, enforceCompiled, pol, stats, enforceState, &seq, &jsonlMu, signer)
+			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmDefendCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
 		}()
 	}
 
@@ -880,9 +880,9 @@ func Main() error {
 func loadAllowedDomainsMap(m *ebpf.Map, pol *policy.Policy) error {
 	if pol != nil && pol.HasWildSuffixes() {
 		// The BPF allowed_domains map uses exact-string lookup; wildcard allowed-hosts
-		// entries (e.g. *.example.com) are not inserted and have no effect in enforce
-		// mode. Use allowed-domains or allowed-ips for BPF enforcement of those hosts.
-		slog.Warn("enforce mode: wildcard allowed-hosts entries are classify-only and will NOT be enforced by BPF; add matching allowed-domains or allowed-ips entries")
+		// entries (e.g. *.example.com) are not inserted and have no effect in defend
+		// mode. Use allowed-domains or allowed-ips for BPF defense of those hosts.
+		slog.Warn("defend mode: wildcard allowed-hosts entries are classify-only and will NOT be applied by BPF; add matching allowed-domains or allowed-ips entries")
 	}
 	domains := pol.AllowedDomains()
 	for _, domain := range domains {

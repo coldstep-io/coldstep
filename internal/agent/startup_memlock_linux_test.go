@@ -28,7 +28,7 @@ func TestRun_StartupMemlockInitInvoked(t *testing.T) {
 		t.Fatalf("removeMemlockRlimit called %d times, want 1", called)
 	}
 	if err == nil || !strings.Contains(err.Error(), "requires non-empty allowlist") {
-		t.Fatalf("expected enforce allowlist startup error after memlock init, got %v", err)
+		t.Fatalf("expected defend allowlist startup error after memlock init, got %v", err)
 	}
 }
 

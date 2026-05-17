@@ -157,7 +157,7 @@ type FSEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
-// DenyEvent is one JSONL record for an enforcement-mode blocked egress attempt.
+// DenyEvent is one JSONL record for a defend-mode blocked egress attempt.
 type DenyEvent struct {
 	Type     string `json:"type"` // "deny"
 	TS       string `json:"ts"`
@@ -170,7 +170,7 @@ type DenyEvent struct {
 	Dst      string `json:"dst"`
 	Dport    uint16 `json:"dport"`
 	Reason   string `json:"reason"`
-	Mode     string `json:"mode"` // "defend" (blocking; legacy rows may say "enforce")
+	Mode     string `json:"mode"` // "defend" (blocking)
 	// HookFamily is "lsm" or "cgroup" when known (which deny ring handled the event).
 	HookFamily string `json:"hook_family,omitempty"`
 	// MatchKind is "dns_cache" if Dst had a cached DNS owner name at emission time, else "unknown".
@@ -196,7 +196,7 @@ type BPFTamperEvent struct {
 	Type     string `json:"type"` // "bpf_tamper"
 	TS       string `json:"ts"`
 	Seq      uint64 `json:"seq"`
-	Asset    string `json:"asset"` // e.g. "map:enforce_cfg"
+	Asset    string `json:"asset"` // e.g. "map:defend_cfg"
 	Error    string `json:"error"`
 	Expected string `json:"expected,omitempty"`
 	Actual   string `json:"actual,omitempty"`

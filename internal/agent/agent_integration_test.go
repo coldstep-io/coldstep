@@ -214,7 +214,7 @@ func TestRun_DefendModeBlockedConnectEmitsDenyJSONL(t *testing.T) {
 	}
 
 	// 8.8.8.8 is outside the default ignored RFC1918 ranges (10/8, 172.16/12) and outside
-	// the 127.0.0.1/32 allowlist, so the cgroup enforce hook should block this connect
+	// the 127.0.0.1/32 allowlist, so the cgroup defend hook should block this connect
 	// with EPERM and emit a deny event on the deny_events ringbuf.
 	if conn, derr := net.DialTimeout("tcp", "8.8.8.8:53", 1*time.Second); derr == nil {
 		_ = conn.Close()

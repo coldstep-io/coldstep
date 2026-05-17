@@ -1,5 +1,5 @@
-# Reusable CI + Coldstep detect/enforce. Agent/BPF build + unit tests + integration run on **ubuntu-latest** /
-# **ubuntu-22.04** (x64) and **ubuntu-24.04-arm** / **ubuntu-22.04-arm** (arm64). Detect/enforce stay on ubuntu-latest.
+# Reusable CI + Coldstep detect/defend. Agent/BPF build + unit tests + integration run on **ubuntu-latest** /
+# **ubuntu-22.04** (x64) and **ubuntu-24.04-arm** / **ubuntu-22.04-arm** (arm64). Detect/defend stay on ubuntu-latest.
 
 name: coldstep-ci runner
 
@@ -246,7 +246,7 @@ jobs:
           COLDSTEP_DETECT_PROFILE: enhanced
         run: ./bin/coldstep-report build-model
 
-      - name: Enforce Anti-Blindness Gating
+      - name: Apply Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
         env:
           COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
@@ -396,7 +396,7 @@ jobs:
   defend-mode:
     needs: [gofmt]
     runs-on: ubuntu-latest
-    # Enforce-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
+    # Defend-mode first load can sit in the BPF verifier for 20+ minutes on busy runners; keep headroom past fail-on-error wait.
     timeout-minutes: 45
     env:
       COLDSTEP_DEFEND_DENY_JSONL_STRICT: ${{ inputs.defend_deny_jsonl_strict && '1' || '0' }}
@@ -419,7 +419,7 @@ jobs:
         if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
 
-      - name: Install runtime probes (before enforce so mirrors/DNS still work)
+      - name: Install runtime probes (before defend so mirrors/DNS still work)
         run: |
           set -euo pipefail
           sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
@@ -433,7 +433,7 @@ jobs:
           command -v nmap
           command -v curl
 
-      - name: Pin theclouddj.com for nmap (avoid stub DNS once enforce is running)
+      - name: Pin theclouddj.com for nmap (avoid stub DNS once defend is running)
         run: |
           set -euo pipefail
           ip=$(dig +short theclouddj.com A | awk 'NF{print; exit}')
@@ -476,7 +476,7 @@ jobs:
         run: |
           set -euo pipefail
           if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
-            echo "expected curl to example.com to fail under enforce allowlist"
+            echo "expected curl to example.com to fail under defend allowlist"
             exit 1
           fi
 
@@ -484,7 +484,7 @@ jobs:
         run: |
           set -euo pipefail
           if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
-            echo "expected direct IP connect to be blocked under enforce allowlist"
+            echo "expected direct IP connect to be blocked under defend allowlist"
             exit 1
           fi
 
@@ -524,7 +524,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "## Enforce smoke"
+            echo "## Defend smoke"
             echo ""
             echo "- **Result:** prior steps asserted allowlist / URL block / IP rules. See **Show deny lines (debug)** for raw \`deny\` JSONL rows."
           } >> "${GITHUB_STEP_SUMMARY}"

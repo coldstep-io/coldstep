@@ -27,7 +27,7 @@ const integrityBackoffWindow = 5 * time.Minute
 // integrityBackoff tracks per-asset last-failure timestamps so recurring
 // integrity failures within integrityBackoffWindow downgrade their slog
 // level (M-13). Each watchMapIntegrity goroutine owns its own instance —
-// the enforce and LSM watchers run independently and reuse asset names.
+// the defend and LSM watchers run independently and reuse asset names.
 type integrityBackoff struct {
 	mu       sync.Mutex
 	lastFail map[string]time.Time
@@ -67,7 +67,7 @@ func (b *integrityBackoff) clear(asset string) {
 	delete(b.lastFail, asset)
 }
 
-func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, enforceCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, enforceState *enforcementState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+func watchMapIntegrity(ctx context.Context, cfg config.Config, defendCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, defendCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, defendState *defendState, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -82,41 +82,41 @@ func watchMapIntegrity(ctx context.Context, cfg config.Config, enforceCfg, allow
 			}
 			return ctx.Err()
 		case <-ticker.C:
-			checkMapIntegrity(cfg, enforceCfg, allowedIpv4, ignoredIpv4, enforceCompiled, pol, stats, enforceState, backoff, seq, jsonlMu, signer)
+			checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, defendCompiled, pol, stats, defendState, backoff, seq, jsonlMu, signer)
 		}
 	}
 }
 
-func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, enforceCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, enforceState *enforcementState, backoff *integrityBackoff, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) {
-	if enforceCfg == nil || allowedIpv4 == nil || ignoredIpv4 == nil {
+func checkMapIntegrity(cfg config.Config, defendCfg, allowedIpv4, ignoredIpv4 *ebpf.Map, defendCompiled policy.CompileResult, pol *policy.Policy, stats *runStats, defendState *defendState, backoff *integrityBackoff, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) {
+	if defendCfg == nil || allowedIpv4 == nil || ignoredIpv4 == nil {
 		return
 	}
 
-	// 1. Check enforce_cfg
-	const assetEnforceCfg = "map:enforce_cfg"
+	// 1. Check defend_cfg
+	const assetDefendCfg = "map:defend_cfg"
 	var key uint32 = 0
 	var val uint32
-	modeEnforce := uint32(1)
-	if err := enforceCfg.Lookup(&key, &val); err != nil {
-		logMapIntegrityFailure(cfg, assetEnforceCfg, "lookup error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
-		// H-05: a missing/unreadable enforce_cfg key behaves like detect mode in
-		// BPF (`enforcement_enabled()` returns false when the key is absent).
-		// Try to restore the enforce mode key on the same path the value-mismatch
+	modeDefend := uint32(1)
+	if err := defendCfg.Lookup(&key, &val); err != nil {
+		logMapIntegrityFailure(cfg, assetDefendCfg, "lookup error", "", "", stats, seq, jsonlMu, defendState, backoff, signer)
+		// H-05: a missing/unreadable defend_cfg key behaves like detect mode in
+		// BPF (`defense_enabled()` returns false when the key is absent).
+		// Try to restore the defend mode key on the same path the value-mismatch
 		// branch uses so a transient lookup failure or tamper does not silently
-		// disable enforcement.
-		if updErr := enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny); updErr != nil {
-			slog.Error("BPF map enforce_cfg revert failed (lookup error)", "err", updErr)
+		// disable defend.
+		if updErr := defendCfg.Update(&key, &modeDefend, ebpf.UpdateAny); updErr != nil {
+			slog.Error("BPF map defend_cfg revert failed (lookup error)", "err", updErr)
 		} else {
-			slog.Error("BPF map enforce_cfg revert succeeded after lookup error")
-			backoff.clear(assetEnforceCfg)
+			slog.Error("BPF map defend_cfg revert succeeded after lookup error")
+			backoff.clear(assetDefendCfg)
 		}
 	} else if val != 1 {
-		logMapIntegrityFailure(cfg, assetEnforceCfg, "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, enforceState, backoff, signer)
+		logMapIntegrityFailure(cfg, assetDefendCfg, "value mismatch", "1", fmt.Sprintf("%d", val), stats, seq, jsonlMu, defendState, backoff, signer)
 		// Revert tampering.
-		if err := enforceCfg.Update(&key, &modeEnforce, ebpf.UpdateAny); err != nil {
-			slog.Error("BPF map enforce_cfg revert failed", "err", err)
+		if err := defendCfg.Update(&key, &modeDefend, ebpf.UpdateAny); err != nil {
+			slog.Error("BPF map defend_cfg revert failed", "err", err)
 		} else {
-			backoff.clear(assetEnforceCfg)
+			backoff.clear(assetDefendCfg)
 		}
 	}
 
@@ -130,17 +130,17 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		count++
 	}
 	if err := iter.Err(); err != nil {
-		logMapIntegrityFailure(cfg, assetAllowed, "iterate error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
+		logMapIntegrityFailure(cfg, assetAllowed, "iterate error", "", "", stats, seq, jsonlMu, defendState, backoff, signer)
 	} else {
-		enforceState.mu.Lock()
-		expected := enforceState.expectedEntries
-		enforceState.mu.Unlock()
+		defendState.mu.Lock()
+		expected := defendState.expectedEntries
+		defendState.mu.Unlock()
 		if count != expected {
-			logMapIntegrityFailure(cfg, assetAllowed, "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, enforceState, backoff, signer)
+			logMapIntegrityFailure(cfg, assetAllowed, "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, defendState, backoff, signer)
 			// H-04: re-program the LPM trie from the compiled snapshot so a
 			// tampered widening (extra allowed entries) or count corruption
 			// does not persist until process restart.
-			added, removed, rearmErr := rearmAllowedFromSnapshot(allowedIpv4, enforceCompiled, pol)
+			added, removed, rearmErr := rearmAllowedFromSnapshot(allowedIpv4, defendCompiled, pol)
 			if rearmErr != nil {
 				slog.Error("BPF allowlist re-arm failed", "asset", assetAllowed, "err", rearmErr)
 			} else {
@@ -158,13 +158,13 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 		countIgnored++
 	}
 	if err := iterIgnored.Err(); err != nil {
-		logMapIntegrityFailure(cfg, assetIgnored, "iterate error", "", "", stats, seq, jsonlMu, enforceState, backoff, signer)
+		logMapIntegrityFailure(cfg, assetIgnored, "iterate error", "", "", stats, seq, jsonlMu, defendState, backoff, signer)
 	} else {
-		enforceState.mu.Lock()
-		expectedIgnored := enforceState.expectedIgnoredEntries
-		enforceState.mu.Unlock()
+		defendState.mu.Lock()
+		expectedIgnored := defendState.expectedIgnoredEntries
+		defendState.mu.Unlock()
 		if countIgnored != expectedIgnored {
-			logMapIntegrityFailure(cfg, assetIgnored, "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, enforceState, backoff, signer)
+			logMapIntegrityFailure(cfg, assetIgnored, "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, defendState, backoff, signer)
 			// H-04: same self-heal posture as allowed_ipv4 — restore from
 			// policy.IgnoredIPv4Nets so an attacker cannot widen the
 			// implicit-allow surface by injecting extra ignored CIDRs.
@@ -179,10 +179,10 @@ func checkMapIntegrity(cfg config.Config, enforceCfg, allowedIpv4, ignoredIpv4 *
 	}
 }
 
-func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, enforceState *enforcementState, backoff *integrityBackoff, signer *telemetry.Signer) {
+func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, defendState *defendState, backoff *integrityBackoff, signer *telemetry.Signer) {
 	stats.addBPFMapIntegrityFailure()
-	if enforceState != nil {
-		enforceState.addMapIntegrityFailure()
+	if defendState != nil {
+		defendState.addMapIntegrityFailure()
 	}
 	// M-13: dedupe slog severity per asset within integrityBackoffWindow. The
 	// JSONL bpf_tamper event and counter increments still flow on every tick

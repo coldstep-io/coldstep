@@ -10,7 +10,7 @@
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
  * (structural layout similar to separate tcp/udp/http probe sources).
  *
- * cgroup enforcement lives in bpf/trace_enforce.bpf.c (internal/bpf/traceenforce).
+ * cgroup defend lives in bpf/trace_defend.bpf.c (internal/bpf/tracedefend).
  */
 #include "vmlinux.h"
 #include <bpf/bpf_core_read.h>
@@ -521,7 +521,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 	 * io_uring_setup(2) detection: any call is a security signal because
 	 * io_uring operations bypass syscall-based BPF hooks entirely.
 	 * Counter-only — the sysctl disable (io-uring-disable action input)
-	 * is the enforcement mechanism; this is the detection fallback.
+	 * is the defense mechanism; this is the detection fallback.
 	 */
 	if (id == (long)COLDSTEP_NR_IO_URING_SETUP) {
 		note_io_uring_setup_observed();

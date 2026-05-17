@@ -34,12 +34,12 @@ func TestBuildDetectMarkdown_TriageRibbon_Detect(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_TriageRibbon_EnforceDeny(t *testing.T) {
+func TestBuildDetectMarkdown_TriageRibbon_DefendDeny(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		EnforcementMode:      "enforce",
-		EnforcementDenyCount: 3,
-		BPF:                  []telemetry.BPFStatus{{Name: "connect", OK: true}},
-		MaxRowsPerSection:    50,
+		DefendMode:        "defend",
+		DefendDenyCount:   3,
+		BPF:               []telemetry.BPFStatus{{Name: "connect", OK: true}},
+		MaxRowsPerSection: 50,
 	})
 	if !strings.Contains(md, "**deny events:** 3") {
 		t.Fatalf("missing deny triage:\n%s", md)
@@ -303,19 +303,19 @@ func TestBuildDetectMarkdown_ReasonFlagsIgnoredWhenRowsPresent(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_EnforcePlusLabelBlocking(t *testing.T) {
+func TestBuildDetectMarkdown_DefendPlusLabelBlocking(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		EnforcementMode:          "enforce+cgroup",
-		EnforcementAllowlistSize: 1,
-		EnforcementDenyCount:     4,
-		MaxRowsPerSection:        50,
+		DefendMode:          "defend+cgroup",
+		DefendAllowlistSize: 1,
+		DefendDenyCount:     4,
+		MaxRowsPerSection:   50,
 	})
 	for _, needle := range []string{
 		"## Coldstep · defend",
 		"| **Mode** | `defend`",
 		"**deny events:** 4",
-		"### Enforcement",
-		"| Mode | `defend` |",
+		"### Defend",
+		"| Mode | `defend+cgroup` |",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
@@ -323,12 +323,12 @@ func TestBuildDetectMarkdown_EnforcePlusLabelBlocking(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_EnforcementSection(t *testing.T) {
+func TestBuildDetectMarkdown_DefendSection(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		EnforcementMode:          "enforce",
-		EnforcementAllowlistSize: 3,
-		EnforcementDenyCount:     2,
-		EnforcementFirstDeny: &DenyDigestRow{
+		DefendMode:          "defend",
+		DefendAllowlistSize: 3,
+		DefendDenyCount:     2,
+		DefendFirstDeny: &DenyDigestRow{
 			TS:       "2026-01-01T00:00:00Z",
 			PID:      1234,
 			Comm:     "curl",
@@ -341,7 +341,7 @@ func TestBuildDetectMarkdown_EnforcementSection(t *testing.T) {
 	for _, needle := range []string{
 		"## Coldstep · defend",
 		"Defend mode: cgroup-scoped IPv4 egress is allowlisted",
-		"### Enforcement",
+		"### Defend",
 		"| Mode | `defend` |",
 		"| Allowlist size | 3 |",
 		"| Deny count | 2 |",
@@ -418,15 +418,15 @@ func TestBuildDetectMarkdown_FSGateOff_NoSection(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_EnforcementDenyReserveFailures(t *testing.T) {
+func TestBuildDetectMarkdown_DefendDenyReserveFailures(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		EnforcementMode:                "enforce",
-		EnforcementAllowlistSize:       2,
-		EnforcementDenyReserveFailures: 5,
+		DefendMode:                "defend",
+		DefendAllowlistSize:       2,
+		DefendDenyReserveFailures: 5,
 	})
 	for _, needle := range []string{
 		"## Coldstep · defend",
-		"### Enforcement",
+		"### Defend",
 		"| Deny ringbuf reserve failures (blocked, no JSONL) | 5 |",
 	} {
 		if !strings.Contains(md, needle) {

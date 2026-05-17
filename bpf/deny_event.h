@@ -1,7 +1,7 @@
 /*
- * Shared packed `deny_event` wire layout for both cgroup egress enforcement
- * (`bpf/trace_enforce.bpf.c`) and BPF LSM enforcement
- * (`bpf/trace_lsm_enforce.bpf.c`). Both objects emit identical 46-byte
+ * Shared packed `deny_event` wire layout for both cgroup egress defend
+ * (`bpf/trace_defend.bpf.c`) and BPF LSM defend
+ * (`bpf/trace_lsm_defend.bpf.c`). Both objects emit identical 46-byte
  * records into their respective deny ringbufs (`deny_events`,
  * `lsm_deny_events`); userspace decodes both via `decodeDenyEvent` /
  * `denyEventWireSize=46` in `internal/agent/agent_linux.go`. Keeping a single

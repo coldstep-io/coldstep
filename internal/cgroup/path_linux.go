@@ -20,7 +20,7 @@ import (
 // `12:cpu:/user.slice/...` which have no "0::" entry, so this function falls
 // back to "/sys/fs/cgroup" (which on a v1 host is the tmpfs root containing
 // per-controller subdirs, not a cgroup directory) and the BPF
-// cgroup/connect4 + cgroup/sendmsg4 attach in trace_enforce.bpf.c will fail
+// cgroup/connect4 + cgroup/sendmsg4 attach in trace_defend.bpf.c will fail
 // with EINVAL. Coldstep currently targets GitHub-hosted `ubuntu-latest`
 // runners which have used cgroup v2 unified hierarchy since the
 // `ubuntu-22.04` image (Linux 5.15+). v1 runner support is out of scope.
