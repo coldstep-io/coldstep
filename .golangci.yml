@@ -8,6 +8,11 @@ linters:
     - errcheck
     - gosec
   exclusions:
+    paths:
+      # bpf2go-generated companion files (LoadX, *Objects) are produced by
+      # `go generate` and not checked into git, so typecheck cannot resolve
+      # the hand-written abi_test.go references to them.
+      - "internal/bpf/"
     rules:
       - path: "_test\\.go"
         linters: [gosec]
