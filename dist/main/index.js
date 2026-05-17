@@ -19967,9 +19967,10 @@ var https = __toESM(require("https"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.2.3";
-var COLDSTEP_BINARY_SHA256 = "c2663c380ff86bbe7e26d68f21f5278b25a6fbb1eada1cc0507287ad395d4110";
-var COLDSTEP_BINARY_URL = `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
+var COLDSTEP_BINARY_VERSION = "v0.2.4";
+var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
+var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
+var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
 function actionRootPath() {
   return path.resolve(__dirname, "..", "..");
 }
@@ -19994,6 +19995,69 @@ function sha256File(p) {
   const h = (0, import_crypto.createHash)("sha256");
   h.update(fs3.readFileSync(p));
   return h.digest("hex");
+}
+async function fetchReleaseJSON(url, token, maxRedirects = 3) {
+  const headers = {
+    "User-Agent": "coldstep-action",
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28"
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return new Promise((resolve2, reject) => {
+    const visit = (current, remaining) => {
+      const req = https.get(current, { headers }, (res) => {
+        const status = res.statusCode ?? 0;
+        if ((status === 301 || status === 302 || status === 307 || status === 308) && res.headers.location) {
+          res.resume();
+          if (remaining <= 0) {
+            reject(new Error(`too many redirects fetching ${url}`));
+            return;
+          }
+          const next = new URL(res.headers.location, current).toString();
+          visit(next, remaining - 1);
+          return;
+        }
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => {
+          const body = Buffer.concat(chunks).toString("utf8");
+          if (status !== 200) {
+            reject(new Error(`GitHub API ${status} fetching ${current}: ${body.slice(0, 300)}`));
+            return;
+          }
+          try {
+            resolve2(JSON.parse(body));
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        });
+      });
+      req.on("error", reject);
+      req.setTimeout(3e4, () => req.destroy(new Error(`timeout fetching ${current}`)));
+    };
+    visit(url, maxRedirects);
+  });
+}
+async function fetchExpectedAssetSha256(token) {
+  const apiURL = `https://api.github.com/repos/${COLDSTEP_BINARY_REPO}/releases/tags/${COLDSTEP_BINARY_VERSION}`;
+  const release = await fetchReleaseJSON(apiURL, token);
+  const asset = release.assets.find((a) => a.name === COLDSTEP_BINARY_ASSET_NAME);
+  if (!asset) {
+    throw new Error(
+      `coldstep: release ${COLDSTEP_BINARY_VERSION} has no asset named ${COLDSTEP_BINARY_ASSET_NAME}`
+    );
+  }
+  const digest = asset.digest ?? "";
+  if (!digest.startsWith("sha256:")) {
+    throw new Error(
+      `coldstep: asset ${COLDSTEP_BINARY_ASSET_NAME} on release ${COLDSTEP_BINARY_VERSION} is missing a sha256 digest (got: ${digest || "<none>"}). Re-run supply-chain-attest on the tag, or upgrade to a release whose asset has a digest.`
+    );
+  }
+  const sha = digest.slice("sha256:".length).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sha)) {
+    throw new Error(`coldstep: asset digest is not a valid sha256 hex (got: ${digest})`);
+  }
+  return sha;
 }
 async function downloadToFile(url, destPath, maxRedirects = 5) {
   return new Promise((resolve2, reject) => {
@@ -20058,13 +20122,15 @@ async function ensureColdstepBinary() {
   if (process.arch !== "x64") {
     throw new Error(`coldstep: unsupported arch ${process.arch} \u2014 only linux/amd64 is published`);
   }
+  const token = getInput("github-token") || process.env.GITHUB_TOKEN || "";
+  const expectedSha = await fetchExpectedAssetSha256(token);
   const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
   const cacheDir = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION);
   const binPath = path.join(cacheDir, "coldstep");
   fs3.mkdirSync(cacheDir, { recursive: true });
   if (fs3.existsSync(binPath)) {
     const got2 = sha256File(binPath);
-    if (got2 === COLDSTEP_BINARY_SHA256) {
+    if (got2 === expectedSha) {
       try {
         fs3.chmodSync(binPath, 493);
       } catch {
@@ -20081,13 +20147,13 @@ async function ensureColdstepBinary() {
   info(`coldstep: downloading ${COLDSTEP_BINARY_VERSION} from ${COLDSTEP_BINARY_URL}`);
   await downloadToFile(COLDSTEP_BINARY_URL, binPath);
   const got = sha256File(binPath);
-  if (got !== COLDSTEP_BINARY_SHA256) {
+  if (got !== expectedSha) {
     try {
       fs3.unlinkSync(binPath);
     } catch {
     }
     throw new Error(
-      `coldstep: downloaded binary sha256 mismatch \u2014 expected ${COLDSTEP_BINARY_SHA256}, got ${got} (url=${COLDSTEP_BINARY_URL})`
+      `coldstep: downloaded binary sha256 mismatch \u2014 expected ${expectedSha} (from GitHub Releases API), got ${got} (url=${COLDSTEP_BINARY_URL})`
     );
   }
   fs3.chmodSync(binPath, 493);

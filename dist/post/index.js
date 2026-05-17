@@ -23702,8 +23702,10 @@ var path2 = __toESM(require("path"));
 var fs3 = __toESM(require("fs"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.2.3";
-var COLDSTEP_BINARY_URL = `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
+var COLDSTEP_BINARY_VERSION = "v0.2.4";
+var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
+var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
+var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
 function actionRootPath() {
   return path.resolve(__dirname, "..", "..");
 }
