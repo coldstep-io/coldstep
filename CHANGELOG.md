@@ -6,6 +6,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-05-17
+
+### Fixed
+
+- **Action bundle / release pin:** `0.2.2`'s `src/shared.ts` left `COLDSTEP_BINARY_VERSION` at `v0.2.1` and `COLDSTEP_BINARY_SHA256` at the v0.2.1 asset's hash, so consumers pinning `coldstep-io/coldstep@v0.2.2` either downloaded the wrong binary or hit `coldstep: downloaded binary sha256 mismatch` from the cgroup-root-attach build that was actually shipped on the v0.2.2 release. `0.2.3` re-aligns the constants with the published `v0.2.3` release asset and rebuilds `dist/{pre,main,post}/index.js`. **Action behavior is otherwise identical to v0.2.2.**
+
 ## [0.2.2] - 2026-05-17
 
 ### Removed (breaking)
