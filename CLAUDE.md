@@ -83,10 +83,10 @@ Eight BPF probe packages under `internal/bpf/`, each compiled by `go generate`:
 
 | Package | Compiler driver | Why |
 | :------ | :------------- | :-- |
-| `traceexec`, `tracefork`, `traceenforce` | direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 …` | No syscall-NR dispatch in the C source. |
-| `traceconnect`, `tracedns`, `tracefs`, `tracebpfaudit`, `tracelsmenforce` | indirect `//go:generate go run ./run_bpf2go.go` | C sources branch on syscall numbers per arch (`#if defined(bpf_target_arm64)` vs `bpf_target_x86`) so bpf2go must be invoked with `-D__TARGET_ARCH_<runtime.GOARCH>`; the wrapper builds the flags string. |
+| `traceexec`, `tracefork`, `tracedefend` | direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 …` | No syscall-NR dispatch in the C source. |
+| `traceconnect`, `tracedns`, `tracefs`, `tracebpfaudit`, `tracelsmdefend` | indirect `//go:generate go run ./run_bpf2go.go` | C sources branch on syscall numbers per arch (`#if defined(bpf_target_arm64)` vs `bpf_target_x86`) so bpf2go must be invoked with `-D__TARGET_ARCH_<runtime.GOARCH>`; the wrapper builds the flags string. |
 
-Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `enforce_policy.inc`, `enforce_lpm_key.h`, `trace_connect_obs.h`, `trace_*_obs.inc`, `trace_tls_write.inc`). Defend hooks come from two .bpf.c files: `trace_enforce.bpf.c` (cgroup `connect4`/`sendmsg4`) and `trace_lsm_enforce.bpf.c` (BPF LSM `socket_connect`/`socket_sendmsg`). Both are IPv4-only — do not promise IPv6 anywhere.
+Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `defend_policy.inc`, `defend_lpm_key.h`, `trace_connect_obs.h`, `trace_*_obs.inc`, `trace_tls_write.inc`). Defend hooks come from two .bpf.c files: `trace_defend.bpf.c` (cgroup `connect4`/`sendmsg4`) and `trace_lsm_defend.bpf.c` (BPF LSM `socket_connect`/`socket_sendmsg`). Both are IPv4-only — do not promise IPv6 anywhere.
 
 The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep-report build-model` step so integrity scoring matches.
 
@@ -125,8 +125,8 @@ When CI fails on BPF verifier or generated-stub drift, run `bash scripts/agent-l
 ## Conventions
 
 - **Go version:** `go 1.25.10` pinned in `go.mod`; CI uses `setup-go` with `go-version-file: go.mod`. Don't bump the minor in code without updating workflows.
-- **`gofmt` is enforced** on every tracked `.go` file in the working tree.
-- **Encoding:** repo is UTF-8 / LF. `.editorconfig` enforces tabs for Go, 2-space spaces for YAML/TS/JSON. `scripts/check-encoding.sh` blocks U+FFFD bytes (`EF BF BD`) and a specific mojibake sequence — common cause is shell quoting damage from PowerShell `gh pr edit --body "…"`; use `--body-file` and templates under `.github/pr-bodies/` instead.
+- **`gofmt` is required** on every tracked `.go` file in the working tree.
+- **Encoding:** repo is UTF-8 / LF. `.editorconfig` requires tabs for Go, 2-space spaces for YAML/TS/JSON. `scripts/check-encoding.sh` blocks U+FFFD bytes (`EF BF BD`) and a specific mojibake sequence — common cause is shell quoting damage from PowerShell `gh pr edit --body "…"`; use `--body-file` and templates under `.github/pr-bodies/` instead.
 - **No vendored guard code.** Implementation is clean-room.
 - **Cross-platform builds:** every Linux-specific file uses `//go:build linux` and has a sibling stub for other GOOSes when needed (see `internal/agent/agent_stub.go`, `internal/cgroup/path_other.go`). Integration tests use `//go:build integration && linux && !windows`.
 - **Local-only / gitignored trees:** `plans/`, `docs/`, `design/`, `knowledge/`, `skills/`, `.cursor/`, `.vscode/`, `specs/`, `AGENTS.md`, `ARCHITECTURE.md`, `KNOWLEDGE_DIRECTOR.md`. `coldstep-ci-runner.yml` actively fails CI if `AGENTS.md` is committed. **Never** `git add -f` any of these paths.

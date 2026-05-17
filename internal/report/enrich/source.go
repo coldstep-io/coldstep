@@ -2,7 +2,7 @@
 // implement (OTX, rDNS, future passive-DNS, GeoIP, VirusTotal). Sources MUST:
 //
 //   - Mutate ONLY the report slot selected by setSlot (currently m.OTX/m.RDNS).
-//   - Honour ctx.Done() — cancellation is the budget-enforcement mechanism.
+//   - Honour ctx.Done() — cancellation is the budget-defense mechanism.
 //   - Return nil for any recoverable failure after writing
 //     {"skipped": "<reason>"} to their slot.
 //

@@ -1,5 +1,5 @@
 // Package policy implements Coldstep IPv4-only egress allowlists. IPv6 is not supported; invalid
-// literals/CIDRs are rejected at parse time. BPF enforcement uses IPv4 maps only.
+// literals/CIDRs are rejected at parse time. BPF defend programs use IPv4 maps only.
 package policy
 
 import (
@@ -11,11 +11,11 @@ import (
 )
 
 // MaxIgnoredIPv4Nets is the maximum merged ignored CIDR entries (defaults + user).
-// It must match the BPF LPM trie max_entries in trace_enforce.bpf.c.
+// It must match the BPF LPM trie max_entries in trace_defend.bpf.c.
 const MaxIgnoredIPv4Nets = 128
 
-// MaxAllowedEnforceIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_enforce.bpf.c.
-const MaxAllowedEnforceIPv4Keys = 4096
+// MaxAllowedDefendIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_defend.bpf.c.
+const MaxAllowedDefendIPv4Keys = 4096
 
 // MaxAllowedHostnameBytes is the maximum length of an allowed hostname (exact match or wildcard suffix).
 // DNS FQDNs are at most 253 octets (RFC 1035). BPF allowed_domains uses fixed char[256] keys; longer
@@ -169,7 +169,7 @@ func (p *Policy) IgnoredIPv4Nets() []*net.IPNet {
 // AllowedDomains returns the exact allowed hostnames from the policy.
 // Wildcard entries (e.g. *.example.com) are NOT returned; the BPF allowed_domains
 // map uses exact-string lookup and cannot match wildcards. Use HasWildSuffixes to
-// detect wildcard entries and warn when enforce mode is active.
+// detect wildcard entries and warn when defend mode is active.
 func (p *Policy) AllowedDomains() []string {
 	if p == nil {
 		return nil
@@ -183,13 +183,13 @@ func (p *Policy) AllowedDomains() []string {
 
 // HasWildSuffixes reports whether the policy contains any wildcard allowed-hosts entries
 // (e.g. *.example.com). These are matched by Classify but are NOT loaded into the BPF
-// allowed_domains map, so they have no effect in enforce/defend mode.
+// allowed_domains map, so they have no effect in defend mode.
 func (p *Policy) HasWildSuffixes() bool {
 	return p != nil && len(p.wildSuffixes) > 0
 }
 
 // MergeLiteralAllowedIPv4Keys adds IPv4 addresses from COLDSTEP_ALLOWED_IPS-style policy entries
-// into keys (used with domain-resolved IPs for enforce-mode BPF allowed_ipv4).
+// into keys (used with domain-resolved IPs for defend-mode BPF allowed_ipv4).
 func (p *Policy) MergeLiteralAllowedIPv4Keys(keys map[[4]byte]struct{}) {
 	if p == nil || keys == nil || len(p.ips) == 0 {
 		return
@@ -219,7 +219,7 @@ func (p *Policy) MergeLiteralAllowedIPv4Into(s *IPv4Set) {
 
 // AllowedIPv4Nets returns literal CIDR allowlist entries (PR-G) parsed from
 // allowed-ips. Bare-IPv4 literals from p.ips are NOT included here — the
-// userspace loadEnforceMaps caller programs them as /32 LPM keys via the
+// userspace loadDefendMaps caller programs them as /32 LPM keys via the
 // existing IPv4Set / map[[4]byte] flow. Returns nil when no CIDRs were given.
 func (p *Policy) AllowedIPv4Nets() []*net.IPNet {
 	if p == nil {
@@ -253,7 +253,7 @@ func (p *Policy) Classify(fqdn string, ip net.IP) Class {
 			return ClassAllowed
 		}
 		// PR-G: also honour literal CIDR allowlist entries so the Go-side
-		// classifier matches BPF enforcement (which now does LPM lookup).
+		// classifier matches BPF defend programs (which now do LPM lookup).
 		if len(p.nets) > 0 && NetsContains(p.nets, ip4) {
 			return ClassAllowed
 		}
