@@ -58,7 +58,7 @@
               <div class="pipeline-row">
                 <span class="pill">BPF load</span>
                 <span class="bar" aria-hidden="true"></span>
-                <strong>observe / enforce</strong>
+                <strong>observe / defend</strong>
               </div>
               <div class="pipeline-row">
                 <span class="pill">your job</span>
@@ -87,7 +87,7 @@
             <article class="feature" data-reveal>
               <h3>Progressive hardening</h3>
               <p>
-                Start in detect mode to learn normal egress. When policy is clear, switch to enforce mode with explicit
+                Start in detect mode to learn normal egress. When policy is clear, switch to defend mode with explicit
                 allowlists so unexpected destinations fail the job early instead of silently leaking.
               </p>
             </article>
@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.1
+      - uses: coldstep-io/coldstep@v0.2.4
 </code></pre>
           </div>
         </section>
@@ -129,7 +129,7 @@ jobs:
         <section class="section section--tight-top" aria-labelledby="modes-heading">
           <h2 id="modes-heading">Two modes, one agent</h2>
           <p class="section-intro">
-            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.2.1</code>) instead of tracking
+            Pin a release tag in workflows (for example <code>coldstep-io/coldstep@v0.2.4</code>) instead of tracking
             <code>@main</code> unless you intentionally want churn.
           </p>
           <div class="modes">
@@ -139,10 +139,11 @@ jobs:
               <span class="mode-tag">Default</span>
             </div>
             <div class="mode">
-              <h3>Enforce</h3>
+              <h3>Defend</h3>
               <p>
-                Block TCP and UDP egress outside your allowlist. Requires explicit configuration—this is a guardrail,
-                not a surprise.
+                Block IPv4 egress outside your allowlist (cgroup <code>connect4</code> / <code>sendmsg4</code>, BPF
+                LSM where available). Requires a non-empty allowlist—this is a guardrail, not a surprise. IPv6 is
+                out of scope.
               </p>
               <span class="mode-tag">Opt-in</span>
             </div>
