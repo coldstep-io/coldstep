@@ -36,6 +36,11 @@ export function agentStatusPath(): string {
   return path.join(baseDir, '.coldstep-ready.json');
 }
 
+export function eventsLogPath(): string {
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
+  return path.join(baseDir, '.coldstep-events.jsonl');
+}
+
 function sha256File(p: string): string {
   const h = createHash('sha256');
   h.update(fs.readFileSync(p));
