@@ -1,0 +1,31 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  golangci-lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          # internal/bpf/ packages require generated files that are only
+          # produced by `go generate` on Linux with clang installed.
+          # The .golangci.yml exclusions handle typecheck errors, but skip
+          # the whole subtree from being linted at the package level too.
+          args: --timeout=5m $(go list ./... | grep -v 'internal/bpf' | tr '\n' ' ')
