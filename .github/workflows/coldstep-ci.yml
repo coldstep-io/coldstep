@@ -37,3 +37,24 @@ jobs:
       defend_deny_jsonl_strict: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'strict' || false }}
       skip_integration: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'fast' || false }}
     secrets: inherit
+
+  lint:
+    name: golangci-lint
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: latest
