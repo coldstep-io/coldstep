@@ -276,6 +276,29 @@ func readLSMDenyReserveFailureCount(objs *tracelsmdefend.TracelsmdefendObjects) 
 	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
+// buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the
+// cgroup and LSM defend loaders: take compiled domain resolutions, fold in the
+// literal IPv4 entries from the policy, and produce an LPM plan ready to write
+// into the BPF allowlist map identified by mapName. The two callers differ only
+// in which BPF map (allowed_ipv4 vs lsm_allowed_ipv4) receives the result.
+func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *policy.Policy) (allowedLPMPlan, error) {
+	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
+	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
+	pol.MergeLiteralAllowedIPv4Keys(v4keys)
+
+	plan, err := buildAllowedLPMPlan(mapName, v4keys, pol.AllowedIPv4Nets())
+	if err != nil {
+		return allowedLPMPlan{}, err
+	}
+	if plan.totalEntries > policy.MaxAllowedDefendIPv4Keys {
+		return allowedLPMPlan{}, fmt.Errorf("%s: %d entries exceeds BPF max %d", mapName, plan.totalEntries, policy.MaxAllowedDefendIPv4Keys)
+	}
+	if plan.totalEntries == 0 {
+		return allowedLPMPlan{}, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
+	}
+	return plan, nil
+}
+
 func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
 		return 0, 0, fmt.Errorf("tracelsmdefend objects are required for defend mode")
@@ -294,27 +317,9 @@ func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled poli
 		}
 	}
 
-	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
-	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
-	if pol != nil {
-		pol.MergeLiteralAllowedIPv4Keys(v4keys)
-	}
-	var literalNets []*net.IPNet
-	if pol != nil {
-		literalNets = pol.AllowedIPv4Nets()
-	}
-
-	plan, err := buildAllowedLPMPlan("lsm_allowed_ipv4", v4keys, literalNets)
+	plan, err := buildDefendAllowedPlan("lsm_allowed_ipv4", compiled, pol)
 	if err != nil {
 		return 0, 0, err
-	}
-	totalEntries := plan.totalEntries
-	if totalEntries > policy.MaxAllowedDefendIPv4Keys {
-		return 0, 0, fmt.Errorf("lsm_allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedDefendIPv4Keys)
-	}
-
-	if totalEntries == 0 {
-		return 0, 0, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
 	}
 
 	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, plan); err != nil {
@@ -325,7 +330,7 @@ func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled poli
 		return 0, 0, err
 	}
 
-	return totalEntries, ignoredCount, nil
+	return plan.totalEntries, ignoredCount, nil
 }
 
 // loadDefendMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
@@ -353,27 +358,9 @@ func loadDefendMaps(objs *tracedefend.TracedefendObjects, compiled policy.Compil
 		}
 	}
 
-	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
-	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
-	if pol != nil {
-		pol.MergeLiteralAllowedIPv4Keys(v4keys)
-	}
-	var literalNets []*net.IPNet
-	if pol != nil {
-		literalNets = pol.AllowedIPv4Nets()
-	}
-
-	plan, err := buildAllowedLPMPlan("allowed_ipv4", v4keys, literalNets)
+	plan, err := buildDefendAllowedPlan("allowed_ipv4", compiled, pol)
 	if err != nil {
 		return 0, 0, err
-	}
-	totalEntries := plan.totalEntries
-	if totalEntries > policy.MaxAllowedDefendIPv4Keys {
-		return 0, 0, fmt.Errorf("allowed_ipv4: %d entries exceeds BPF max %d", totalEntries, policy.MaxAllowedDefendIPv4Keys)
-	}
-
-	if totalEntries == 0 {
-		return 0, 0, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
 	}
 
 	if err := loadAllowedLPMMap(objs.AllowedIpv4, plan); err != nil {
@@ -384,7 +371,7 @@ func loadDefendMaps(objs *tracedefend.TracedefendObjects, compiled policy.Compil
 		return 0, 0, err
 	}
 
-	return totalEntries, ignoredCount, nil
+	return plan.totalEntries, ignoredCount, nil
 }
 
 // loadAllowedLPMMap programs the allowed_ipv4 LPM trie (PR-G).
