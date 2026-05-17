@@ -9,7 +9,7 @@ export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 
 // Pinned coldstep agent release. Bump these together when cutting a new release;
 // the SHA256 must match the coldstep-linux-amd64 asset on the named tag.
-export const COLDSTEP_BINARY_VERSION = 'v0.2.1';
+export const COLDSTEP_BINARY_VERSION = 'v0.2.2';
 export const COLDSTEP_BINARY_SHA256 = '49bae9f1d34fe1f9fa4a50a2bcc2604b7d485836e3046a3bd718199b74d4d355';
 export const COLDSTEP_BINARY_URL =
   `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
