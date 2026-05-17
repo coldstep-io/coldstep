@@ -19089,7 +19089,7 @@ var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 var COLDSTEP_BINARY_VERSION = "v0.2.2";
-var COLDSTEP_BINARY_SHA256 = "49bae9f1d34fe1f9fa4a50a2bcc2604b7d485836e3046a3bd718199b74d4d355";
+var COLDSTEP_BINARY_SHA256 = "c2663c380ff86bbe7e26d68f21f5278b25a6fbb1eada1cc0507287ad395d4110";
 var COLDSTEP_BINARY_URL = `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
 function actionRootPath() {
   return path.resolve(__dirname, "..", "..");
