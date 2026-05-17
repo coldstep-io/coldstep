@@ -58,6 +58,59 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
 
+  # Dedicated security linter. Complements `staticcheck` in unit jobs by flagging
+  # crypto / SSRF / hardcoded-credential issues. The excluded rules below are
+  # systemic false-positives for this codebase (a CI security agent that, by
+  # design, reads paths from controlled env vars and runs sudo sub-processes):
+  #   G104 unchecked errors          — covered by errcheck / staticcheck SA4006
+  #   G204 subprocess with variable  — agent re-executes itself via `sudo -E binPath`
+  #   G301 dir perms 0750+           — 0755 needed for CI-shared workspace dirs
+  #   G302 file perms 0600+          — 0644 needed for digest/JSONL files consumed by later steps
+  #   G304 file inclusion variable   — CLI tool reads paths from CLI flags / GITHUB_* env
+  #   G306 WriteFile perms 0600+     — same rationale as G302
+  #   G703 path-traversal taint      — taint sources are GITHUB_EVENT_PATH / GITHUB_STEP_SUMMARY (trusted)
+  #   G704 SSRF taint                — outbound calls are GitHub API URLs built from GITHUB_REPOSITORY (trusted)
+  gosec:
+    name: gosec
+    needs: [gofmt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Prepare BPF and generated Go
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+      - name: Run gosec
+        uses: securego/gosec@master
+        with:
+          args: '-exclude=G104,G204,G301,G302,G304,G306,G703,G704 ./...'
+
+  # Dedicated staticcheck job (also embedded in unit/integration jobs for
+  # parallel cross-OS coverage). Keeps a single fast lint signal on the
+  # critical path even when those longer jobs are skipped.
+  staticcheck:
+    name: staticcheck
+    needs: [gofmt]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - name: Prepare BPF and generated Go
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+      - name: Install staticcheck
+        env:
+          GOTOOLCHAIN: auto
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@v0.7.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+      - name: Run staticcheck
+        run: staticcheck ./...
+
   unit:
     name: unit (${{ matrix.os }})
     needs: [gofmt]
