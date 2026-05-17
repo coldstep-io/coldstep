@@ -16,7 +16,7 @@ func main() {
 
 func runCLI(args []string) int {
 	if len(args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: coldstep run")
+		fmt.Fprintln(os.Stderr, "usage: coldstep <run|validate> [args...]")
 		return 2
 	}
 	switch args[1] {
@@ -26,6 +26,8 @@ func runCLI(args []string) int {
 			return 1
 		}
 		return 0
+	case "validate":
+		return runValidate(args[2:], os.Stdout, os.Stderr)
 	default:
 		fmt.Fprintln(os.Stderr, "unknown command")
 		return 2
