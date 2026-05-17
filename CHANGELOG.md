@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-05-17
+
+### Changed
+
+- **Action bundle / sha-pin mechanism:** the TypeScript layer no longer hardcodes `COLDSTEP_BINARY_SHA256`. `src/shared.ts` now queries the GitHub Releases API at runtime (`GET /repos/coldstep-io/coldstep/releases/tags/{version}`) and reads the official `coldstep-linux-amd64` asset's `digest` field, then verifies the downloaded binary against it. Removes the previous chicken-and-egg where the sha pin had to match a `bin/coldstep` build produced only after the tag had been pushed — and didn't, in v0.2.2 / v0.2.3. The API call uses the action's `github-token` input (falling back to unauthenticated, which is fine for public repos).
+
+### Fixed
+
+- **Consumers pinned to `@v0.2.3`** would hit `coldstep: downloaded binary sha256 mismatch` because the v0.2.3 supply-chain-attest build was not byte-reproducible vs. v0.2.2 (same source, different asset digest). v0.2.4 sidesteps the issue entirely by not hardcoding the digest.
+
 ## [0.2.3] - 2026-05-17
 
 ### Fixed
