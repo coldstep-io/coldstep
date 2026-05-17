@@ -7,12 +7,15 @@ import * as path from 'path';
 
 export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 
-// Pinned coldstep agent release. Bump these together when cutting a new release;
-// the SHA256 must match the coldstep-linux-amd64 asset on the named tag.
-export const COLDSTEP_BINARY_VERSION = 'v0.2.3';
-export const COLDSTEP_BINARY_SHA256 = 'c2663c380ff86bbe7e26d68f21f5278b25a6fbb1eada1cc0507287ad395d4110';
+// Pinned coldstep agent release. Only the version is bumped at release time;
+// the expected SHA-256 is fetched at runtime from the GitHub Releases API so we
+// don't have to hardcode an asset digest the supply-chain-attest build produces
+// only after the tag is pushed.
+export const COLDSTEP_BINARY_VERSION = 'v0.2.4';
+export const COLDSTEP_BINARY_ASSET_NAME = 'coldstep-linux-amd64';
+export const COLDSTEP_BINARY_REPO = 'coldstep-io/coldstep';
 export const COLDSTEP_BINARY_URL =
-  `https://github.com/coldstep-io/coldstep/releases/download/${COLDSTEP_BINARY_VERSION}/coldstep-linux-amd64`;
+  `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
 
 // JS actions never get GITHUB_ACTION_PATH (composite-only) and cwd() is the consumer workspace,
 // so derive the action root from this bundle's location: dist/{pre,main,post}/index.js → root.
@@ -45,6 +48,82 @@ function sha256File(p: string): string {
   const h = createHash('sha256');
   h.update(fs.readFileSync(p));
   return h.digest('hex');
+}
+
+interface GitHubReleaseAsset {
+  name: string;
+  digest?: string;
+}
+
+interface GitHubRelease {
+  assets: GitHubReleaseAsset[];
+}
+
+async function fetchReleaseJSON(url: string, token: string, maxRedirects = 3): Promise<GitHubRelease> {
+  const headers: Record<string, string> = {
+    'User-Agent': 'coldstep-action',
+    Accept: 'application/vnd.github+json',
+    'X-GitHub-Api-Version': '2022-11-28',
+  };
+  if (token) headers.Authorization = `Bearer ${token}`;
+
+  return new Promise((resolve, reject) => {
+    const visit = (current: string, remaining: number): void => {
+      const req = https.get(current, { headers }, (res) => {
+        const status = res.statusCode ?? 0;
+        if ((status === 301 || status === 302 || status === 307 || status === 308) && res.headers.location) {
+          res.resume();
+          if (remaining <= 0) {
+            reject(new Error(`too many redirects fetching ${url}`));
+            return;
+          }
+          const next = new URL(res.headers.location, current).toString();
+          visit(next, remaining - 1);
+          return;
+        }
+        const chunks: Buffer[] = [];
+        res.on('data', (c: Buffer) => chunks.push(c));
+        res.on('end', () => {
+          const body = Buffer.concat(chunks).toString('utf8');
+          if (status !== 200) {
+            reject(new Error(`GitHub API ${status} fetching ${current}: ${body.slice(0, 300)}`));
+            return;
+          }
+          try {
+            resolve(JSON.parse(body) as GitHubRelease);
+          } catch (e) {
+            reject(e instanceof Error ? e : new Error(String(e)));
+          }
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(30_000, () => req.destroy(new Error(`timeout fetching ${current}`)));
+    };
+    visit(url, maxRedirects);
+  });
+}
+
+async function fetchExpectedAssetSha256(token: string): Promise<string> {
+  const apiURL = `https://api.github.com/repos/${COLDSTEP_BINARY_REPO}/releases/tags/${COLDSTEP_BINARY_VERSION}`;
+  const release = await fetchReleaseJSON(apiURL, token);
+  const asset = release.assets.find((a) => a.name === COLDSTEP_BINARY_ASSET_NAME);
+  if (!asset) {
+    throw new Error(
+      `coldstep: release ${COLDSTEP_BINARY_VERSION} has no asset named ${COLDSTEP_BINARY_ASSET_NAME}`,
+    );
+  }
+  const digest = asset.digest ?? '';
+  if (!digest.startsWith('sha256:')) {
+    throw new Error(
+      `coldstep: asset ${COLDSTEP_BINARY_ASSET_NAME} on release ${COLDSTEP_BINARY_VERSION} is missing a sha256 digest (got: ${digest || '<none>'}). ` +
+        `Re-run supply-chain-attest on the tag, or upgrade to a release whose asset has a digest.`,
+    );
+  }
+  const sha = digest.slice('sha256:'.length).toLowerCase();
+  if (!/^[a-f0-9]{64}$/.test(sha)) {
+    throw new Error(`coldstep: asset digest is not a valid sha256 hex (got: ${digest})`);
+  }
+  return sha;
 }
 
 async function downloadToFile(url: string, destPath: string, maxRedirects = 5): Promise<void> {
@@ -99,11 +178,18 @@ async function downloadToFile(url: string, destPath: string, maxRedirects = 5): 
 }
 
 // Resolves a usable coldstep binary, downloading the pinned release asset on first use
-// and caching it under RUNNER_TEMP/coldstep-action/<version>/coldstep. SHA256-verified.
+// and caching it under RUNNER_TEMP/coldstep-action/<version>/coldstep. The expected
+// SHA-256 is queried from the GitHub Releases API at runtime so we don't have to
+// hardcode (and chase) a digest the supply-chain-attest build produces only after the
+// tag has been pushed.
 export async function ensureColdstepBinary(): Promise<string> {
   if (process.arch !== 'x64') {
     throw new Error(`coldstep: unsupported arch ${process.arch} — only linux/amd64 is published`);
   }
+
+  const token = core.getInput('github-token') || process.env.GITHUB_TOKEN || '';
+  const expectedSha = await fetchExpectedAssetSha256(token);
+
   const cacheRoot = process.env.RUNNER_TEMP || os.tmpdir();
   const cacheDir = path.join(cacheRoot, 'coldstep-action', COLDSTEP_BINARY_VERSION);
   const binPath = path.join(cacheDir, 'coldstep');
@@ -111,7 +197,7 @@ export async function ensureColdstepBinary(): Promise<string> {
 
   if (fs.existsSync(binPath)) {
     const got = sha256File(binPath);
-    if (got === COLDSTEP_BINARY_SHA256) {
+    if (got === expectedSha) {
       try { fs.chmodSync(binPath, 0o755); } catch { /* ignore */ }
       core.info(`coldstep: reusing cached binary ${binPath} (${COLDSTEP_BINARY_VERSION})`);
       return binPath;
@@ -123,10 +209,10 @@ export async function ensureColdstepBinary(): Promise<string> {
   core.info(`coldstep: downloading ${COLDSTEP_BINARY_VERSION} from ${COLDSTEP_BINARY_URL}`);
   await downloadToFile(COLDSTEP_BINARY_URL, binPath);
   const got = sha256File(binPath);
-  if (got !== COLDSTEP_BINARY_SHA256) {
+  if (got !== expectedSha) {
     try { fs.unlinkSync(binPath); } catch { /* ignore */ }
     throw new Error(
-      `coldstep: downloaded binary sha256 mismatch — expected ${COLDSTEP_BINARY_SHA256}, got ${got} (url=${COLDSTEP_BINARY_URL})`,
+      `coldstep: downloaded binary sha256 mismatch — expected ${expectedSha} (from GitHub Releases API), got ${got} (url=${COLDSTEP_BINARY_URL})`,
     );
   }
   fs.chmodSync(binPath, 0o755);
