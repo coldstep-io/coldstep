@@ -4,7 +4,8 @@
  *   - IPv4-only TCP connect + (tgid,fd)->dst map for optional TLS ClientHello correlation
  *   - IPv4 egress via sendto(2) and sendmsg(2) → `udp_events` ringbuf (name legacy; includes TCP sendto;
  *     not complete for all UDP egress paths)
- *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on write/writev/pwrite(2)/pwritev/pwritev2/sendto
+ *   - Optional cleartext HTTP/1 on destination port 80 and TLS ClientHello sniff on
+ *     write/writev/pwrite64/pwritev/pwritev2/sendto (single tuple lookup shared by both sniffs)
  *   - LRU map eviction handles stale (tgid,fd) entries (close(2) cleanup removed)
  *
  * Logic is split across bpf/trace_tcp_obs.inc, trace_udp_obs.inc, and trace_http_obs.inc
@@ -426,7 +427,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (ns_read_syscall_arg(regs, 2, &dx_ul))
 			return 0;
 
-		return handle_tls_obs_sys_enter(id, di_ul, si_ul, dx_ul);
+		return handle_write_obs_sys_enter(id, di_ul, si_ul, dx_ul);
 	}
 
 	if (id == (long)COLDSTEP_NR_SENDMMSG) {

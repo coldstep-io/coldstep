@@ -1,9 +1,10 @@
 /*
- * TLS ClientHello sniff on IPv4 TCP buffers.
+ * TLS ClientHello + plaintext HTTP/1 sniff on IPv4 TCP buffers.
  *
  * Dispatch:
- *   - write(2) / writev(2) / pwrite(2) / pwritev(2) / pwritev2(2): handled here via
- *     handle_tls_obs_sys_enter (tuple from fd map; first three syscall args match write/writev ABI).
+ *   - write(2) / writev(2) / pwrite64(2) / pwritev(2) / pwritev2(2): handled here via
+ *     handle_write_obs_sys_enter (tuple from fd map; first three syscall args match write/writev ABI).
+ *     One LRU lookup feeds both TLS and HTTP/80 sniff (mirrors the sendto arm in trace_connect.bpf.c).
  *   - sendto(2): handled in trace_connect.bpf.c NR_SENDTO — builds connect4_tuple from
  *     cached connect tuple OR explicit sockaddr-in (parity with HTTP sendto path).
  */
@@ -86,23 +87,53 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 	}
 }
 
-/* NR_write/NR_writev: fd lookup then try_emit_tls_clienthello_from_tuple. NR_sendto paths call try_emit_tls_clienthello_from_tuple from trace_connect.bpf.c (including explicit sockaddr TCP sendto). */
-static __always_inline void try_emit_tls_clienthello(__u32 fd32, unsigned long buf_ptr, __u32 len_in)
+/*
+ * Run both TLS-ClientHello and HTTP/80 sniff against a single buffer using a
+ * pre-fetched (tgid,fd) tuple. Used by handle_write_obs_sys_enter so each
+ * write/writev/pwrite* dispatch does at most one connect4_by_tgid_fd lookup.
+ * Mirrors the sendto arm in trace_connect.bpf.c (TLS + HTTP from one tuple).
+ */
+static __always_inline void try_emit_buffer_sniff_from_tuple(struct connect4_tuple *tup,
+							     unsigned long buf_ptr, __u32 len,
+							     __u64 pt)
+{
+	try_emit_tls_clienthello_from_tuple(tup, buf_ptr, len, pt);
+
+	if (!tup || !tup->in_use)
+		return;
+
+	{
+		__be16 sin_port;
+		__be32 sin_addr;
+
+		__builtin_memcpy(&sin_port, tup->dport, sizeof(sin_port));
+		__builtin_memcpy(&sin_addr, tup->daddr, sizeof(sin_addr));
+
+		if (sin_port == bpf_htons(80) && len >= 4 &&
+		    http_prefix_looks_like_request(buf_ptr, len))
+			handle_http_obs_emit_pt(pt, buf_ptr, len, sin_port, sin_addr);
+	}
+}
+
+/*
+ * write/writev/pwrite64/pwritev/pwritev2 dispatch: fetch (tgid,fd) tuple once,
+ * run TLS ClientHello sniff (any port) and HTTP/1 plaintext sniff (dport 80).
+ * di/si/dx are syscall arg registers as read in handle_raw_sys_enter.
+ */
+static __always_inline int handle_write_obs_sys_enter(long id, unsigned long di_ul,
+						      unsigned long si_ul, unsigned long dx_ul)
 {
 	struct connect4_tuple tup;
 	__u64 pt;
 
-	if (coldstep_connect_tuple_fetch(fd32, &tup, &pt))
-		return;
-	try_emit_tls_clienthello_from_tuple(&tup, buf_ptr, len_in, pt);
-}
+	if (coldstep_connect_tuple_fetch((__u32)di_ul, &tup, &pt))
+		return 0;
 
-/* id + syscall arg registers; di/si/dx read only in handle_raw_sys_enter. */
-static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul,
-						   unsigned long si_ul, unsigned long dx_ul)
-{
-	if (id == (long)COLDSTEP_NR_WRITE) {
-		try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
+	if (id == (long)COLDSTEP_NR_WRITE || id == (long)COLDSTEP_NR_PWRITE64) {
+		/* fd, buf, count — same first-three-arg layout for write and pwrite64
+		 * (pwrite64 offset is arg3, ignored for sniff). */
+		try_emit_buffer_sniff_from_tuple(&tup, si_ul, coldstep_syscall_len_u32(dx_ul),
+						 pt);
 		return 0;
 	}
 
@@ -130,15 +161,10 @@ static __always_inline int handle_tls_obs_sys_enter(long id, unsigned long di_ul
 				__u32 iov_len = coldstep_syscall_len_u32(iov0.iov_len);
 				if (iov_len > TLS_PAYLOAD_MAX)
 					iov_len = TLS_PAYLOAD_MAX;
-				try_emit_tls_clienthello((__u32)di_ul, iov0.iov_base, iov_len);
+				try_emit_buffer_sniff_from_tuple(&tup, iov0.iov_base, iov_len,
+								 pt);
 			}
 		}
-		return 0;
-	}
-
-	if (id == (long)COLDSTEP_NR_PWRITE64) {
-		/* fd, buf, count — same layout as NR_WRITE; offset is arg3 (ignored for sniff). */
-		try_emit_tls_clienthello((__u32)di_ul, si_ul, coldstep_syscall_len_u32(dx_ul));
 		return 0;
 	}
 
