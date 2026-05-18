@@ -3,19 +3,13 @@ package policy
 import (
 	"fmt"
 	"net"
-	"strings"
-	"unicode"
 )
 
 // ParseIgnoredIPNets parses comma- or ASCII-whitespace-separated IPv4 CIDRs.
 // IPv6 is not supported.
 func ParseIgnoredIPNets(raw string) ([]*net.IPNet, error) {
 	var out []*net.IPNet
-	for _, tok := range splitIgnoredRawFields(raw) {
-		tok = strings.TrimSpace(tok)
-		if tok == "" {
-			continue
-		}
+	for _, tok := range splitFields(raw) {
 		_, ipnet, err := net.ParseCIDR(tok)
 		if err != nil {
 			return nil, fmt.Errorf("invalid ignored CIDR %q: %w", tok, err)
@@ -29,13 +23,6 @@ func ParseIgnoredIPNets(raw string) ([]*net.IPNet, error) {
 		})
 	}
 	return out, nil
-}
-
-// splitIgnoredRawFields matches policy.splitFields (comma or ASCII whitespace).
-func splitIgnoredRawFields(s string) []string {
-	return strings.FieldsFunc(s, func(r rune) bool {
-		return r == ',' || unicode.IsSpace(r)
-	})
 }
 
 // DefaultIgnoredIPv4Nets returns the implicit RFC1918 private-network ranges
