@@ -72,7 +72,7 @@ func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.
 	}
 }
 
-func TestBuildDetectMarkdown_HotEgressDestinations(t *testing.T) {
+func TestBuildDetectMarkdown_TopDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{
 			TS: "t", PID: 1, Comm: "curl", Remote: "`10.0.0.1:443`", Policy: "monitor",
@@ -83,10 +83,21 @@ func TestBuildDetectMarkdown_HotEgressDestinations(t *testing.T) {
 		}},
 		MaxRowsPerSection: 50,
 	})
-	for _, needle := range []string{"### Hot egress destinations", "registry.npmjs.org", "10.0.0.1:443", "tcp", "http"} {
+	for _, needle := range []string{"### Top destinations", "registry.npmjs.org", "10.0.0.1:443", "tcp", "http"} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}
+	}
+}
+
+func TestBuildDetectMarkdown_TopDestinations_HiddenWhenEmpty(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal:         3,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "### Top destinations") {
+		t.Fatalf("Top destinations should be hidden when no egress rows present:\n%s", md)
 	}
 }
 
@@ -127,7 +138,7 @@ func TestBuildDetectMarkdown_ProcessTreeSection(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_KPIAndSections(t *testing.T) {
+func TestBuildDetectMarkdown_HeaderAndCompactKPI(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:       []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
 		ExecTotal: 1, TCPTotal: 2, UDPTotal: 3, HTTPTotal: 4,
@@ -148,15 +159,72 @@ func TestBuildDetectMarkdown_KPIAndSections(t *testing.T) {
 		MaxRowsPerSection: 5,
 	})
 	for _, needle := range []string{
-		"## Coldstep · detect",
-		"Detect-only: observe, do not block.",
-		"### KPI", "| **exec** | 1 |", "| **udp** | 3 |", "| **http** | 4 |",
+		"## ✅ coldstep — detect",
+		"| exec | tcp | udp | http | tls |",
+		"| 1 | 2 | 3 | 4 | — |",
+		"<details>",
+		"<summary>Technical details",
+		"#### Full KPI",
+		"| **exec** | 1 |", "| **udp** | 3 |", "| **http** | 4 |",
 		"UDP sendto", "HTTP/1 cleartext", "Canonical log (JSONL)", "connect(2)",
 		"PID (TGID)", "| `99` |", "`sh`", "Executable (BPF-capped)", "`/bin/sh`",
 		"**UDP KPI**",
+		"> Full event log: `/tmp/x.jsonl`",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_HeaderEmojiVerdicts(t *testing.T) {
+	clean := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(clean, "## ✅ coldstep — detect") {
+		t.Fatalf("clean-run header missing ✅:\n%s", clean)
+	}
+
+	review := BuildDetectMarkdown(DigestInput{
+		BPF:                       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		UDPRingbufReserveFailures: 1,
+	})
+	if !strings.Contains(review, "## ⚠️ coldstep — detect") {
+		t.Fatalf("review-state header missing ⚠️:\n%s", review)
+	}
+
+	alert := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{{Name: "exec", OK: false}},
+	})
+	if !strings.Contains(alert, "## 🚨 coldstep — detect") {
+		t.Fatalf("alert-state header missing 🚨:\n%s", alert)
+	}
+}
+
+func TestBuildDetectMarkdown_NoForbiddenGFMTags(t *testing.T) {
+	// Job Summaries render GFM; <font>, <p align>, <sub>, <center> are not in
+	// the allowlist and would appear as literal text. This guards against
+	// regression that might re-introduce them.
+	inputs := []DigestInput{
+		{},
+		{ExecTotal: 1, TCPTotal: 1, BPF: []telemetry.BPFStatus{{Name: "x", OK: true}}},
+		{
+			DefendMode: "defend", DefendDenyCount: 1, DefendAllowlistSize: 1,
+			BPF: []telemetry.BPFStatus{{Name: "x", OK: true}},
+		},
+		{
+			BPFMapIntegrityFailures: 2,
+			BPF:                     []telemetry.BPFStatus{{Name: "x", OK: false}},
+		},
+	}
+	forbidden := []string{"<font", "<p align", "<sub>", "</sub>", "<center"}
+	for i, in := range inputs {
+		md := BuildDetectMarkdown(in)
+		for _, tag := range forbidden {
+			if strings.Contains(md, tag) {
+				t.Fatalf("case %d: forbidden tag %q present in digest:\n%s", i, tag, md)
+			}
 		}
 	}
 }
@@ -315,10 +383,10 @@ func TestBuildDetectMarkdown_DefendPlusLabelBlocking(t *testing.T) {
 		MaxRowsPerSection:   50,
 	})
 	for _, needle := range []string{
-		"## Coldstep · defend",
+		"coldstep — defend",
 		"| **Mode** | `defend`",
 		"**deny events:** 4",
-		"### Defend",
+		"#### Defend",
 		"| Mode | `defend+cgroup` |",
 	} {
 		if !strings.Contains(md, needle) {
@@ -343,9 +411,8 @@ func TestBuildDetectMarkdown_DefendSection(t *testing.T) {
 		},
 	})
 	for _, needle := range []string{
-		"## Coldstep · defend",
-		"Defend mode: cgroup-scoped IPv4 egress is allowlisted",
-		"### Defend",
+		"coldstep — defend",
+		"#### Defend",
 		"| Mode | `defend` |",
 		"| Allowlist size | 3 |",
 		"| Deny count | 2 |",
@@ -361,8 +428,10 @@ func TestBuildDetectMarkdown_DefendSection(t *testing.T) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}
 	}
-	if strings.Contains(md, "Detect-only: observe, do not block.") {
-		t.Fatalf("defend digest should not use detect-only banner:\n%s", md)
+	// The previous design had a Detect-only banner; the new compact header drops it.
+	// Defend digests must still announce the mode in the header.
+	if strings.Contains(md, "coldstep — detect") {
+		t.Fatalf("defend digest should not announce detect mode:\n%s", md)
 	}
 }
 
@@ -429,8 +498,8 @@ func TestBuildDetectMarkdown_DefendDenyReserveFailures(t *testing.T) {
 		DefendDenyReserveFailures: 5,
 	})
 	for _, needle := range []string{
-		"## Coldstep · defend",
-		"### Defend",
+		"coldstep — defend",
+		"#### Defend",
 		"| Deny ringbuf reserve failures (blocked, no JSONL) | 5 |",
 	} {
 		if !strings.Contains(md, needle) {
@@ -506,5 +575,38 @@ func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}
+	}
+}
+
+func TestBuildDetectMarkdown_FooterAlwaysPresent(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{})
+	if !strings.Contains(md, "> Full event log:") {
+		t.Fatalf("missing footer:\n%s", md)
+	}
+	if !strings.Contains(md, ".coldstep-events.jsonl") {
+		t.Fatalf("footer should default to .coldstep-events.jsonl when path unset:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_VisibleLineBudget(t *testing.T) {
+	// A typical detect run should produce a compact visible section (above the
+	// Technical details fold). Count visible lines until the first <details> at
+	// column 0 — that's our budget for what an operator sees by default.
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		ExecTotal: 12, TCPTotal: 4, UDPTotal: 3, HTTPTotal: 0,
+		TCPRows: []TCPDigestRow{{
+			TS: "t", PID: 1, Comm: "curl", Remote: "`1.2.3.4:443`", Policy: "monitor",
+		}},
+		MaxRowsPerSection: 50,
+	})
+	idx := strings.Index(md, "<details>")
+	if idx < 0 {
+		t.Fatalf("expected Technical details fold; got:\n%s", md)
+	}
+	visible := md[:idx]
+	lines := strings.Count(visible, "\n")
+	if lines > 30 {
+		t.Fatalf("visible portion is %d lines, budget is 30:\n%s", lines, visible)
 	}
 }
