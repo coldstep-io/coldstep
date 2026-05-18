@@ -21,14 +21,13 @@ import (
 	"github.com/cilium/ebpf/features"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/coldstep-io/coldstep/internal/bpf/defend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracedefend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmdefend"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/proctree"
@@ -133,8 +132,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer lsmDenyRd.Close()
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
-	var defendObjs tracedefend.TracedefendObjects
-	var lsmObjs *tracelsmdefend.TracelsmdefendObjects
+	var defendObjs defend.DefendObjects
 	var hasDefend bool
 	var hasLSM bool
 	var defendConnectLnk link.Link
@@ -148,39 +146,45 @@ func Run(ctx context.Context, cfg config.Config) error {
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
 			haveLSM = true
 		}
+
+		// Phase 2.3: cgroup + LSM share one bpf2go object. The loader strips
+		// LSM programs (and their dedicated maps) from the spec when the
+		// kernel lacks CONFIG_BPF_LSM so prog_load doesn't fail.
+		if err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM); err != nil {
+			return fmt.Errorf("load defend bpf objects: %w", err)
+		}
+		hasDefend = true
+		defer func() {
+			defendState.setDenyReserveFailures(readDenyReserveFailureCount(&defendObjs))
+			if hasLSM {
+				defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(&defendObjs))
+			}
+			_ = defendObjs.Close()
+		}()
+
 		var lsmAttachErr error
 
 		if haveLSM {
-			lsmCandidate := new(tracelsmdefend.TracelsmdefendObjects)
-			if err := tracelsmdefend.LoadTracelsmdefendObjects(lsmCandidate, nil); err != nil {
-				return fmt.Errorf("load lsm defend bpf objects: %w", err)
-			}
-
-			if _, _, loadErr := loadLSMDefendMaps(lsmCandidate, defendCompiled, pol); loadErr != nil {
-				_ = lsmCandidate.Close()
+			if _, _, loadErr := loadLSMDefendMaps(&defendObjs, defendCompiled, pol); loadErr != nil {
 				return loadErr
 			}
 
-			rd, err := ringbuf.NewReader(lsmCandidate.LsmDenyEvents)
+			rd, err := ringbuf.NewReader(defendObjs.LsmDenyEvents)
 			if err != nil {
-				_ = lsmCandidate.Close()
 				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
 			}
 
-			lnk1, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketConnect})
+			lnk1, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketConnect})
 			if err != nil {
 				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
 				_ = rd.Close()
-				_ = lsmCandidate.Close()
 			} else {
-				lnk2, err := link.AttachLSM(link.LSMOptions{Program: lsmCandidate.LsmSocketSendmsg})
+				lnk2, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendmsg})
 				if err != nil {
 					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
 					_ = lnk1.Close()
 					_ = rd.Close()
-					_ = lsmCandidate.Close()
 				} else {
-					lsmObjs = lsmCandidate
 					hasLSM = true
 					// Keep the LSM ringbuf as a secondary reader. The primary denyRd
 					// always reads from the cgroup ringbuf (attached below) because on
@@ -188,10 +192,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 					// never fire — `lsm_deny_events` then stays empty even though
 					// cgroup is defending.
 					lsmDenyRd.R = rd
-					defer func() {
-						defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(lsmObjs))
-						_ = lsmObjs.Close()
-					}()
 					defer lnk1.Close()
 					defer lnk2.Close()
 				}
@@ -209,21 +209,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 			slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
 		}
 
-		// Always load and attach the cgroup defend program, regardless of whether
-		// LSM also attached. The cgroup hook is the reliable always-on defense
-		// path: LSM hooks may attach but never fire when the kernel's `lsm=` boot
-		// chain excludes BPF (Ubuntu 24.04 ships this way). The primary deny
-		// reader watches the cgroup `deny_events` ringbuf; the LSM ringbuf, when
-		// present, is drained by a separate reader.
-		if err := tracedefend.LoadTracedefendObjects(&defendObjs, nil); err != nil {
-			return fmt.Errorf("load defend bpf objects: %w", err)
-		}
-		hasDefend = true
-		defer func() {
-			defendState.setDenyReserveFailures(readDenyReserveFailureCount(&defendObjs))
-			_ = defendObjs.Close()
-		}()
-
+		// Always program the cgroup defend maps and attach the cgroup hooks,
+		// regardless of whether LSM also attached. The cgroup hook is the
+		// reliable always-on defense path: LSM hooks may attach but never fire
+		// when the kernel's `lsm=` boot chain excludes BPF (Ubuntu 24.04 ships
+		// this way). The primary deny reader watches the cgroup `deny_events`
+		// ringbuf; the LSM ringbuf, when present, is drained by a separate
+		// reader.
 		allowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
 		if loadErr != nil {
 			return loadErr
@@ -359,16 +351,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		dnsObjs, dnsLnkEnter, dnsLnkExit = objs, le, lx
 		// Register every live dns_cache map so userspace DNS observations
 		// flow into all in-kernel programs that consult dns_cache for
-		// late-binding IP -> FQDN attribution. Defend/LSM collections each
-		// instantiate their own dns_cache via dns_cache.h, so registering
-		// only the DNS-tracer instance previously left defend decisions
-		// blind to runtime DNS learning (M-14, paired with H-03's deletes).
+		// late-binding IP -> FQDN attribution. Defend's cgroup + LSM sections
+		// share one dns_cache map (Phase 2.3 merge), so a single defend
+		// entry covers both hook families (M-14, paired with H-03's deletes).
 		dnsCacheMaps := []*ebpf.Map{dnsObjs.DnsCache}
 		if hasDefend && defendObjs.DnsCache != nil {
 			dnsCacheMaps = append(dnsCacheMaps, defendObjs.DnsCache)
-		}
-		if hasLSM && lsmObjs != nil && lsmObjs.DnsCache != nil {
-			dnsCacheMaps = append(dnsCacheMaps, lsmObjs.DnsCache)
 		}
 		dnsCache.SetBPFMaps(dnsCacheMaps)
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
@@ -784,7 +772,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, lsmObjs.LsmDefendCfg, lsmObjs.LsmAllowedIpv4, lsmObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
+			errCh <- watchMapIntegrity(runCtx, cfg, defendObjs.LsmDefendCfg, defendObjs.LsmAllowedIpv4, defendObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
 		}()
 	}
 

@@ -7,6 +7,71 @@ linters:
     - unused
     - errcheck
     - gosec
+  settings:
+    errcheck:
+      # Close errors on cleanup paths are intentionally best-effort per
+      # CLAUDE.md: BPF loader unwind paths use `_ = x.Close()` /
+      # `defer x.Close()` because the operator-facing error is the primary
+      # attach/load failure; chained Close errors are not actionable.
+      # fmt.Fprint* on stderr/stdout and best-effort os.Remove in test
+      # cleanup have no useful error to handle either.
+      #
+      # errcheck matches by static receiver type, so each concrete/interface
+      # type needs its own entry — there is no glob form.
+      exclude-functions:
+        - (*os.File).Close
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*github.com/cilium/ebpf.Map).Close
+        - (*github.com/cilium/ebpf.Program).Close
+        - (github.com/cilium/ebpf/link.Link).Close
+        - (*github.com/cilium/ebpf/ringbuf.Reader).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/defend.DefendObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/traceexec.TraceexecObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/traceconnect.TraceconnectObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/tracedns.TracednsObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/tracefork.TraceforkObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/tracefs.TracefsObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit.TracebpfauditObjects).Close
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - os.Remove
+    gosec:
+      # Mirror the standalone gosec workflow's exclusions — same documented
+      # rationale lives in .github/workflows/coldstep-ci-runner.yml.
+      #   G104 unchecked errors          covered by errcheck
+      #   G204 subprocess with variable  agent re-execs itself via `sudo -E binPath`
+      #   G301 dir perms 0750+           0755 needed for CI-shared workspace dirs
+      #   G302 file perms 0600+          0644 needed for digest/JSONL files consumed by later steps
+      #   G304 file inclusion variable   CLI tool reads paths from CLI flags / GITHUB_* env
+      #   G306 WriteFile perms 0600+     same rationale as G302
+      #   G703 path-traversal taint      taint sources are GITHUB_EVENT_PATH / GITHUB_STEP_SUMMARY (trusted)
+      #   G704 SSRF taint                outbound calls are GitHub API URLs built from GITHUB_REPOSITORY (trusted)
+      excludes:
+        - G104
+        - G204
+        - G301
+        - G302
+        - G304
+        - G306
+        - G703
+        - G704
+    staticcheck:
+      # Match the standalone hosted-linux/staticcheck step
+      # (honnef.co/go/tools v0.7.0) check selection. ST1000/ST1003/ST1016/
+      # ST1020-22 are staticcheck's own defaults-off; QF* (quickfix) are
+      # stylistic suggestions, not bug-finding checks.
+      checks:
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        - -QF1001
+        - -QF1007
+        - -QF1012
   exclusions:
     paths:
       - "internal/bpf/"

@@ -79,14 +79,14 @@ Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`
 
 ### Agent ↔ BPF wiring (`internal/agent/`, `internal/bpf/`, `bpf/`)
 
-Eight BPF probe packages under `internal/bpf/`, each compiled by `go generate`:
+Seven BPF probe packages under `internal/bpf/`, each compiled by `go generate`:
 
 | Package | Compiler driver | Why |
 | :------ | :------------- | :-- |
-| `traceexec`, `tracefork`, `tracedefend` | direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 …` | No syscall-NR dispatch in the C source. |
-| `traceconnect`, `tracedns`, `tracefs`, `tracebpfaudit`, `tracelsmdefend` | indirect `//go:generate go run ./run_bpf2go.go` | C sources branch on syscall numbers per arch (`#if defined(bpf_target_arm64)` vs `bpf_target_x86`) so bpf2go must be invoked with `-D__TARGET_ARCH_<runtime.GOARCH>`; the wrapper builds the flags string. |
+| `traceexec`, `tracefork` | direct `//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 …` | No syscall-NR dispatch in the C source. |
+| `traceconnect`, `tracedns`, `tracefs`, `tracebpfaudit`, `defend` | indirect `//go:generate go run ../bpfgen/main.go` | C sources branch on syscall numbers per arch (`#if defined(bpf_target_arm64)` vs `bpf_target_x86`) so bpf2go must be invoked with `-D__TARGET_ARCH_<runtime.GOARCH>`; the wrapper builds the flags string. `defend` only needs this because its LSM section pulls in `trace_connect_obs.h`. |
 
-Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `defend_policy.inc`, `defend_lpm_key.h`, `trace_connect_obs.h`, `trace_*_obs.inc`, `trace_tls_write.inc`). Defend hooks come from two .bpf.c files: `trace_defend.bpf.c` (cgroup `connect4`/`sendmsg4`) and `trace_lsm_defend.bpf.c` (BPF LSM `socket_connect`/`socket_sendmsg`). Both are IPv4-only — do not promise IPv6 anywhere.
+Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `defend_policy.inc`, `defend_lpm_key.h`, `trace_connect_obs.h`, `trace_*_obs.inc`, `trace_tls_write.inc`). Defend hooks come from one combined source `trace_defend_all.bpf.c`, which includes `trace_defend_cgroup.inc` (cgroup `connect4`/`sendmsg4`) and `trace_lsm_defend_lsm.inc` (BPF LSM `socket_connect`/`socket_sendmsg`). Both sections are IPv4-only — do not promise IPv6 anywhere. The Go-side loader `defend.LoadDefendObjectsForKernel` strips the LSM section from the spec on kernels without CONFIG_BPF_LSM so prog_load doesn't fail.
 
 The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep-report build-model` step so integrity scoring matches.
 

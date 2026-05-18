@@ -1,7 +1,14 @@
 /*
- * Shared IPv4 defend policy + deny ringbuf emit for cgroup and LSM objects.
+ * Shared IPv4 defend policy + deny ringbuf emit for cgroup and LSM hook
+ * sections of bpf/trace_defend_all.bpf.c.
  *
- * Before #include, each translation unit must define map symbol macros (bare
+ * Intentionally NOT include-guarded: this file is included twice in the
+ * combined defend translation unit (once for the cgroup section with cg_*
+ * map names, once for the LSM section with lsm_* map names). Each include
+ * defines a distinct set of static __always_inline helpers whose names are
+ * disambiguated by macro substitution from the caller.
+ *
+ * Before #include, each section must define map symbol macros (bare
  * identifiers, no string):
  *   CS_DEF_RB_DENY          — BPF_MAP_TYPE_RINGBUF (struct deny_event samples)
  *   CS_DEF_PC_DENY_FAIL     — BPF_MAP_TYPE_PERCPU_ARRAY failure counter
@@ -9,13 +16,16 @@
  *   CS_DEF_TRIE_ALLOWED     — LPM trie allowlist
  *   CS_DEF_TRIE_IGNORED     — LPM trie ignored CIDRs
  *
+ * The section must also rename the helper functions via `#define` so the
+ * other section can declare its own copies in the same TU without
+ * colliding (e.g. `#define defense_enabled cg_defense_enabled`). #undef
+ * after the include.
+ *
  * Caller must #include "defend_lpm_key.h" before BPF map defs that use
  * struct ns_lpm4_key, then #include "dns_cache.h" (dns_cache + allowed_domains maps).
  * Caller must define IPPROTO_*, AF_INET, COLDSTEP_DEFEND_KEY_MODE, *_MODE_*,
  * COLDSTEP_PROTO_*, COLDSTEP_DENY_REASON_* to match existing defend programs.
  */
-#ifndef COLDSTEP_DEFEND_POLICY_INC
-#define COLDSTEP_DEFEND_POLICY_INC
 
 #ifndef CS_DEF_RB_DENY
 #error "Define CS_DEF_RB_DENY before defend_policy.inc"
@@ -107,5 +117,3 @@ static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4
 	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
 	bpf_ringbuf_submit(de, 0);
 }
-
-#endif /* COLDSTEP_DEFEND_POLICY_INC */
