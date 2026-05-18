@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- refactor: consolidate four `*EmptyReason` digest helpers into `protocolEmptyReason`.
+
+---
+
 ## [v0.2.4] — 2025-05-16
 
 ### Fixed

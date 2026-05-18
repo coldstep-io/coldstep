@@ -462,7 +462,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<details>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
 		if len(in.TCPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(tcpEmptyReason(in))))
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TCPDegradedHook, in.TCPReaderErrors))))
 		} else {
 			for _, r := range in.TCPRows {
 				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
@@ -476,7 +476,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<details>\n<summary><strong>UDP sendto (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Remote | Len | FQDN | Policy |\n|:--|--:|:-|:-|--:|:-|:-|\n")
 		if len(in.UDPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | %s |\n", sanitizeCell(udpEmptyReason(in))))
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.UDPDegradedHook, in.UDPReaderErrors))))
 		} else {
 			for _, r := range in.UDPRows {
 				fq := r.FQDN
@@ -494,7 +494,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<details>\n<summary><strong>HTTP/1 cleartext (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | Method | Host | Path (summary) | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|:-|:-|\n")
 		if len(in.HTTPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | — | %s |\n", sanitizeCell(httpEmptyReason(in))))
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.HTTPDegradedHook, in.HTTPReaderErrors))))
 		} else {
 			for _, r := range in.HTTPRows {
 				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | `%s` | `%s` | %s | %s |\n",
@@ -512,7 +512,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<details>\n<summary><strong>TLS ClientHello / SNI (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
 		if len(in.TLSRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(tlsEmptyReason(in))))
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors))))
 		} else {
 			for _, r := range in.TLSRows {
 				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | %s | %s |\n",
