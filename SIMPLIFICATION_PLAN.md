@@ -1,6 +1,6 @@
 # Coldstep Simplification Plan
 
-> **Status:** Phases 2.2 and 2.4 complete. Phase 2.3 planned.
+> **Status:** Phases 2.2, 2.3, and 2.4 complete.
 >
 > This file lives at the repo root and is tracked in git (unlike `/docs/`).
 
@@ -37,7 +37,7 @@ Low. The two existing code paths are structurally identical today; the consolida
 
 ---
 
-## Phase 2.3 — Shared BPF skeleton
+## Phase 2.3 — Shared BPF skeleton ✓ done (PR #138)
 
 ### Current state
 
@@ -100,4 +100,4 @@ None.
 
 - [x] 2.4 — SIMPLIFICATION_PLAN.md written and tracked
 - [x] 2.2 — Unified policy loader implemented and merged (PR #136, net -13 LOC)
-- [ ] 2.3 — Shared BPF skeleton implemented and merged
+- [x] 2.3 — Shared BPF skeleton implemented and merged (PR #138)

@@ -12,9 +12,10 @@
 //
 // Sister probe packages that use this same indirect helper (their .bpf.c
 // also dispatches by syscall NR): tracedns, tracefs, tracebpfaudit,
-// tracelsmdefend. Probes that do NOT need per-arch flags (no syscall-NR
-// dispatch) use the simpler direct bpf2go invocation in their own gen.go:
-// tracedefend, traceexec, tracefork.
+// defend (its LSM section includes trace_connect_obs.h for
+// read_ipv4_sockaddr). Probes that do NOT need per-arch flags (no
+// syscall-NR dispatch) use the simpler direct bpf2go invocation in their
+// own gen.go: traceexec, tracefork.
 package traceconnect
 
 //go:generate go run ../bpfgen/main.go Traceconnect trace_connect.bpf.c

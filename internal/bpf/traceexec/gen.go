@@ -6,8 +6,8 @@
 // which is a stable kernel tracepoint (not a syscall raw_tp), so no
 // architecture-specific syscall-number constants are required.
 //
-// See internal/bpf/tracedefend/gen.go for an explanation of the two
-// loader patterns used in this repo.
+// See internal/bpf/bpfgen/main.go for an explanation of the two loader
+// patterns used in this repo.
 package traceexec
 
 //go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 -cc clang -no-strip -target bpfel,bpfeb -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Traceexec ../../../bpf/trace_exec.bpf.c -- -I../../../bpf -I/usr/include/bpf

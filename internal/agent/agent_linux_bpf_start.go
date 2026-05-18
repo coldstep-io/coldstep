@@ -27,7 +27,7 @@ func initMemlock() error {
 }
 
 // startSyscallTrace loads observability-only BPF (TCP connect + UDP sendto + HTTP sniff + TLS write sniff; single raw_tp attach).
-// cgroup defend loads separately (tracedefend) when mode is defend.
+// cgroup + LSM defend load separately (internal/bpf/defend) when mode is defend.
 // When enableTLSSNI is true, sets tls_agent_cfg map so BPF emits TLS ClientHello captures.
 // tlsAgentCfgFailed is set when the map update fails (SNI path stays off in BPF) so callers can mark the hook degraded.
 func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {

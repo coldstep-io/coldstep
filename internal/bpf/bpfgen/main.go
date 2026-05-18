@@ -9,9 +9,10 @@
 // on runtime.GOARCH, so each affected package invokes this helper instead.
 //
 // Probe packages that need it: traceconnect, tracedns, tracefs, tracebpfaudit,
-// tracelsmdefend. Probes whose C source has no syscall-NR dispatch
-// (tracedefend, traceexec, tracefork) keep the simpler direct `//go:generate`
-// line in their own gen.go and do not call this helper.
+// defend (LSM section of the merged defend object pulls in trace_connect_obs.h
+// for read_ipv4_sockaddr). Probes whose C source has no syscall-NR dispatch
+// (traceexec, tracefork) keep the simpler direct `//go:generate` line in
+// their own gen.go and do not call this helper.
 //
 // Invocation (from a probe package's gen.go):
 //
