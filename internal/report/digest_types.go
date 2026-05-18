@@ -167,7 +167,11 @@ type DigestInput struct {
 	// the first iovec is invisible to the JSONL/digest. Operators can use this
 	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
 	UDPSendmsgMultiIovecObserved int
-	TLSWritevMultiIovecObserved  int
+	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
+	// length, distinct from per-message msg_iovlen). Messages 2..N are not
+	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
+	SendmmsgMultiMessage        int
+	TLSWritevMultiIovecObserved int
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters (supersedes the PR-E aggregate
 	// `UnobservedEgressSyscalls`). Each counts a path that emits dest/length

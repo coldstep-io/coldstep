@@ -322,6 +322,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setHTTPRingbufReserveFailures(readHTTPRingbufReserveFailureCount(syscallObjs))
 				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
 				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
+				stats.setSendmmsgMultiMessage(readSendmmsgMultiMessageCount(syscallObjs))
 				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
 				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
