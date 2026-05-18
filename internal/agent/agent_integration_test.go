@@ -101,8 +101,8 @@ func TestRun_DetectWritesSummary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(b, []byte("## Coldstep")) || !bytes.Contains(b, []byte("| **exec** |")) {
-		t.Fatalf("expected Coldstep table with exec row, got:\n%s", string(b))
+	if !bytes.Contains(b, []byte("coldstep — detect")) || !bytes.Contains(b, []byte("| **exec** |")) {
+		t.Fatalf("expected coldstep detect heading with exec row, got:\n%s", string(b))
 	}
 }
 
