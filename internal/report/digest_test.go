@@ -61,7 +61,7 @@ func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.
 		"| **Observability (partial / bypass-class)** |",
 		"counter-only",
 		"io_uring_setup(2) observed",
-		"⚠ io_uring_setup (syscall-hook bypass class)=1",
+		"⚠️ io_uring_setup (syscall-hook bypass class)=1",
 		"sendfile partial-observe=2",
 		"splice partial-observe=1",
 		"sendmmsg first-message-only=3",
@@ -153,7 +153,7 @@ func TestBuildDetectMarkdown_KPIAndSections(t *testing.T) {
 		"### KPI", "| **exec** | 1 |", "| **udp** | 3 |", "| **http** | 4 |",
 		"UDP sendto", "HTTP/1 cleartext", "Canonical log (JSONL)", "connect(2)",
 		"PID (TGID)", "| `99` |", "`sh`", "Executable (BPF-capped)", "`/bin/sh`",
-		"IPv4 sendto and sendmsg egress",
+		"**UDP KPI**",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
