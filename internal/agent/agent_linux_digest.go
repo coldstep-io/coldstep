@@ -135,6 +135,7 @@ func buildDigestInput(
 		ForkRingbufReserveFailures:     stats.forkRingbufReserveFailures(),
 		FSRingbufReserveFailures:       stats.fsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
+		SendmmsgMultiMessage:           stats.sendmmsgMultiMessage(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
 		SendfileObserved:               stats.sendfileObserved(),
 		SpliceObserved:                 stats.spliceObserved(),

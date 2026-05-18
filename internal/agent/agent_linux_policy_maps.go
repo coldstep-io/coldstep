@@ -212,6 +212,13 @@ func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObject
 	return readUint32CounterMap(objs.UdpSendmsgMultiIovecObserved, "readUDPSendmsgMultiIovecObservedCount")
 }
 
+func readSendmmsgMultiMessageCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32PerCPUArraySum(objs.SendmmsgMultiMessageObserved, "readSendmmsgMultiMessageCount")
+}
+
 func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0

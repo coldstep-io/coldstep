@@ -45,6 +45,7 @@ type runStats struct {
 	forkRingbufReserveFailuresN     int
 	fsRingbufReserveFailuresN       int
 	udpSendmsgMultiIovecObservedN   int
+	sendmmsgMultiMessageN           int
 	tlsWritevMultiIovecObservedN    int
 	sendfileObservedN               int
 	spliceObservedN                 int
@@ -263,6 +264,18 @@ func (s *runStats) udpSendmsgMultiIovecObserved() int {
 	return s.udpSendmsgMultiIovecObservedN
 }
 
+func (s *runStats) setSendmmsgMultiMessage(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sendmmsgMultiMessageN = n
+}
+
+func (s *runStats) sendmmsgMultiMessage() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendmmsgMultiMessageN
+}
+
 func (s *runStats) setTLSWritevMultiIovecObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -441,6 +454,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		FSRingbufReserveFailures:       s.fsRingbufReserveFailuresN,
 		RingbufReserveFailuresTotal:    rbTotal,
 		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
+		SendmmsgMultiMessage:           s.sendmmsgMultiMessageN,
 		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
 		SendfileObserved:               s.sendfileObservedN,
 		SpliceObserved:                 s.spliceObservedN,

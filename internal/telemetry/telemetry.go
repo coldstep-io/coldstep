@@ -96,7 +96,11 @@ type Summary struct {
 	ForkRingbufReserveFailures    int    `json:"fork_ringbuf_reserve_failures,omitempty"`
 	FSRingbufReserveFailures      int    `json:"fs_ringbuf_reserve_failures,omitempty"`
 	UDPSendmsgMultiIovecObserved  int    `json:"udp_sendmsg_multi_iovec_observed,omitempty"`
-	TLSWritevMultiIovecObserved   int    `json:"tls_writev_multi_iovec_observed,omitempty"`
+	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
+	// length, distinct from per-message msg_iovlen). Messages 2..N are not
+	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
+	SendmmsgMultiMessage        int `json:"sendmmsg_multi_message_observed,omitempty"`
+	TLSWritevMultiIovecObserved int `json:"tls_writev_multi_iovec_observed,omitempty"`
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters that supersede the previous aggregate
 	// `unobserved_egress_syscalls_observed` field. Slots:

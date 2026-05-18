@@ -121,6 +121,21 @@ struct {
 	__type(value, __u32);
 } udp_sendmsg_multi_iovec_observed SEC(".maps");
 
+/*
+ * BG-03: NR_SENDMMSG multi-message visibility counter. Increments once per
+ * sendmmsg(2) call with vlen > 1 (mmsghdr vector length > 1, distinct from
+ * per-message iovec fragmentation). Separate from udp_sendmsg_multi_iovec_observed
+ * — the iovec counter still describes the first mmsghdr's msg_iovlen, while
+ * this counter describes how many sendmmsg calls have N>1 messages (of which
+ * only message 0 is introspected). PERCPU_ARRAY for write-side contention.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} sendmmsg_multi_message_observed SEC(".maps");
+
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
 	__uint(max_entries, 1);
@@ -500,7 +515,23 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		note_partial_egress(PARTIAL_OBS_SENDMMSG);
 
 		/* struct mmsghdr starts with struct msghdr */
-		return handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
+		int rc = handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
+
+		/*
+		 * BG-03: bump sendmmsg_multi_message_observed when the caller
+		 * passed vlen > 1 — distinct signal from udp_sendmsg_multi_iovec
+		 * (which is per-message scatter/gather). messages 2..N are not
+		 * introspected, so this counter quantifies the silent gap.
+		 */
+		if (vlen_ul > 1) {
+			__u32 k = 0;
+			__u32 *v = bpf_map_lookup_elem(&sendmmsg_multi_message_observed, &k);
+
+			if (v)
+				__sync_fetch_and_add(v, 1);
+		}
+
+		return rc;
 	}
 
 	if (id == (long)COLDSTEP_NR_SENDFILE) {
