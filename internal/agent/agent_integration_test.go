@@ -496,6 +496,90 @@ s.close()
 	}
 }
 
+// TestRun_HTTPWritePort80JSONL covers BG-04: HTTP/1 plaintext on dport 80 emitted via
+// write(2)/pwrite64(2) after a TCP connect must produce a "type":"http" JSONL row, same as
+// the sendto(2) arm. Mirrors TestRun_HTTPSendtoPort80JSONL but uses write/os.write and
+// pwrite to exercise the write/pwrite* dispatch arm in trace_connect.bpf.c.
+func TestRun_HTTPWritePort80JSONL(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed:", err)
+	}
+	dir := t.TempDir()
+	detect := filepath.Join(dir, "detect.md")
+	events := filepath.Join(dir, ".coldstep-events.jsonl")
+	probe := filepath.Join(dir, "http_write_probe.py")
+	if err := os.WriteFile(detect, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
+	t.Setenv("COLDSTEP_ALLOWED_IPS", "")
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_DETECT_LOG", detect)
+	t.Setenv("COLDSTEP_EVENTS_LOG", events)
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(ctx, cfg) }()
+
+	time.Sleep(450 * time.Millisecond)
+
+	// Issue both write() and pwrite() so the test asserts the new write/pwrite* sniff arm.
+	// socket.send() invokes sendto(2) under the hood; os.write(fd, ...) is plain write(2),
+	// and os.pwrite(fd, ...) is pwrite64(2) — both hit handle_write_obs_sys_enter.
+	py := `import os
+import socket
+addr = ("example.com", 80)
+req1 = b"GET /a HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+req2 = b"GET /b HTTP/1.1\r\nHost: example.com\r\nConnection: close\r\n\r\n"
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(addr)
+os.write(s.fileno(), req1)
+s.close()
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+s.connect(addr)
+os.pwrite(s.fileno(), req2, 0)
+s.close()
+`
+	if err := os.WriteFile(probe, []byte(py), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command("python3", probe)
+	if err := cmd.Run(); err != nil {
+		t.Logf("http write probe (non-fatal): %v", err)
+	}
+
+	cancel()
+	err = <-errCh
+	if err != nil && err != context.Canceled {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"type":"http"`)) {
+		t.Fatalf("expected at least one http JSONL line, got:\n%s", b)
+	}
+	if !bytes.Contains(b, []byte(`"dport":80`)) {
+		t.Fatalf("expected http JSONL with dport 80, got:\n%s", b)
+	}
+}
+
 func TestRun_TLSClientHelloSNIJSONL(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root for BPF load")

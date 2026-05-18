@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **HTTP/1 sniff parity for write(2) family** — plaintext HTTP/1 requests on dport 80 are now captured when emitted via `write(2)`, `writev(2)`, `pwrite64(2)`, `pwritev(2)`, or `pwritev2(2)` on a connected TCP socket. Previously only the `sendto(2)` arm produced `http_events`; Go `net/http`, libcurl over plain HTTP, and most stdlib HTTP clients use `write(2)` and were silently missing from the HTTP JSONL stream. The new dispatch helper fetches the (tgid,fd) tuple once and runs both the TLS-ClientHello sniff and the HTTP/80 sniff from a single LRU lookup, keeping the verifier budget flat. (BG-04)
+
 ### Changed
 - refactor: consolidate four `*EmptyReason` digest helpers into `protocolEmptyReason`.
 
