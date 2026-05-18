@@ -42,7 +42,6 @@ jobs:
     name: golangci-lint
     if: github.event_name == 'push' || github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    continue-on-error: true
     permissions:
       contents: read
     steps:
@@ -53,6 +52,9 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Prepare BPF and generated Go
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
 
       - name: golangci-lint
         uses: golangci/golangci-lint-action@v8
