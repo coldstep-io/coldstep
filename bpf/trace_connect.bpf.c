@@ -129,25 +129,34 @@ struct {
 } tls_writev_multi_iovec_observed SEC(".maps");
 
 /*
- * PR-E (Theme C of the 2026-04-18 review): aggregate visibility counter for
- * IPv4 egress / file-descriptor write syscalls that Coldstep does NOT
- * currently sniff for HTTP/TLS payload. Real workloads (multi-message
- * sendmmsg(2), pwrite(2)/pwritev(2)/pwritev2(2) onto a TCP socket,
- * sendfile(2)/sendfile64(2) zero-copy push from a file fd to a socket fd,
- * splice(2) pipe→socket) all bypass the existing sendto/sendmsg/write/writev
- * arms. Without a counter, those syscalls are silently invisible. This single
- * counter increments once per such syscall observed (any process) so users
- * can decide whether the gap matters for their workload before requesting
- * full per-syscall sniff arms (which would require iov-vector reads + extra
- * verifier complexity for sendmmsg, and pipe→socket fd correlation for
- * sendfile/splice). Single map keeps the BPF program small and verifier-fast.
+ * BG-01 (supersedes PR-E aggregate counter): per-syscall partial-observe
+ * counter for IPv4 egress / fd-write syscalls that emit destination/length
+ * telemetry but no HTTP/TLS payload sniff. Operators can see *which* path
+ * fired, not just a total, so they can decide whether the gap matters for
+ * their workload before requesting full per-syscall sniff arms (would
+ * require iov-vector reads + extra verifier complexity for sendmmsg, and
+ * pipe->socket fd correlation for sendfile/splice).
+ *
+ * Slot layout:
+ *   0 = sendfile / sendfile64 (tracked via handle_udp_obs_emit_pt only)
+ *   1 = splice (same)
+ *   2 = sendmmsg (only first mmsghdr inspected; messages 2..N dropped)
+ *   3 = reserved (keeps max_entries a power of two for future use)
+ *
+ * PERCPU_ARRAY keeps the increment hot-path lock-free; userspace sums
+ * across CPUs via Lookup(key, &vals []u32). Slot count is bounded (4)
+ * for verifier-friendly constant-key access from the sys_enter dispatcher.
  */
+#define PARTIAL_OBS_SENDFILE 0
+#define PARTIAL_OBS_SPLICE   1
+#define PARTIAL_OBS_SENDMMSG 2
+
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__uint(max_entries, 1);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 4);
 	__type(key, __u32);
 	__type(value, __u32);
-} unobserved_egress_syscalls_observed SEC(".maps");
+} partial_egress_observed SEC(".maps");
 
 /*
  * io_uring_setup(2) detection counter. Any invocation of io_uring_setup is a
@@ -271,6 +280,21 @@ static __always_inline void note_io_uring_setup_observed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&io_uring_setup_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+/*
+ * note_partial_egress: bump the per-syscall partial-observe counter (BG-01).
+ * `slot` is a compile-time constant from the PARTIAL_OBS_* enum above; the
+ * verifier sees a bounded uint key and a single-slot PERCPU_ARRAY access.
+ */
+static __always_inline void note_partial_egress(int slot)
+{
+	__u32 k = (__u32)slot;
+	__u32 *v = bpf_map_lookup_elem(&partial_egress_observed, &k);
 
 	if (!v)
 		return;
@@ -463,6 +487,13 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		 * `mmsghdr.msg_hdr`); messages 2..N are not introspected.
 		 */
 
+		/*
+		 * BG-01: bump the per-syscall partial-observe counter before
+		 * delegating to the first-message handler so the count
+		 * reflects every sendmmsg call, including vlen==1.
+		 */
+		note_partial_egress(PARTIAL_OBS_SENDMMSG);
+
 		/* struct mmsghdr starts with struct msghdr */
 		return handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
 	}
@@ -487,6 +518,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 		if (!coldstep_tuple_dst_for_fd((__u32)di_ul, &sin_port, &sin_addr, &pt))
 			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
+		note_partial_egress(PARTIAL_OBS_SENDFILE);
 		return 0;
 	}
 
@@ -510,12 +542,15 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 		if (!coldstep_tuple_dst_for_fd((__u32)fd_out_ul, &sin_port, &sin_addr, &pt))
 			handle_udp_obs_emit_pt(pt, sin_port, sin_addr, len);
+		note_partial_egress(PARTIAL_OBS_SPLICE);
 		return 0;
 	}
 
 	/*
-	 * PR-E: `unobserved_egress_syscalls_observed` stays in the object for digest parity;
-	 * dispatch arms above cover today’s sniff paths (including pwrite* TLS).
+	 * BG-01 supersedes the PR-E aggregate counter: per-syscall partial-observe
+	 * counts (sendfile, splice, sendmmsg) are bumped inside their dispatch arms
+	 * above. Operators read partial_egress_observed[0..2] to see which path drove
+	 * the gap, instead of a single aggregate that hid the breakdown.
 	 */
 
 	/*

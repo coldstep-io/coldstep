@@ -12,6 +12,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - refactor: consolidate four `*EmptyReason` digest helpers into `protocolEmptyReason`.
+- **BPF telemetry — per-syscall partial-observe counters (BG-01).** Replaced the dead aggregate `unobserved_egress_syscalls_observed` ARRAY (no increment sites since the pwrite* sniff arms were added; always read 0) with a 4-slot `partial_egress_observed` PERCPU_ARRAY. Slots: `sendfile`/`sendfile64`, `splice`, and `sendmmsg` (first-message-only). The digest, triage ribbon, and telemetry JSON now surface each path independently (`sendfile_observed`, `splice_observed`, `sendmmsg_first_only`) so operators can see *which* syscall drove the visibility gap instead of a single total. Existing sniff paths are unchanged.
 
 ---
 

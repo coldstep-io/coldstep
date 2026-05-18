@@ -46,7 +46,9 @@ type runStats struct {
 	fsRingbufReserveFailuresN       int
 	udpSendmsgMultiIovecObservedN   int
 	tlsWritevMultiIovecObservedN    int
-	unobservedEgressSyscallsN       int
+	sendfileObservedN               int
+	spliceObservedN                 int
+	sendmmsgFirstOnlyN              int
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
@@ -273,16 +275,34 @@ func (s *runStats) tlsWritevMultiIovecObserved() int {
 	return s.tlsWritevMultiIovecObservedN
 }
 
-func (s *runStats) setUnobservedEgressSyscalls(n int) {
+// setPartialEgressObserved records the BG-01 per-syscall partial-observe
+// counters (sendfile, splice, sendmmsg first-only) snapshotted from BPF on
+// shutdown. The three slots replaced the aggregate UnobservedEgressSyscalls
+// counter so operators can see which path drove the gap.
+func (s *runStats) setPartialEgressObserved(sendfile, splice, sendmmsg int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.unobservedEgressSyscallsN = n
+	s.sendfileObservedN = sendfile
+	s.spliceObservedN = splice
+	s.sendmmsgFirstOnlyN = sendmmsg
 }
 
-func (s *runStats) unobservedEgressSyscalls() int {
+func (s *runStats) sendfileObserved() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.unobservedEgressSyscallsN
+	return s.sendfileObservedN
+}
+
+func (s *runStats) spliceObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.spliceObservedN
+}
+
+func (s *runStats) sendmmsgFirstOnly() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendmmsgFirstOnlyN
 }
 
 func (s *runStats) setIoUringSetupObserved(n int) {
@@ -422,7 +442,9 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		RingbufReserveFailuresTotal:    rbTotal,
 		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
 		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
-		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
+		SendfileObserved:               s.sendfileObservedN,
+		SpliceObserved:                 s.spliceObservedN,
+		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
