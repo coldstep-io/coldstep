@@ -21,6 +21,73 @@ import (
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 )
 
+// partialEgressTotal sums the BG-01 per-syscall partial-observe counters so the
+// headline-badge "Review" threshold can flip on any non-zero partial-observe
+// without the user having to scroll into the KPI table.
+func partialEgressTotal(in DigestInput) int {
+	return in.SendfileObserved + in.SpliceObserved + in.SendmmsgFirstOnly
+}
+
+// writeHeadlineBadge renders a one-line summary verdict immediately under the
+// `## Coldstep · …` header. Levels: 🚨 Alert, ⚠️ Review, ✅ Clean run. The badge
+// is a blockquote so it survives GitHub Job Summary's tight vertical budget
+// even when the rest of the digest is collapsed.
+func writeHeadlineBadge(b *strings.Builder, in DigestInput) {
+	mode := "detect"
+	if isBlockingDigestMode(in.DefendMode) {
+		mode = "defend"
+	}
+
+	bpfOK := true
+	for _, row := range in.BPF {
+		if !row.OK {
+			bpfOK = false
+			break
+		}
+	}
+
+	alert := (!in.CanaryPipelineOK && in.CanaryFailCount > 0) ||
+		in.BPFHeartbeatFailures > 0 ||
+		in.BPFMapIntegrityFailures > 0 ||
+		(len(in.BPF) > 0 && !bpfOK)
+
+	rbTotal := totalDetectRingbufReserveFailures(in)
+	review := rbTotal > 0 ||
+		in.UDPSendmsgMultiIovecObserved > 0 ||
+		in.TLSWritevMultiIovecObserved > 0 ||
+		in.SendmmsgMultiMessage > 0 ||
+		partialEgressTotal(in) > 0
+
+	var emoji, label string
+	switch {
+	case alert:
+		emoji, label = "🚨", "Alert"
+	case review:
+		emoji, label = "⚠️", "Review"
+	default:
+		emoji, label = "✅", "Clean run"
+	}
+
+	bpfNote := "BPF OK"
+	if !bpfOK {
+		bpfNote = "BPF degraded"
+	}
+	if len(in.BPF) == 0 {
+		bpfNote = "BPF status n/a"
+	}
+
+	parts := []string{
+		fmt.Sprintf("%s **%s**", emoji, label),
+		mode,
+		bpfNote,
+		fmt.Sprintf("%d exec", in.ExecTotal),
+		fmt.Sprintf("%d tcp", in.TCPTotal),
+	}
+	b.WriteString("> ")
+	b.WriteString(strings.Join(parts, " · "))
+	b.WriteString("\n\n")
+}
+
 func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	b.WriteString("### Triage\n\n")
 	b.WriteString("| Question | Answer |\n|:--|:--|\n")
@@ -49,10 +116,10 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if len(in.BPF) == 0 {
 		b.WriteString("| **BPF hooks** | *(no status rows)* |\n")
 	} else if bpfOK {
-		b.WriteString("| **BPF hooks** | **OK** — all reported probes loaded |\n")
+		b.WriteString("| **BPF hooks** | ✅ All probes OK |\n")
 	} else {
 		sort.Strings(badBPF)
-		b.WriteString(fmt.Sprintf("| **BPF hooks** | **Review** — degraded: %s |\n", sanitizeCell(strings.Join(badBPF, ", "))))
+		b.WriteString(fmt.Sprintf("| **BPF hooks** | 🚨 **Review** — degraded: %s |\n", sanitizeCell(strings.Join(badBPF, ", "))))
 	}
 
 	droppedTotal := 0
@@ -60,9 +127,9 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 		droppedTotal += v
 	}
 	if droppedTotal == 0 {
-		b.WriteString("| **JSONL decode drops** | **None** |\n")
+		b.WriteString("| **JSONL decode drops** | ✅ None |\n")
 	} else {
-		b.WriteString(fmt.Sprintf("| **JSONL decode drops** | **%d** total — see rollups below |\n", droppedTotal))
+		b.WriteString(fmt.Sprintf("| **JSONL decode drops** | ⚠️ **%d** total — see rollups below |\n", droppedTotal))
 	}
 
 	var gapParts []string
@@ -115,7 +182,7 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
 	}
 	if in.IoUringSetupObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("⚠ io_uring_setup (syscall-hook bypass class)=%d", in.IoUringSetupObserved))
+		gapParts = append(gapParts, fmt.Sprintf("⚠️ io_uring_setup (syscall-hook bypass class)=%d", in.IoUringSetupObserved))
 	}
 	if in.BPFAuditRingbufReserveFailures > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("bpf audit ringbuf reserve=%d", in.BPFAuditRingbufReserveFailures))
@@ -123,10 +190,8 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
 	}
-	if len(gapParts) == 0 {
-		b.WriteString("| **Capture gaps** | **None reported** (see footnotes for semantics) |\n")
-	} else {
-		b.WriteString(fmt.Sprintf("| **Capture gaps** | **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
+	if len(gapParts) > 0 {
+		b.WriteString(fmt.Sprintf("| **Capture gaps** | ⚠️ **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
 	}
 
 	if interp := truthfulnessInterpretation(in); interp != "" {
@@ -138,7 +203,6 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	}
 
 	b.WriteString("\n")
-	b.WriteString("<sub>Triage is for fast decisions; row-level detail stays in collapsible sections below and in JSONL.</sub>\n\n")
 }
 
 func writeHotEgressTable(b *strings.Builder, in DigestInput) {
@@ -174,65 +238,35 @@ func writeDetectProfileKPI(b *strings.Builder, in DigestInput) {
 	b.WriteString("| **detect profile** | standard |\n")
 }
 
-// BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
-func BuildDetectMarkdown(in DigestInput) string {
-	max := in.MaxRowsPerSection
-	if max <= 0 {
-		max = DefaultMaxRowsPerSection
-	}
-
-	var b strings.Builder
-	if isBlockingDigestMode(in.DefendMode) {
-		b.WriteString("## Coldstep · defend\n\n")
-		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Defend mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
-	} else {
-		b.WriteString("## Coldstep · detect\n\n")
-		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Detect-only: observe, do not block. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
-	}
-	writeTriageRibbon(&b, in)
-	writeHotEgressTable(&b, in)
+// writeKPITable emits the KPI rows ordered network → process → fs → health.
+// Ringbuf reserve / multi-iovec / partial-egress counters sit directly under
+// the metric they relate to instead of being scattered across the table.
+func writeKPITable(b *strings.Builder, in DigestInput) {
 	b.WriteString("### KPI\n\n")
 	b.WriteString("| Signal | Count |\n|:--|--:|\n")
-	writeDetectProfileKPI(&b, in)
-	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
-	if in.BPFAuditTotal > 0 {
-		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))
-	}
-	if in.BPFMapIntegrityFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **bpf_map_integrity_failures** | <font color=\"red\">%d</font> |\n", in.BPFMapIntegrityFailures))
-	}
-	if procForkKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
-	}
+	writeDetectProfileKPI(b, in)
+
+	// --- network ---
 	b.WriteString(fmt.Sprintf("| **tcp** | %d |\n", in.TCPTotal))
 	if in.Connect4TupleUpdateFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
 	}
-	if in.UDPRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures))
+	if in.ConnectRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **connect_events ringbuf reserve failures** | %d |\n", in.ConnectRingbufReserveFailures))
 	}
 	if in.DNSRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
 	}
-	if in.ConnectRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **connect_events ringbuf reserve failures** | %d |\n", in.ConnectRingbufReserveFailures))
+	if in.TCPDNSResponsesObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved))
 	}
-	if in.HTTPRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **http_events ringbuf reserve failures** | %d |\n", in.HTTPRingbufReserveFailures))
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString(fmt.Sprintf("| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead))
 	}
-	if in.TLSRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures))
-	}
-	if in.ExecRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **exec_events ringbuf reserve failures** | %d |\n", in.ExecRingbufReserveFailures))
-	}
-	if in.ForkRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **proc_fork_events ringbuf reserve failures** | %d |\n", in.ForkRingbufReserveFailures))
-	}
-	if in.FSRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **fs_events ringbuf reserve failures** | %d |\n", in.FSRingbufReserveFailures))
+
+	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures))
 	}
 	if in.UDPSendmsgMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
@@ -240,9 +274,23 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.SendmmsgMultiMessage > 0 {
 		b.WriteString(fmt.Sprintf("| **sendmmsg multi-message calls (msg[1..n] not introspected)** | %d |\n", in.SendmmsgMultiMessage))
 	}
-	if in.TLSWritevMultiIovecObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
+
+	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
+	if in.HTTPRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **http_events ringbuf reserve failures** | %d |\n", in.HTTPRingbufReserveFailures))
 	}
+
+	if tlsKPIVisible(in) {
+		b.WriteString(fmt.Sprintf("| **tls** | %d |\n", in.TLSTotal))
+		if in.TLSRingbufReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf("| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures))
+		}
+		if in.TLSWritevMultiIovecObserved > 0 {
+			b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
+		}
+	}
+
+	// BG-01 per-syscall partial-observe.
 	if in.SendfileObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **sendfile partial-observe (dest+len, no payload sniff)** | %d |\n", in.SendfileObserved))
 	}
@@ -253,10 +301,47 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(fmt.Sprintf("| **sendmmsg first-message-only (msgs 2..N not introspected)** | %d |\n", in.SendmmsgFirstOnly))
 	}
 	if in.IoUringSetupObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
+		b.WriteString(fmt.Sprintf("| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
+	}
+
+	// --- processes ---
+	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
+	if in.ExecRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **exec_events ringbuf reserve failures** | %d |\n", in.ExecRingbufReserveFailures))
+	}
+	if procForkKPIVisible(in) {
+		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
+		if in.ForkRingbufReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf("| **proc_fork_events ringbuf reserve failures** | %d |\n", in.ForkRingbufReserveFailures))
+		}
+	}
+	if in.BPFAuditTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))
 	}
 	if in.BPFAuditRingbufReserveFailures > 0 {
 		b.WriteString(fmt.Sprintf("| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures))
+	}
+
+	// --- filesystem ---
+	if fsKPIVisible(in) {
+		b.WriteString(fmt.Sprintf("| **fs_event** | %d |\n", in.FSTotal))
+		if in.FSRingbufReserveFailures > 0 {
+			b.WriteString(fmt.Sprintf("| **fs_events ringbuf reserve failures** | %d |\n", in.FSRingbufReserveFailures))
+		}
+	}
+
+	// --- decode/jsonl drops near the dropped-counter rollup ---
+	droppedTotal := 0
+	for _, v := range in.DroppedCounts {
+		droppedTotal += v
+	}
+	if droppedTotal > 0 {
+		b.WriteString(fmt.Sprintf("| **dropped events (decode/jsonl)** | %d |\n", droppedTotal))
+	}
+
+	// --- health (last) ---
+	if in.BPFMapIntegrityFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **bpf_map_integrity_failures** | <font color=\"red\">%d</font> |\n", in.BPFMapIntegrityFailures))
 	}
 	if in.CanaryFailCount > 0 {
 		status := "✅ OK"
@@ -272,78 +357,12 @@ func BuildDetectMarkdown(in DigestInput) string {
 	} else {
 		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
-	if in.TCPDNSResponsesObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved))
-	}
-	if in.TCPDNSSkippedShortRead > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead))
-	}
-	droppedTotal := 0
-	for _, v := range in.DroppedCounts {
-		droppedTotal += v
-	}
-	if droppedTotal > 0 {
-		b.WriteString(fmt.Sprintf("| **dropped events (decode/jsonl)** | %d |\n", droppedTotal))
-	}
-	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
-	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
-	if tlsKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **tls** | %d |\n", in.TLSTotal))
-	}
-	if fsKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **fs_event** | %d |\n", in.FSTotal))
-	}
-	b.WriteString("<sub>UDP KPI counts IPv4 sendto and sendmsg egress (first iovec length; destination from msg_name or connected socket cache). HTTP KPI counts cleartext HTTP/1 request bytes on sendto to destination port 80 only; https traffic appears as tcp connect events.")
-	if tlsKPIVisible(in) {
-		b.WriteString(" **tls** KPI counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).")
-	}
-	if procForkKPIVisible(in) {
-		b.WriteString(" **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).")
-	}
-	if fsKPIVisible(in) {
-		b.WriteString(" **fs_event** KPI counts high-signal filesystem operations (create, unlink, rename, chmod) observed via `openat`/`unlinkat`/`renameat2`/`fchmodat` syscalls when `COLDSTEP_FEATURE_GATES=fs_events=1`.")
-	}
-	if in.Connect4TupleUpdateFailures > 0 {
-		b.WriteString(" **connect4** row: BPF could not insert some `(tgid,fd)→tuple` entries (hash pressure); TCP connect ringbuf events are unchanged, but TLS ClientHello correlation may degrade.")
-	}
-	if in.UDPRingbufReserveFailures > 0 {
-		b.WriteString(" **udp_events** reserve failures indicate ringbuf pressure; some UDP egress may be unobserved.")
-	}
-	if in.DNSRingbufReserveFailures > 0 {
-		b.WriteString(" **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.")
-	}
-	if in.ConnectRingbufReserveFailures > 0 {
-		b.WriteString(" **connect_events** reserve failures indicate ringbuf pressure; some TCP connect telemetry may be missed.")
-	}
-	if in.HTTPRingbufReserveFailures > 0 {
-		b.WriteString(" **http_events** reserve failures indicate ringbuf pressure; some cleartext HTTP telemetry may be missed.")
-	}
-	if in.TLSRingbufReserveFailures > 0 {
-		b.WriteString(" **tls_events** reserve failures indicate ringbuf pressure; some TLS/SNI telemetry may be missed.")
-	}
-	if in.ExecRingbufReserveFailures > 0 {
-		b.WriteString(" **exec_events** reserve failures indicate ringbuf pressure; some exec telemetry may be missed.")
-	}
-	if in.ForkRingbufReserveFailures > 0 {
-		b.WriteString(" **proc_fork_events** reserve failures indicate ringbuf pressure; some fork/process-tree telemetry may be missed.")
-	}
-	if in.FSRingbufReserveFailures > 0 {
-		b.WriteString(" **fs_events** reserve failures indicate ringbuf pressure; some filesystem telemetry may be missed.")
-	}
-	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
-		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
-	}
-	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
-		b.WriteString(" **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
-	}
-	if in.IoUringSetupObserved > 0 {
-		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode (and may complicate observation). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).")
-	}
-	if in.TCPDNSSkippedShortRead > 0 {
-		b.WriteString(" **TCP DNS short reads** counts TCP read(2) returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.")
-	}
-	b.WriteString("</sub>\n\n")
+	b.WriteString("\n")
+}
 
+// writeRollups emits the policy-classification and dropped-event rollup lines.
+// Kept separate from writeKPITable so KPI stays one Markdown table.
+func writeRollups(b *strings.Builder, in DigestInput) {
 	if len(in.PolicyCounts) > 0 {
 		rollupLabel := "TCP / UDP / HTTP classification"
 		if tlsKPIVisible(in) {
@@ -371,6 +390,11 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(strings.Join(parts, " · "))
 		b.WriteString("\n\n")
 	}
+
+	droppedTotal := 0
+	for _, v := range in.DroppedCounts {
+		droppedTotal += v
+	}
 	if droppedTotal > 0 {
 		b.WriteString("**Dropped event counters**: ")
 		type kv struct {
@@ -397,8 +421,126 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString(strings.Join(parts, " · "))
 		b.WriteString("\n\n")
 	}
+}
 
+// writeRunInfo emits a compact 2-row table with the JSONL canonical-log path and
+// the userspace event-sequence range. Sits above the Technical details fold.
+func writeRunInfo(b *strings.Builder, in DigestInput) {
+	if in.JSONLPath == "" && (in.SeqFirst == 0 || in.SeqLast < in.SeqFirst) {
+		return
+	}
+	b.WriteString("### Run info\n\n")
+	b.WriteString("| Field | Value |\n|:--|:--|\n")
+	if in.JSONLPath != "" {
+		b.WriteString(fmt.Sprintf("| **Canonical log (JSONL)** | `%s` |\n", sanitizeCell(in.JSONLPath)))
+	}
+	if in.SeqFirst > 0 && in.SeqLast >= in.SeqFirst {
+		b.WriteString(fmt.Sprintf("| **Event sequence range (userspace)** | %d–%d |\n", in.SeqFirst, in.SeqLast))
+	}
+	b.WriteString("\n")
+}
+
+// writeTechnicalDetails folds the long-form KPI semantics, truncation note,
+// per-protocol caveats, and the BPF hook status table into a single `<details>`
+// block at the bottom of the digest.
+func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
+	b.WriteString("<details>\n<summary>Technical details — KPI semantics and capture notes</summary>\n\n")
+
+	b.WriteString("- **UDP KPI** counts IPv4 `sendto` and `sendmsg` egress (first iovec length; destination from `msg_name` or connected-socket cache).\n")
+	b.WriteString("- **HTTP KPI** counts cleartext HTTP/1 request bytes on `sendto` to destination port 80 only; HTTPS traffic appears as TCP connect events.\n")
+	if tlsKPIVisible(in) {
+		b.WriteString("- **tls KPI** counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).\n")
+	}
+	if procForkKPIVisible(in) {
+		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")
+	}
+	if fsKPIVisible(in) {
+		b.WriteString("- **fs_event KPI** counts high-signal filesystem operations (create, unlink, rename, chmod) observed via `openat`/`unlinkat`/`renameat2`/`fchmodat` syscalls when `COLDSTEP_FEATURE_GATES=fs_events=1`.\n")
+	}
+	if in.Connect4TupleUpdateFailures > 0 {
+		b.WriteString("- **connect4 map failures** indicate BPF could not insert some `(tgid,fd)→tuple` entries (hash pressure); TCP connect ringbuf events are unchanged, but TLS ClientHello correlation may degrade.\n")
+	}
+	if in.UDPRingbufReserveFailures > 0 {
+		b.WriteString("- **udp_events** reserve failures indicate ringbuf pressure; some UDP egress may be unobserved.\n")
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		b.WriteString("- **dns_events** reserve failures indicate ringbuf pressure; some DNS reply telemetry may be missed.\n")
+	}
+	if in.ConnectRingbufReserveFailures > 0 {
+		b.WriteString("- **connect_events** reserve failures indicate ringbuf pressure; some TCP connect telemetry may be missed.\n")
+	}
+	if in.HTTPRingbufReserveFailures > 0 {
+		b.WriteString("- **http_events** reserve failures indicate ringbuf pressure; some cleartext HTTP telemetry may be missed.\n")
+	}
+	if in.TLSRingbufReserveFailures > 0 {
+		b.WriteString("- **tls_events** reserve failures indicate ringbuf pressure; some TLS/SNI telemetry may be missed.\n")
+	}
+	if in.ExecRingbufReserveFailures > 0 {
+		b.WriteString("- **exec_events** reserve failures indicate ringbuf pressure; some exec telemetry may be missed.\n")
+	}
+	if in.ForkRingbufReserveFailures > 0 {
+		b.WriteString("- **proc_fork_events** reserve failures indicate ringbuf pressure; some fork/process-tree telemetry may be missed.\n")
+	}
+	if in.FSRingbufReserveFailures > 0 {
+		b.WriteString("- **fs_events** reserve failures indicate ringbuf pressure; some filesystem telemetry may be missed.\n")
+	}
+	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
+		b.WriteString("- **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with `iovlen>1`); only the first iovec is captured by the BPF probe.\n")
+	}
+	if in.SendmmsgMultiMessage > 0 {
+		b.WriteString("- **sendmmsg multi-message** counts `sendmmsg(2)` calls with `vlen>1` (multi-message batch); only the first `mmsghdr` is introspected today.\n")
+	}
+	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
+		b.WriteString("- **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.\n")
+	}
+	if in.IoUringSetupObserved > 0 {
+		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		b.WriteString("- **TCP DNS short reads** counts TCP `read(2)` returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.\n")
+	}
+
+	var trunc []string
+	if in.TruncatedExec {
+		trunc = append(trunc, "exec")
+	}
+	if in.TruncatedTCP {
+		trunc = append(trunc, "tcp")
+	}
+	if in.TruncatedUDP {
+		trunc = append(trunc, "udp")
+	}
+	if in.TruncatedHTTP {
+		trunc = append(trunc, "http")
+	}
+	if in.TruncatedTLS {
+		trunc = append(trunc, "tls")
+	}
+	if in.TruncatedProcessTree {
+		trunc = append(trunc, "proc_fork")
+	}
+	if in.TruncatedFS {
+		trunc = append(trunc, "fs_event")
+	}
+	if len(trunc) > 0 {
+		b.WriteString(fmt.Sprintf("- **Truncated sections:** %s — showing up to **%d** newest rows per section; totals in KPI are full counts.\n",
+			strings.Join(trunc, ", "), max))
+	} else {
+		b.WriteString(fmt.Sprintf("- **Row cap:** up to **%d** rows per section when activity exceeds the cap.\n", max))
+	}
+	b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets.\n")
+	if tlsKPIVisible(in) {
+		b.WriteString("- **TLS / SNI:** rows come from the first ClientHello-shaped buffer on supported `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/connected or explicit-`sockaddr` `sendto` paths after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
+	} else {
+		b.WriteString("- **HTTPS:** TLS payloads are not decrypted; enable `tls_sni=1` in `COLDSTEP_FEATURE_GATES` for optional ClientHello SNI hints.\n")
+	}
+	if procForkKPIVisible(in) {
+		b.WriteString("- **Process tree:** parent/child IDs come from `sched_process_fork`; correlation with TGID/exec is best-effort on shared runners.\n")
+	}
+
+	// BPF hook status table — moved out of the main body, Fix 5.
 	if len(in.BPF) > 0 {
+		b.WriteString("\n**BPF hook status**\n\n")
 		b.WriteString("| BPF hook | Status |\n|:--|:--|\n")
 		for _, row := range in.BPF {
 			st := "ok"
@@ -411,9 +553,35 @@ func BuildDetectMarkdown(in DigestInput) string {
 			}
 			b.WriteString(fmt.Sprintf("| `%s` | %s%s |\n", sanitizeCell(row.Name), st, detail))
 		}
-		b.WriteString("\n")
 	}
 
+	b.WriteString("\n</details>\n\n")
+}
+
+// BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
+func BuildDetectMarkdown(in DigestInput) string {
+	max := in.MaxRowsPerSection
+	if max <= 0 {
+		max = DefaultMaxRowsPerSection
+	}
+
+	var b strings.Builder
+	if isBlockingDigestMode(in.DefendMode) {
+		b.WriteString("## Coldstep · defend\n\n")
+		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
+		b.WriteString("<sub>Defend mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
+	} else {
+		b.WriteString("## Coldstep · detect\n\n")
+		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
+		b.WriteString("<sub>Detect-only: observe, do not block. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
+	}
+	writeHeadlineBadge(&b, in)
+	writeHotEgressTable(&b, in)
+	writeTriageRibbon(&b, in)
+	writeKPITable(&b, in)
+	writeRollups(&b, in)
+	// Marker: end of new writer chain; the legacy inline KPI / sub blob / standalone
+	// BPF hook table that used to live here is removed below this point.
 	if in.DefendMode != "" || in.DefendAllowlistSize > 0 || in.DefendDenyCount > 0 || in.DefendDenyReserveFailures > 0 || in.DefendFirstDeny != nil {
 		b.WriteString("### Defend\n\n")
 		b.WriteString("| Field | Value |\n|:--|:--|\n")
@@ -442,16 +610,6 @@ func BuildDetectMarkdown(in DigestInput) string {
 		}
 	}
 
-	procTreeEmptyReason := func(in DigestInput) string {
-		if in.ProcForkDegraded {
-			return "degraded hook"
-		}
-		if in.ProcForkReaderErrors > 0 {
-			return fmt.Sprintf("reader errors (%d)", in.ProcForkReaderErrors)
-		}
-		return "no events"
-	}
-
 	writeExec := func() {
 		b.WriteString("<details>\n<summary><strong>Exec (recent)</strong></summary>\n\n")
 		b.WriteString("| Time (UTC) | PID (TGID) | TID | Comm | Executable (BPF-capped) |\n|:--|--:|--:|:-|:-|\n")
@@ -468,7 +626,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 		b.WriteString("<details>\n<summary><strong>Process tree (recent)</strong></summary>\n\n")
 		b.WriteString("| Outline |\n|:-|\n")
 		if len(in.ProcessTreeLines) == 0 {
-			b.WriteString(fmt.Sprintf("| %s |\n", sanitizeCell(procTreeEmptyReason(in))))
+			b.WriteString(fmt.Sprintf("| %s |\n", sanitizeCell(protocolEmptyReason(in.ProcForkDegraded, in.ProcForkReaderErrors))))
 		} else {
 			for _, line := range in.ProcessTreeLines {
 				b.WriteString(fmt.Sprintf("| %s |\n", sanitizeCell(line)))
@@ -602,50 +760,8 @@ func BuildDetectMarkdown(in DigestInput) string {
 	writeTLS()
 	writeFS()
 
-	b.WriteString("### Footnotes\n\n")
-	if in.JSONLPath != "" {
-		b.WriteString(fmt.Sprintf("- **Canonical log (JSONL):** `%s` — append-only source of truth; Job Summary is a capped digest.\n", sanitizeCell(in.JSONLPath)))
-	}
-	if in.SeqFirst > 0 && in.SeqLast >= in.SeqFirst {
-		b.WriteString(fmt.Sprintf("- **Event sequence range (userspace):** %d–%d\n", in.SeqFirst, in.SeqLast))
-	}
-	var trunc []string
-	if in.TruncatedExec {
-		trunc = append(trunc, "exec")
-	}
-	if in.TruncatedTCP {
-		trunc = append(trunc, "tcp")
-	}
-	if in.TruncatedUDP {
-		trunc = append(trunc, "udp")
-	}
-	if in.TruncatedHTTP {
-		trunc = append(trunc, "http")
-	}
-	if in.TruncatedTLS {
-		trunc = append(trunc, "tls")
-	}
-	if in.TruncatedProcessTree {
-		trunc = append(trunc, "proc_fork")
-	}
-	if in.TruncatedFS {
-		trunc = append(trunc, "fs_event")
-	}
-	if len(trunc) > 0 {
-		b.WriteString(fmt.Sprintf("- **Truncated sections:** %s — showing up to **%d** newest rows per section; totals in KPI are full counts.\n",
-			strings.Join(trunc, ", "), max))
-	} else {
-		b.WriteString(fmt.Sprintf("- **Row cap:** up to **%d** rows per section when activity exceeds the cap.\n", max))
-	}
-	b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets.\n")
-	if tlsKPIVisible(in) {
-		b.WriteString("- **TLS / SNI:** rows come from the first ClientHello-shaped buffer on supported `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/connected or explicit-`sockaddr` `sendto` paths after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
-	} else {
-		b.WriteString("- **HTTPS:** TLS payloads are not decrypted; enable `tls_sni=1` in `COLDSTEP_FEATURE_GATES` for optional ClientHello SNI hints.\n")
-	}
-	if procForkKPIVisible(in) {
-		b.WriteString("- **Process tree:** parent/child IDs come from `sched_process_fork`; correlation with TGID/exec is best-effort on shared runners.\n")
-	}
+	writeRunInfo(&b, in)
+	writeTechnicalDetails(&b, in, max)
 
 	s := b.String()
 	if len(s) > summarySoftByteBudget {
