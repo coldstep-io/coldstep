@@ -219,11 +219,37 @@ func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects
 	return readUint32CounterMap(objs.TlsWritevMultiIovecObserved, "readTLSWritevMultiIovecObservedCount")
 }
 
-func readUnobservedEgressSyscallsCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
+// readPartialEgressCounts returns the BG-01 per-syscall partial-observe
+// counters (sendfile, splice, sendmmsg) summed across CPUs. Slots:
+//
+//	0 = sendfile / sendfile64
+//	1 = splice
+//	2 = sendmmsg (first-message-only observed)
+//
+// Reads each slot independently because PERCPU_ARRAY Lookup is per-key.
+func readPartialEgressCounts(objs *traceconnect.TraceconnectObjects) (sendfile, splice, sendmmsg int) {
+	if objs == nil || objs.PartialEgressObserved == nil {
+		return 0, 0, 0
 	}
-	return readUint32CounterMap(objs.UnobservedEgressSyscallsObserved, "readUnobservedEgressSyscallsCount")
+	read := func(key uint32, label string) int {
+		var vals []uint32
+		if err := objs.PartialEgressObserved.Lookup(&key, &vals); err != nil {
+			if errors.Is(err, ebpf.ErrKeyNotExist) {
+				return 0
+			}
+			slog.Warn("percpu uint32 map lookup failed", "helper", label, "err", err)
+			return 0
+		}
+		n := 0
+		for _, v := range vals {
+			n += int(v)
+		}
+		return n
+	}
+	sendfile = read(0, "readPartialEgressCounts(sendfile)")
+	splice = read(1, "readPartialEgressCounts(splice)")
+	sendmmsg = read(2, "readPartialEgressCounts(sendmmsg)")
+	return
 }
 
 func readIoUringSetupObservedCount(objs *traceconnect.TraceconnectObjects) int {

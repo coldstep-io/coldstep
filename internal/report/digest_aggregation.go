@@ -124,7 +124,7 @@ func totalDetectRingbufReserveFailures(in DigestInput) int {
 // (neutral wording; ringbuf pressure is its own triage row).
 func truthfulnessInterpretation(in DigestInput) string {
 	var parts []string
-	if in.UnobservedEgressSyscalls > 0 {
+	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
 		parts = append(parts, "Some egress syscalls are counter-only; JSONL is not a full traffic map (SECURITY.md, Guarantees vs best-effort).")
 	}
 	if in.IoUringSetupObserved > 0 {
