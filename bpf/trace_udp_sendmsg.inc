@@ -107,10 +107,18 @@ have_dest:
 
 			{
 				__u32 tls_len = iov1_len;
+				struct connect4_tuple st = {};
+				__u64 pt = use_tuple_pt ? tuple_pt
+							: bpf_get_current_pid_tgid();
 
 				if (tls_len > TLS_PAYLOAD_MAX)
 					tls_len = TLS_PAYLOAD_MAX;
-				try_emit_tls_clienthello(fd32, iov1.iov_base, tls_len);
+				st.in_use = 1;
+				st._pad = 0;
+				__builtin_memcpy(st.daddr, &sin_addr, sizeof(st.daddr));
+				__builtin_memcpy(st.dport, &sin_port, sizeof(st.dport));
+				try_emit_tls_clienthello_from_tuple(&st, iov1.iov_base,
+								    tls_len, pt);
 			}
 
 			if (sin_port == bpf_htons(80)) {
