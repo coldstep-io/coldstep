@@ -191,11 +191,11 @@ export async function startAgent(): Promise<void> {
 
   if (ioUringDisable) {
     try {
-      execFileSync('sudo', ['sysctl', '-w', 'io_uring_disabled=2'], { stdio: 'inherit' });
-      core.info('io_uring disabled via sysctl (io_uring_disabled=2) — closes io_uring eBPF bypass vector');
+      execFileSync('sudo', ['sysctl', '-w', 'kernel.io_uring_disabled=2'], { stdio: 'inherit' });
+      core.info('io_uring disabled via sysctl (kernel.io_uring_disabled=2) — closes io_uring eBPF bypass vector');
     } catch (e) {
       core.warning(
-        `io-uring-disable: sysctl io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); ` +
+        `io-uring-disable: sysctl kernel.io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); ` +
           'io_uring-based syscall bypasses may not be blocked on this runner',
       );
     }
