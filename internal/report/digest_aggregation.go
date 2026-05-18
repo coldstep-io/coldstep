@@ -148,42 +148,12 @@ func fsKPIVisible(in DigestInput) bool {
 	return in.FSGate
 }
 
-func tcpEmptyReason(in DigestInput) string {
-	if in.TCPDegradedHook {
+func protocolEmptyReason(degraded bool, errors int) string {
+	if degraded {
 		return "degraded hook"
 	}
-	if in.TCPReaderErrors > 0 {
-		return fmt.Sprintf("reader errors (%d)", in.TCPReaderErrors)
-	}
-	return "no events"
-}
-
-func udpEmptyReason(in DigestInput) string {
-	if in.UDPDegradedHook {
-		return "degraded hook"
-	}
-	if in.UDPReaderErrors > 0 {
-		return fmt.Sprintf("reader errors (%d)", in.UDPReaderErrors)
-	}
-	return "no events"
-}
-
-func httpEmptyReason(in DigestInput) string {
-	if in.HTTPDegradedHook {
-		return "degraded hook"
-	}
-	if in.HTTPReaderErrors > 0 {
-		return fmt.Sprintf("reader errors (%d)", in.HTTPReaderErrors)
-	}
-	return "no events"
-}
-
-func tlsEmptyReason(in DigestInput) string {
-	if in.TLSDegradedHook {
-		return "degraded hook"
-	}
-	if in.TLSReaderErrors > 0 {
-		return fmt.Sprintf("reader errors (%d)", in.TLSReaderErrors)
+	if errors > 0 {
+		return fmt.Sprintf("reader errors (%d)", errors)
 	}
 	return "no events"
 }
