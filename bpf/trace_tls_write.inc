@@ -144,9 +144,11 @@ static __always_inline int handle_write_obs_sys_enter(long id, unsigned long di_
 		if (dx_ul > 0 && si_ul) {
 			/*
 			 * Multi-iovec visibility: writev's `vlen` arg (dx_ul) > 1
-			 * means scatter/gather payload that we will only observe
-			 * for iov[0]. Counter wired to tlsWritevMultiIovecObservedN
-			 * in agent_linux.go.
+			 * means scatter/gather payload. The counter still fires to
+			 * surface the rate of fragmented writes; BG-02 added a
+			 * bounded peek at iov[1] below so the second segment is no
+			 * longer silently dropped from sniff. Counter wired to
+			 * tlsWritevMultiIovecObservedN in agent_linux.go.
 			 */
 			if (dx_ul > 1)
 				note_tls_writev_multi_iovec();
@@ -163,6 +165,29 @@ static __always_inline int handle_write_obs_sys_enter(long id, unsigned long di_
 					iov_len = TLS_PAYLOAD_MAX;
 				try_emit_buffer_sniff_from_tuple(&tup, iov0.iov_base, iov_len,
 								 pt);
+
+				/*
+				 * BG-02 (C1, bounded): some writev callers split the
+				 * record so iov[0] holds a small header (length prefix
+				 * or framing byte) and iov[1] holds the TLS
+				 * ClientHello body. The dispatch helper rejects
+				 * non-TLS / non-HTTP prefixes internally, so doing a
+				 * second bounded peek at iov[1] is safe — at worst the
+				 * fingerprint also fails on iov[1] and nothing is
+				 * emitted. Strictly capped at index 1; no iov walk.
+				 */
+				if (dx_ul >= 2) {
+					struct coldstep_iovec iov1 = {};
+					if (bpf_probe_read_user(&iov1, sizeof(iov1),
+						(void *)(si_ul + sizeof(struct coldstep_iovec))) == 0) {
+						__u32 iov1_len = coldstep_syscall_len_u32(iov1.iov_len);
+						if (iov1_len > TLS_PAYLOAD_MAX)
+							iov1_len = TLS_PAYLOAD_MAX;
+						try_emit_buffer_sniff_from_tuple(&tup,
+										 iov1.iov_base,
+										 iov1_len, pt);
+					}
+				}
 			}
 		}
 		return 0;

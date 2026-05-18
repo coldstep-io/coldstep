@@ -67,8 +67,11 @@ have_dest:
 	} else {
 		/*
 		 * Multi-iovec visibility: surface scatter/gather sendmsg calls so
-		 * operators see the rate of payload-fragmentation we don't observe past
-		 * iov[0]. Counter wired to udpSendmsgMultiIovecObservedN in agent_linux.go.
+		 * operators see the rate of payload-fragmentation. Counter still fires
+		 * so the historical metric stays comparable; BG-02 added the bounded
+		 * iov[1] peek below so iov[1] is no longer silently dropped from
+		 * TLS/HTTP sniff. Counter wired to udpSendmsgMultiIovecObservedN in
+		 * agent_linux.go.
 		 */
 		if (msg_iovlen > 1)
 			note_udp_sendmsg_multi_iovec();
@@ -84,6 +87,51 @@ have_dest:
 		handle_udp_obs_emit_pt(tuple_pt, sin_port, sin_addr, len);
 	else
 		handle_udp_obs_emit(sin_port, sin_addr, len);
+
+	/*
+	 * BG-02 (C1, bounded): historically only iov[0] length was extracted
+	 * for the udp_send_event; iov[1+] payloads were silently dropped from
+	 * TLS/HTTP sniff. When the sendmsg buffer is split (e.g. header in
+	 * iov[0], TLS ClientHello / HTTP request line in iov[1]) the protocol
+	 * fingerprint lives in iov[1]. Do one bounded peek at iov[1] and feed
+	 * it through the existing sniff helpers — both gate on their own
+	 * prefix tests, so non-matching payloads emit nothing. Strictly capped
+	 * at index 1: no unlimited iov walk.
+	 */
+	if (msg_iov && msg_iovlen >= 2) {
+		struct coldstep_iovec iov1 = {};
+
+		if (bpf_probe_read_user(&iov1, sizeof(iov1),
+					(void *)(msg_iov + sizeof(struct coldstep_iovec))) == 0) {
+			__u32 iov1_len = coldstep_syscall_len_u32(iov1.iov_len);
+
+			{
+				__u32 tls_len = iov1_len;
+
+				if (tls_len > TLS_PAYLOAD_MAX)
+					tls_len = TLS_PAYLOAD_MAX;
+				try_emit_tls_clienthello(fd32, iov1.iov_base, tls_len);
+			}
+
+			if (sin_port == bpf_htons(80)) {
+				__u32 http_len = iov1_len;
+
+				if (http_len > 0x00100000)
+					http_len = 0x00100000;
+				if (http_len >= 4 &&
+				    http_prefix_looks_like_request(iov1.iov_base, http_len)) {
+					if (use_tuple_pt)
+						handle_http_obs_emit_pt(tuple_pt, iov1.iov_base,
+									http_len, sin_port,
+									sin_addr);
+					else
+						handle_http_obs_emit(iov1.iov_base, http_len,
+								     sin_port, sin_addr);
+				}
+			}
+		}
+	}
+
 	return 0;
 }
 

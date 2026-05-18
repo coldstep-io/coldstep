@@ -303,9 +303,14 @@ static __always_inline void note_partial_egress(int slot)
 
 #include "trace_tcp_obs.inc"
 #include "trace_udp_obs.inc"
-#include "trace_udp_sendmsg.inc"
 #include "trace_http_obs.inc"
 #include "trace_tls_write.inc"
+/*
+ * trace_udp_sendmsg.inc must come last among these — its BG-02 iov[1] peek
+ * path calls try_emit_tls_clienthello (defined in trace_tls_write.inc) and
+ * handle_http_obs_emit{,_pt} (defined in trace_http_obs.inc).
+ */
+#include "trace_udp_sendmsg.inc"
 
 /*
  * Canary emit helper: reads canary_trigger[0]; if non-zero, reserves a
