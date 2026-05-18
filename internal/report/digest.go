@@ -96,6 +96,9 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.UDPSendmsgMultiIovecObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("udp multi-iovec=%d", in.UDPSendmsgMultiIovecObserved))
 	}
+	if in.SendmmsgMultiMessage > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("sendmmsg multi-message=%d", in.SendmmsgMultiMessage))
+	}
 	if in.TLSWritevMultiIovecObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("tls writev multi-iovec=%d", in.TLSWritevMultiIovecObserved))
 	}
@@ -227,6 +230,9 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 	if in.UDPSendmsgMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
+	}
+	if in.SendmmsgMultiMessage > 0 {
+		b.WriteString(fmt.Sprintf("| **sendmmsg multi-message calls (msg[1..n] not introspected)** | %d |\n", in.SendmmsgMultiMessage))
 	}
 	if in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))

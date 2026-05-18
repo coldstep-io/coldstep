@@ -168,6 +168,11 @@ type DigestInput struct {
 	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
 	UDPSendmsgMultiIovecObserved int
 	TLSWritevMultiIovecObserved  int
+	// SendmmsgMultiMessage counts sendmmsg(2) calls with vlen > 1 (BG-03).
+	// Distinct from UDPSendmsgMultiIovecObserved (which is per-message iovec
+	// fragmentation): this axis is the number of mmsghdr entries, where BPF
+	// only introspects the first so messages 2..N are silently uncaptured.
+	SendmmsgMultiMessage int
 	// UnobservedEgressSyscalls counts IPv4-egress / fd-write syscalls (sendmmsg,
 	// sendfile, sendfile64, splice, etc.) not fully covered by HTTP/TLS sniff arms (PR-E).
 	// pwrite64/pwritev/pwritev2 share the TLS ClientHello path with write/writev when tuple-correlated.

@@ -136,6 +136,7 @@ func buildDigestInput(
 		FSRingbufReserveFailures:       stats.fsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
+		SendmmsgMultiMessage:           stats.sendmmsgMultiMessageObserved(),
 		UnobservedEgressSyscalls:       stats.unobservedEgressSyscalls(),
 		IoUringSetupObserved:           stats.ioUringSetupObserved(),
 		CanaryPipelineOK:               canarySnap.pipelineOK,

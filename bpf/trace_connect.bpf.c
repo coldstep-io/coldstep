@@ -128,6 +128,22 @@ struct {
 } tls_writev_multi_iovec_observed SEC(".maps");
 
 /*
+ * BG-03 (Phase D of 2026-05-09 BPF features plan): distinct counter for
+ * sendmmsg(2) calls with vlen > 1. The `udp_sendmsg_multi_iovec_observed`
+ * counter named-by-design tracks multi-iovec (per-message msg_iovlen > 1).
+ * Multi-message (vlen > 1) is a separate axis: one syscall, many mmsghdr
+ * entries — BPF only introspects the first one, so messages 2..N are
+ * silently invisible. PERCPU_ARRAY avoids cross-CPU contention on the
+ * increment; userspace sums the slots.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} sendmmsg_multi_message_observed SEC(".maps");
+
+/*
  * PR-E (Theme C of the 2026-04-18 review): aggregate visibility counter for
  * IPv4 egress / file-descriptor write syscalls that Coldstep does NOT
  * currently sniff for HTTP/TLS payload. Real workloads (multi-message
@@ -260,6 +276,16 @@ static __always_inline void note_tls_writev_multi_iovec(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&tls_writev_multi_iovec_observed, &k);
+
+	if (!v)
+		return;
+	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_sendmmsg_multi_message(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&sendmmsg_multi_message_observed, &k);
 
 	if (!v)
 		return;
@@ -463,7 +489,17 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		 */
 
 		/* struct mmsghdr starts with struct msghdr */
-		return handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
+		int rc = handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
+
+		/*
+		 * BG-03: count multi-message sendmmsg calls separately from
+		 * multi-iovec. `vlen_ul > 1` means messages 2..N exist but are
+		 * not introspected (BPF only walks the first mmsghdr).
+		 */
+		if (vlen_ul > 1)
+			note_sendmmsg_multi_message();
+
+		return rc;
 	}
 
 	if (id == (long)COLDSTEP_NR_SENDFILE) {

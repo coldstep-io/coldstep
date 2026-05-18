@@ -331,6 +331,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
 				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
 				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
+				stats.setSendmmsgMultiMessageObserved(readSendmmsgMultiMessageCount(syscallObjs))
 				stats.setUnobservedEgressSyscalls(readUnobservedEgressSyscallsCount(syscallObjs))
 				stats.setIoUringSetupObserved(readIoUringSetupObservedCount(syscallObjs))
 			}

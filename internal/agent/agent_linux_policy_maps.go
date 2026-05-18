@@ -220,6 +220,13 @@ func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects
 	return readUint32CounterMap(objs.TlsWritevMultiIovecObserved, "readTLSWritevMultiIovecObservedCount")
 }
 
+func readSendmmsgMultiMessageCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32PerCPUArraySum(objs.SendmmsgMultiMessageObserved, "sendmmsg_multi_message_observed")
+}
+
 func readUnobservedEgressSyscallsCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0

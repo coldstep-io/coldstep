@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added
+- BG-03: `sendmmsg_multi_message_observed` counter tracks NR_SENDMMSG calls with vlen>1 (separate from multi-iovec counter).
+
+---
+
 ## [v0.2.4] — 2025-05-16
 
 ### Fixed

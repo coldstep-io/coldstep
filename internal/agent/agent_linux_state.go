@@ -46,6 +46,7 @@ type runStats struct {
 	fsRingbufReserveFailuresN       int
 	udpSendmsgMultiIovecObservedN   int
 	tlsWritevMultiIovecObservedN    int
+	sendmmsgMultiMessageObservedN   int
 	unobservedEgressSyscallsN       int
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
@@ -273,6 +274,18 @@ func (s *runStats) tlsWritevMultiIovecObserved() int {
 	return s.tlsWritevMultiIovecObservedN
 }
 
+func (s *runStats) setSendmmsgMultiMessageObserved(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sendmmsgMultiMessageObservedN = n
+}
+
+func (s *runStats) sendmmsgMultiMessageObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendmmsgMultiMessageObservedN
+}
+
 func (s *runStats) setUnobservedEgressSyscalls(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -422,6 +435,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		RingbufReserveFailuresTotal:    rbTotal,
 		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
 		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
+		SendmmsgMultiMessage:           s.sendmmsgMultiMessageObservedN,
 		UnobservedEgressSyscalls:       s.unobservedEgressSyscallsN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
