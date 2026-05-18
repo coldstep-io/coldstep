@@ -161,9 +161,6 @@ func normalizeCompositeMode(raw string) (string, error) {
 	if mode == "" {
 		mode = "detect"
 	}
-	if mode == "enforce" {
-		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
-	}
 	if mode != "detect" && mode != "defend" {
 		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
 	}
