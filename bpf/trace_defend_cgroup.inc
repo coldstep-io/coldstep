@@ -1,46 +1,16 @@
 /*
- * SUPERSEDED — Phase 2.3 (SIMPLIFICATION_PLAN.md). The active source is now
- * bpf/trace_defend_all.bpf.c, which includes bpf/trace_defend_cgroup.inc for
- * this content alongside the LSM section. This file is retained for one
- * release as a reference for the standalone cgroup translation unit; no
- * Go package generates from it. Delete in the follow-up cleanup PR.
+ * Cgroup egress defend section of bpf/trace_defend_all.bpf.c.
+ * IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`); IPv6 not supported.
  *
- * cgroup egress defend for mode: defend — IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`).
- * IPv6 is not supported. Loaded as a separate BPF collection from syscall observability programs.
+ * Maps in this section use bare names (no prefix): deny_events,
+ * deny_reserve_failures, defend_cfg, allowed_ipv4, ignored_ipv4_lpm.
+ * Policy helpers from defend_policy.inc are renamed to cg_* so the LSM
+ * section can declare lsm_* equivalents in the same translation unit.
+ *
+ * The combined .bpf.c provides vmlinux/BPF helpers, LICENSE, shared
+ * #defines (IPPROTO_*, AF_INET, COLDSTEP_*), the deny_event _Static_assert,
+ * and dns_cache.h (allowed_domains + dns_cache) before including this file.
  */
-#include "vmlinux.h"
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
-#include <bpf/bpf_core_read.h>
-#include "defend_lpm_key.h"
-#include "dns_cache.h"
-#include "deny_event.h"
-
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
-
-#ifndef IPPROTO_TCP
-#define IPPROTO_TCP 6
-#endif
-
-#ifndef IPPROTO_UDP
-#define IPPROTO_UDP 17
-#endif
-
-#ifndef AF_INET
-#define AF_INET 2
-#endif
-
-#define COLDSTEP_DEFEND_KEY_MODE 0
-#define COLDSTEP_DEFEND_MODE_DETECT 0
-#define COLDSTEP_DEFEND_MODE_DEFEND 1
-
-#define COLDSTEP_PROTO_TCP 1
-#define COLDSTEP_PROTO_UDP 2
-
-#define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
-
-_Static_assert(sizeof(struct deny_event) == 46,
-	       "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -80,6 +50,11 @@ struct {
 	__type(value, __u8);
 } ignored_ipv4_lpm SEC(".maps");
 
+#define defense_enabled cg_defense_enabled
+#define dst_is_allowlisted cg_dst_is_allowlisted
+#define dst_in_ignored cg_dst_in_ignored
+#define note_deny_ring_reserve_failed cg_note_deny_ring_reserve_failed
+#define emit_deny_event_ipv4 cg_emit_deny_event_ipv4
 #define CS_DEF_RB_DENY deny_events
 #define CS_DEF_PC_DENY_FAIL deny_reserve_failures
 #define CS_DEF_ARR_DEFEND_CFG defend_cfg
@@ -91,8 +66,13 @@ struct {
 #undef CS_DEF_ARR_DEFEND_CFG
 #undef CS_DEF_TRIE_ALLOWED
 #undef CS_DEF_TRIE_IGNORED
+#undef defense_enabled
+#undef dst_is_allowlisted
+#undef dst_in_ignored
+#undef note_deny_ring_reserve_failed
+#undef emit_deny_event_ipv4
 
-static __always_inline __u8 protocol_from_sock_ctx(struct bpf_sock_addr *ctx)
+static __always_inline __u8 cg_protocol_from_sock_ctx(struct bpf_sock_addr *ctx)
 {
 	if (ctx->protocol == IPPROTO_UDP)
 		return COLDSTEP_PROTO_UDP;
@@ -106,18 +86,18 @@ static __always_inline int defend_cgroup_sock_addr_ipv4(struct bpf_sock_addr *ct
 {
 	__be32 daddr = (__be32)ctx->user_ip4;
 	__be16 dport = (__be16)ctx->user_port;
-	__u8 protocol = protocol_from_sock_ctx(ctx);
+	__u8 protocol = cg_protocol_from_sock_ctx(ctx);
 	__u8 addr4[4];
 
-	if (!defense_enabled())
+	if (!cg_defense_enabled())
 		return 1;
-	if (dst_in_ignored(daddr))
+	if (cg_dst_in_ignored(daddr))
 		return 1;
-	if (dst_is_allowlisted(daddr))
+	if (cg_dst_is_allowlisted(daddr))
 		return 1;
 
 	__builtin_memcpy(addr4, &daddr, sizeof(addr4));
-	emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	cg_emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 	return 0;
 }
 

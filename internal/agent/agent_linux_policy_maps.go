@@ -18,14 +18,13 @@ import (
 
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
+	"github.com/coldstep-io/coldstep/internal/bpf/defend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracedefend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracelsmdefend"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -150,7 +149,7 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	return n
 }
 
-func readDenyReserveFailureCount(objs *tracedefend.TracedefendObjects) int {
+func readDenyReserveFailureCount(objs *defend.DefendObjects) int {
 	if objs == nil {
 		return 0
 	}
@@ -269,7 +268,7 @@ func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
 	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
 }
 
-func readLSMDenyReserveFailureCount(objs *tracelsmdefend.TracelsmdefendObjects) int {
+func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
 	if objs == nil {
 		return 0
 	}
@@ -299,9 +298,9 @@ func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *
 	return plan, nil
 }
 
-func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("tracelsmdefend objects are required for defend mode")
+		return 0, 0, fmt.Errorf("defend objects are required for LSM defend mode")
 	}
 	keyMode := uint32(0)
 	modeDefend := uint32(1)
@@ -340,9 +339,9 @@ func loadLSMDefendMaps(objs *tracelsmdefend.TracelsmdefendObjects, compiled poli
 // are still programmed individually but with prefixlen=32. Literal CIDR
 // entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
 // single LPM key and cover every address inside the range.
-func loadDefendMaps(objs *tracedefend.TracedefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("tracedefend objects are required for defend mode")
+		return 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
 	}
 	keyMode := uint32(0)
 	modeDefend := uint32(1)
@@ -384,7 +383,7 @@ func loadDefendMaps(objs *tracedefend.TracedefendObjects, compiled policy.Compil
 // are the prefix length in CPU/little-endian order (BPF_MAP_TYPE_LPM_TRIE
 // reads it as a u32) and bytes [4:8] are the network address in network byte
 // order. Don't reorder fields without also updating the BPF `struct ns_lpm4_key`
-// definition in bpf/trace_defend.bpf.c — they share wire format.
+// definition in bpf/defend_lpm_key.h — they share wire format.
 type allowedLPMPlan struct {
 	singleIPKeys [][8]byte
 	cidrKeys     [][8]byte

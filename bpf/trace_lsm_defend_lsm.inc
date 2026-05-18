@@ -1,51 +1,16 @@
 /*
- * SUPERSEDED — Phase 2.3 (SIMPLIFICATION_PLAN.md). The active source is now
- * bpf/trace_defend_all.bpf.c, which includes bpf/trace_lsm_defend_lsm.inc
- * for this content alongside the cgroup section. This file is retained for
- * one release as a reference for the standalone LSM translation unit; no
- * Go package generates from it. Delete in the follow-up cleanup PR.
+ * LSM defend section of bpf/trace_defend_all.bpf.c.
+ * IPv4 only (`lsm/socket_connect`, `lsm/socket_sendmsg`).
  *
- * BPF LSM defend for mode: defend — IPv4 only (socket_connect, socket_sendmsg).
- * Provides robust defense by hooking into the Linux Security Module (LSM) framework.
+ * Maps in this section carry the lsm_ prefix to coexist with the cgroup
+ * section's bare-named maps in the same translation unit. Policy helpers
+ * from defend_policy.inc are renamed to lsm_*.
+ *
+ * The combined .bpf.c provides vmlinux/BPF helpers, LICENSE, shared
+ * #defines (IPPROTO_*, AF_INET, EPERM, COLDSTEP_*), the deny_event
+ * _Static_assert, trace_connect_obs.h (read_ipv4_sockaddr for the sendmsg
+ * explicit-destination path), and dns_cache.h before including this file.
  */
-#include "vmlinux.h"
-#include <bpf/bpf_helpers.h>
-#include <bpf/bpf_tracing.h>
-#include <bpf/bpf_core_read.h>
-#include "trace_connect_obs.h"
-#include "defend_lpm_key.h"
-#include "dns_cache.h"
-#include "deny_event.h"
-
-char LICENSE[] SEC("license") = "Dual BSD/GPL";
-
-#ifndef IPPROTO_TCP
-#define IPPROTO_TCP 6
-#endif
-
-#ifndef IPPROTO_UDP
-#define IPPROTO_UDP 17
-#endif
-
-#ifndef AF_INET
-#define AF_INET 2
-#endif
-
-#ifndef EPERM
-#define EPERM 1
-#endif
-
-#define COLDSTEP_DEFEND_KEY_MODE 0
-#define COLDSTEP_DEFEND_MODE_DETECT 0
-#define COLDSTEP_DEFEND_MODE_DEFEND 1
-
-#define COLDSTEP_PROTO_TCP 1
-#define COLDSTEP_PROTO_UDP 2
-
-#define COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED 1
-
-_Static_assert(sizeof(struct deny_event) == 46,
-	       "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
@@ -82,6 +47,11 @@ struct {
 	__type(value, __u8);
 } lsm_ignored_ipv4_lpm SEC(".maps");
 
+#define defense_enabled lsm_defense_enabled
+#define dst_is_allowlisted lsm_dst_is_allowlisted
+#define dst_in_ignored lsm_dst_in_ignored
+#define note_deny_ring_reserve_failed lsm_note_deny_ring_reserve_failed
+#define emit_deny_event_ipv4 lsm_emit_deny_event_ipv4
 #define CS_DEF_RB_DENY lsm_deny_events
 #define CS_DEF_PC_DENY_FAIL lsm_deny_reserve_failures
 #define CS_DEF_ARR_DEFEND_CFG lsm_defend_cfg
@@ -93,6 +63,11 @@ struct {
 #undef CS_DEF_ARR_DEFEND_CFG
 #undef CS_DEF_TRIE_ALLOWED
 #undef CS_DEF_TRIE_IGNORED
+#undef defense_enabled
+#undef dst_is_allowlisted
+#undef dst_in_ignored
+#undef note_deny_ring_reserve_failed
+#undef emit_deny_event_ipv4
 
 /*
  * LSM hooks return 0 to allow, -EPERM to deny.
@@ -100,7 +75,7 @@ struct {
 SEC("lsm/socket_connect")
 int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, int addrlen)
 {
-	if (!defense_enabled())
+	if (!lsm_defense_enabled())
 		return 0;
 	if (!address)
 		return 0;
@@ -130,14 +105,14 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 	bpf_probe_read_kernel(&daddr, sizeof(daddr), &addr4->sin_addr.s_addr);
 	bpf_probe_read_kernel(&dport, sizeof(dport), &addr4->sin_port);
 
-	if (dst_in_ignored(daddr))
+	if (lsm_dst_in_ignored(daddr))
 		return 0;
-	if (dst_is_allowlisted(daddr))
+	if (lsm_dst_is_allowlisted(daddr))
 		return 0;
 
 	__u8 addr_bytes[4];
 	__builtin_memcpy(addr_bytes, &daddr, sizeof(addr_bytes));
-	emit_deny_event_ipv4(proto, addr_bytes, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	lsm_emit_deny_event_ipv4(proto, addr_bytes, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 
 	return -EPERM;
 }
@@ -145,7 +120,7 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 SEC("lsm/socket_sendmsg")
 int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int size)
 {
-	if (!defense_enabled())
+	if (!lsm_defense_enabled())
 		return 0;
 
 	if (!msg)
@@ -155,7 +130,8 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	 * H-01 / M-04 (BPF Deep Audit, 2026-05-01): Connected TCP/UDP commonly uses
 	 * sendmsg with NULL msg_name — derive IPv4 peer from sock_common when absent.
 	 * When msg_name is set, read_ipv4_sockaddr(msg_name) honors short namelen.
-	 * Cgroup sendmsg4 (separate object) complements this path on kernels with cgroup BPF.
+	 * Cgroup sendmsg4 (combined into the same defend object) complements this
+	 * path on kernels with cgroup BPF.
 	 */
 
 	struct sock *sk = NULL;
@@ -194,14 +170,14 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 			return 0;
 	}
 
-	if (dst_in_ignored(daddr))
+	if (lsm_dst_in_ignored(daddr))
 		return 0;
-	if (dst_is_allowlisted(daddr))
+	if (lsm_dst_is_allowlisted(daddr))
 		return 0;
 
 	__u8 addr_bytes[4];
 	__builtin_memcpy(addr_bytes, &daddr, sizeof(addr_bytes));
-	emit_deny_event_ipv4(proto, addr_bytes, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	lsm_emit_deny_event_ipv4(proto, addr_bytes, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
 
 	return -EPERM;
 }
