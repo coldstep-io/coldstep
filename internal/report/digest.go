@@ -99,8 +99,14 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 	if in.TLSWritevMultiIovecObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("tls writev multi-iovec=%d", in.TLSWritevMultiIovecObserved))
 	}
-	if in.UnobservedEgressSyscalls > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("unobserved egress syscalls=%d", in.UnobservedEgressSyscalls))
+	if in.SendfileObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("sendfile partial-observe=%d", in.SendfileObserved))
+	}
+	if in.SpliceObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("splice partial-observe=%d", in.SpliceObserved))
+	}
+	if in.SendmmsgFirstOnly > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("sendmmsg first-message-only=%d", in.SendmmsgFirstOnly))
 	}
 	if in.TCPDNSSkippedShortRead > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
@@ -231,8 +237,14 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
 	}
-	if in.UnobservedEgressSyscalls > 0 {
-		b.WriteString(fmt.Sprintf("| **unobserved egress syscalls (sendmmsg/sendfile/splice)** | %d |\n", in.UnobservedEgressSyscalls))
+	if in.SendfileObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **sendfile partial-observe (dest+len, no payload sniff)** | %d |\n", in.SendfileObserved))
+	}
+	if in.SpliceObserved > 0 {
+		b.WriteString(fmt.Sprintf("| **splice partial-observe (dest+len, no payload sniff)** | %d |\n", in.SpliceObserved))
+	}
+	if in.SendmmsgFirstOnly > 0 {
+		b.WriteString(fmt.Sprintf("| **sendmmsg first-message-only (msgs 2..N not introspected)** | %d |\n", in.SendmmsgFirstOnly))
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **⚠ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
@@ -315,8 +327,8 @@ func BuildDetectMarkdown(in DigestInput) string {
 	if in.UDPSendmsgMultiIovecObserved > 0 || in.TLSWritevMultiIovecObserved > 0 {
 		b.WriteString(" **multi-iovec** counters surface scatter/gather syscalls (`sendmsg`/`writev` with vlen>1); only the first iovec is captured by the BPF probe.")
 	}
-	if in.UnobservedEgressSyscalls > 0 {
-		b.WriteString(" **unobserved egress syscalls** counts IPv4 egress / fd-write paths (e.g. `sendmmsg`, `sendfile`, `splice`) that bypass Coldstep's HTTP/TLS sniff arms; non-zero means real traffic was missed by the sniff layer. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
+	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
+		b.WriteString(" **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.")
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(" **⚠ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode (and may complicate observation). If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).")

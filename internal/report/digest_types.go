@@ -168,11 +168,19 @@ type DigestInput struct {
 	// to gauge how much UDP sendmsg / TLS writev traffic is partially observed.
 	UDPSendmsgMultiIovecObserved int
 	TLSWritevMultiIovecObserved  int
-	// UnobservedEgressSyscalls counts IPv4-egress / fd-write syscalls (sendmmsg,
-	// sendfile, sendfile64, splice, etc.) not fully covered by HTTP/TLS sniff arms (PR-E).
-	// pwrite64/pwritev/pwritev2 share the TLS ClientHello path with write/writev when tuple-correlated.
-	// Non-zero indicates Coldstep's observability has a real-workload gap.
-	UnobservedEgressSyscalls int
+	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
+	// per-syscall partial-observe counters (supersedes the PR-E aggregate
+	// `UnobservedEgressSyscalls`). Each counts a path that emits dest/length
+	// telemetry but no HTTP/TLS payload sniff:
+	//   - SendfileObserved:   sendfile(2) / sendfile64(2)
+	//   - SpliceObserved:     splice(2)
+	//   - SendmmsgFirstOnly:  sendmmsg(2) — only the first mmsghdr is inspected;
+	//                         messages 2..N are not introspected.
+	// Non-zero values mean the named syscall fired in the run; operators can
+	// see which path drove the gap, not just a total.
+	SendfileObserved  int
+	SpliceObserved    int
+	SendmmsgFirstOnly int
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
 	// dispatch arm. Non-zero means some workload attempted async I/O setup;
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.

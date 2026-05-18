@@ -59,7 +59,6 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			{"tls_agent_cfg", 1},
 			{"udp_sendmsg_multi_iovec_observed", 4},
 			{"tls_writev_multi_iovec_observed", 4},
-			{"unobserved_egress_syscalls_observed", 4},
 			{"io_uring_setup_observed", 4},
 			{"canary_trigger", 8},
 		}
@@ -105,6 +104,25 @@ func TestTraceconnectMapShapes(t *testing.T) {
 				t.Errorf("%s unexpected shape MaxEntries=%d KeySize=%d ValueSize=%d",
 					name, ms.MaxEntries, ms.KeySize, ms.ValueSize)
 			}
+		}
+	})
+
+	t.Run("partial_egress_observed is a 4-slot PERCPU_ARRAY (BG-01)", func(t *testing.T) {
+		ms, ok := spec.Maps["partial_egress_observed"]
+		if !ok {
+			t.Fatal("map partial_egress_observed not found in CollectionSpec")
+		}
+		if ms.Type != ebpf.PerCPUArray {
+			t.Errorf("partial_egress_observed type = %v, want ebpf.PerCPUArray", ms.Type)
+		}
+		if ms.MaxEntries != 4 {
+			t.Errorf("partial_egress_observed MaxEntries = %d, want 4", ms.MaxEntries)
+		}
+		if ms.KeySize != 4 {
+			t.Errorf("partial_egress_observed KeySize = %d, want 4", ms.KeySize)
+		}
+		if ms.ValueSize != 4 {
+			t.Errorf("partial_egress_observed ValueSize = %d, want 4", ms.ValueSize)
 		}
 	})
 }
