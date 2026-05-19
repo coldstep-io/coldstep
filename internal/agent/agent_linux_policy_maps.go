@@ -583,7 +583,10 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	dstIP := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
 	dst := dstIP.String()
-	comm := string(bytes.TrimRight(commb[:], "\x00"))
+	// P1-5: sanitize attacker-controlled comm before it lands in JSONL — a
+	// blocked process whose argv[0] embeds newline / control bytes must not
+	// be able to forge an extra record in the event log.
+	comm := telemetry.SanitizeField(string(bytes.TrimRight(commb[:], "\x00")), 16)
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	matchKind := "unknown"
 	if dns != nil && dns.Lookup(dstIP) != "" {
