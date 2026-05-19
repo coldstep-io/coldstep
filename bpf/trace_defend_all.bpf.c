@@ -24,6 +24,7 @@
 #include <bpf/bpf_endian.h>
 #include "trace_connect_obs.h"
 #include "defend_lpm_key.h"
+#include "defend_lpm_v6_key.h"
 #include "dns_cache.h"
 #include "deny_event.h"
 
@@ -39,6 +40,10 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
 #ifndef AF_INET
 #define AF_INET 2
+#endif
+
+#ifndef AF_INET6
+#define AF_INET6 10
 #endif
 
 #ifndef EPERM

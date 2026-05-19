@@ -201,12 +201,24 @@ type DigestInput struct {
 	SpliceObserved    int
 	SendmmsgFirstOnly int
 	// IPv6ConnectObserved / IPv6SendmsgObserved count non-loopback IPv6
-	// egress attempts observed by the P0-1 Phase 1 cgroup/connect6 and
-	// cgroup/sendmsg6 hooks. coldstep defend mode is IPv4-only — non-zero
-	// values mean traffic escaped enforcement entirely; the triage table
-	// surfaces this as ⚠️ in detect mode and 🚨 in defend mode.
+	// egress attempts observed by the cgroup/connect6 and cgroup/sendmsg6
+	// hooks. Under P2-1 Phase 2 these hooks enforce in defend mode (LPM
+	// trie lookup against allowed_ipv6). In detect mode non-zero values
+	// remain a visibility row (no enforcement); in defend mode the digest
+	// pivots on DefendIPv6AllowlistSize — non-zero means traffic was gated
+	// by an explicit AAAA-resolved allowlist, zero means defend is in a
+	// pure block-all IPv6 posture.
 	IPv6ConnectObserved uint32
 	IPv6SendmsgObserved uint32
+	// DefendIPv6AllowlistSize is the number of /128 entries programmed
+	// into the BPF allowed_ipv6 LPM trie at agent startup. Used by the
+	// digest to distinguish two Phase 2 defend postures:
+	//   - allowlist > 0: ✅ blocked (AAAA-resolved entries gating IPv6)
+	//   - allowlist == 0: ⚠️ pure block-all (all non-loopback/non-link-local
+	//     IPv6 denied — works, but operators should know their config has
+	//     no AAAA destinations and may surprise users who expect IPv6
+	//     services).
+	DefendIPv6AllowlistSize int
 	// SendpageObserved counts security_socket_sendpage invocations recorded
 	// by the lsm/socket_sendpage hook. Non-zero means sendfile(2) or splice(2)
 	// reached a socket via the sock_sendpage path — which cgroup/sendmsg4 and
