@@ -330,6 +330,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 
 	if tlsKPIVisible(in) {
 		fmt.Fprintf(b, "| **tls** | %d |\n", in.TLSTotal)
+		if in.TLSTotal > 0 {
+			fmt.Fprintf(b, "| **tls SNI confidence** | %s |\n", formatTLSConfidenceCell(in))
+		}
 		if in.TLSRingbufReserveFailures > 0 {
 			fmt.Fprintf(b, "| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures)
 		}

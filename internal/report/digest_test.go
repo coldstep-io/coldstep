@@ -259,6 +259,41 @@ func TestBuildDetectMarkdown_TLSKPIAndSection(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_TLSConfidenceKPIRow(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                  []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TLSTotal:             3,
+		TLSConfidenceFull:    2,
+		TLSConfidencePartial: 1,
+		TLSConfidenceUnknown: 0,
+		TLSSNIGate:           true,
+		PolicyCounts:         map[string]int{"monitor": 3},
+		MaxRowsPerSection:    50,
+	})
+	for _, needle := range []string{
+		"| **tls SNI confidence** |",
+		"full=2",
+		"partial=1",
+		"unknown=0",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_TLSConfidenceRowHiddenWhenNoTLS(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TLSTotal:          0,
+		TLSSNIGate:        true,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "tls SNI confidence") {
+		t.Fatalf("confidence row should be hidden when TLSTotal=0, got:\n%s", md)
+	}
+}
+
 func TestTruncateExeForDigest(t *testing.T) {
 	long := strings.Repeat("a", execExeDigestMaxBytes+20)
 	out := TruncateExeForDigest(long)

@@ -108,7 +108,16 @@ type DigestInput struct {
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
 	TLSSNIGate                                         bool
-	PolicyCounts                                       map[string]int
+	// TLSConfidenceFull / Partial / Inferred / Unknown count TLS events by the
+	// reliability of the captured SNI. The digest surfaces these as a
+	// `full=N partial=M unknown=K` row when at least one TLS event exists, so
+	// operators can weigh how trustworthy an SNI-based allow/deny match is on
+	// this run.
+	TLSConfidenceFull     int
+	TLSConfidencePartial  int
+	TLSConfidenceInferred int
+	TLSConfidenceUnknown  int
+	PolicyCounts          map[string]int
 
 	ExecRows  []ExecDigestRow
 	TCPRows   []TCPDigestRow
