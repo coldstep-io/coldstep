@@ -494,7 +494,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	}
 }
 
-func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
+func TestAppendDenyFromRaw_UnknownAddressFamilyRejected(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
@@ -502,7 +502,7 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	state := newDefendState()
 
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
-	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
+	raw[26] = 17 // AF_PACKET — only AF_INET / AF_INET6 are emitted by defend.
 
 	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
@@ -510,6 +510,45 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported address family") {
 		t.Fatalf("expected AF error, got %v", err)
+	}
+}
+
+func TestAppendDenyFromRaw_IPv6DenyDecoded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: logPath}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newDefendState()
+
+	raw := make([]byte, denyEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 7)
+	binary.LittleEndian.PutUint32(raw[4:8], 7)
+	copy(raw[8:24], "curl")
+	raw[24] = denyProtoTCP
+	raw[25] = denyReasonDstNotAllowlisted
+	raw[26] = linuxAFInet6
+	ip6 := net.ParseIP("2001:db8::1").To16()
+	copy(raw[28:44], ip6)
+	binary.BigEndian.PutUint16(raw[44:46], 443)
+
+	deny, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "cgroup", nil)
+	if err != nil {
+		t.Fatalf("appendDenyFromRaw: %v", err)
+	}
+	if deny.Dst != "2001:db8::1" {
+		t.Fatalf("Dst=%q want 2001:db8::1", deny.Dst)
+	}
+	if deny.Dport != 443 || deny.Protocol != "tcp" {
+		t.Fatalf("Dport=%d Protocol=%q", deny.Dport, deny.Protocol)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"dst":"2001:db8::1"`)) {
+		t.Fatalf("expected IPv6 dst in JSONL, got %s", string(data))
 	}
 }
 

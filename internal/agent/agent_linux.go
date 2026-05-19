@@ -277,11 +277,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// this way). The primary deny reader watches the cgroup `deny_events`
 		// ringbuf; the LSM ringbuf, when present, is drained by a separate
 		// reader.
-		allowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
+		allowlistSize, ipv6AllowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
 		if loadErr != nil {
 			return loadErr
 		}
 		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
+		defendState.setIPv6AllowlistSize(ipv6AllowlistSize)
 		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
 			return fmt.Errorf("ringbuf reader deny: %w", err)

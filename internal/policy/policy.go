@@ -17,6 +17,13 @@ const MaxIgnoredIPv4Nets = 128
 // MaxAllowedDefendIPv4Keys matches allowed_ipv4 max_entries in bpf/trace_defend.bpf.c.
 const MaxAllowedDefendIPv4Keys = 4096
 
+// MaxAllowedDefendIPv6Keys matches allowed_ipv6 max_entries in
+// bpf/trace_defend_cgroup.inc. Kept symmetric with IPv4 so the abi_test
+// pair stays parallel; in practice AAAA resolutions yield fewer entries
+// per domain than A records (one AAAA + a few alias addresses), so 4096
+// is well above realistic defend-mode demand.
+const MaxAllowedDefendIPv6Keys = 4096
+
 // MaxAllowedHostnameBytes is the maximum length of an allowed hostname (exact match or wildcard suffix).
 // DNS FQDNs are at most 253 octets (RFC 1035). BPF allowed_domains uses fixed char[256] keys; longer
 // names would truncate silently in userspace map updates without this guard.

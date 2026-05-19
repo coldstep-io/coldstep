@@ -41,8 +41,12 @@ func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver pol
 		return policy.CompileResult{}, perr
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
-	if compiled.AllowedIPv4.Len() == 0 {
-		msg := "defend allowlist effective allowlist is empty (no IPv4 A-record resolutions; add literals to allowed-ips if needed)"
+	// P2-1 Phase 2: an IPv6-only allowlist (AAAA resolutions, no A) is
+	// valid — both BPF defend hooks attach, IPv4 cgroup denies everything,
+	// IPv6 cgroup denies everything outside allowed_ipv6. Only reject
+	// when BOTH families are empty (every domain failed both A and AAAA).
+	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 {
+		msg := "defend allowlist effective allowlist is empty (no A/AAAA resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
 		}
@@ -221,6 +225,12 @@ func clampPerCPUSumToUint32(n int) uint32 {
 // literal IPv4 entries from the policy, and produce an LPM plan ready to write
 // into the BPF allowlist map identified by mapName. The two callers differ only
 // in which BPF map (allowed_ipv4 vs lsm_allowed_ipv4) receives the result.
+//
+// Empty IPv4 plan is allowed: under Phase 2 a defend mode run can have
+// AAAA-only resolutions and still defend coherently — the IPv4 cgroup
+// hook simply blocks every non-ignored destination. compileDefendAllowlist
+// already rejects the truly-empty case (both families empty) before this
+// builder runs.
 func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *policy.Policy) (allowedLPMPlan, error) {
 	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
 	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
@@ -232,9 +242,6 @@ func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *
 	}
 	if plan.totalEntries > policy.MaxAllowedDefendIPv4Keys {
 		return allowedLPMPlan{}, fmt.Errorf("%s: %d entries exceeds BPF max %d", mapName, plan.totalEntries, policy.MaxAllowedDefendIPv4Keys)
-	}
-	if plan.totalEntries == 0 {
-		return allowedLPMPlan{}, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
 	}
 	return plan, nil
 }
@@ -308,11 +315,22 @@ func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult
 	}, compiled, pol)
 }
 
-func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+// loadDefendMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
+//
+// PR-G: allowed_ipv4 is now a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP
+// allowlist entries (resolved domain IPs + literal /32s from --allowed-ips)
+// are still programmed individually but with prefixlen=32. Literal CIDR
+// entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
+// single LPM key and cover every address inside the range.
+//
+// Returns (ipv4Entries, ipv6Entries, ignoredCidrs, error). The IPv6 count
+// flows into defendState.setIPv6AllowlistSize so the digest can choose
+// between ✅ "gated" and 🚨 "block-all" Phase 2 verdicts.
+func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
+		return 0, 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
 	}
-	return loadDefendMapsForBackend(defendMapSet{
+	ipv4Entries, ignoredCount, err := loadDefendMapsForBackend(defendMapSet{
 		cfgName:        "defend_cfg",
 		allowedName:    "allowed_ipv4",
 		cfg:            objs.DefendCfg,
@@ -320,6 +338,24 @@ func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, p
 		allowedLPM:     objs.AllowedIpv4,
 		allowedDomains: objs.AllowedDomains,
 	}, compiled, pol)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+
+	// P2-1 Phase 2: program AAAA-resolved destinations into allowed_ipv6
+	// when the map is present in the loaded objects. Loader stripped this
+	// to nil if the BPF stubs predate Phase 2 — populate returns (0, nil)
+	// in that case, so older stubs continue to load IPv4-only defend.
+	ipv6Programmed, err := populateAllowedIPv6Map(objs.AllowedIpv6, compiled)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if ipv6Programmed > 0 {
+		slog.Info("allowlist loaded into BPF map", "map", "allowed_ipv6",
+			"ipv6_entries", ipv6Programmed)
+	}
+
+	return ipv4Entries, ipv6Programmed, ignoredCount, nil
 }
 
 // loadAllowedLPMMap programs the allowed_ipv4 LPM trie (PR-G).
@@ -416,6 +452,47 @@ func loadAllowedLPMMap(m *ebpf.Map, plan allowedLPMPlan) error {
 	return nil
 }
 
+// populateAllowedIPv6Map writes AAAA-resolved /128 entries from the
+// compiled allowlist into the BPF allowed_ipv6 LPM trie. Wire format is
+// the userspace mirror of `struct lpm_v6_key`: 20-byte buffer where bytes
+// [0:4] are the prefix length in CPU/little-endian order (BPF_MAP_TYPE_LPM_TRIE
+// reads it as u32) and bytes [4:20] are the IPv6 address in network byte
+// order. Drift between this layout and bpf/defend_lpm_v6_key.h equals
+// silent EINVAL on Update at startup — both sides MUST move together.
+//
+// Returns the number of entries actually programmed. Missing map (older
+// stubs that predate Phase 2) is tolerated: 0 returned, no error — the
+// BPF program also degrades gracefully because cgroup/connect6 +
+// sendmsg6 will be missing, leaving IPv4-only defend.
+func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	// Deterministic ordering for reproducibility (tests, logs).
+	keys := make([][16]byte, 0, compiled.AllowedIPv6.Len())
+	compiled.AllowedIPv6.ForEach(func(k [16]byte) { keys = append(keys, k) })
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare(keys[i][:], keys[j][:]) < 0
+	})
+	if len(keys) > policy.MaxAllowedDefendIPv6Keys {
+		return 0, fmt.Errorf("allowed_ipv6: %d entries exceeds BPF max %d",
+			len(keys), policy.MaxAllowedDefendIPv6Keys)
+	}
+	val := uint8(1)
+	programmed := 0
+	for _, addr := range keys {
+		var key [20]byte
+		binary.LittleEndian.PutUint32(key[0:4], 128)
+		copy(key[4:20], addr[:])
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			return programmed, fmt.Errorf("load allowed_ipv6 map (/128 %s): %w",
+				net.IP(addr[:]).String(), err)
+		}
+		programmed++
+	}
+	return programmed, nil
+}
+
 func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
@@ -423,10 +500,20 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	protocol := denyProtocolLabel(protocolRaw)
 	reason := denyReasonLabel(reasonRaw)
-	if af != linuxAFInet {
-		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
+	var dstIP net.IP
+	switch af {
+	case linuxAFInet:
+		dstIP = net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
+	case linuxAFInet6:
+		// P2-1 Phase 2: IPv6 deny events. daddr16 holds the 16-byte address
+		// in network byte order; net.IP shares that layout so we can copy
+		// it verbatim. String() picks the canonical zero-compressed form.
+		ip := make(net.IP, net.IPv6len)
+		copy(ip, daddr16[:])
+		dstIP = ip
+	default:
+		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4/IPv6 only)", af)
 	}
-	dstIP := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
 	dst := dstIP.String()
 	// P1-5: sanitize attacker-controlled comm before it lands in JSONL — a
 	// blocked process whose argv[0] embeds newline / control bytes must not

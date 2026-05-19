@@ -59,13 +59,13 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 
 | Topic | Detail |
 | :---- | :----- |
-| **IP versions** | **Defend is IPv4-only.** Allowlists and cgroup blocking (`connect4` / `sendmsg4`) cover IPv4 traffic only. **IPv6 egress is observed** via `cgroup/connect6` / `cgroup/sendmsg6` and surfaces in the digest as **⚠️** (detect) or **🚨** (defend, where it escaped enforcement) — Phase 1, observe-only. IPv6 blocking is not yet implemented. |
+| **IP versions** | **Defend is IPv4 + IPv6.** Allowlists resolve both **A** and **AAAA** records and program two LPM tries: `allowed_ipv4` (4-byte keys) and `allowed_ipv6` (16-byte keys). cgroup hooks block on both families — `connect4` / `sendmsg4` for IPv4, `connect6` / `sendmsg6` for IPv6 — denying any destination not on the allowlist with `EPERM`. `::1` (loopback) and `fe80::/10` (link-local) always bypass enforcement. Detect mode observes both families without enforcing. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
-For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hooks, IPv4-only defend), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
+For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hook coverage), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
 
 ---
 
