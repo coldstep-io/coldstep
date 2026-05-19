@@ -46,8 +46,13 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			continue
 		}
 
-		comm := string(bytes.TrimRight(ev.Comm[:], "\x00"))
-		exe := string(bytes.TrimRight(ev.ExePath[:], "\x00"))
+		// P1-5: sanitize attacker-controlled strings at the decode point so
+		// every downstream consumer (digest rows + JSONL writer) sees the same
+		// safe value. Stripping C0/C1 controls here is what prevents JSONL
+		// injection — a process whose argv[0] embeds `\n{"type":"meta"...}`
+		// could otherwise forge a record into the append-only event log.
+		comm := telemetry.SanitizeField(nullTermStr(ev.Comm[:]), 16)
+		exe := telemetry.SanitizeField(nullTermStr(ev.ExePath[:]), 4096)
 		stats.addExec()
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addExec(report.ExecDigestRow{
@@ -111,8 +116,8 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			continue
 		}
 
-		pcomm := string(bytes.TrimRight(ev.ParentComm[:], "\x00"))
-		ccomm := string(bytes.TrimRight(ev.ChildComm[:], "\x00"))
+		pcomm := telemetry.SanitizeField(nullTermStr(ev.ParentComm[:]), 16)
+		ccomm := telemetry.SanitizeField(nullTermStr(ev.ChildComm[:]), 16)
 		forkBuf.add(proctree.Edge{
 			ParentTGID:    ev.ParentPID,
 			ChildTGID:     ev.ChildPID,
@@ -213,8 +218,8 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 			continue
 		}
 
-		comm := nullTermStr(ev.Comm[:])
-		path := nullTermStr(ev.Path[:])
+		comm := telemetry.SanitizeField(nullTermStr(ev.Comm[:]), 16)
+		path := telemetry.SanitizeField(nullTermStr(ev.Path[:]), 4096)
 		op := fsOpName(ev.Op)
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 
@@ -293,11 +298,14 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 		if ip == nil {
 			continue
 		}
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		fqdn, fqdnProv := "", "unknown"
 		if dns != nil {
 			fqdn, fqdnProv = dns.LookupProvenance(ip)
 		}
+		// FQDN ultimately derives from on-wire DNS labels captured in BPF — sanitize
+		// before any use (digest row, classifier display, JSONL).
+		fqdn = telemetry.SanitizeField(fqdn, 253)
 		cl := pol.Classify(fqdn, ip)
 		stats.addTCP(cl)
 		stats.incDomainCount(fqdn)
@@ -371,12 +379,14 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		if ip == nil {
 			continue
 		}
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
 		if !parsed {
 			stats.addDropped("tls_sni_parse")
 			continue
 		}
+		// SNI is parsed from an attacker-controlled TLS ClientHello buffer.
+		sni = telemetry.SanitizeField(sni, 253)
 		cl := pol.Classify(sni, ip)
 		stats.addTLS(cl)
 
@@ -443,11 +453,12 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 		if ip == nil {
 			continue
 		}
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		fqdn, fqdnProv := "", "unknown"
 		if dns != nil {
 			fqdn, fqdnProv = dns.LookupProvenance(ip)
 		}
+		fqdn = telemetry.SanitizeField(fqdn, 253)
 		cl := pol.Classify(fqdn, ip)
 		stats.addUDP(cl)
 		stats.incDomainCount(fqdn)
@@ -516,12 +527,16 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 		if ip == nil {
 			continue
 		}
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		method, host, path, parsed := telemetry.ParseHTTPRequestPrefix(rawPay)
 		if !parsed {
 			stats.addDropped("http_prefix_parse")
 			continue
 		}
+		// HTTP request prefix is parsed from a kernel-captured first-write buffer.
+		method = telemetry.SanitizeField(method, 16)
+		host = telemetry.SanitizeField(host, 253)
+		path = telemetry.SanitizeField(path, 4096)
 		cl := pol.Classify(host, ip)
 		stats.addHTTP(cl)
 
@@ -616,7 +631,7 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 		}
 
 		stats.addBPFAudit()
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 
 		slog.Info("bpf syscall audit", "tgid", tgid, "comm", comm, "cmd", cmd)
