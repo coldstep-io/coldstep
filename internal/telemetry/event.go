@@ -15,6 +15,15 @@ type BPFStatus struct {
 	Detail string `json:"detail,omitempty"`
 }
 
+// CompatWarning is a non-fatal runner-compatibility signal emitted at agent
+// startup. Detect mode always proceeds even when warnings fire — these are
+// observations for operators about runner environments (DinD, BuildKit,
+// service containers) that may interfere with cgroup BPF attachment.
+type CompatWarning struct {
+	Code   string `json:"code"`
+	Detail string `json:"detail,omitempty"`
+}
+
 // MetaEvent is the recommended first JSONL line (run context, no secrets).
 type MetaEvent struct {
 	Type          string          `json:"type"` // "meta"

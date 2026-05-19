@@ -1,0 +1,300 @@
+# Runner-compatibility matrix.
+#
+# Verifies that coldstep starts cleanly and produces events across the runner
+# variants users actually deploy on:
+#
+#   - vanilla            plain ubuntu-latest
+#   - dind               with `services: docker: image: docker:dind`
+#   - buildkit           DOCKER_BUILDKIT=1 (BuildKit-based docker builds)
+#   - service-containers postgres service container alongside the job
+#
+# Cgroup namespacing and bind-mounts differ across these setups and can
+# interfere with cgroup-BPF attach in defend mode. This workflow runs in
+# detect mode (always-safe) and asserts event flow + readiness so a
+# regression is visible before it hits a defend-mode user.
+#
+# Each variant lives in its own job so `services:` can be set unconditionally
+# (GitHub Actions does not gracefully ignore service entries with empty
+# image strings), and `continue-on-error: true` on every variant keeps one
+# failure from cancelling the rest. The aggregate job reads `needs.*.result`
+# and converts per-variant results into the final pass/fail signal.
+
+name: coldstep-runner-compat
+
+on:
+  schedule:
+    # Weekly Mondays 04:00 UTC. Offset from the kernel matrix (03:00 UTC)
+    # so weekly compatibility signals don't collide on the same hosted
+    # runner pool.
+    - cron: '0 4 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  vanilla:
+    name: vanilla
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+      - name: Build Linux agent
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+      - name: Start Coldstep (detect)
+        uses: ./
+        with:
+          phase: start
+          mode: detect
+          detect-profile: enhanced
+          fail-on-error: 'true'
+          release-path: bin/coldstep
+          allow: |
+            *.ubuntu.com
+            theclouddj.com
+      - name: Variant load — vanilla
+        run: |
+          set -euo pipefail
+          curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
+      - name: Stop Coldstep
+        uses: ./
+        with:
+          phase: stop
+          report: none
+          fail-on-error: 'false'
+      - name: Assert event stream + readiness
+        run: bash .github/workflows/scripts/runner-compat-assert.sh vanilla
+      - name: Upload variant artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-runner-compat-vanilla
+          path: |
+            ${{ github.workspace }}/.coldstep-events.jsonl
+            ${{ github.workspace }}/.coldstep-telemetry.json
+            ${{ github.workspace }}/.coldstep-ready.json
+            ${{ github.workspace }}/.coldstep-detect.md
+          if-no-files-found: warn
+
+  dind:
+    name: dind
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    services:
+      docker:
+        image: docker:dind
+        options: --privileged
+        ports:
+          - 2375:2375
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+      - name: Build Linux agent
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+      - name: Start Coldstep (detect)
+        uses: ./
+        with:
+          phase: start
+          mode: detect
+          detect-profile: enhanced
+          fail-on-error: 'true'
+          release-path: bin/coldstep
+          allow: |
+            *.ubuntu.com
+            theclouddj.com
+      - name: Variant load — dind probe
+        run: |
+          set -euo pipefail
+          # Reach the dind sidecar from the runner. The probe is best-effort:
+          # the goal here is exercising cgroup egress against a service
+          # container, not validating dind itself.
+          timeout 10 bash -c 'until nc -z -w1 docker 2375; do sleep 1; done' || true
+          curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
+      - name: Stop Coldstep
+        uses: ./
+        with:
+          phase: stop
+          report: none
+          fail-on-error: 'false'
+      - name: Assert event stream + readiness
+        run: bash .github/workflows/scripts/runner-compat-assert.sh dind
+      - name: Upload variant artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-runner-compat-dind
+          path: |
+            ${{ github.workspace }}/.coldstep-events.jsonl
+            ${{ github.workspace }}/.coldstep-telemetry.json
+            ${{ github.workspace }}/.coldstep-ready.json
+            ${{ github.workspace }}/.coldstep-detect.md
+          if-no-files-found: warn
+
+  buildkit:
+    name: buildkit
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    env:
+      DOCKER_BUILDKIT: '1'
+      BUILDKIT_PROGRESS: plain
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+      - name: Build Linux agent
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+      - name: Start Coldstep (detect)
+        uses: ./
+        with:
+          phase: start
+          mode: detect
+          detect-profile: enhanced
+          fail-on-error: 'true'
+          release-path: bin/coldstep
+          allow: |
+            *.ubuntu.com
+            theclouddj.com
+      - name: Variant load — BuildKit build
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/buildkit-ctx
+          cat >/tmp/buildkit-ctx/Dockerfile <<'EOF'
+          FROM alpine:3.20
+          RUN echo coldstep-buildkit-compat
+          EOF
+          DOCKER_BUILDKIT=1 docker build -t coldstep-buildkit-compat:latest /tmp/buildkit-ctx || true
+      - name: Stop Coldstep
+        uses: ./
+        with:
+          phase: stop
+          report: none
+          fail-on-error: 'false'
+      - name: Assert event stream + readiness
+        run: bash .github/workflows/scripts/runner-compat-assert.sh buildkit
+      - name: Upload variant artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-runner-compat-buildkit
+          path: |
+            ${{ github.workspace }}/.coldstep-events.jsonl
+            ${{ github.workspace }}/.coldstep-telemetry.json
+            ${{ github.workspace }}/.coldstep-ready.json
+            ${{ github.workspace }}/.coldstep-detect.md
+          if-no-files-found: warn
+
+  service-containers:
+    name: service-containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    continue-on-error: true
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_PASSWORD: coldstep-compat
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+      - name: Build Linux agent
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+      - name: Start Coldstep (detect)
+        uses: ./
+        with:
+          phase: start
+          mode: detect
+          detect-profile: enhanced
+          fail-on-error: 'true'
+          release-path: bin/coldstep
+          allow: |
+            *.ubuntu.com
+            theclouddj.com
+      - name: Variant load — postgres query
+        run: |
+          set -euo pipefail
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client
+          PGPASSWORD=coldstep-compat psql -h localhost -U postgres -c 'SELECT 1;' || true
+      - name: Stop Coldstep
+        uses: ./
+        with:
+          phase: stop
+          report: none
+          fail-on-error: 'false'
+      - name: Assert event stream + readiness
+        run: bash .github/workflows/scripts/runner-compat-assert.sh service-containers
+      - name: Upload variant artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-runner-compat-service-containers
+          path: |
+            ${{ github.workspace }}/.coldstep-events.jsonl
+            ${{ github.workspace }}/.coldstep-telemetry.json
+            ${{ github.workspace }}/.coldstep-ready.json
+            ${{ github.workspace }}/.coldstep-detect.md
+          if-no-files-found: warn
+
+  aggregate:
+    name: aggregate
+    needs: [vanilla, dind, buildkit, service-containers]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Summarize variant results
+        env:
+          R_VANILLA: ${{ needs.vanilla.result }}
+          R_DIND: ${{ needs.dind.result }}
+          R_BUILDKIT: ${{ needs.buildkit.result }}
+          R_SVC: ${{ needs.service-containers.result }}
+        run: |
+          set -euo pipefail
+          summary="${GITHUB_STEP_SUMMARY}"
+          {
+            echo "## Runner compatibility matrix"
+            echo ""
+            echo "| Variant | Result |"
+            echo "| --- | --- |"
+          } >> "$summary"
+          had_failure=0
+          for row in \
+            "vanilla:${R_VANILLA}" \
+            "dind:${R_DIND}" \
+            "buildkit:${R_BUILDKIT}" \
+            "service-containers:${R_SVC}"; do
+            v="${row%%:*}"
+            s="${row##*:}"
+            badge=":white_check_mark:"
+            case "$s" in
+              success) : ;;
+              skipped) badge=":fast_forward:" ;;
+              cancelled) badge=":no_entry:"; had_failure=1 ;;
+              *) badge=":x:"; had_failure=1 ;;
+            esac
+            echo "| ${v} | ${badge} ${s} |" >> "$summary"
+          done
+          if [[ "$had_failure" == "1" ]]; then
+            echo "::error::one or more runner variants failed; see per-variant job artifacts"
+            exit 1
+          fi

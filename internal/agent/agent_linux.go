@@ -43,6 +43,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	kernel := kernelRelease()
+	compatWarnings := CheckRunnerCompat()
+	for _, w := range compatWarnings {
+		slog.Warn("runner_compat_warning", "code", w.Code, "detail", w.Detail)
+	}
 	stats := newRunStats()
 	maxRows := report.DefaultMaxRowsPerSection
 	rows := newRowBuffer(maxRows)
@@ -79,6 +83,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
+		sum.CompatWarnings = compatWarnings
 		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum, signer); err != nil {
 			slog.Warn("telemetry summary", "err", err)
 		}
