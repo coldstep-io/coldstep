@@ -323,6 +323,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
 				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
 				stats.setSendmmsgMultiMessage(readSendmmsgMultiMessageCount(syscallObjs))
+				// TODO: regenerate BPF stubs after building on Linux — readSendmmsgUnobservedExtraCount
+				// references objs.SendmmsgUnobservedExtra defined by the new
+				// sendmmsg_unobserved_extra PERCPU_ARRAY in bpf/trace_connect.bpf.c.
+				stats.setSendmmsgUnobservedExtra(readSendmmsgUnobservedExtraCount(syscallObjs))
 				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
 				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)

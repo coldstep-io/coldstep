@@ -99,7 +99,13 @@ type Summary struct {
 	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
 	// length, distinct from per-message msg_iovlen). Messages 2..N are not
 	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
-	SendmmsgMultiMessage        int `json:"sendmmsg_multi_message_observed,omitempty"`
+	SendmmsgMultiMessage int `json:"sendmmsg_multi_message_observed,omitempty"`
+	// SendmmsgUnobservedExtra counts individual sendmmsg(2) extra messages
+	// (beyond the unrolled SENDMMSG_EXTRA_MAX bound) that the BPF observation
+	// loop could not reach. The loop walks messages 1..7 inline; this counter
+	// quantifies how many message slots remain silent on vlen >= 9 calls
+	// (BG-03 Gap 3 follow-up).
+	SendmmsgUnobservedExtra     int `json:"sendmmsg_unobserved_extra,omitempty"`
 	TLSWritevMultiIovecObserved int `json:"tls_writev_multi_iovec_observed,omitempty"`
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters that supersede the previous aggregate
