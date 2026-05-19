@@ -388,7 +388,8 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		// SNI is parsed from an attacker-controlled TLS ClientHello buffer.
 		sni = telemetry.SanitizeField(sni, 253)
 		cl := pol.Classify(sni, ip)
-		stats.addTLS(cl)
+		conf := telemetry.ScoreTLSConfidence(sni)
+		stats.addTLS(cl, conf)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addTLS(report.TLSDigestRow{
@@ -405,7 +406,8 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				Type: "tls", TS: ts, Seq: n,
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, SNI: sni,
-				Dst: ip.String(), Dport: port,
+				Confidence: conf,
+				Dst:        ip.String(), Dport: port,
 				Policy: string(cl),
 				Note:   "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
 			}
