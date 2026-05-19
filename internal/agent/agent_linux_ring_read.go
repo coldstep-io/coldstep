@@ -300,6 +300,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 		}
 		cl := pol.Classify(fqdn, ip)
 		stats.addTCP(cl)
+		stats.incDomainCount(fqdn)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		notes := "—"
@@ -449,6 +450,7 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 		}
 		cl := pol.Classify(fqdn, ip)
 		stats.addUDP(cl)
+		stats.incDomainCount(fqdn)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addUDP(report.UDPDigestRow{
