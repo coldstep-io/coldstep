@@ -4,8 +4,10 @@ package defend
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 )
 
 // LoadDefendObjectsForKernel populates obj with the cgroup defend programs
@@ -39,11 +41,37 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		// sendpage_observed lives in the LSM section; strip it when LSM is
 		// disabled so we don't pin a per-cpu counter nobody reads.
 		delete(spec.Maps, "sendpage_observed")
+	} else if !kernelHasLSMHook("socket_sendpage") {
+		// Kernel 6.5+ removed the socket_sendpage LSM hook (proto_ops
+		// ->sendpage and security_socket_sendpage were dropped together).
+		// On those kernels sendfile(2)/splice(2) route through sendmsg
+		// with MSG_SPLICE_PAGES, so cgroup/sendmsg4 + lsm/socket_sendmsg
+		// already cover them. Leaving the program in the spec would fail
+		// prog_load (ENOENT on the BTF attach target) and bring down the
+		// whole defend collection. The sendpage_observed counter is also
+		// stripped because nothing will write to it.
+		delete(spec.Programs, "lsm_socket_sendpage")
+		delete(spec.Maps, "sendpage_observed")
 	}
 
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
-		return err
+		// Defensive fallback: BTF lookup may have succeeded but prog_load
+		// still rejected sendpage for some other reason (BTF mismatch,
+		// CONFIG_SECURITY_NETWORK off, etc.). Strip the program and retry
+		// once so the rest of the LSM section still loads.
+		if wantLSM && isSendpageLoadFailure(err) {
+			spec2, err2 := LoadDefend()
+			if err2 != nil {
+				return err2
+			}
+			delete(spec2.Programs, "lsm_socket_sendpage")
+			delete(spec2.Maps, "sendpage_observed")
+			coll, err = ebpf.NewCollection(spec2)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	success := false
 	defer func() {
@@ -197,4 +225,29 @@ func detachMapIfPresent(coll *ebpf.Collection, name string, dst **ebpf.Map) {
 		*dst = m
 		delete(coll.Maps, name)
 	}
+}
+
+// kernelHasLSMHook reports whether the running kernel's BTF declares
+// bpf_lsm_<name>, indicating the LSM hook is attachable. Returns false
+// when kernel BTF cannot be loaded or the symbol is absent — caller
+// should treat false as "do not load this hook".
+func kernelHasLSMHook(name string) bool {
+	spec, err := btf.LoadKernelSpec()
+	if err != nil {
+		return false
+	}
+	var fn *btf.Func
+	return spec.TypeByName("bpf_lsm_"+name, &fn) == nil
+}
+
+// isSendpageLoadFailure pattern-matches an ebpf.NewCollection error to
+// detect prog_load rejection of lsm_socket_sendpage specifically. Used
+// as a defensive fallback when the BTF pre-check missed the kernel's
+// removal of the hook.
+func isSendpageLoadFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "lsm_socket_sendpage") || strings.Contains(s, "socket_sendpage")
 }
