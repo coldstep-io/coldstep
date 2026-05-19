@@ -185,9 +185,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		hasDefend = true
 		defer func() {
-			defendState.setDenyReserveFailures(readDenyReserveFailureCount(&defendObjs))
+			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
 			if hasLSM {
-				defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(&defendObjs))
+				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
 			}
 			// P0-1 Phase 1: snapshot the IPv6 observe-only counters so the
 			// digest can warn when traffic escaped the IPv4-only defend
@@ -365,7 +365,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("load bpf objects: %w", err)
 	}
 	defer execObjs.Close()
-	defer func() { stats.setExecRingbufReserveFailures(readExecRingbufReserveFailureCount(&execObjs)) }()
+	defer func() {
+		stats.setExecRingbufReserveFailures(readUint32PerCPUArraySum(execObjs.ExecRingbufReserveFailures, "exec_ringbuf_reserve_failures"))
+	}()
 
 	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
 	if err != nil {
@@ -414,21 +416,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer syscallLnk.Close()
 		defer func() {
 			if syscallObjs != nil {
-				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
-				stats.setUDPRingbufReserveFailures(readUDPRingbufReserveFailureCount(syscallObjs))
-				stats.setConnectRingbufReserveFailures(readConnectRingbufReserveFailureCount(syscallObjs))
-				stats.setHTTPRingbufReserveFailures(readHTTPRingbufReserveFailureCount(syscallObjs))
-				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
-				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
-				stats.setSendmmsgMultiMessage(readSendmmsgMultiMessageCount(syscallObjs))
-				// TODO: regenerate BPF stubs after building on Linux — readSendmmsgUnobservedExtraCount
-				// references objs.SendmmsgUnobservedExtra defined by the new
+				stats.setConnect4TupleUpdateFailures(readUint32PerCPUArraySum(syscallObjs.Connect4TupleUpdateFailures, "connect4_tuple_update_failures"))
+				stats.setUDPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.UdpRingbufReserveFailures, "udp_ringbuf_reserve_failures"))
+				stats.setConnectRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.ConnectRingbufReserveFailures, "connect_ringbuf_reserve_failures"))
+				stats.setHTTPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.HttpRingbufReserveFailures, "http_ringbuf_reserve_failures"))
+				stats.setTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TlsRingbufReserveFailures, "tls_ringbuf_reserve_failures"))
+				stats.setUDPSendmsgMultiIovecObserved(readUint32CounterMap(syscallObjs.UdpSendmsgMultiIovecObserved, "udp_sendmsg_multi_iovec_observed"))
+				stats.setSendmmsgMultiMessage(readUint32PerCPUArraySum(syscallObjs.SendmmsgMultiMessageObserved, "sendmmsg_multi_message_observed"))
+				// TODO: regenerate BPF stubs after building on Linux —
+				// syscallObjs.SendmmsgUnobservedExtra is defined by the new
 				// sendmmsg_unobserved_extra PERCPU_ARRAY in bpf/trace_connect.bpf.c.
-				stats.setSendmmsgUnobservedExtra(readSendmmsgUnobservedExtraCount(syscallObjs))
-				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
-				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs)
+				stats.setSendmmsgUnobservedExtra(readUint32PerCPUArraySum(syscallObjs.SendmmsgUnobservedExtra, "sendmmsg_unobserved_extra"))
+				stats.setTLSWritevMultiIovecObserved(readUint32CounterMap(syscallObjs.TlsWritevMultiIovecObserved, "tls_writev_multi_iovec_observed"))
+				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs.PartialEgressObserved)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
-				stats.setIoUringSetupObserved(readIoUringSetupObservedCount(syscallObjs))
+				stats.setIoUringSetupObserved(readUint32CounterMap(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
@@ -470,9 +472,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer dnsLnkEnter.Close()
 		defer func() {
 			if dnsObjs != nil {
-				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
-				stats.setTCPDNSResponsesObserved(readTCPDNSResponsesObservedCount(dnsObjs))
-				stats.setTCPDNSSkippedShortRead(readTCPDNSSkippedShortReadCount(dnsObjs))
+				stats.setDNSRingbufReserveFailures(readUint32PerCPUArraySum(dnsObjs.DnsRingbufReserveFailures, "dns_ringbuf_reserve_failures"))
+				stats.setTCPDNSResponsesObserved(readUint32CounterMap(dnsObjs.TcpDnsResponsesObserved, "tcp_dns_responses_observed"))
+				stats.setTCPDNSSkippedShortRead(readUint32CounterMap(dnsObjs.TcpDnsSkippedShortRead, "tcp_dns_skipped_short_read"))
 			}
 		}()
 	}
@@ -520,7 +522,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					slog.Info("tracing sched_process_fork (process tree)")
 					defer func() {
 						if forkObjs != nil {
-							stats.setForkRingbufReserveFailures(readForkRingbufReserveFailureCount(forkObjs))
+							stats.setForkRingbufReserveFailures(readUint32PerCPUArraySum(forkObjs.ForkRingbufReserveFailures, "fork_ringbuf_reserve_failures"))
 						}
 						forkRd.Close()
 						if forkLnk != nil {
@@ -588,7 +590,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					slog.Info("tracing fs events (openat+create, unlink, rename, chmod)")
 					defer func() {
 						if fsObjs != nil {
-							stats.setFSRingbufReserveFailures(readFSRingbufReserveFailureCount(fsObjs))
+							stats.setFSRingbufReserveFailures(readUint32PerCPUArraySum(fsObjs.FsRingbufReserveFailures, "fs_ringbuf_reserve_failures"))
 						}
 						fsRd.Close()
 						if fsLnk != nil {
@@ -618,7 +620,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer bpfAuditLnk.Close()
 		defer func() {
 			if bpfAuditObjs != nil {
-				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
+				stats.setBPFAuditRingbufReserveFailures(readUint32PerCPUArraySum(bpfAuditObjs.BpfAuditReserveFailures, "bpf_audit_ringbuf_reserve_failures"))
 			}
 		}()
 	}
