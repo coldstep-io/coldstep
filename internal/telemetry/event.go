@@ -13,6 +13,12 @@ type BPFStatus struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
 	Detail string `json:"detail,omitempty"`
+	// BTFAvailable, when set, records the result of the early kernel BTF
+	// availability probe (see internal/agent.probeBTF). It is populated on
+	// the synthetic "btf" status row so .coldstep-telemetry.json carries
+	// an explicit signal that all CO-RE-relocated programs had a kernel
+	// BTF spec to bind against.
+	BTFAvailable bool `json:"btf_available,omitempty"`
 }
 
 // CompatWarning is a non-fatal runner-compatibility signal emitted at agent
