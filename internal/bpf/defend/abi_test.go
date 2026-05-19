@@ -117,6 +117,38 @@ func TestIPv6ObservePrograms(t *testing.T) {
 	}
 }
 
+// TestAllowedIPv6MapShape asserts the P2-1 Phase 2 allowed_ipv6 LPM trie
+// has the shape userspace expects when programming AAAA-resolved
+// destinations: BPF_MAP_TYPE_LPM_TRIE, key size 20 bytes
+// (4-byte prefixlen + 16-byte address), value size 1 byte, max_entries
+// matching policy.MaxAllowedDefendIPv6Keys. Drift on any of these results
+// in silent EINVAL on Update at agent start, surfacing as defend-bypass.
+// Skips until stubs are regenerated on Linux.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestAllowedIPv6MapShape(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ms, ok := spec.Maps["allowed_ipv6"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: map \"allowed_ipv6\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ms.Type != ebpf.LPMTrie {
+		t.Errorf("allowed_ipv6 type = %v, want ebpf.LPMTrie", ms.Type)
+	}
+	if ms.KeySize != 20 {
+		t.Errorf("allowed_ipv6 KeySize = %d, want 20 (4-byte prefixlen + 16-byte addr)", ms.KeySize)
+	}
+	if ms.ValueSize != 1 {
+		t.Errorf("allowed_ipv6 ValueSize = %d, want 1", ms.ValueSize)
+	}
+	if ms.MaxEntries != uint32(policy.MaxAllowedDefendIPv6Keys) {
+		t.Errorf("allowed_ipv6 MaxEntries = %d, want %d (policy.MaxAllowedDefendIPv6Keys)",
+			ms.MaxEntries, policy.MaxAllowedDefendIPv6Keys)
+	}
+}
+
 // TestSendpageObserveMapIsPerCPUArray asserts the sendpage_observed counter
 // map (kernel-5.15 sendfile/splice gap) has the PERCPU_ARRAY shape userspace
 // expects to sum. Added in bpf/trace_lsm_defend_lsm.inc; the test skips

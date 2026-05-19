@@ -41,12 +41,23 @@ func droppedTotal(in DigestInput) int {
 }
 
 // ipv6EgressObserved returns the total non-loopback IPv6 egress attempts
-// observed by the P0-1 Phase 1 cgroup/connect6 + cgroup/sendmsg6 hooks.
-// Non-zero means traffic bypassed the IPv4-only defend enforcement; in
-// detect mode that's a visibility gap (⚠️), in defend mode that's an
-// outright bypass (🚨).
+// observed by the cgroup/connect6 + cgroup/sendmsg6 hooks. Non-zero means
+// IPv6 destinations were contacted during the run. Under Phase 2, defend
+// mode enforces on these — see ipv6DefendActive for the predicate that
+// chooses the ✅/⚠️ verdict.
 func ipv6EgressObserved(in DigestInput) uint32 {
 	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved
+}
+
+// ipv6DefendActive reports whether Phase 2 IPv6 enforcement is fully
+// configured for this defend run. It returns true when defend mode is
+// active AND the agent programmed at least one entry into the BPF
+// allowed_ipv6 LPM trie (AAAA-resolved or literal). False covers two
+// cases: detect mode (no enforcement at all) and defend mode with a
+// pure block-all IPv6 posture (allowlist empty), which is functional
+// but should be flagged so operators can spot a missing AAAA config.
+func ipv6DefendActive(in DigestInput) bool {
+	return isBlockingDigestMode(in.DefendMode) && in.DefendIPv6AllowlistSize > 0
 }
 
 // verdictEmoji returns ✅ / ⚠️ / 🚨 for the headline. Mirrors the prior
@@ -59,12 +70,17 @@ func verdictEmoji(in DigestInput) string {
 			break
 		}
 	}
-	// In defend mode, any observed IPv6 egress is a 🚨 — the IPv4-only
-	// cgroup/connect4+sendmsg4 path could not gate it, so traffic
-	// escaped enforcement entirely. In detect mode this is a ⚠️
-	// limitation rather than an alert (handled in the review check
-	// below).
-	defendIPv6Bypass := isBlockingDigestMode(in.DefendMode) && ipv6EgressObserved(in) > 0
+	// P2-1 Phase 2: IPv6 in defend mode is gated by the allowed_ipv6 LPM
+	// trie when populated (any traffic outside it gets EPERM at the
+	// cgroup/connect6+sendmsg6 hooks). The "bypass" alert only fires when
+	// defend mode observed IPv6 egress AND the IPv6 allowlist is empty —
+	// in that block-all posture the events were denied, but the operator
+	// likely meant to add AAAA destinations and should see it. Detect
+	// mode still flags IPv6 as a ⚠️ visibility gap (handled in the review
+	// check below).
+	defendIPv6Bypass := isBlockingDigestMode(in.DefendMode) &&
+		ipv6EgressObserved(in) > 0 &&
+		in.DefendIPv6AllowlistSize == 0
 	alert := (!in.CanaryPipelineOK && in.CanaryFailCount > 0) ||
 		in.BPFHeartbeatFailures > 0 ||
 		in.BPFMapIntegrityFailures > 0 ||
@@ -73,6 +89,11 @@ func verdictEmoji(in DigestInput) string {
 	if alert {
 		return "🚨"
 	}
+	// IPv6 egress is a ⚠️ when there's no Phase 2 enforcement to gate it
+	// (detect mode — visibility-only). In defend mode with a populated
+	// allowed_ipv6 trie the traffic was actually checked, so it's no
+	// longer a review trigger on its own.
+	ipv6Review := ipv6EgressObserved(in) > 0 && !ipv6DefendActive(in) && !isBlockingDigestMode(in.DefendMode)
 	review := totalDetectRingbufReserveFailures(in) > 0 ||
 		in.UDPSendmsgMultiIovecObserved > 0 ||
 		in.TLSWritevMultiIovecObserved > 0 ||
@@ -83,7 +104,7 @@ func verdictEmoji(in DigestInput) string {
 		in.DefendDenyReserveFailures > 0 ||
 		droppedTotal(in) > 0 ||
 		in.IoUringSetupObserved > 0 ||
-		ipv6EgressObserved(in) > 0
+		ipv6Review
 	if review {
 		return "⚠️"
 	}
@@ -106,12 +127,23 @@ func writeHeader(b *strings.Builder, in DigestInput) {
 }
 
 // writeCoverage emits a one-line scope statement so users do not misread ✅ as
-// "every byte of egress observed". IPv6 and QUIC/HTTP3 are statically out of
-// scope today (no BPF coverage); the "Payloads beyond iov[0]" cell flips to
-// ⚠️ partial when BG-01 partial-observe counters fired this run.
+// "every byte of egress observed". IPv6 coverage flips state per run:
+//   - detect or defend without allowed_ipv6: "observed" (cgroup/connect6 +
+//     sendmsg6 always counts; defend with empty trie still gates by denying).
+//   - defend with allowed_ipv6 entries: "gated" (Phase 2 active).
+//
+// QUIC/HTTP3 remains statically out of scope (no BPF coverage). The
+// "Payloads beyond iov[0]" cell flips to ⚠️ partial when BG-01
+// partial-observe counters fired this run.
 func writeCoverage(b *strings.Builder, in DigestInput) {
-	fmt.Fprintf(b, "**Coverage this run:** IPv4 TCP/UDP ✓ observed | IPv6 ✗ not observed | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: %s\n\n",
-		coveragePayloadState(in))
+	ipv6State := "observed (detect — no enforcement)"
+	if ipv6DefendActive(in) {
+		ipv6State = "gated (defend allowed_ipv6 active)"
+	} else if isBlockingDigestMode(in.DefendMode) {
+		ipv6State = "denied (defend block-all — empty allowed_ipv6)"
+	}
+	fmt.Fprintf(b, "**Coverage this run:** IPv4 TCP/UDP ✓ observed | IPv6 %s | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: %s\n\n",
+		ipv6State, coveragePayloadState(in))
 }
 
 // writeCompactKPI emits a single-row 5-column KPI table. The full per-channel
@@ -249,16 +281,25 @@ func buildTriageRows(in DigestInput) [][2]string {
 		}
 	}
 
-	// P0-1 Phase 1: surface IPv6 egress as a top-level triage row. In
-	// detect mode this is a ⚠️ limitation (IPv4-only visibility); in
-	// defend mode it's 🚨 (the IPv4-only allowlist could not gate the
-	// connection). Phase 2 will add IPv6 enforcement.
+	// P2-1 Phase 2: surface IPv6 egress as a triage row. Three states:
+	//   - detect mode: ⚠️ visibility-only (no enforcement, by design).
+	//   - defend mode + allowed_ipv6 populated: ✅ gated by AAAA-resolved
+	//     LPM trie; non-matches were denied with EPERM.
+	//   - defend mode + allowed_ipv6 empty: 🚨 pure block-all posture —
+	//     functional, but operator likely forgot to configure AAAA
+	//     destinations for any service they want reachable over IPv6.
 	if n := ipv6EgressObserved(in); n > 0 {
-		badge := "⚠️"
-		suffix := "IPv6 enforcement not yet supported"
-		if isBlockingDigestMode(in.DefendMode) {
+		var badge, suffix string
+		switch {
+		case ipv6DefendActive(in):
+			badge = "✅"
+			suffix = fmt.Sprintf("**gated by %d-entry allowed_ipv6 LPM trie (AAAA-resolved)**", in.DefendIPv6AllowlistSize)
+		case isBlockingDigestMode(in.DefendMode):
 			badge = "🚨"
-			suffix = "**defend allowlist is IPv4-only — traffic escaped enforcement**"
+			suffix = "**defend has no allowed_ipv6 entries — all non-loopback IPv6 denied (block-all). Add AAAA destinations to `allow:` if this was unintentional.**"
+		default:
+			badge = "⚠️"
+			suffix = "detect mode — IPv6 visibility only, Phase 2 enforcement runs in defend"
 		}
 		rows = append(rows, [2]string{
 			"**IPv6 egress detected**",
@@ -361,10 +402,22 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 		fmt.Fprintf(b, "| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved)
 	}
 	if in.IPv6ConnectObserved > 0 {
-		fmt.Fprintf(b, "| **⚠️ ipv6 connect6 observed (defend is IPv4-only)** | %d |\n", in.IPv6ConnectObserved)
+		label := "**⚠️ ipv6 connect6 observed (detect — no enforcement)**"
+		if ipv6DefendActive(in) {
+			label = "**✅ ipv6 connect6 gated by allowed_ipv6**"
+		} else if isBlockingDigestMode(in.DefendMode) {
+			label = "**🚨 ipv6 connect6 denied (defend has empty allowed_ipv6 — block-all)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.IPv6ConnectObserved)
 	}
 	if in.IPv6SendmsgObserved > 0 {
-		fmt.Fprintf(b, "| **⚠️ ipv6 sendmsg6 observed (defend is IPv4-only)** | %d |\n", in.IPv6SendmsgObserved)
+		label := "**⚠️ ipv6 sendmsg6 observed (detect — no enforcement)**"
+		if ipv6DefendActive(in) {
+			label = "**✅ ipv6 sendmsg6 gated by allowed_ipv6**"
+		} else if isBlockingDigestMode(in.DefendMode) {
+			label = "**🚨 ipv6 sendmsg6 denied (defend has empty allowed_ipv6 — block-all)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.IPv6SendmsgObserved)
 	}
 
 	// --- processes ---
@@ -778,10 +831,13 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
 	}
 	if ipv6EgressObserved(in) > 0 {
-		if isBlockingDigestMode(in.DefendMode) {
-			b.WriteString("- **🚨 IPv6 egress** was observed by the `cgroup/connect6` and `cgroup/sendmsg6` observe-only hooks. coldstep defend currently enforces only IPv4 (`cgroup/connect4` and `cgroup/sendmsg4`), so these connections **escaped the allowlist entirely** — review which destinations were contacted and whether IPv4 fallbacks should be required.\n")
-		} else {
-			b.WriteString("- **⚠️ IPv6 egress** was observed by the `cgroup/connect6` and `cgroup/sendmsg6` observe-only hooks. coldstep is IPv4-only for now — Phase 1 (P0-1) records the attempts so visibility gaps are explicit; Phase 2 will add IPv6 enforcement.\n")
+		switch {
+		case ipv6DefendActive(in):
+			fmt.Fprintf(b, "- **✅ IPv6 egress** observed and gated by the `cgroup/connect6` + `cgroup/sendmsg6` defend hooks against the `allowed_ipv6` LPM trie (%d AAAA-resolved entries). `::1` (loopback) and `fe80::/10` (link-local) bypass the lookup.\n", in.DefendIPv6AllowlistSize)
+		case isBlockingDigestMode(in.DefendMode):
+			b.WriteString("- **🚨 IPv6 egress** observed under defend mode with an empty `allowed_ipv6` LPM trie — every non-loopback / non-link-local IPv6 destination was denied (block-all). If any of these were legitimate, add the relevant AAAA hostnames to `allow:` so the next run programs the LPM trie.\n")
+		default:
+			b.WriteString("- **⚠️ IPv6 egress** observed in detect mode. coldstep records the attempts here; switching to `mode: defend` activates the Phase 2 `cgroup/connect6` + `cgroup/sendmsg6` LPM-trie enforcement.\n")
 		}
 	}
 	if in.TCPDNSSkippedShortRead > 0 {

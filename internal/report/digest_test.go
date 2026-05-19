@@ -616,29 +616,41 @@ func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 func TestBuildDetectMarkdown_CoverageScopeBlock_AlwaysPresent(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name string
-		in   DigestInput
+		name       string
+		in         DigestInput
+		ipv6Cell   string
+		extraCells []string
 	}{
 		{"clean detect", DigestInput{
 			BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
 			ExecTotal: 1,
-		}},
-		{"defend", DigestInput{
-			DefendMode:          "defend",
-			DefendAllowlistSize: 1,
-			DefendDenyCount:     0,
-			BPF:                 []telemetry.BPFStatus{{Name: "connect", OK: true}},
-		}},
+		}, "IPv6 observed (detect — no enforcement)", nil},
+		{"defend gated", DigestInput{
+			DefendMode:              "defend",
+			DefendAllowlistSize:     1,
+			DefendIPv6AllowlistSize: 2,
+			DefendDenyCount:         0,
+			BPF:                     []telemetry.BPFStatus{{Name: "connect", OK: true}},
+		}, "IPv6 gated (defend allowed_ipv6 active)", nil},
+		{"defend block-all", DigestInput{
+			DefendMode:              "defend",
+			DefendAllowlistSize:     1,
+			DefendIPv6AllowlistSize: 0,
+			DefendDenyCount:         0,
+			BPF:                     []telemetry.BPFStatus{{Name: "connect", OK: true}},
+		}, "IPv6 denied (defend block-all — empty allowed_ipv6)", nil},
 	}
 	for _, c := range cases {
 		md := BuildDetectMarkdown(c.in)
-		for _, needle := range []string{
+		needles := []string{
 			"**Coverage this run:**",
 			"IPv4 TCP/UDP ✓ observed",
-			"IPv6 ✗ not observed",
+			c.ipv6Cell,
 			"QUIC/HTTP3 ✗ not observed",
 			"Payloads beyond iov[0]: ✓ observed",
-		} {
+		}
+		needles = append(needles, c.extraCells...)
+		for _, needle := range needles {
 			if !strings.Contains(md, needle) {
 				t.Fatalf("[%s] missing %q in digest:\n%s", c.name, needle, md)
 			}
@@ -740,9 +752,10 @@ func TestBuildDetectMarkdown_VisibleLineBudget(t *testing.T) {
 	}
 }
 
-// TestBuildDetectMarkdown_IPv6Observed_DetectMode covers the P0-1 Phase 1
-// detect-mode rendering: any non-zero IPv6 counter must (a) flip the
-// headline verdict to ⚠️ and (b) add a triage row naming the limitation.
+// TestBuildDetectMarkdown_IPv6Observed_DetectMode covers detect-mode
+// rendering: any non-zero IPv6 counter must (a) flip the headline verdict
+// to ⚠️ and (b) add a triage row naming detect mode as visibility-only.
+// Detect never enforces IPv6 (Phase 2 enforcement is defend-only).
 func TestBuildDetectMarkdown_IPv6Observed_DetectMode(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:                 []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
@@ -756,7 +769,7 @@ func TestBuildDetectMarkdown_IPv6Observed_DetectMode(t *testing.T) {
 		"**IPv6 egress detected**",
 		"⚠️ **5** non-loopback IPv6 destinations",
 		"connect=3 sendmsg=2",
-		"IPv6 enforcement not yet supported",
+		"detect mode — IPv6 visibility only",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
@@ -767,27 +780,59 @@ func TestBuildDetectMarkdown_IPv6Observed_DetectMode(t *testing.T) {
 	}
 }
 
-// TestBuildDetectMarkdown_IPv6Observed_DefendMode covers the defend-mode
-// escalation: in defend mode the IPv4-only allowlist could not gate the
-// IPv6 connection, so the headline must be 🚨 and the triage row must
-// say the allowlist is IPv4-only.
-func TestBuildDetectMarkdown_IPv6Observed_DefendMode(t *testing.T) {
+// TestBuildDetectMarkdown_IPv6Observed_DefendMode_BlockAll covers Phase 2
+// defend-mode with an empty allowed_ipv6 LPM trie: every non-loopback /
+// non-link-local IPv6 destination was denied (block-all). The headline
+// stays 🚨 because the empty trie likely indicates a missed AAAA config,
+// and the triage row tells the operator how to fix it.
+func TestBuildDetectMarkdown_IPv6Observed_DefendMode_BlockAll(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		DefendMode:          "defend",
-		BPF:                 []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
-		ExecTotal:           1,
-		IPv6ConnectObserved: 1,
-		MaxRowsPerSection:   50,
+		DefendMode:              "defend",
+		BPF:                     []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:               1,
+		IPv6ConnectObserved:     1,
+		DefendIPv6AllowlistSize: 0,
+		MaxRowsPerSection:       50,
 	})
 	for _, needle := range []string{
 		"## 🚨 coldstep — defend",
 		"**IPv6 egress detected**",
 		"🚨 **1** non-loopback IPv6 destinations",
-		"defend allowlist is IPv4-only",
+		"defend has no allowed_ipv6 entries",
+		"block-all",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}
+	}
+}
+
+// TestBuildDetectMarkdown_IPv6Observed_DefendMode_Gated covers Phase 2
+// defend-mode with a populated allowed_ipv6 LPM trie: traffic was checked,
+// matches were allowed, non-matches were denied. The headline must NOT
+// be 🚨 (Phase 2 is doing its job), and the triage row should say "gated".
+func TestBuildDetectMarkdown_IPv6Observed_DefendMode_Gated(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:              "defend",
+		BPF:                     []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:               1,
+		IPv6ConnectObserved:     4,
+		IPv6SendmsgObserved:     1,
+		DefendIPv6AllowlistSize: 3,
+		MaxRowsPerSection:       50,
+	})
+	for _, needle := range []string{
+		"## ✅ coldstep — defend",
+		"**IPv6 egress detected**",
+		"✅ **5** non-loopback IPv6 destinations",
+		"gated by 3-entry allowed_ipv6 LPM trie",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+	if strings.Contains(md, "🚨 coldstep") {
+		t.Fatalf("Phase 2 gated defend must not escalate to 🚨:\n%s", md)
 	}
 }
 

@@ -144,6 +144,17 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		detachMapIfPresent(coll, m.name, m.dst)
 	}
 
+	// P2-1 Phase 2: IPv6 allowlist LPM trie. Optional in older generated
+	// stubs (same regeneration window as the connect6/sendmsg6 enforcement
+	// path). When absent, defend mode still loads but cgroup/connect6 and
+	// cgroup/sendmsg6 fall back to Phase 1 observe-only behaviour because
+	// the bpf2go binding's defend_cgroup_connect6 program reference will
+	// also be missing.
+	// TODO: remove the missing-map tolerance once defend objects are
+	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
+	// allowed_ipv6 map.
+	detachMapIfPresent(coll, "allowed_ipv6", &obj.AllowedIpv6)
+
 	if wantLSM {
 		lsmPrograms := []struct {
 			name string
