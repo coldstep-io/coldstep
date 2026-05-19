@@ -115,7 +115,7 @@ struct {
  * full multi-iovec capture (would require unrolled bounded loops in BPF).
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -158,7 +158,7 @@ struct {
 } sendmmsg_unobserved_extra SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -202,7 +202,7 @@ struct {
  * counter catches cases where the sysctl is off or was not applied.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -303,7 +303,8 @@ static __always_inline void note_udp_sendmsg_multi_iovec(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	/* PERCPU_ARRAY: each CPU owns its slot; no global atomic contention. */
+	(*v)++;
 }
 
 static __always_inline void note_tls_writev_multi_iovec(void)
@@ -313,7 +314,7 @@ static __always_inline void note_tls_writev_multi_iovec(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_io_uring_setup_observed(void)
@@ -323,7 +324,7 @@ static __always_inline void note_io_uring_setup_observed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 /*
