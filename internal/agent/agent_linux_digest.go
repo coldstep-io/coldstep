@@ -88,6 +88,7 @@ func buildDigestInput(
 	canarySnap canarySnapshot,
 ) report.DigestInput {
 	execN, tcpN, udpN, httpN, tlsN, fsN := stats.counts()
+	tlsConfFull, tlsConfPartial, tlsConfInferred, tlsConfUnknown := stats.tlsConfidenceCounts()
 	rawTPName := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 	in := report.DigestInput{
 		DetectProfile:                  cfg.DetectProfile,
@@ -97,6 +98,10 @@ func buildDigestInput(
 		UDPTotal:                       udpN,
 		HTTPTotal:                      httpN,
 		TLSTotal:                       tlsN,
+		TLSConfidenceFull:              tlsConfFull,
+		TLSConfidencePartial:           tlsConfPartial,
+		TLSConfidenceInferred:          tlsConfInferred,
+		TLSConfidenceUnknown:           tlsConfUnknown,
 		TLSSNIGate:                     tlsSNIGate,
 		PolicyCounts:                   stats.snapshotPolicyCounts(),
 		ExecRows:                       execRows,

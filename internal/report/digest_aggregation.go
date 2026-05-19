@@ -181,6 +181,26 @@ func tlsKPIVisible(in DigestInput) bool {
 	return in.TLSSNIGate
 }
 
+// formatTLSConfidenceCell renders the per-tier TLS SNI confidence counters as
+// a compact `full=N partial=M unknown=K` cell. Inferred is only included when
+// non-zero (no enricher emits it today, so callers can keep the cell short).
+// Callers should gate the row on TLSTotal > 0; we still defend with the same
+// check so an accidental call with zero events does not show a misleading row.
+func formatTLSConfidenceCell(in DigestInput) string {
+	if in.TLSTotal == 0 {
+		return "—"
+	}
+	parts := []string{
+		fmt.Sprintf("full=%d", in.TLSConfidenceFull),
+		fmt.Sprintf("partial=%d", in.TLSConfidencePartial),
+	}
+	if in.TLSConfidenceInferred > 0 {
+		parts = append(parts, fmt.Sprintf("inferred=%d", in.TLSConfidenceInferred))
+	}
+	parts = append(parts, fmt.Sprintf("unknown=%d", in.TLSConfidenceUnknown))
+	return strings.Join(parts, " · ")
+}
+
 func fsKPIVisible(in DigestInput) bool {
 	return in.FSGate
 }

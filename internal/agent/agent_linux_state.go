@@ -34,6 +34,10 @@ type runStats struct {
 	udpN                            int
 	httpN                           int
 	tlsN                            int
+	tlsConfidenceFullN              int
+	tlsConfidencePartialN           int
+	tlsConfidenceInferredN          int
+	tlsConfidenceUnknownN           int
 	procForkN                       int
 	fsN                             int
 	connect4TupleUpdateFailuresN    int
@@ -153,11 +157,29 @@ func (s *runStats) addHTTP(cl policy.Class) {
 	s.addPolicyLocked(cl)
 }
 
-func (s *runStats) addTLS(cl policy.Class) {
+func (s *runStats) addTLS(cl policy.Class, conf telemetry.TLSConfidence) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tlsN++
+	switch conf {
+	case telemetry.TLSConfidenceFull:
+		s.tlsConfidenceFullN++
+	case telemetry.TLSConfidencePartial:
+		s.tlsConfidencePartialN++
+	case telemetry.TLSConfidenceInferred:
+		s.tlsConfidenceInferredN++
+	default:
+		s.tlsConfidenceUnknownN++
+	}
 	s.addPolicyLocked(cl)
+}
+
+// tlsConfidenceCounts returns per-tier TLS confidence counters (full,
+// partial, inferred, unknown) for digest reporting.
+func (s *runStats) tlsConfidenceCounts() (full, partial, inferred, unknown int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tlsConfidenceFullN, s.tlsConfidencePartialN, s.tlsConfidenceInferredN, s.tlsConfidenceUnknownN
 }
 
 func (s *runStats) setConnect4TupleUpdateFailures(n int) {
