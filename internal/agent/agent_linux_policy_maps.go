@@ -97,33 +97,17 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 	return programmed, nil
 }
 
-// readUint32CounterMap reads a single-entry uint32-keyed/uint32-valued BPF counter map at key 0.
-//
-// Failure semantics (M-07): "key not found" is the legitimate zero state and is returned silently.
-// Any other Lookup error (map closed, wrong type, EBADF, program unloaded) is logged at WARN and
-// surfaced as zero so digest rendering keeps progressing — losing the distinction between "counter
-// is genuinely zero" and "map is unreadable" was the M-07 anti-pattern. The H-05 instance of this
-// pattern (defend_cfg) is owned by Group A; this helper deliberately stays scoped to read-only
-// counter maps and never touches defend state.
-func readUint32CounterMap(m *ebpf.Map, helperName string) int {
-	if m == nil {
-		return 0
-	}
-	var k uint32
-	var v uint32
-	if err := m.Lookup(&k, &v); err != nil {
-		if errors.Is(err, ebpf.ErrKeyNotExist) {
-			return 0
-		}
-		slog.Warn("uint32 counter map lookup failed", "helper", helperName, "err", err)
-		return 0
-	}
-	return int(v)
-}
-
 // readUint32PerCPUArraySum sums all CPU slots for a BPF_MAP_TYPE_PERCPU_ARRAY map
-// with uint32 values at key 0. Used after migrating reserve-failure maps off a
-// contended global ARRAY slot.
+// with uint32 values at key 0. Used after migrating all hot-path counters off
+// contended global ARRAY slots — every uint32 observability/reserve counter is
+// now per-CPU so the increment side stays lock-free (cgroup-scoped writer code
+// runs with preemption disabled per syscall).
+//
+// Failure semantics (M-07): "key not found" is the legitimate zero state and is
+// returned silently. Any other Lookup error (map closed, wrong type, EBADF,
+// program unloaded) is logged at WARN and surfaced as zero so digest rendering
+// keeps progressing — losing the distinction between "counter is genuinely
+// zero" and "map is unreadable" was the M-07 anti-pattern.
 func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	if m == nil {
 		return 0

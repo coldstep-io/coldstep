@@ -29,29 +29,26 @@ func TestDNSMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("dns_ringbuf_reserve_failures is PERCPU_ARRAY", func(t *testing.T) {
-		ms, ok := spec.Maps["dns_ringbuf_reserve_failures"]
-		if !ok {
-			t.Fatal(`map "dns_ringbuf_reserve_failures" not found`)
+	t.Run("PERCPU_ARRAY reserve, failure, and observation counter maps", func(t *testing.T) {
+		names := []string{
+			"dns_ringbuf_reserve_failures",
+			"dns_recvfrom_buf_update_failures",
+			"tcp_dns_responses_observed",
+			"tcp_dns_skipped_short_read",
 		}
-		if ms.Type != ebpf.PerCPUArray {
-			t.Fatalf("type = %v, want ebpf.PerCPUArray", ms.Type)
-		}
-		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
-			t.Fatalf("unexpected shape %+v", ms)
-		}
-	})
-
-	t.Run("tcp_dns_skipped_short_read is ARRAY uint32 counter", func(t *testing.T) {
-		ms, ok := spec.Maps["tcp_dns_skipped_short_read"]
-		if !ok {
-			t.Fatal(`map "tcp_dns_skipped_short_read" not found`)
-		}
-		if ms.Type != ebpf.Array {
-			t.Fatalf("type = %v, want ebpf.Array", ms.Type)
-		}
-		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
-			t.Fatalf("unexpected shape %+v", ms)
+		for _, name := range names {
+			ms, ok := spec.Maps[name]
+			if !ok {
+				t.Errorf("map %s not found in CollectionSpec", name)
+				continue
+			}
+			if ms.Type != ebpf.PerCPUArray {
+				t.Errorf("%s type = %v, want ebpf.PerCPUArray", name, ms.Type)
+			}
+			if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+				t.Errorf("%s unexpected shape MaxEntries=%d KeySize=%d ValueSize=%d",
+					name, ms.MaxEntries, ms.KeySize, ms.ValueSize)
+			}
 		}
 	})
 }

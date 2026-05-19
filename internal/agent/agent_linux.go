@@ -421,16 +421,16 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setConnectRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.ConnectRingbufReserveFailures, "connect_ringbuf_reserve_failures"))
 				stats.setHTTPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.HttpRingbufReserveFailures, "http_ringbuf_reserve_failures"))
 				stats.setTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TlsRingbufReserveFailures, "tls_ringbuf_reserve_failures"))
-				stats.setUDPSendmsgMultiIovecObserved(readUint32CounterMap(syscallObjs.UdpSendmsgMultiIovecObserved, "udp_sendmsg_multi_iovec_observed"))
+				stats.setUDPSendmsgMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.UdpSendmsgMultiIovecObserved, "udp_sendmsg_multi_iovec_observed"))
 				stats.setSendmmsgMultiMessage(readUint32PerCPUArraySum(syscallObjs.SendmmsgMultiMessageObserved, "sendmmsg_multi_message_observed"))
 				// TODO: regenerate BPF stubs after building on Linux —
 				// syscallObjs.SendmmsgUnobservedExtra is defined by the new
 				// sendmmsg_unobserved_extra PERCPU_ARRAY in bpf/trace_connect.bpf.c.
 				stats.setSendmmsgUnobservedExtra(readUint32PerCPUArraySum(syscallObjs.SendmmsgUnobservedExtra, "sendmmsg_unobserved_extra"))
-				stats.setTLSWritevMultiIovecObserved(readUint32CounterMap(syscallObjs.TlsWritevMultiIovecObserved, "tls_writev_multi_iovec_observed"))
+				stats.setTLSWritevMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.TlsWritevMultiIovecObserved, "tls_writev_multi_iovec_observed"))
 				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs.PartialEgressObserved)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
-				stats.setIoUringSetupObserved(readUint32CounterMap(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
+				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
@@ -473,8 +473,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer func() {
 			if dnsObjs != nil {
 				stats.setDNSRingbufReserveFailures(readUint32PerCPUArraySum(dnsObjs.DnsRingbufReserveFailures, "dns_ringbuf_reserve_failures"))
-				stats.setTCPDNSResponsesObserved(readUint32CounterMap(dnsObjs.TcpDnsResponsesObserved, "tcp_dns_responses_observed"))
-				stats.setTCPDNSSkippedShortRead(readUint32CounterMap(dnsObjs.TcpDnsSkippedShortRead, "tcp_dns_skipped_short_read"))
+				stats.setTCPDNSResponsesObserved(readUint32PerCPUArraySum(dnsObjs.TcpDnsResponsesObserved, "tcp_dns_responses_observed"))
+				stats.setTCPDNSSkippedShortRead(readUint32PerCPUArraySum(dnsObjs.TcpDnsSkippedShortRead, "tcp_dns_skipped_short_read"))
 			}
 		}()
 	}
