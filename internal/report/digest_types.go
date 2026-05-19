@@ -255,6 +255,13 @@ type DigestInput struct {
 	BPFAuditRingbufReserveFailures int
 	DroppedCounts                  map[string]int
 
+	// KTLSOffloadTotal counts setsockopt(fd, SOL_TLS, TLS_TX|TLS_RX, ...) calls
+	// observed by trace_ktls.bpf.c. Non-zero means SNI sniffing is structurally
+	// impossible on those sockets — the kernel encrypts, the userspace probe
+	// only sees ciphertext fragments. P3-1.
+	KTLSOffloadTotal           int
+	KTLSRingbufReserveFailures int
+
 	// P1-1 DNS Allowlist Trust Model hardening surface.
 	//
 	// UnresolvedAllowlistDomains lists allowlist domains that did not yield any

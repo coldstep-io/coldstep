@@ -648,6 +648,60 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 	}
 }
 
+// readKTLSRing drains setsockopt(SOL_TLS, TLS_TX|TLS_RX) ringbuf events from
+// trace_ktls.bpf.c. Each event names one socket that handed TLS encryption to
+// the kernel — meaning the userspace SNI sniffer in trace_tls_write.inc will
+// observe ciphertext on that fd and cannot resolve SNI. Counted in runStats
+// for the digest KPI; appended to JSONL when EventsLogPath is set.
+func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (ktls)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		tgid, tid, fd, commb, dirByte, ok := decodeKTLSEvent(record.RawSample)
+		if !ok {
+			stats.addDropped("ktls_decode")
+			slog.Warn("decode ktls", "len", len(record.RawSample))
+			continue
+		}
+		stats.addKTLS()
+		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		direction := ktlsDirectionLabel(dirByte)
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+		slog.Debug("ktls offload", "tgid", tgid, "comm", comm, "fd", fd, "direction", direction)
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.KTLSEvent{
+				Type: telemetry.EventTypeKTLS, TS: ts, Seq: n,
+				PID: tgid, TGID: tgid, ThreadID: tid,
+				Comm: comm, FD: fd, Direction: direction,
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("ktls_jsonl")
+				slog.Warn("events jsonl (ktls)", "err", werr)
+			}
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {
