@@ -388,6 +388,13 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 		}
 	}
 
+	if in.KTLSOffloadTotal > 0 {
+		fmt.Fprintf(b, "| **KTLS offload** | %d sockets · SNI extraction not possible |\n", in.KTLSOffloadTotal)
+	}
+	if in.KTLSRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **ktls_events ringbuf reserve failures** | %d |\n", in.KTLSRingbufReserveFailures)
+	}
+
 	if in.SendfileObserved > 0 {
 		fmt.Fprintf(b, "| **sendfile partial-observe (dest+len, no payload sniff)** | %d |\n", in.SendfileObserved)
 	}
@@ -790,6 +797,9 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	b.WriteString("- **HTTP KPI** counts cleartext HTTP/1 request bytes on `sendto` to destination port 80 only; HTTPS traffic appears as TCP connect events.\n")
 	if tlsKPIVisible(in) {
 		b.WriteString("- **tls KPI** counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).\n")
+	}
+	if in.KTLSOffloadTotal > 0 {
+		b.WriteString("- **KTLS offload** counts sockets where the application called `setsockopt(SOL_TLS, TLS_TX|TLS_RX)` to hand TLS encryption to the kernel. After offload the application writes plaintext while the kernel encrypts on the wire, so the userspace ClientHello sniffer on `write`/`writev`/`sendto` paths only observes ciphertext record fragments and **cannot resolve SNI** on those sockets. Affected egress still appears as TCP connect events (destination IP + port) — only the SNI hint is lost.\n")
 	}
 	if procForkKPIVisible(in) {
 		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")

@@ -154,6 +154,50 @@ func TestDenyEventJSON_HookProvenance(t *testing.T) {
 	}
 }
 
+func TestKTLSEvent_RoundTrip(t *testing.T) {
+	t.Parallel()
+	ev := KTLSEvent{
+		Type: EventTypeKTLS, TS: "2026-05-19T00:00:00Z", Seq: 9,
+		PID: 4242, TGID: 4242, ThreadID: 4243, Comm: "openssl",
+		FD: 7, Direction: "tx",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if EventTypeKTLS != "ktls_offload" {
+		t.Fatalf("EventTypeKTLS = %q, want ktls_offload", EventTypeKTLS)
+	}
+	if et := EventType(b); et != "ktls_offload" {
+		t.Fatalf("EventType=%q want ktls_offload", et)
+	}
+	for _, needle := range []string{
+		`"type":"ktls_offload"`,
+		`"ts":"2026-05-19T00:00:00Z"`,
+		`"seq":9`,
+		`"pid":4242`,
+		`"tgid":4242`,
+		`"thread_id":4243`,
+		`"comm":"openssl"`,
+		`"fd":7`,
+		`"direction":"tx"`,
+	} {
+		if !bytes.Contains(b, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, string(b))
+		}
+	}
+	if bytes.Contains(b, []byte(`"sig"`)) {
+		t.Fatalf("omitempty sig should be absent in JSON, got %s", b)
+	}
+	var got KTLSEvent
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Type != "ktls_offload" || got.Seq != 9 || got.PID != 4242 || got.FD != 7 || got.Direction != "tx" {
+		t.Fatalf("round trip mismatch: %+v", got)
+	}
+}
+
 func TestFSEvent_RoundTrip(t *testing.T) {
 	t.Parallel()
 	ev := FSEvent{

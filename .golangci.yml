@@ -33,6 +33,7 @@ linters:
         - (*github.com/coldstep-io/coldstep/internal/bpf/tracefork.TraceforkObjects).Close
         - (*github.com/coldstep-io/coldstep/internal/bpf/tracefs.TracefsObjects).Close
         - (*github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit.TracebpfauditObjects).Close
+        - (*github.com/coldstep-io/coldstep/internal/bpf/tracektls.TracektlsObjects).Close
         - fmt.Fprintf
         - fmt.Fprintln
         - os.Remove

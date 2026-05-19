@@ -161,6 +161,8 @@ func buildDigestInput(
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
+		KTLSOffloadTotal:               stats.ktlsTotal(),
+		KTLSRingbufReserveFailures:     stats.ktlsRingbufReserveFailures(),
 		BPFHeartbeatFailures:           stats.bpfHeartbeatFailureCount(),
 		DroppedCounts:                  stats.snapshotDroppedCounts(),
 		FSGate:                         fsGate,

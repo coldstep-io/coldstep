@@ -28,6 +28,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/proctree"
@@ -636,6 +637,27 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 	}
 
+	var ktlsRd ringReader
+	defer ktlsRd.Close()
+	var ktlsObjs *tracektls.TracektlsObjects
+	var ktlsLnk link.Link
+	if kR, kO, kL, err := startKTLSTrace(); err != nil {
+		slog.Info("ktls offload trace disabled", "err", err)
+		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (ktls)", OK: false, Detail: bpfDetail(err)})
+	} else {
+		ktlsRd.R = kR
+		ktlsObjs, ktlsLnk = kO, kL
+		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (ktls)", OK: true})
+		slog.Info("tracing setsockopt(SOL_TLS) for KTLS offload detection")
+		defer ktlsObjs.Close()
+		defer ktlsLnk.Close()
+		defer func() {
+			if ktlsObjs != nil {
+				stats.setKTLSRingbufReserveFailures(readUint32PerCPUArraySum(ktlsObjs.KtlsRingbufReserveFailures, "ktls_ringbuf_reserve_failures"))
+			}
+		}()
+	}
+
 	// Attach bpf() audit tracing only after other BPF collections finish loading.
 	// Otherwise coldstep's own bpf(2) syscalls during object load can fill the small
 	// audit ringbuf before readBPFAuditRing starts, dropping later canary traffic (e.g. bpftool).
@@ -705,6 +727,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfAuditRd.Close()
 		forkRd.Close()
 		fsRd.Close()
+		ktlsRd.Close()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
@@ -739,6 +762,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if bpfAuditRd.R != nil {
+		readerCount++
+	}
+	if ktlsRd.R != nil {
 		readerCount++
 	}
 	if hasDefend {
@@ -899,6 +925,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer)
+		}()
+	}
+	if ktlsRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer)
 		}()
 	}
 

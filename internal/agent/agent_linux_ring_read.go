@@ -383,6 +383,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
+	reasm := newTLSReassembler()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -416,9 +417,20 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		}
 		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
+		reassembled := false
 		if !parsed {
-			stats.addDropped("tls_sni_parse")
-			continue
+			// Fall back to userspace inter-syscall reassembly: stitch this
+			// payload onto any buffered prefix for the same (pid, dst, dport)
+			// and retry. This recovers the Go crypto/tls and rustls header/body
+			// split where the 5-byte record header lands in one write() and the
+			// handshake body lands in the next.
+			res := reasm.appendAndParse(tlsReassemblyKey{PID: tgid, Dst: daddr, Dport: port}, rawPay)
+			if !res.parsed {
+				stats.addDropped("tls_sni_parse")
+				continue
+			}
+			sni = res.sni
+			reassembled = res.reassembly
 		}
 		// SNI is parsed from an attacker-controlled TLS ClientHello buffer.
 		sni = telemetry.SanitizeField(sni, 253)
@@ -437,14 +449,19 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
 			n := seq.Next()
+			note := "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed"
+			if reassembled {
+				note = "ClientHello SNI recovered via inter-syscall reassembly (header/body split across writes)"
+			}
 			ev := telemetry.TLSEvent{
 				Type: "tls", TS: ts, Seq: n,
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, SNI: sni,
-				Confidence: conf,
-				Dst:        ip.String(), Dport: port,
+				Confidence:     conf,
+				ReassembledSNI: reassembled,
+				Dst:            ip.String(), Dport: port,
 				Policy: string(cl),
-				Note:   "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
+				Note:   note,
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()
@@ -663,6 +680,60 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 			continue
 		}
 		cache.AddFromPacket(pkt)
+	}
+}
+
+// readKTLSRing drains setsockopt(SOL_TLS, TLS_TX|TLS_RX) ringbuf events from
+// trace_ktls.bpf.c. Each event names one socket that handed TLS encryption to
+// the kernel — meaning the userspace SNI sniffer in trace_tls_write.inc will
+// observe ciphertext on that fd and cannot resolve SNI. Counted in runStats
+// for the digest KPI; appended to JSONL when EventsLogPath is set.
+func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (ktls)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		tgid, tid, fd, commb, dirByte, ok := decodeKTLSEvent(record.RawSample)
+		if !ok {
+			stats.addDropped("ktls_decode")
+			slog.Warn("decode ktls", "len", len(record.RawSample))
+			continue
+		}
+		stats.addKTLS()
+		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		direction := ktlsDirectionLabel(dirByte)
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+		slog.Debug("ktls offload", "tgid", tgid, "comm", comm, "fd", fd, "direction", direction)
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.KTLSEvent{
+				Type: telemetry.EventTypeKTLS, TS: ts, Seq: n,
+				PID: tgid, TGID: tgid, ThreadID: tid,
+				Comm: comm, FD: fd, Direction: direction,
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("ktls_jsonl")
+				slog.Warn("events jsonl (ktls)", "err", werr)
+			}
+		}
 	}
 }
 
