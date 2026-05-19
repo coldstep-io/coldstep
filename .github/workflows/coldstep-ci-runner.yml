@@ -191,6 +191,24 @@ jobs:
           go-version-file: go.mod
       - name: Prepare BPF
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+      - name: Kernel staleness check (P2-4)
+        # Annotate when the integration runner kernel drifts >2 major versions
+        # past the minimum supported (5.15). Drift here means the integration
+        # job is no longer exercising the floor of the supported range, so a
+        # regression on older kernels could slip through unnoticed. Warn-only:
+        # the kernel matrix workflow (.github/workflows/coldstep-kernel-matrix.yml)
+        # is the long-term home for pinned coverage.
+        run: |
+          set -eu
+          RUNNER_KERNEL=$(uname -r | cut -d. -f1-2)
+          MIN_KERNEL="5.15"
+          echo "Runner kernel: $RUNNER_KERNEL, min supported: $MIN_KERNEL"
+          runner_major=$(echo "$RUNNER_KERNEL" | cut -d. -f1)
+          min_major=$(echo "$MIN_KERNEL" | cut -d. -f1)
+          delta=$((runner_major - min_major))
+          if [ "$delta" -gt 2 ]; then
+            echo "::warning title=Kernel staleness::Runner kernel $RUNNER_KERNEL is >2 major versions ahead of minimum supported $MIN_KERNEL — older-kernel regressions may not surface in this job; rely on coldstep-kernel-matrix.yml"
+          fi
       - name: Go vet
         run: go vet ./...
       - name: staticcheck
