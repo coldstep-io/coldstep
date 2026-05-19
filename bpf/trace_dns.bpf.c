@@ -97,6 +97,10 @@ struct {
 	__type(value, __u32);
 } tcp_dns_skipped_short_read SEC(".maps");
 
+/*
+ * AUDIT(5a): null checked — every `note_*` counter helper below follows the
+ * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
+ */
 static __always_inline void note_dns_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
@@ -198,6 +202,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	/* AUDIT(5a): null checked — `!pending` returns before deref. */
 	pending = bpf_map_lookup_elem(&recvfrom_buf, &pid_tgid);
 	if (!pending)
 		return 0;
@@ -212,6 +217,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	if (orig_nr == (unsigned long)COLDSTEP_NR_RECVFROM) {
+		/* AUDIT(5f): return checked — non-zero aborts before deref. */
 		if (bpf_probe_read_user(hdr, sizeof(hdr), (void *)pending->buf_user))
 			return 0;
 		/* QR bit must be 1 (response) */
@@ -229,6 +235,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 		}
 		__u8 tcp_hdr[5];
+		/* AUDIT(5f): return checked — non-zero aborts before deref. */
 		if (bpf_probe_read_user(tcp_hdr, sizeof(tcp_hdr), (void *)pending->buf_user))
 			return 0;
 		/* QR bit (byte 2 of DNS header) is at offset 4 */
@@ -256,6 +263,8 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (copy_len > DNS_SNIFF_MAX)
 		copy_len = DNS_SNIFF_MAX;
 
+	/* AUDIT(5b): submit/discard paired — `!ev` early return holds no slot;
+	 * the probe-read-failure path discards before return; success submits. */
 	ev = bpf_ringbuf_reserve(&dns_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_dns_ringbuf_reserve_failed();
@@ -267,6 +276,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	__builtin_memset(ev->_pad, 0, sizeof(ev->_pad));
 	_Static_assert(sizeof(ev->data) == DNS_SNIFF_MAX,
 		       "dns sniff data array vs DNS_SNIFF_MAX");
+	/* AUDIT(5f): return checked — non-zero path discards the reserved slot. */
 	if (bpf_probe_read_user(ev->data, sizeof(ev->data), (void *)pending->buf_user)) {
 		bpf_ringbuf_discard(ev, 0);
 		return 0;

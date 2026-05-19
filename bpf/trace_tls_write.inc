@@ -23,6 +23,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 {
 	{
 		__u32 key0 = 0;
+		/* AUDIT(5a): null checked — `!en` short-circuits before `*en`. */
 		__u8 *en = bpf_map_lookup_elem(&tls_agent_cfg, &key0);
 
 		if (!en || *en == 0)
@@ -41,6 +42,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 		unsigned char peek[6];
 
 		/* Constant read size — variable peeksz trips strict verifiers on some runners. */
+		/* AUDIT(5f): return checked — non-zero aborts before deref. */
 		if (bpf_probe_read_user(peek, 6, (void *)buf_ptr))
 			return;
 		if (peek[0] != 0x16)   /* ContentType: Handshake */
@@ -56,6 +58,9 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 
 	{
 		__u32 tgid = (__u32)(pt >> 32);
+		/* AUDIT(5b): submit/discard paired — `!ev` early return holds
+		 * no slot; the probe-read-failure path discards before return;
+		 * success submits at end of block. */
 		struct tls_sniff_event *ev =
 			bpf_ringbuf_reserve(&tls_events, sizeof(*ev), 0);
 
@@ -78,6 +83,7 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 			_Static_assert(sizeof(ev->payload) == TLS_PAYLOAD_MAX,
 				       "tls sniff payload array vs TLS_PAYLOAD_MAX");
 			ev->capture_len = (__u16)len;
+			/* AUDIT(5f): return checked — non-zero discards the reserved slot. */
 			if (bpf_probe_read_user(ev->payload, sizeof(ev->payload), (void *)buf_ptr)) {
 				bpf_ringbuf_discard(ev, 0);
 				return;
@@ -152,6 +158,9 @@ static __always_inline int handle_write_obs_sys_enter(long id, unsigned long di_
 			 */
 			if (dx_ul > 1)
 				note_tls_writev_multi_iovec();
+			/* AUDIT(5f): return checked — only the `== 0` branch
+			 * proceeds; on probe failure iov0 stays {} and the
+			 * sniff is skipped. */
 			if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)si_ul) == 0) {
 				/*
 				 * iov_len comes from untrusted userspace memory. Cap it to
@@ -178,6 +187,13 @@ static __always_inline int handle_write_obs_sys_enter(long id, unsigned long di_
 				 */
 				if (dx_ul >= 2) {
 					struct coldstep_iovec iov1 = {};
+					/* AUDIT(5c): pointer arithmetic bounded — `si_ul` is
+					 * the userspace iovec[] base; `+ sizeof(coldstep_iovec)`
+					 * advances to iov[1]. The kernel performs the actual
+					 * bounds check inside bpf_probe_read_user; a short
+					 * iovec array yields a non-zero return below and the
+					 * branch is skipped.
+					 * AUDIT(5f): return checked — only `== 0` proceeds. */
 					if (bpf_probe_read_user(&iov1, sizeof(iov1),
 						(void *)(si_ul + sizeof(struct coldstep_iovec))) == 0) {
 						__u32 iov1_len = coldstep_syscall_len_u32(iov1.iov_len);

@@ -32,6 +32,7 @@ struct {
 static __always_inline void note_exec_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!v` returns before deref. */
 	__u32 *v = bpf_map_lookup_elem(&exec_ringbuf_reserve_failures, &k);
 
 	if (!v)
@@ -50,6 +51,10 @@ int handle_sched_process_exec(void *ctx)
 	void *src;
 
 	e = (struct trace_event_raw_sched_process_exec *)ctx;
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional;
+	 * probe_read_kernel_str return is intentionally ignored (ev->exe_path
+	 * was memset to zero so failure leaves a zero-filled path). */
 	ev = bpf_ringbuf_reserve(&events, sizeof(*ev), 0);
 	if (!ev) {
 		note_exec_ringbuf_reserve_failed();
@@ -71,6 +76,12 @@ int handle_sched_process_exec(void *ctx)
 	 * start of the trace record. Guard both: off must be non-zero (offset 0
 	 * is the fixed record header, never the dynamic string section) and
 	 * reasonably small (trace records are page-bounded).
+	 *
+	 * AUDIT(5c): pointer arithmetic bounded — `off` is verifier-guarded
+	 * (0 < off < 4096) and `len` is clamped to EXE_PATH_MAX-1 below;
+	 * bpf_probe_read_kernel_str performs the kernel-side bound on src.
+	 * AUDIT(5f): return intentionally not checked — destination buffer was
+	 * memset to zero above so failure yields an empty exe_path string.
 	 */
 	if (len > 0 && off > 0 && off < 4096) {
 		src = (void *)((__u64)e + off); /* __data_loc: offset from trace record start */

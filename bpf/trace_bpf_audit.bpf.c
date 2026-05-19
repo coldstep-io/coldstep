@@ -36,6 +36,7 @@ struct {
 static __always_inline void note_bpf_audit_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — early return guards `(*v)++`. */
 	__u32 *v = bpf_map_lookup_elem(&bpf_audit_reserve_failures, &k);
 
 	if (!v)
@@ -59,6 +60,8 @@ int handle_raw_sys_enter_bpf(struct bpf_raw_tracepoint_args *ctx)
 	if (ns_read_syscall_arg(regs, 0, &cmd_ul))
 		return 0;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct bpf_audit_event *ev = bpf_ringbuf_reserve(&bpf_audit_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_bpf_audit_reserve_failed();

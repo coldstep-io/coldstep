@@ -41,6 +41,7 @@ struct {
 static __always_inline void note_fork_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!v` returns before deref. */
 	__u32 *v = bpf_map_lookup_elem(&fork_ringbuf_reserve_failures, &k);
 
 	if (!v)
@@ -62,6 +63,8 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 	struct task_struct *child = (void *)ctx->args[1];
 	pid_t ppid, cpid;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	ev = bpf_ringbuf_reserve(&fork_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_fork_ringbuf_reserve_failed();
@@ -71,14 +74,18 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 	__builtin_memset(ev->parent_comm, 0, sizeof(ev->parent_comm));
 	__builtin_memset(ev->child_comm, 0, sizeof(ev->child_comm));
 
+	/* AUDIT(5e): field stable 5.15+ — task_struct.pid has been a pid_t
+	 * field at the same offset since the kernel began publishing BTF. */
 	ppid = BPF_CORE_READ(parent, pid);
 	cpid = BPF_CORE_READ(child, pid);
 	ev->parent_pid = (__u32)ppid;
 	ev->child_pid = (__u32)cpid;
 
 	/* task_struct.comm is a fixed array; read through the kernel pointer. */
+	/* AUDIT(5f): return checked — non-zero zeroes the destination. */
 	if (bpf_probe_read_kernel_str(ev->parent_comm, sizeof(ev->parent_comm), &parent->comm))
 		__builtin_memset(ev->parent_comm, 0, sizeof(ev->parent_comm));
+	/* AUDIT(5f): return checked — non-zero zeroes the destination. */
 	if (bpf_probe_read_kernel_str(ev->child_comm, sizeof(ev->child_comm), &child->comm))
 		__builtin_memset(ev->child_comm, 0, sizeof(ev->child_comm));
 
@@ -87,6 +94,10 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 		pid_t sid = 0;
 		struct pid *spid;
 
+		/* AUDIT(5e): field stable 5.15+ — `task_struct.group_leader`,
+		 * `signal_struct.pids[PIDTYPE_SID]`, and `pid.numbers[0].nr` have
+		 * been stable since the 4.18 struct-pid rework; load failure
+		 * yields a NULL `spid` and `sid` stays zero. */
 		spid = BPF_CORE_READ(child, group_leader, signal, pids[PIDTYPE_SID]);
 		if (spid)
 			sid = BPF_CORE_READ(spid, numbers[0].nr);
@@ -94,6 +105,9 @@ int handle_sched_process_fork(struct bpf_raw_tracepoint_args *ctx)
 	}
 
 	/* v0.3: PID namespace inode — container boundary detection. */
+	/* AUDIT(5e): field stable 5.15+ — `task_struct.nsproxy`,
+	 * `nsproxy.pid_ns_for_children`, and `pid_namespace.ns.inum` (via
+	 * struct ns_common) have been stable since 3.x. */
 	ev->child_pidns_inum = (__u32)BPF_CORE_READ(child, nsproxy,
 						     pid_ns_for_children,
 						     ns.inum);

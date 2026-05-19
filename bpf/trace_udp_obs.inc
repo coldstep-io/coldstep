@@ -9,6 +9,8 @@
 static __always_inline void handle_udp_obs_emit_pt(__u64 pt, __be16 sin_port, __be32 sin_addr,
 						    __u32 len)
 {
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ue` early return (no slot held). Submit unconditional. */
 	struct udp_send_event *ue =
 		bpf_ringbuf_reserve(&udp_events, sizeof(*ue), 0);
 	if (!ue) {
@@ -52,6 +54,7 @@ static __always_inline int coldstep_connect_tuple_fetch(__u32 fd32, struct conne
 	__u64 pt = bpf_get_current_pid_tgid();
 	__u32 tgid = (__u32)(pt >> 32);
 	__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
+	/* AUDIT(5a): null checked — `!tup` short-circuits before deref. */
 	struct connect4_tuple *tup = bpf_map_lookup_elem(&connect4_by_tgid_fd, &mkey);
 
 	if (!tup || !tup->in_use || !out || !pt_out)
