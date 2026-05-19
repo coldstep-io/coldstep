@@ -68,7 +68,7 @@ struct {
 } dns_ringbuf_reserve_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -80,7 +80,7 @@ struct {
  * bump tcp_dns_skipped_short_read; multi-read reassembly is still out of scope.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -91,7 +91,7 @@ struct {
  * 2-byte RFC 1035 length prefix plus minimal DNS header inspection (partial TCP segments).
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -118,7 +118,8 @@ static __always_inline void note_dns_recvfrom_buf_update_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	/* PERCPU_ARRAY: each CPU owns its slot; no global atomic contention. */
+	(*v)++;
 }
 
 static __always_inline void note_tcp_dns_response(void)
@@ -128,7 +129,7 @@ static __always_inline void note_tcp_dns_response(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_tcp_dns_skipped_short_read(void)
@@ -138,7 +139,7 @@ static __always_inline void note_tcp_dns_skipped_short_read(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 SEC("raw_tp/sys_enter")
