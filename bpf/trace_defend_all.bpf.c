@@ -21,6 +21,7 @@
 #include <bpf/bpf_helpers.h>
 #include <bpf/bpf_tracing.h>
 #include <bpf/bpf_core_read.h>
+#include <bpf/bpf_endian.h>
 #include "trace_connect_obs.h"
 #include "defend_lpm_key.h"
 #include "dns_cache.h"

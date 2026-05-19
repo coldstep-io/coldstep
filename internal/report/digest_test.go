@@ -685,3 +685,68 @@ func TestBuildDetectMarkdown_VisibleLineBudget(t *testing.T) {
 		t.Fatalf("visible portion is %d lines, budget is 30:\n%s", lines, visible)
 	}
 }
+
+// TestBuildDetectMarkdown_IPv6Observed_DetectMode covers the P0-1 Phase 1
+// detect-mode rendering: any non-zero IPv6 counter must (a) flip the
+// headline verdict to ⚠️ and (b) add a triage row naming the limitation.
+func TestBuildDetectMarkdown_IPv6Observed_DetectMode(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                 []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:           1,
+		IPv6ConnectObserved: 3,
+		IPv6SendmsgObserved: 2,
+		MaxRowsPerSection:   50,
+	})
+	for _, needle := range []string{
+		"## ⚠️ coldstep — detect",
+		"**IPv6 egress detected**",
+		"⚠️ **5** non-loopback IPv6 destinations",
+		"connect=3 sendmsg=2",
+		"IPv6 enforcement not yet supported",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+	if strings.Contains(md, "🚨 coldstep") {
+		t.Fatalf("detect mode IPv6 observation must not escalate to 🚨:\n%s", md)
+	}
+}
+
+// TestBuildDetectMarkdown_IPv6Observed_DefendMode covers the defend-mode
+// escalation: in defend mode the IPv4-only allowlist could not gate the
+// IPv6 connection, so the headline must be 🚨 and the triage row must
+// say the allowlist is IPv4-only.
+func TestBuildDetectMarkdown_IPv6Observed_DefendMode(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:          "defend",
+		BPF:                 []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:           1,
+		IPv6ConnectObserved: 1,
+		MaxRowsPerSection:   50,
+	})
+	for _, needle := range []string{
+		"## 🚨 coldstep — defend",
+		"**IPv6 egress detected**",
+		"🚨 **1** non-loopback IPv6 destinations",
+		"defend allowlist is IPv4-only",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_IPv6Observed_ZeroIsClean confirms the IPv6
+// triage row only appears when at least one counter is non-zero — clean
+// runs must not surface IPv6 noise.
+func TestBuildDetectMarkdown_IPv6Observed_ZeroIsClean(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "**IPv6 egress detected**") {
+		t.Fatalf("IPv6 triage row must not appear when counters are zero:\n%s", md)
+	}
+}

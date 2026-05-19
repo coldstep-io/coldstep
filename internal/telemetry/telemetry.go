@@ -113,17 +113,24 @@ type Summary struct {
 	//   - sendfile_observed:     sendfile(2) / sendfile64(2)
 	//   - splice_observed:       splice(2)
 	//   - sendmmsg_first_only:   sendmmsg(2) — only the first mmsghdr inspected
-	SendfileObserved               int `json:"sendfile_observed,omitempty"`
-	SpliceObserved                 int `json:"splice_observed,omitempty"`
-	SendmmsgFirstOnly              int `json:"sendmmsg_first_only,omitempty"`
-	IoUringSetupObserved           int `json:"io_uring_setup_observed,omitempty"`
-	TCPDNSResponsesObserved        int `json:"tcp_dns_responses_observed,omitempty"`
-	TCPDNSSkippedShortRead         int `json:"tcp_dns_skipped_short_read,omitempty"`
-	BPFAuditEvents                 int `json:"bpf_audit_events,omitempty"`
-	BPFHeartbeatFailures           int `json:"bpf_heartbeat_failures,omitempty"`
-	BPFMapIntegrityFailures        int `json:"bpf_map_integrity_failures,omitempty"`
-	BPFDNSCacheUpdateFailures      int `json:"bpf_dns_cache_update_failures,omitempty"`
-	BPFAuditRingbufReserveFailures int `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
+	SendfileObserved  int `json:"sendfile_observed,omitempty"`
+	SpliceObserved    int `json:"splice_observed,omitempty"`
+	SendmmsgFirstOnly int `json:"sendmmsg_first_only,omitempty"`
+	// IPv6ConnectObserved / IPv6SendmsgObserved count non-loopback IPv6
+	// egress attempts observed by the P0-1 Phase 1 cgroup/connect6 and
+	// cgroup/sendmsg6 hooks. Phase 1 is observe-only — IPv6 enforcement
+	// is not yet implemented, so non-zero values mean traffic escaped
+	// the IPv4-only defend allowlist. The digest surfaces this gap.
+	IPv6ConnectObserved            uint32 `json:"ipv6_connect_observed,omitempty"`
+	IPv6SendmsgObserved            uint32 `json:"ipv6_sendmsg_observed,omitempty"`
+	IoUringSetupObserved           int    `json:"io_uring_setup_observed,omitempty"`
+	TCPDNSResponsesObserved        int    `json:"tcp_dns_responses_observed,omitempty"`
+	TCPDNSSkippedShortRead         int    `json:"tcp_dns_skipped_short_read,omitempty"`
+	BPFAuditEvents                 int    `json:"bpf_audit_events,omitempty"`
+	BPFHeartbeatFailures           int    `json:"bpf_heartbeat_failures,omitempty"`
+	BPFMapIntegrityFailures        int    `json:"bpf_map_integrity_failures,omitempty"`
+	BPFDNSCacheUpdateFailures      int    `json:"bpf_dns_cache_update_failures,omitempty"`
+	BPFAuditRingbufReserveFailures int    `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
 	// RingbufReserveFailuresTotal is the sum of per-channel ringbuf reserve failure
 	// counters (detect-path telemetry only; excludes defend deny-event reserves).
 	RingbufReserveFailuresTotal int            `json:"ringbuf_reserve_failures_total,omitempty"`

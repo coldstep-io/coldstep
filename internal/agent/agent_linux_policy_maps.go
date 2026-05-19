@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"sort"
@@ -321,6 +322,45 @@ func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
 		return 0
 	}
 	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
+}
+
+// readIPv6ConnectObservedCount returns the per-CPU sum of the
+// ipv6_connect_observed counter populated by the cgroup/connect6
+// observe-only hook (P0-1 Phase 1). Returns 0 when the map is absent
+// (stubs predate the regeneration on Linux).
+// TODO: wire to defend objects after regeneration on Linux — this is a
+// no-op until defendObjs.Ipv6ConnectObserved is populated by the
+// generated bindings.
+func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
+	if objs == nil {
+		return 0
+	}
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6ConnectObserved, "readIPv6ConnectObservedCount"))
+}
+
+// readIPv6SendmsgObservedCount mirrors readIPv6ConnectObservedCount for
+// the cgroup/sendmsg6 observe-only hook (P0-1 Phase 1).
+// TODO: wire to defend objects after regeneration on Linux.
+func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
+	if objs == nil {
+		return 0
+	}
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
+}
+
+// clampPerCPUSumToUint32 narrows the int sum returned by
+// readUint32PerCPUArraySum down to uint32 with explicit saturation. The
+// per-cpu values are uint32 but summed into an int across the CPU set;
+// in practice the result fits, but gosec G115 wants an explicit bounded
+// conversion before the narrowing cast.
+func clampPerCPUSumToUint32(n int) uint32 {
+	if n <= 0 {
+		return 0
+	}
+	if n > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(n)
 }
 
 // buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the

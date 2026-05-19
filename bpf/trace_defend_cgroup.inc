@@ -1,9 +1,14 @@
 /*
  * Cgroup egress defend section of bpf/trace_defend_all.bpf.c.
- * IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`); IPv6 not supported.
+ *
+ * IPv4 paths (`cgroup/connect4`, `cgroup/sendmsg4`) carry the policy-based
+ * deny logic. IPv6 paths (`cgroup/connect6`, `cgroup/sendmsg6`) are
+ * Phase 1 observe-only (P0-1): they bump per-cpu counters but always
+ * return 1 (allow). Enforcement on IPv6 is a future phase.
  *
  * Maps in this section use bare names (no prefix): deny_events,
- * deny_reserve_failures, defend_cfg, allowed_ipv4, ignored_ipv4_lpm.
+ * deny_reserve_failures, defend_cfg, allowed_ipv4, ignored_ipv4_lpm,
+ * ipv6_connect_observed, ipv6_sendmsg_observed.
  * Policy helpers from defend_policy.inc are renamed to cg_* so the LSM
  * section can declare lsm_* equivalents in the same translation unit.
  *
@@ -49,6 +54,27 @@ struct {
 	__type(key, struct ns_lpm4_key);
 	__type(value, __u8);
 } ignored_ipv4_lpm SEC(".maps");
+
+/*
+ * P0-1 Phase 1: IPv6 egress observe-only counters. cgroup/connect6 and
+ * cgroup/sendmsg6 hooks below bump these on any non-loopback IPv6
+ * destination but never deny — surfaces the silent IPv6 bypass gap
+ * (IPv4-only enforcement) in the digest as a warning. Per-cpu uint32
+ * to avoid cache-line contention; userspace sums across CPUs.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} ipv6_connect_observed SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} ipv6_sendmsg_observed SEC(".maps");
 
 #define defense_enabled cg_defense_enabled
 #define dst_is_allowlisted cg_dst_is_allowlisted
@@ -111,4 +137,49 @@ SEC("cgroup/sendmsg4")
 int defend_sendmsg4(struct bpf_sock_addr *ctx)
 {
 	return defend_cgroup_sock_addr_ipv4(ctx);
+}
+
+/*
+ * IPv6 loopback (::1) check: user_ip6 is __be32[4] in network byte order;
+ * ::1 is {0,0,0,htonl(1)}. Skip loopback so test runners' localhost IPv6
+ * traffic doesn't dominate the counter.
+ */
+static __always_inline int cg_ipv6_is_loopback(struct bpf_sock_addr *ctx)
+{
+	return ctx->user_ip6[0] == 0 &&
+	       ctx->user_ip6[1] == 0 &&
+	       ctx->user_ip6[2] == 0 &&
+	       ctx->user_ip6[3] == bpf_htonl(1);
+}
+
+static __always_inline void cg_bump_percpu_u32(void *map)
+{
+	__u32 key = 0;
+	__u32 *val = bpf_map_lookup_elem(map, &key);
+	if (val)
+		__sync_fetch_and_add(val, 1);
+}
+
+/*
+ * Phase 1 (P0-1): observe-only — record the IPv6 egress attempt and
+ * always return 1 (allow). Enforcement on IPv6 is a future phase; right
+ * now coldstep can't gate it, but the digest can warn that traffic
+ * escaped the IPv4-only allowlist.
+ */
+SEC("cgroup/connect6")
+int defend_cgroup_connect6(struct bpf_sock_addr *ctx)
+{
+	if (cg_ipv6_is_loopback(ctx))
+		return 1;
+	cg_bump_percpu_u32(&ipv6_connect_observed);
+	return 1;
+}
+
+SEC("cgroup/sendmsg6")
+int defend_cgroup_sendmsg6(struct bpf_sock_addr *ctx)
+{
+	if (cg_ipv6_is_loopback(ctx))
+		return 1;
+	cg_bump_percpu_u32(&ipv6_sendmsg_observed);
+	return 1;
 }
