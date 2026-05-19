@@ -144,8 +144,12 @@ type Summary struct {
 	DroppedCounts               map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                map[string]int `json:"policy_counts"`
 	BPF                         []BPFStatus    `json:"bpf,omitempty"`
-	Signature                   string         `json:"signature,omitempty"`
-	PublicKey                   string         `json:"public_key,omitempty"`
+	// CompatWarnings carries non-fatal runner-compatibility signals
+	// captured at agent startup (cgroup-v1 detection, container-namespace
+	// delegation, deep cgroup nesting). Empty when the runner looks normal.
+	CompatWarnings []CompatWarning `json:"compat_warnings,omitempty"`
+	Signature      string          `json:"signature,omitempty"`
+	PublicKey      string          `json:"public_key,omitempty"`
 }
 
 // WriteSummary writes telemetry summary JSON (overwrites).
