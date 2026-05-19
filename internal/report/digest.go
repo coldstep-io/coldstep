@@ -73,12 +73,27 @@ func verdictEmoji(in DigestInput) string {
 }
 
 // writeHeader renders the single-line `## <emoji> coldstep — <mode>` heading.
+// When partial-coverage signals fired (ringbuf drops or partial-observe
+// counters), a blockquote note steers the reader to the Coverage block — the ✅
+// badge alone would otherwise imply complete observation.
 func writeHeader(b *strings.Builder, in DigestInput) {
 	mode := "detect"
 	if isBlockingDigestMode(in.DefendMode) {
 		mode = "defend"
 	}
 	fmt.Fprintf(b, "## %s coldstep — %s\n\n", verdictEmoji(in), mode)
+	if hasPartialCoverageSignals(in) {
+		b.WriteString("> ⚠️ Partial coverage — see Coverage block below.\n\n")
+	}
+}
+
+// writeCoverage emits a one-line scope statement so users do not misread ✅ as
+// "every byte of egress observed". IPv6 and QUIC/HTTP3 are statically out of
+// scope today (no BPF coverage); the "Payloads beyond iov[0]" cell flips to
+// ⚠️ partial when BG-01 partial-observe counters fired this run.
+func writeCoverage(b *strings.Builder, in DigestInput) {
+	fmt.Fprintf(b, "**Coverage this run:** IPv4 TCP/UDP ✓ observed | IPv6 ✗ not observed | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: %s\n\n",
+		coveragePayloadState(in))
 }
 
 // writeCompactKPI emits a single-row 5-column KPI table. The full per-channel
@@ -305,6 +320,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 
 	if dt := droppedTotal(in); dt > 0 {
 		fmt.Fprintf(b, "| **dropped events (decode/jsonl)** | %d |\n", dt)
+	}
+	if rb := totalDetectRingbufReserveFailures(in); rb > 0 {
+		fmt.Fprintf(b, "| **⚠️ Ringbuf drops (detect-path total)** | %d events dropped |\n", rb)
 	}
 
 	// --- health (last) ---
@@ -761,6 +779,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 	var b strings.Builder
 	writeHeader(&b, in)
 	writeCompactKPI(&b, in)
+	writeCoverage(&b, in)
 	writeTopDestinations(&b, in)
 	writeTriageTable(&b, in)
 	writeTechnicalDetails(&b, in, max)
