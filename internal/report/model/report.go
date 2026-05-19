@@ -16,6 +16,33 @@ type Report struct {
 	CapabilityEval   CapabilityEval        `json:"capability_eval"`
 	OTX              json.RawMessage       `json:"otx"`
 	RDNS             json.RawMessage       `json:"rdns"`
+	// ObservationHours is the wall-clock span from the meta event (or
+	// earliest observed event) to the last event in the JSONL stream.
+	// Surfaces in build-model output so post-run gates can reject
+	// short learning windows (P1-2 / 4a: learning-mode poisoning).
+	ObservationHours float64 `json:"observation_hours"`
+	// ShortObservationWindow is set by build-model when ObservationHours
+	// is below the --min-observation-hours threshold. assert-integrity
+	// promotes it to a hard fail.
+	ShortObservationWindow bool `json:"short_observation_window,omitempty"`
+	// MinObservationHours echoes the threshold supplied to build-model
+	// (0 when no threshold was requested). Lets the digest explain why
+	// a window was flagged.
+	MinObservationHours float64 `json:"min_observation_hours,omitempty"`
+	// SuspiciousDomains is the union of high-entropy / rare / port-anomaly
+	// flagged destinations (P1-2 / 4b). render-summary surfaces the count.
+	SuspiciousDomains []SuspiciousDomain `json:"suspicious_domains,omitempty"`
+}
+
+// SuspiciousDomain captures why a destination was flagged during build-model.
+// Reasons is a non-empty, sorted, de-duped set of: "high_entropy",
+// "rare", "port_anomaly".
+type SuspiciousDomain struct {
+	Domain      string   `json:"domain"`
+	Reasons     []string `json:"reasons"`
+	Entropy     float64  `json:"entropy,omitempty"`
+	Occurrences int      `json:"occurrences,omitempty"`
+	Ports       []int    `json:"ports,omitempty"`
 }
 
 type RunMeta struct {
