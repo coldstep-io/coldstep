@@ -363,6 +363,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if in.SendmmsgUnobservedExtra > 0 {
 		fmt.Fprintf(b, "| **sendmmsg extra messages dropped past unroll bound (vlen>8)** | %d |\n", in.SendmmsgUnobservedExtra)
 	}
+	if in.QUICCandidateCount > 0 {
+		fmt.Fprintf(b, "| **QUIC (port-443 UDP)** | %d flows · payload not inspected |\n", in.QUICCandidateCount)
+	}
 
 	fmt.Fprintf(b, "| **http** | %d |\n", in.HTTPTotal)
 	if in.HTTPRingbufReserveFailures > 0 {
@@ -823,6 +826,9 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	}
 	if in.SendmmsgMultiMessage > 0 {
 		b.WriteString("- **sendmmsg multi-message** counts `sendmmsg(2)` calls with `vlen>1` (multi-message batch); only the first `mmsghdr` is introspected today.\n")
+	}
+	if in.QUICCandidateCount > 0 {
+		b.WriteString("- **QUIC (port-443 UDP)** counts UDP egress to non-loopback IPv4 on port 443 — a heuristic for QUIC/HTTP3 flows. Payload content is encrypted at the transport layer and **not inspected** by the BPF probes; the JSONL `quic_candidate` event records pid, comm, and destination only. Use this to gauge how much of the run is invisible to HTTP/TLS sniff paths.\n")
 	}
 	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
 		b.WriteString("- **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.\n")

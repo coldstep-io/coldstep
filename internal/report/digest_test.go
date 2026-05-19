@@ -594,6 +594,40 @@ func TestBuildDetectMarkdown_RingbufReserveRollup(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_QUICCandidateKPI(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		UDPTotal:           5,
+		QUICCandidateCount: 3,
+	})
+	for _, needle := range []string{
+		"| **QUIC (port-443 UDP)** | 3 flows · payload not inspected |",
+		"**QUIC (port-443 UDP)** counts UDP egress to non-loopback IPv4 on port 443",
+		"Payload content is encrypted",
+		"not inspected",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_QUICCandidateKPI_Hidden_WhenZero(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		UDPTotal:           5,
+		QUICCandidateCount: 0,
+	})
+	for _, unexpected := range []string{
+		"QUIC (port-443 UDP)",
+		"payload not inspected",
+	} {
+		if strings.Contains(md, unexpected) {
+			t.Fatalf("unexpected QUIC row when count=0:\n%s", md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		DroppedCounts: map[string]int{
