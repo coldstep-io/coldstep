@@ -70,6 +70,9 @@ func rdnsEnrich(args []string) error {
 	}
 
 	m["dns_lookups"] = lookups
+	if err := applyReputationEnrichers(m); err != nil {
+		return err
+	}
 	if err := writeModelMap(inPath, m); err != nil {
 		return err
 	}
@@ -114,6 +117,9 @@ func otxEnrich(args []string) error {
 				"unidentified": 0,
 				"total":        0,
 			},
+		}
+		if err := applyReputationEnrichers(m); err != nil {
+			return err
 		}
 		return writeModelMap(inPath, m)
 	}
@@ -190,6 +196,9 @@ func otxEnrich(args []string) error {
 			"unidentified": unidentifiedCount,
 			"total":        maliciousCount + cleanCount + unidentifiedCount,
 		},
+	}
+	if err := applyReputationEnrichers(m); err != nil {
+		return err
 	}
 	return writeModelMap(inPath, m)
 }
