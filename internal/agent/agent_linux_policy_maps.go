@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"sort"
@@ -319,7 +320,7 @@ func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
 	}
-	return uint32(readUint32PerCPUArraySum(objs.Ipv6ConnectObserved, "readIPv6ConnectObservedCount"))
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6ConnectObserved, "readIPv6ConnectObservedCount"))
 }
 
 // readIPv6SendmsgObservedCount mirrors readIPv6ConnectObservedCount for
@@ -329,7 +330,22 @@ func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
 	}
-	return uint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
+}
+
+// clampPerCPUSumToUint32 narrows the int sum returned by
+// readUint32PerCPUArraySum down to uint32 with explicit saturation. The
+// per-cpu values are uint32 but summed into an int across the CPU set;
+// in practice the result fits, but gosec G115 wants an explicit bounded
+// conversion before the narrowing cast.
+func clampPerCPUSumToUint32(n int) uint32 {
+	if n <= 0 {
+		return 0
+	}
+	if n > math.MaxUint32 {
+		return math.MaxUint32
+	}
+	return uint32(n)
 }
 
 // buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the
