@@ -348,6 +348,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
 	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
+	reasm := newTLSReassembler()
 	for {
 		record, err := rd.Read()
 		if err != nil {
@@ -381,9 +382,20 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		}
 		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
+		reassembled := false
 		if !parsed {
-			stats.addDropped("tls_sni_parse")
-			continue
+			// Fall back to userspace inter-syscall reassembly: stitch this
+			// payload onto any buffered prefix for the same (pid, dst, dport)
+			// and retry. This recovers the Go crypto/tls and rustls header/body
+			// split where the 5-byte record header lands in one write() and the
+			// handshake body lands in the next.
+			res := reasm.appendAndParse(tlsReassemblyKey{PID: tgid, Dst: daddr, Dport: port}, rawPay)
+			if !res.parsed {
+				stats.addDropped("tls_sni_parse")
+				continue
+			}
+			sni = res.sni
+			reassembled = res.reassembly
 		}
 		// SNI is parsed from an attacker-controlled TLS ClientHello buffer.
 		sni = telemetry.SanitizeField(sni, 253)
@@ -402,14 +414,19 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
 			n := seq.Next()
+			note := "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed"
+			if reassembled {
+				note = "ClientHello SNI recovered via inter-syscall reassembly (header/body split across writes)"
+			}
 			ev := telemetry.TLSEvent{
 				Type: "tls", TS: ts, Seq: n,
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, SNI: sni,
-				Confidence: conf,
-				Dst:        ip.String(), Dport: port,
+				Confidence:     conf,
+				ReassembledSNI: reassembled,
+				Dst:            ip.String(), Dport: port,
 				Policy: string(cl),
-				Note:   "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
+				Note:   note,
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()

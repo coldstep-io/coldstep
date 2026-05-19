@@ -211,11 +211,18 @@ type TLSEvent struct {
 	Comm       string        `json:"comm"`
 	SNI        string        `json:"sni"`
 	Confidence TLSConfidence `json:"confidence,omitempty"`
-	Dst        string        `json:"dst"`
-	Dport      uint16        `json:"dport"`
-	Policy     string        `json:"policy"`
-	Note       string        `json:"note,omitempty"`
-	Sig        string        `json:"sig,omitempty"`
+	// ReassembledSNI is true when the SNI was recovered by stitching multiple
+	// write/writev/sendto syscall buffers together (P3-3 inter-syscall
+	// reassembly) rather than parsed from a single capture. It is independent
+	// of Confidence (which scores the SNI string itself); a reassembled SNI
+	// can still be Confidence="full" if its length is well under the RFC
+	// boundary.
+	ReassembledSNI bool   `json:"reassembled_sni,omitempty"`
+	Dst            string `json:"dst"`
+	Dport          uint16 `json:"dport"`
+	Policy         string `json:"policy"`
+	Note           string `json:"note,omitempty"`
+	Sig            string `json:"sig,omitempty"`
 }
 
 // QUICCandidateEvent is emitted when a UDP egress to port 443 on a non-loopback
