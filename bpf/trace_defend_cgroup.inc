@@ -155,6 +155,7 @@ static __always_inline int cg_ipv6_is_loopback(struct bpf_sock_addr *ctx)
 static __always_inline void cg_bump_percpu_u32(void *map)
 {
 	__u32 key = 0;
+	/* AUDIT(5a): null checked — only used inside `if (val)`. */
 	__u32 *val = bpf_map_lookup_elem(map, &key);
 	if (val)
 		__sync_fetch_and_add(val, 1);

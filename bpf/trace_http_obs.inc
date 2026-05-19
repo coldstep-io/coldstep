@@ -5,6 +5,8 @@
 static __always_inline void handle_http_obs_emit_pt(__u64 pt, unsigned long buf_ptr, __u32 len,
 						    __be16 sin_port, __be32 sin_addr)
 {
+	/* AUDIT(5b): submit/discard paired — `!he` early return holds no slot;
+	 * probe-read-failure path discards before return; success submits. */
 	struct http_sniff_event *he =
 		bpf_ringbuf_reserve(&http_events, sizeof(*he), 0);
 	if (!he) {
@@ -30,6 +32,7 @@ static __always_inline void handle_http_obs_emit_pt(__u64 pt, unsigned long buf_
 		__u32 sz = coldstep_probe_user_sz_http(len);
 
 		he->capture_len = (__u16)sz;
+		/* AUDIT(5f): return checked — non-zero discards the reserved slot. */
 		if (bpf_probe_read_user(he->payload, sizeof(he->payload), (void *)buf_ptr)) {
 			bpf_ringbuf_discard(he, 0);
 			return;

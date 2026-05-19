@@ -433,6 +433,20 @@ func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult
 		return 0, 0, err
 	}
 
+	// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are
+	// not reflected. The agent resolves domains once during compileDefendAllowlist
+	// and writes the resulting /32 set + literal CIDRs into the LPM trie here.
+	// If a domain's A-record set changes after this point (DNS rotation, CDN
+	// edge migration), the BPF allowlist still reflects the startup snapshot
+	// until the next agent restart. Operators relying on DNS-backed domain
+	// rules should treat the agent's lifetime as the freshness window for the
+	// allowlist and add literal CIDRs / IPs for any destinations that need to
+	// survive DNS rotation. The dns_cache map (populated by trace_dns.bpf.c at
+	// runtime) is consulted as a fallback for reverse lookups in
+	// defend_policy.inc:dst_is_allowlisted, but the primary LPM map is
+	// snapshot-only.
+	slog.Info("allowlist loaded into BPF map", "map", "lsm_allowed_ipv4", "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
+
 	return plan.totalEntries, ignoredCount, nil
 }
 
@@ -473,6 +487,11 @@ func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, p
 	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
 		return 0, 0, err
 	}
+
+	// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are
+	// not reflected. See loadLSMDefendMaps for the full rationale — both
+	// loaders share the same compile-once / load-into-BPF lifecycle.
+	slog.Info("allowlist loaded into BPF map", "map", "allowed_ipv4", "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
 
 	return plan.totalEntries, ignoredCount, nil
 }

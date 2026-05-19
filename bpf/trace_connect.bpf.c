@@ -241,6 +241,10 @@ struct {
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
 
+/*
+ * AUDIT(5a): null checked — every `note_*` counter helper below follows the
+ * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
+ */
 static __always_inline void note_connect4_tuple_update_failed(void)
 {
 	__u32 k = 0;
@@ -356,11 +360,14 @@ static __always_inline void note_partial_egress(int slot)
 static __always_inline void maybe_emit_canary(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!seq` short-circuits before `*seq`. */
 	__u64 *seq = bpf_map_lookup_elem(&canary_trigger, &k);
 
 	if (!seq || *seq == 0)
 		return;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct canary_event *ev = bpf_ringbuf_reserve(&connect_events,
 						      sizeof(struct canary_event), 0);
 	if (!ev) {
@@ -556,6 +563,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 #define SENDMMSG_EXTRA_MAX 7
 		if (vlen_ul > 1) {
 			__u32 k = 0;
+			/* AUDIT(5a): null checked — used only inside `if (v)`. */
 			__u32 *v = bpf_map_lookup_elem(&sendmmsg_multi_message_observed, &k);
 
 			if (v)
@@ -569,6 +577,16 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			 * -Wpass-failed=transform-warning under -Werror. Guard
 			 * the body with an `if` instead so all 7 iterations are
 			 * statically present and skipped when i >= vlen32.
+			 *
+			 * AUDIT(5c): pointer arithmetic bounded — `i` is the
+			 * unrolled loop induction variable in [1, 7]; the
+			 * resulting offset (i * 64) is at most 448 bytes from
+			 * the userspace mmsghdr vector base, well within the
+			 * kernel sys_sendmmsg argument range. Pointer is fed
+			 * to bpf_probe_read_user inside the helper, which
+			 * performs the kernel-side bound check.
+			 * AUDIT(5d): loop bound is constant — SENDMMSG_EXTRA_MAX=7,
+			 * verifier-provable. #pragma unroll forces full unroll.
 			 */
 #pragma unroll
 			for (int i = 1; i <= SENDMMSG_EXTRA_MAX; i++) {
@@ -580,6 +598,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 
 			if (vlen32 > SENDMMSG_EXTRA_MAX + 1) {
 				__u32 ke = 0;
+				/* AUDIT(5a): null checked — used only inside `if (ve)`. */
 				__u32 *ve = bpf_map_lookup_elem(&sendmmsg_unobserved_extra, &ke);
 
 				if (ve)
