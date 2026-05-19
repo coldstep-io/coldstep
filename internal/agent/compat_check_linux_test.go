@@ -107,7 +107,7 @@ func TestCgroupNamespaceDelegated(t *testing.T) {
 		{"kubepods prefix", "0::/kubepods/burstable/podabc/container\n", false},
 		{"system slice docker", "0::/system.slice/docker-abc.scope\n", false},
 		{"lxc", "0::/lxc/container1\n", false},
-		{"multi line one bad", "0::/\n1::cpu:/docker/abc/foo\n", false},
+		{"multi line one bad", "0::/\n1:cpu:/docker/abc/foo\n", false},
 	}
 	for _, tc := range cases {
 		tc := tc
@@ -131,7 +131,7 @@ func TestInit1CgroupMaxDepth(t *testing.T) {
 		{"root only", "0::/\n", 0},
 		{"single level", "0::/foo\n", 1},
 		{"trailing slash ignored", "0::/foo/bar/\n", 2},
-		{"max across lines", "0::/a\n1::cpu:/x/y/z\n", 3},
+		{"max across lines", "0::/a\n1:cpu:/x/y/z\n", 3},
 		{"empty", "", 0},
 	}
 	for _, tc := range cases {
