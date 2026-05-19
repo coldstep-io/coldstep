@@ -70,6 +70,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
 		{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: "not loaded"},
 		{Name: "dns recvfrom sniff", OK: false, Detail: "not loaded"},
+		{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: "not loaded"},
 	}
 
 	detectDest := cfg.StepSummaryPath
@@ -309,6 +310,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
+
+		// P3-2: paired kprobe/kretprobe on tcp_v4_connect. Captures the
+		// kernel return code so the digest can distinguish established
+		// from refused / timeout / unreachable connections. Failure here
+		// is non-fatal — the entry-side connect_event still records the
+		// attempt, just without a paired result.
+		if kpLnk, krLnk, kerr := attachTCPConnectKprobes(syscallObjs); kerr != nil {
+			slog.Info("tcp_v4_connect kprobe pair attach failed; connect_result events disabled", "err", kerr)
+			bpfSt[3] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: bpfDetail(kerr)}
+		} else {
+			bpfSt[3] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: true}
+			slog.Info("tcp_v4_connect kprobe/kretprobe attached (connect_result events enabled)")
+			defer kpLnk.Close()
+			defer krLnk.Close()
+		}
+
 		// Defend mode readiness is written after the deny reader goroutine launches
 		// (further below); writing it here would race the action's probe steps, which
 		// run as soon as readiness is set, against the reader being alive.

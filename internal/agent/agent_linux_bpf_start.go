@@ -99,6 +99,32 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 	return connRd, udpRd, httpRd, tlsRd, objs, lnk, tlsAgentCfgFailed, nil
 }
 
+// attachTCPConnectKprobes attaches the P3-2 paired kprobe/kretprobe on
+// tcp_v4_connect. The pair captures the kernel return code so the digest
+// can distinguish established / refused / timeout / unreachable
+// connections (the entry-side raw_tp/sys_enter on connect(2) cannot).
+//
+// We do NOT strip the kprobe programs from the BPF spec on unsupported
+// kernels (unlike defend's LSM stripping): BPF_PROG_TYPE_KPROBE is
+// universally available on every Linux kernel coldstep supports, so
+// prog_load never fails. The actual failure mode is attach-time when
+// tcp_v4_connect isn't exposed via the kprobe machinery (rare — would
+// require CONFIG_KPROBES=n, which no hosted Ubuntu kernel ships with).
+// Callers should log + carry on if this returns an error; the entry-side
+// connect_event still records the attempt, just without a paired result.
+func attachTCPConnectKprobes(objs *traceconnect.TraceconnectObjects) (kprobeLnk, kretprobeLnk link.Link, err error) {
+	kprobeLnk, err = link.Kprobe("tcp_v4_connect", objs.KprobeTcpV4Connect, nil)
+	if err != nil {
+		return nil, nil, fmt.Errorf("attach kprobe tcp_v4_connect: %w", err)
+	}
+	kretprobeLnk, err = link.Kretprobe("tcp_v4_connect", objs.KretprobeTcpV4Connect, nil)
+	if err != nil {
+		_ = kprobeLnk.Close()
+		return nil, nil, fmt.Errorf("attach kretprobe tcp_v4_connect: %w", err)
+	}
+	return kprobeLnk, kretprobeLnk, nil
+}
+
 func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {
 	objs = new(tracebpfaudit.TracebpfauditObjects)
 	if err = tracebpfaudit.LoadTracebpfauditObjects(objs, nil); err != nil {

@@ -28,6 +28,21 @@ func decodeConnectEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]b
 	return tgid, tid, comm, daddr, dport, true
 }
 
+// decodeConnectResultEvent parses connect_result_event emitted by the
+// kretprobe on tcp_v4_connect (P3-2). The first 4 bytes are
+// connectResultMagic; the caller is expected to have already matched the
+// magic before invoking this decoder.
+func decodeConnectResultEvent(raw []byte) (tgid, tid uint32, comm [16]byte, result int32, ok bool) {
+	if len(raw) < connectResultEventWireSize {
+		return 0, 0, [16]byte{}, 0, false
+	}
+	result = int32(binary.LittleEndian.Uint32(raw[4:8]))
+	tgid = binary.LittleEndian.Uint32(raw[8:12])
+	tid = binary.LittleEndian.Uint32(raw[12:16])
+	copy(comm[:], raw[16:32])
+	return tgid, tid, comm, result, true
+}
+
 // decodeUDPSendEvent parses udp_send_event. datagram_len lives at offset 32
 // because of the explicit `__u8 _pad[2]` (offsets 30..32) added in
 // trace_connect_obs.h. Reading from offset 30 like the prior implementation

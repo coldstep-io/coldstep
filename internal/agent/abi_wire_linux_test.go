@@ -39,6 +39,7 @@ func TestNetworkAndAuditWireSizes(t *testing.T) {
 		expected uintptr
 	}{
 		{"connect_event", uintptr(connectEventWireSize), uintptr(4 + 4 + 16 + 4 + 2 + 2)},
+		{"connect_result_event", uintptr(connectResultEventWireSize), uintptr(4 + 4 + 4 + 4 + 16)},
 		{"udp_send_event", uintptr(udpSendEventWireSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 4)},
 		{"http_sniff_event", uintptr(httpSniffEventWireSize), uintptr(httpSniffEventHeaderSize + httpPayloadMax + 2)},
 		{"tls_sniff_event", uintptr(tlsSniffEventWireSize), uintptr(tlsSniffEventHeaderSize + tlsPayloadMax + 2)},

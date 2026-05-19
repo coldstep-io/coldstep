@@ -199,7 +199,14 @@ type DigestInput struct {
 	TCPDNSResponsesObserved int
 	// TCPDNSSkippedShortRead counts read(2) returns shorter than 6 bytes on the
 	// TCP DNS path (partial segment — cannot validate length prefix + header).
-	TCPDNSSkippedShortRead         int
+	TCPDNSSkippedShortRead int
+	// TCPResultCounts holds the breakdown of tcp_v4_connect outcomes
+	// captured by the P3-2 kretprobe pair, keyed by ConnectResultString
+	// bucket (established / refused / timeout / unreachable /
+	// in_progress / denied / other). When the kretprobe attach failed,
+	// the map is empty and the digest falls back to the legacy
+	// "TCP connect attempts" wording.
+	TCPResultCounts                map[string]int
 	BPFHeartbeatFailures           int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow

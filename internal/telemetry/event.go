@@ -88,6 +88,26 @@ type TCPEvent struct {
 	Sig            string `json:"sig,omitempty"`
 }
 
+// TCPResultEvent records the tcp_v4_connect return code captured by the
+// paired kprobe/kretprobe (P3-2). It is correlated with the entry-side
+// TCPEvent by (PID, TGID, ThreadID, comm) — the kretprobe runs in the
+// caller's task context, so thread_id matches the connect(2) caller.
+// Result is 0 on success or a negative errno; ResultStr is a coarse
+// classification ("established", "refused", "timeout", "unreachable",
+// "in_progress", "other") suitable for KPI rollups.
+type TCPResultEvent struct {
+	Type      string `json:"type"` // "tcp_result"
+	TS        string `json:"ts"`
+	Seq       uint64 `json:"seq"`
+	PID       uint32 `json:"pid"` // tgid (compat field name)
+	TGID      uint32 `json:"tgid"`
+	ThreadID  uint32 `json:"thread_id"`
+	Comm      string `json:"comm"`
+	Result    int32  `json:"result"`     // 0 = success, otherwise negative errno
+	ResultStr string `json:"result_str"` // "established" | "refused" | "timeout" | "unreachable" | "in_progress" | "other"
+	Sig       string `json:"sig,omitempty"`
+}
+
 // UDPEvent is one JSONL record for IPv4 sendto egress.
 type UDPEvent struct {
 	Type           string `json:"type"` // "udp"
