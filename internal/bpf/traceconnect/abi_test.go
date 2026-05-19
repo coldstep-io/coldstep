@@ -51,15 +51,15 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("singleton ARRAY control and observation maps", func(t *testing.T) {
+	// Singleton ARRAY maps that legitimately stay global: userspace writes
+	// while BPF reads (tls_agent_cfg, canary_trigger). Per-CPU semantics
+	// would not apply.
+	t.Run("singleton ARRAY control maps", func(t *testing.T) {
 		cases := []struct {
 			mapName   string
 			valueSize uint32
 		}{
 			{"tls_agent_cfg", 1},
-			{"udp_sendmsg_multi_iovec_observed", 4},
-			{"tls_writev_multi_iovec_observed", 4},
-			{"io_uring_setup_observed", 4},
 			{"canary_trigger", 8},
 		}
 		for _, c := range cases {
@@ -83,7 +83,7 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("PERCPU_ARRAY reserve and tuple failure maps", func(t *testing.T) {
+	t.Run("PERCPU_ARRAY reserve, tuple-failure, and observation maps", func(t *testing.T) {
 		names := []string{
 			"connect4_tuple_update_failures",
 			"udp_ringbuf_reserve_failures",
@@ -92,6 +92,9 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			"tls_ringbuf_reserve_failures",
 			"sendmmsg_multi_message_observed",
 			"sendmmsg_unobserved_extra",
+			"udp_sendmsg_multi_iovec_observed",
+			"tls_writev_multi_iovec_observed",
+			"io_uring_setup_observed",
 		}
 		for _, name := range names {
 			ms, ok := spec.Maps[name]
