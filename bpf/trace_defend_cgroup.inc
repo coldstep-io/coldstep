@@ -194,6 +194,25 @@ static __always_inline void cg_bump_percpu_u32(void *map)
 }
 
 /*
+ * Copy the 16-byte IPv6 destination from ctx->user_ip6 into a __u32[4]
+ * aligned destination. The cgroup/connect|sendmsg6 verifier rewrites
+ * each `ctx->user_ip6[i]` access into a 4-byte converter load against
+ * the internal sockaddr fields. A wider read (e.g. `__builtin_memcpy
+ * (dst, &ctx->user_ip6[0], 16)`) is rejected with "dereference of
+ * modified ctx ptr R2 off=8 disallowed" because the verifier won't let
+ * helpers / memcpy receive the converter-managed ctx pointer at a
+ * non-zero offset. Issuing four direct __u32 loads stays inside the
+ * allowed access pattern.
+ */
+static __always_inline void cg_copy_user_ip6_u32(struct bpf_sock_addr *ctx, __u32 dst[4])
+{
+	dst[0] = ctx->user_ip6[0];
+	dst[1] = ctx->user_ip6[1];
+	dst[2] = ctx->user_ip6[2];
+	dst[3] = ctx->user_ip6[3];
+}
+
+/*
  * IPv6 allowlist LPM lookup. user_ip6 is __be32[4] (network order); the
  * LPM trie key copies those 16 bytes verbatim into struct lpm_v6_key.addr.
  * Prefixlen is set to /128 for the lookup itself; the trie matches
@@ -205,7 +224,7 @@ static __always_inline int cg_ipv6_is_allowlisted(struct bpf_sock_addr *ctx)
 	struct lpm_v6_key k = {};
 
 	k.prefixlen = 128;
-	__builtin_memcpy(&k.addr[0], &ctx->user_ip6[0], sizeof(k.addr));
+	cg_copy_user_ip6_u32(ctx, (__u32 *)&k.addr[0]);
 	/* AUDIT(5a): null checked — only used inside `if (ok)`. */
 	__u8 *ok = bpf_map_lookup_elem(&allowed_ipv6, &k);
 	return ok != 0;
@@ -240,7 +259,14 @@ static __always_inline void cg_emit_deny_event_ipv6(__u8 protocol, struct bpf_so
 	de->reason = reason;
 	de->af = AF_INET6;
 	de->_pad = 0;
-	__builtin_memcpy(&de->daddr[0], &ctx->user_ip6[0], sizeof(de->daddr));
+	/*
+	 * Same converter-load restriction as cg_copy_user_ip6_u32 — avoid
+	 * passing &ctx->user_ip6[0] to memcpy and instead emit four 4-byte
+	 * stores into the ringbuf record. de->daddr starts at offset 28
+	 * (4+4+16+1+1+1+1) inside the packed deny_event, which is __u32-
+	 * aligned so the casts are sound.
+	 */
+	cg_copy_user_ip6_u32(ctx, (__u32 *)&de->daddr[0]);
 	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
 	bpf_ringbuf_submit(de, 0);
 }
