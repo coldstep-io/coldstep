@@ -191,6 +191,13 @@ type DigestInput struct {
 	SendfileObserved  int
 	SpliceObserved    int
 	SendmmsgFirstOnly int
+	// IPv6ConnectObserved / IPv6SendmsgObserved count non-loopback IPv6
+	// egress attempts observed by the P0-1 Phase 1 cgroup/connect6 and
+	// cgroup/sendmsg6 hooks. coldstep defend mode is IPv4-only — non-zero
+	// values mean traffic escaped enforcement entirely; the triage table
+	// surfaces this as ⚠️ in detect mode and 🚨 in defend mode.
+	IPv6ConnectObserved uint32
+	IPv6SendmsgObserved uint32
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
 	// dispatch arm. Non-zero means some workload attempted async I/O setup;
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.

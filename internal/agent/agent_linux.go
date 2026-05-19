@@ -159,6 +159,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if hasLSM {
 				defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(&defendObjs))
 			}
+			// P0-1 Phase 1: snapshot the IPv6 observe-only counters so the
+			// digest can warn when traffic escaped the IPv4-only defend
+			// allowlist over IPv6. Safe when maps are absent (returns 0).
+			// TODO: wire to defend objects after regeneration on Linux —
+			// today these are no-ops on stubs without the IPv6 maps.
+			stats.setIPv6ConnectObserved(readIPv6ConnectObservedCount(&defendObjs))
+			stats.setIPv6SendmsgObserved(readIPv6SendmsgObservedCount(&defendObjs))
 			_ = defendObjs.Close()
 		}()
 
@@ -251,6 +258,43 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("attach defend_sendmsg4: %w", err)
 		}
 		defer defendSendmsgLnk.Close()
+
+		// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs
+		// (e.g. defend stubs generated before the IPv6 sections were
+		// added) and attach failures (very old kernels without
+		// cgroup/connect6 / cgroup/sendmsg6 support). Phase 2 will block
+		// IPv6; for now we just count and warn.
+		// TODO: regenerate defend objects after build on Linux so
+		// defendObjs.DefendCgroupConnect6 / DefendCgroupSendmsg6 are
+		// always populated on supported kernels.
+		if defendObjs.DefendCgroupConnect6 != nil {
+			ipv6ConnectLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
+				Path:    cgPath,
+				Attach:  ebpf.AttachCGroupInet6Connect,
+				Program: defendObjs.DefendCgroupConnect6,
+			})
+			if attachErr != nil {
+				slog.Info("ipv6 connect6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
+			} else {
+				defer ipv6ConnectLnk.Close()
+			}
+		} else {
+			slog.Info("ipv6 connect6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		}
+		if defendObjs.DefendCgroupSendmsg6 != nil {
+			ipv6SendmsgLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
+				Path:    cgPath,
+				Attach:  ebpf.AttachCGroupUDP6Sendmsg,
+				Program: defendObjs.DefendCgroupSendmsg6,
+			})
+			if attachErr != nil {
+				slog.Info("ipv6 sendmsg6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
+			} else {
+				defer ipv6SendmsgLnk.Close()
+			}
+		} else {
+			slog.Info("ipv6 sendmsg6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		}
 
 		// AttachCgroup returns once the program is bound, but on hosted runners the
 		// kernel has been observed to not yet enforce for newly-created sockets for

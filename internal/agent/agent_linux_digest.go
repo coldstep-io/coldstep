@@ -141,6 +141,8 @@ func buildDigestInput(
 		SendfileObserved:               stats.sendfileObserved(),
 		SpliceObserved:                 stats.spliceObserved(),
 		SendmmsgFirstOnly:              stats.sendmmsgFirstOnly(),
+		IPv6ConnectObserved:            stats.ipv6ConnectObserved(),
+		IPv6SendmsgObserved:            stats.ipv6SendmsgObserved(),
 		IoUringSetupObserved:           stats.ioUringSetupObserved(),
 		CanaryPipelineOK:               canarySnap.pipelineOK,
 		CanaryFailCount:                canarySnap.failCount,

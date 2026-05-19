@@ -51,6 +51,8 @@ type runStats struct {
 	sendfileObservedN               int
 	spliceObservedN                 int
 	sendmmsgFirstOnlyN              int
+	ipv6ConnectObservedN            uint32
+	ipv6SendmsgObservedN            uint32
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
@@ -331,6 +333,37 @@ func (s *runStats) sendmmsgFirstOnly() int {
 	return s.sendmmsgFirstOnlyN
 }
 
+// setIPv6ConnectObserved / setIPv6SendmsgObserved record the P0-1 Phase 1
+// IPv6 observe-only counters snapshotted from BPF on shutdown. cgroup/connect6
+// and cgroup/sendmsg6 hooks bump per-cpu uint32 counters; userspace sums them
+// across CPUs (see readIPv6ConnectObservedCount / readIPv6SendmsgObservedCount).
+// Non-zero means traffic egressed via IPv6 — which the IPv4-only defend hooks
+// could not gate. The digest surfaces this as a warning (detect) or alert
+// (defend); Phase 2 will add actual IPv6 enforcement.
+func (s *runStats) setIPv6ConnectObserved(n uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ipv6ConnectObservedN = n
+}
+
+func (s *runStats) ipv6ConnectObserved() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ipv6ConnectObservedN
+}
+
+func (s *runStats) setIPv6SendmsgObserved(n uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ipv6SendmsgObservedN = n
+}
+
+func (s *runStats) ipv6SendmsgObserved() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ipv6SendmsgObservedN
+}
+
 func (s *runStats) setIoUringSetupObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -473,6 +506,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		SendfileObserved:               s.sendfileObservedN,
 		SpliceObserved:                 s.spliceObservedN,
 		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
+		IPv6ConnectObserved:            s.ipv6ConnectObservedN,
+		IPv6SendmsgObserved:            s.ipv6SendmsgObservedN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
