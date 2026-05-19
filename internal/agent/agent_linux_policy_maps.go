@@ -219,6 +219,21 @@ func readSendmmsgMultiMessageCount(objs *traceconnect.TraceconnectObjects) int {
 	return readUint32PerCPUArraySum(objs.SendmmsgMultiMessageObserved, "readSendmmsgMultiMessageCount")
 }
 
+// readSendmmsgUnobservedExtraCount sums BG-03 Gap 3 per-message extra-message
+// dropped counts across CPUs. Distinct from readSendmmsgMultiMessageCount,
+// which counts CALLS with vlen > 1; this counter sums individual messages
+// beyond index SENDMMSG_EXTRA_MAX (7) that the unrolled loop did not reach.
+//
+// TODO: regenerate BPF stubs after building on Linux — references
+// `objs.SendmmsgUnobservedExtra` defined by `sendmmsg_unobserved_extra` map in
+// bpf/trace_connect.bpf.c, which bpf2go will surface during CI regeneration.
+func readSendmmsgUnobservedExtraCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32PerCPUArraySum(objs.SendmmsgUnobservedExtra, "readSendmmsgUnobservedExtraCount")
+}
+
 func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	if objs == nil {
 		return 0
