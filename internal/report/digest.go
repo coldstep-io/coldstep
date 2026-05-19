@@ -24,6 +24,7 @@ import (
 	"strings"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
+	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
 // partialEgressTotal sums the BG-01 per-syscall partial-observe counters so the
@@ -691,14 +692,19 @@ func writeTLSSection(b *strings.Builder, in DigestInput) {
 		return
 	}
 	b.WriteString("<details>\n<summary><strong>TLS ClientHello / SNI (recent)</strong></summary>\n\n")
-	b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
+	b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy | Confidence |\n|:--|--:|:-|:-|:-|:-|:-|\n")
 	if len(in.TLSRows) == 0 {
-		fmt.Fprintf(b, "| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors)))
+		fmt.Fprintf(b, "| — | — | — | — | — | %s | — |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors)))
 	} else {
 		for _, r := range in.TLSRows {
-			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | %s | %s |\n",
+			conf := string(r.Confidence)
+			if conf == "" {
+				conf = string(telemetry.TLSConfidenceUnknown)
+			}
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | %s | %s | `%s` |\n",
 				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-				sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy))
+				sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy),
+				sanitizeCell(conf))
 		}
 	}
 	b.WriteString("\n</details>\n\n")
@@ -787,6 +793,13 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	b.WriteString("- **HTTP KPI** counts cleartext HTTP/1 request bytes on `sendto` to destination port 80 only; HTTPS traffic appears as TCP connect events.\n")
 	if tlsKPIVisible(in) {
 		b.WriteString("- **tls KPI** counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).\n")
+		if in.TLSTotal > 0 {
+			b.WriteString("- **tls SNI confidence** reason codes (rolled up in the KPI and shown per-row in the TLS table):\n")
+			b.WriteString("    - `full` — complete ClientHello parsed in a single syscall buffer; SNI is below the RFC 1035 server-name boundary and not truncated.\n")
+			b.WriteString("    - `partial` — SNI length hit the capture/RFC boundary (`TLSSNIMaxLen=255`); the captured name may be a prefix of the real server name (fragmented or truncated ClientHello).\n")
+			b.WriteString("    - `inferred` — SNI inferred from prior DNS / connect correlation rather than parsed directly. Reserved for a future enricher and not currently emitted by the BPF path.\n")
+			b.WriteString("    - `unknown` — TLS framing detected but no usable SNI signal was captured.\n")
+		}
 	}
 	if procForkKPIVisible(in) {
 		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")

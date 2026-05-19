@@ -294,6 +294,64 @@ func TestBuildDetectMarkdown_TLSConfidenceRowHiddenWhenNoTLS(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_TLSConfidencePerRowAndLegend exercises the
+// per-row Confidence column in the recent-TLS table and the tier-meaning
+// legend that lands in the Technical-details fold. Co-existing tiers must
+// be rendered with their reason code so operators can attribute KPI counts
+// to specific destinations.
+func TestBuildDetectMarkdown_TLSConfidencePerRowAndLegend(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                  []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TCPTotal:             1,
+		TLSTotal:             3,
+		TLSConfidenceFull:    1,
+		TLSConfidencePartial: 1,
+		TLSConfidenceUnknown: 1,
+		TLSSNIGate:           true,
+		PolicyCounts:         map[string]int{"monitor": 3},
+		TLSRows: []TLSDigestRow{
+			{TS: "t1", PID: 10, Comm: "curl", SNI: "a.example", Remote: "`1.1.1.1:443`", Policy: "monitor", Confidence: telemetry.TLSConfidenceFull},
+			{TS: "t2", PID: 11, Comm: "curl", SNI: strings.Repeat("a", 255), Remote: "`1.1.1.2:443`", Policy: "monitor", Confidence: telemetry.TLSConfidencePartial},
+			{TS: "t3", PID: 12, Comm: "curl", SNI: "", Remote: "`1.1.1.3:443`", Policy: "monitor", Confidence: telemetry.TLSConfidenceUnknown},
+		},
+		JSONLPath:         "/tmp/x.jsonl",
+		SeqFirst:          1,
+		SeqLast:           3,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"| Time (UTC) | PID | Comm | SNI | Remote | Policy | Confidence |",
+		"`full`",
+		"`partial`",
+		"`unknown`",
+		"complete ClientHello parsed in a single syscall buffer",
+		"capture/RFC boundary",
+		"inferred from prior DNS / connect correlation",
+		"TLS framing detected but no usable SNI signal",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_TLSConfidenceEmptyRowDefault verifies that a
+// TLSDigestRow with no Confidence value renders as the reserved "unknown"
+// tier so the column is never blank in the recent-TLS table.
+func TestBuildDetectMarkdown_TLSConfidenceEmptyRowDefault(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TLSTotal:          1,
+		TLSSNIGate:        true,
+		PolicyCounts:      map[string]int{"monitor": 1},
+		TLSRows:           []TLSDigestRow{{TS: "t", PID: 1, Comm: "x", SNI: "n.example", Remote: "`1.1.1.1:443`", Policy: "monitor"}},
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(md, "`unknown`") {
+		t.Fatalf("expected zero-value confidence to render as `unknown`, got:\n%s", md)
+	}
+}
+
 func TestTruncateExeForDigest(t *testing.T) {
 	long := strings.Repeat("a", execExeDigestMaxBytes+20)
 	out := TruncateExeForDigest(long)

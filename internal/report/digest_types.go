@@ -64,13 +64,19 @@ type HTTPDigestRow struct {
 }
 
 // TLSDigestRow is one TLS ClientHello / SNI line in the markdown digest.
+// Confidence is the per-row tier classification produced by
+// telemetry.ScoreTLSConfidence; it is rendered as its own column so operators
+// can see at a glance whether a specific SNI match should be trusted (full /
+// partial / inferred / unknown). The KPI row above aggregates these tiers,
+// while this column attributes them to specific destinations.
 type TLSDigestRow struct {
-	TS     string
-	PID    uint32
-	Comm   string
-	SNI    string
-	Remote string
-	Policy string
+	TS         string
+	PID        uint32
+	Comm       string
+	SNI        string
+	Remote     string
+	Policy     string
+	Confidence telemetry.TLSConfidence
 }
 
 // FSDigestRow is one filesystem event line in the markdown digest.
