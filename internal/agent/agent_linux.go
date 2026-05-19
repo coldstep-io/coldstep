@@ -43,6 +43,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	kernel := kernelRelease()
+	compatWarnings := CheckRunnerCompat()
+	for _, w := range compatWarnings {
+		slog.Warn("runner_compat_warning", "code", w.Code, "detail", w.Detail)
+	}
 	stats := newRunStats()
 	maxRows := report.DefaultMaxRowsPerSection
 	rows := newRowBuffer(maxRows)
@@ -70,6 +74,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
 		{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: "not loaded"},
 		{Name: "dns recvfrom sniff", OK: false, Detail: "not loaded"},
+		// Reaching Run means probeBTF() in Main has already succeeded; record
+		// that explicitly so .coldstep-telemetry.json carries a positive btf
+		// availability signal alongside per-program attach status. Kept at
+		// index 3 so bpfSt[0..2] index-sets below remain stable.
+		{Name: "btf", OK: true, BTFAvailable: true},
+		// P3-2: paired kprobe/kretprobe on tcp_v4_connect for connect_result
+		// events. Filled in by attachTCPConnectKprobes below; kept at index 4
+		// so existing bpfSt[0..3] index-sets stay stable.
 		{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: "not loaded"},
 	}
 
@@ -80,6 +92,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
+		sum.CompatWarnings = compatWarnings
 		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum, signer); err != nil {
 			slog.Warn("telemetry summary", "err", err)
 		}
@@ -117,6 +130,23 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	allowlistCompileTime := time.Now()
+	stats.setAllowlistCompileSnapshot(
+		allowlistCompileTime,
+		defendCompiled.AllowedIPv4.Len(),
+		defendCompiled.UnresolvedDomains,
+		defendCompiled.WildcardRiskDomains,
+	)
+	for _, d := range defendCompiled.UnresolvedDomains {
+		slog.Warn("allowlist domain did not resolve", "domain", d)
+	}
+	if cfg.Mode == config.ModeDefend && len(defendCompiled.UnresolvedDomains) > 0 {
+		slog.Warn("allowlist domains unresolved — legitimate traffic to these domains may be blocked",
+			"count", len(defendCompiled.UnresolvedDomains))
+	}
+	for _, d := range defendCompiled.WildcardRiskDomains {
+		slog.Warn("high-risk wildcard in allowlist", "domain", d)
+	}
 
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
@@ -142,6 +172,19 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// Defend mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
 	// syscall egress tracing attaches (defend requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
+	//
+	// AUDIT(5g): all attach paths close links on failure.
+	// - LSM section (lines ~205-247): if lnk2 attach fails after lnk1 succeeded,
+	//   lnk1.Close() runs explicitly before the function returns. cilium/ebpf
+	//   guarantees AttachLSM returns (nil, err) on failure, so a non-nil
+	//   sendpageLnk with attachErr != nil is unreachable.
+	// - Cgroup section (lines ~283-338): defendConnectLnk and defendSendmsgLnk
+	//   register `defer X.Close()` immediately after each successful attach;
+	//   the optional IPv6 hooks and probe failure path therefore unwind via
+	//   defers without leaking a previously-attached link.
+	// - defendObjs.Close() is registered once at the top of this block, so
+	//   the BPF collection is always released even on the partial-attach
+	//   error returns.
 	if cfg.Mode == config.ModeDefend {
 		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {
@@ -156,10 +199,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		hasDefend = true
 		defer func() {
-			defendState.setDenyReserveFailures(readDenyReserveFailureCount(&defendObjs))
+			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
 			if hasLSM {
-				defendState.setDenyReserveFailures(readLSMDenyReserveFailureCount(&defendObjs))
+				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
 			}
+			// P0-1 Phase 1: snapshot the IPv6 observe-only counters so the
+			// digest can warn when traffic escaped the IPv4-only defend
+			// allowlist over IPv6. Safe when maps are absent (returns 0).
+			// TODO: wire to defend objects after regeneration on Linux —
+			// today these are no-ops on stubs without the IPv6 maps.
+			stats.setIPv6ConnectObserved(readIPv6ConnectObservedCount(&defendObjs))
+			stats.setIPv6SendmsgObserved(readIPv6SendmsgObservedCount(&defendObjs))
+			// Gap 1+2 (sendfile/splice): snapshot the sendpage_observed
+			// counter populated by lsm/socket_sendpage. Safe when the map
+			// is absent (returns 0).
+			stats.setSendpageObserved(readSendpageObservedCount(&defendObjs))
 			_ = defendObjs.Close()
 		}()
 
@@ -195,6 +249,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 					lsmDenyRd.R = rd
 					defer lnk1.Close()
 					defer lnk2.Close()
+
+					// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
+					// so the sock_sendpage() path is gated against the same IPv4
+					// allowlist. Optional — tolerate missing program (older stubs)
+					// and attach failures (very old kernels that lack the
+					// sendpage LSM hook). On kernel 6.8+ this hook is never
+					// invoked because sendfile/splice go through sendmsg with
+					// MSG_SPLICE_PAGES; attaching anyway is harmless.
+					// TODO: regenerate defend objects after build on Linux so
+					// defendObjs.LsmSocketSendpage is always populated.
+					if defendObjs.LsmSocketSendpage != nil {
+						sendpageLnk, attachErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendpage})
+						if attachErr != nil {
+							slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
+						} else {
+							defer sendpageLnk.Close()
+						}
+					} else {
+						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
+					}
 				}
 			}
 		}
@@ -217,11 +291,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// this way). The primary deny reader watches the cgroup `deny_events`
 		// ringbuf; the LSM ringbuf, when present, is drained by a separate
 		// reader.
-		allowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
+		allowlistSize, ipv6AllowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
 		if loadErr != nil {
 			return loadErr
 		}
 		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
+		defendState.setIPv6AllowlistSize(ipv6AllowlistSize)
 		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
 			return fmt.Errorf("ringbuf reader deny: %w", err)
@@ -253,6 +328,43 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		defer defendSendmsgLnk.Close()
 
+		// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs
+		// (e.g. defend stubs generated before the IPv6 sections were
+		// added) and attach failures (very old kernels without
+		// cgroup/connect6 / cgroup/sendmsg6 support). Phase 2 will block
+		// IPv6; for now we just count and warn.
+		// TODO: regenerate defend objects after build on Linux so
+		// defendObjs.DefendCgroupConnect6 / DefendCgroupSendmsg6 are
+		// always populated on supported kernels.
+		if defendObjs.DefendCgroupConnect6 != nil {
+			ipv6ConnectLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
+				Path:    cgPath,
+				Attach:  ebpf.AttachCGroupInet6Connect,
+				Program: defendObjs.DefendCgroupConnect6,
+			})
+			if attachErr != nil {
+				slog.Info("ipv6 connect6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
+			} else {
+				defer ipv6ConnectLnk.Close()
+			}
+		} else {
+			slog.Info("ipv6 connect6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		}
+		if defendObjs.DefendCgroupSendmsg6 != nil {
+			ipv6SendmsgLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
+				Path:    cgPath,
+				Attach:  ebpf.AttachCGroupUDP6Sendmsg,
+				Program: defendObjs.DefendCgroupSendmsg6,
+			})
+			if attachErr != nil {
+				slog.Info("ipv6 sendmsg6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
+			} else {
+				defer ipv6SendmsgLnk.Close()
+			}
+		} else {
+			slog.Info("ipv6 sendmsg6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		}
+
 		// AttachCgroup returns once the program is bound, but on hosted runners the
 		// kernel has been observed to not yet enforce for newly-created sockets for
 		// ~1-3s afterward — so the first connect after .coldstep-ready.json was
@@ -268,7 +380,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("load bpf objects: %w", err)
 	}
 	defer execObjs.Close()
-	defer func() { stats.setExecRingbufReserveFailures(readExecRingbufReserveFailureCount(&execObjs)) }()
+	defer func() {
+		stats.setExecRingbufReserveFailures(readUint32PerCPUArraySum(execObjs.ExecRingbufReserveFailures, "exec_ringbuf_reserve_failures"))
+	}()
 
 	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
 	if err != nil {
@@ -318,9 +432,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// attempt, just without a paired result.
 		if kpLnk, krLnk, kerr := attachTCPConnectKprobes(syscallObjs); kerr != nil {
 			slog.Info("tcp_v4_connect kprobe pair attach failed; connect_result events disabled", "err", kerr)
-			bpfSt[3] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: bpfDetail(kerr)}
+			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: bpfDetail(kerr)}
 		} else {
-			bpfSt[3] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: true}
+			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: true}
 			slog.Info("tcp_v4_connect kprobe/kretprobe attached (connect_result events enabled)")
 			defer kpLnk.Close()
 			defer krLnk.Close()
@@ -333,17 +447,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer syscallLnk.Close()
 		defer func() {
 			if syscallObjs != nil {
-				stats.setConnect4TupleUpdateFailures(readConnect4TupleUpdateFailureCount(syscallObjs))
-				stats.setUDPRingbufReserveFailures(readUDPRingbufReserveFailureCount(syscallObjs))
-				stats.setConnectRingbufReserveFailures(readConnectRingbufReserveFailureCount(syscallObjs))
-				stats.setHTTPRingbufReserveFailures(readHTTPRingbufReserveFailureCount(syscallObjs))
-				stats.setTLSRingbufReserveFailures(readTLSRingbufReserveFailureCount(syscallObjs))
-				stats.setUDPSendmsgMultiIovecObserved(readUDPSendmsgMultiIovecObservedCount(syscallObjs))
-				stats.setSendmmsgMultiMessage(readSendmmsgMultiMessageCount(syscallObjs))
-				stats.setTLSWritevMultiIovecObserved(readTLSWritevMultiIovecObservedCount(syscallObjs))
-				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs)
+				stats.setConnect4TupleUpdateFailures(readUint32PerCPUArraySum(syscallObjs.Connect4TupleUpdateFailures, "connect4_tuple_update_failures"))
+				stats.setUDPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.UdpRingbufReserveFailures, "udp_ringbuf_reserve_failures"))
+				stats.setConnectRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.ConnectRingbufReserveFailures, "connect_ringbuf_reserve_failures"))
+				stats.setHTTPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.HttpRingbufReserveFailures, "http_ringbuf_reserve_failures"))
+				stats.setTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TlsRingbufReserveFailures, "tls_ringbuf_reserve_failures"))
+				stats.setUDPSendmsgMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.UdpSendmsgMultiIovecObserved, "udp_sendmsg_multi_iovec_observed"))
+				stats.setSendmmsgMultiMessage(readUint32PerCPUArraySum(syscallObjs.SendmmsgMultiMessageObserved, "sendmmsg_multi_message_observed"))
+				// TODO: regenerate BPF stubs after building on Linux —
+				// syscallObjs.SendmmsgUnobservedExtra is defined by the new
+				// sendmmsg_unobserved_extra PERCPU_ARRAY in bpf/trace_connect.bpf.c.
+				stats.setSendmmsgUnobservedExtra(readUint32PerCPUArraySum(syscallObjs.SendmmsgUnobservedExtra, "sendmmsg_unobserved_extra"))
+				stats.setTLSWritevMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.TlsWritevMultiIovecObserved, "tls_writev_multi_iovec_observed"))
+				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs.PartialEgressObserved)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
-				stats.setIoUringSetupObserved(readIoUringSetupObservedCount(syscallObjs))
+				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
@@ -385,9 +503,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer dnsLnkEnter.Close()
 		defer func() {
 			if dnsObjs != nil {
-				stats.setDNSRingbufReserveFailures(readDNSRingbufReserveFailureCount(dnsObjs))
-				stats.setTCPDNSResponsesObserved(readTCPDNSResponsesObservedCount(dnsObjs))
-				stats.setTCPDNSSkippedShortRead(readTCPDNSSkippedShortReadCount(dnsObjs))
+				stats.setDNSRingbufReserveFailures(readUint32PerCPUArraySum(dnsObjs.DnsRingbufReserveFailures, "dns_ringbuf_reserve_failures"))
+				stats.setTCPDNSResponsesObserved(readUint32PerCPUArraySum(dnsObjs.TcpDnsResponsesObserved, "tcp_dns_responses_observed"))
+				stats.setTCPDNSSkippedShortRead(readUint32PerCPUArraySum(dnsObjs.TcpDnsSkippedShortRead, "tcp_dns_skipped_short_read"))
 			}
 		}()
 	}
@@ -435,7 +553,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					slog.Info("tracing sched_process_fork (process tree)")
 					defer func() {
 						if forkObjs != nil {
-							stats.setForkRingbufReserveFailures(readForkRingbufReserveFailureCount(forkObjs))
+							stats.setForkRingbufReserveFailures(readUint32PerCPUArraySum(forkObjs.ForkRingbufReserveFailures, "fork_ringbuf_reserve_failures"))
 						}
 						forkRd.Close()
 						if forkLnk != nil {
@@ -503,7 +621,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 					slog.Info("tracing fs events (openat+create, unlink, rename, chmod)")
 					defer func() {
 						if fsObjs != nil {
-							stats.setFSRingbufReserveFailures(readFSRingbufReserveFailureCount(fsObjs))
+							stats.setFSRingbufReserveFailures(readUint32PerCPUArraySum(fsObjs.FsRingbufReserveFailures, "fs_ringbuf_reserve_failures"))
 						}
 						fsRd.Close()
 						if fsLnk != nil {
@@ -533,7 +651,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer bpfAuditLnk.Close()
 		defer func() {
 			if bpfAuditObjs != nil {
-				stats.setBPFAuditRingbufReserveFailures(readBPFAuditRingbufReserveFailureCount(bpfAuditObjs))
+				stats.setBPFAuditRingbufReserveFailures(readUint32PerCPUArraySum(bpfAuditObjs.BpfAuditReserveFailures, "bpf_audit_ringbuf_reserve_failures"))
 			}
 		}()
 	}
@@ -560,6 +678,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 					meta.Capabilities = make(map[string]bool)
 				}
 				meta.Capabilities["fs_events"] = true
+			}
+			meta.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
+			if len(defendCompiled.WildcardRiskDomains) > 0 {
+				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
@@ -831,6 +953,11 @@ func Main() error {
 		return err
 	}
 	setupLogging(cfg.LogLevel)
+
+	if err := probeBTF(); err != nil {
+		slog.Error("startup gate failed", "gate", "btf", "btf_available", false, "err", err)
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()

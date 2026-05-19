@@ -2,7 +2,7 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
 
-**Pin workflows to** **`coldstep-io/coldstep@v0.2.5`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`coldstep-io/coldstep@v0.2.6`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
@@ -36,7 +36,7 @@ Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode
 
 ## Add it to a workflow
 
-**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.2.5`** (or a newer tag you publish), not **`@main`**.
+**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.2.6`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 jobs:
@@ -44,14 +44,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.5
+      - uses: coldstep-io/coldstep@v0.2.6
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.2.5`** (or a newer tag).
+The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.2.6`** (or a newer tag).
 
 ---
 
@@ -59,13 +59,13 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 
 | Topic | Detail |
 | :---- | :----- |
-| **IP versions** | **IPv6 is not supported.** Allowlists, cgroup defense, and syscall tracing targets in this repo are **IPv4 only**. |
+| **IP versions** | **Defend is IPv4 + IPv6.** Allowlists resolve both **A** and **AAAA** records and program two LPM tries: `allowed_ipv4` (4-byte keys) and `allowed_ipv6` (16-byte keys). cgroup hooks block on both families — `connect4` / `sendmsg4` for IPv4, `connect6` / `sendmsg6` for IPv6 — denying any destination not on the allowlist with `EPERM`. `::1` (loopback) and `fe80::/10` (link-local) always bypass enforcement. Detect mode observes both families without enforcing. |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
 | **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep-action`, `bin/coldstep-report`) and no longer requires Node.js runtime hooks. |
 
-For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hooks, IPv4-only defend), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
+For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hook coverage), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
 
 ---
 
@@ -140,12 +140,23 @@ Detect workflows that build the **report model** can enrich indicators with **Al
 
 Enrichment walks indicators present in the report model when **`OTX_API_KEY`** is set (`coldstep-report otx-enrich`).
 
+### Pluggable reputation enrichment (OTX, VirusTotal, PassiveDNS)
+
+The post-processing step exposes a stable plug-in interface (`internal/reputation`) so additional reputation backends can be wired in without modifying core coldstep code. Enrichment is **opt-in** and runs only after JSONL is on disk — never on the agent's hot path. Configure backends via env on the post-run report step:
+
+- `COLDSTEP_OTX_API_KEY` — AlienVault OTX (new pluggable path; coexists with the legacy `OTX_API_KEY` flow above).
+- `COLDSTEP_VIRUSTOTAL_API_KEY` — VirusTotal (stub: key is accepted, wire protocol pending).
+- `COLDSTEP_PASSIVEDNS_SERVER` — CIRCL-compatible PassiveDNS endpoint (stub).
+
+When a backend's env var is empty, the loader installs a no-op enricher for that slot so the registry shape stays stable. Combined results land in the report model under `reputation_results` plus a `reputation` summary block.
+
 ---
 
 ## Limits (read before relying on signals)
 
 - **TCP** rows reflect **`connect(2)` at syscall enter**, not guaranteed established sockets.
 - **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first cleartext handshake buffer seen on **`write(2)`/`writev`/`pwrite(2)`/`pwritev`/`pwritev2`/`sendto`** paths after IPv4 **`connect`** (best-effort); explicit-address TCP **`sendto`** is included when the tuple matches the syscall destination.
+- **QUIC / HTTP3** flows are detected via a **UDP-443 heuristic** (non-loopback IPv4): each match is recorded as a `quic_candidate` JSONL line alongside the underlying `udp` event, and the digest surfaces a **`QUIC (port-443 UDP)`** KPI row. **Payload content is not inspected** — QUIC is encrypted at the transport layer, so coldstep names the visibility gap rather than hiding it.
 - **Shared runners**: attribution is **PID / `comm`**-class; not a perfect global process tree.
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
 - **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.

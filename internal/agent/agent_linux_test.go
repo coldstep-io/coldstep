@@ -495,7 +495,7 @@ func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	}
 }
 
-func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
+func TestAppendDenyFromRaw_UnknownAddressFamilyRejected(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{Mode: config.ModeDefend}
 	var seq telemetry.SeqGen
@@ -503,7 +503,7 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	state := newDefendState()
 
 	raw := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
-	raw[26] = 10 // AF_INET6 — Coldstep does not emit or record IPv6 denies
+	raw[26] = 17 // AF_PACKET — only AF_INET / AF_INET6 are emitted by defend.
 
 	_, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "", nil)
 	if err == nil {
@@ -511,6 +511,45 @@ func TestAppendDenyFromRaw_NonIPv4AddressFamilyRejected(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported address family") {
 		t.Fatalf("expected AF error, got %v", err)
+	}
+}
+
+func TestAppendDenyFromRaw_IPv6DenyDecoded(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: logPath}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newDefendState()
+
+	raw := make([]byte, denyEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 7)
+	binary.LittleEndian.PutUint32(raw[4:8], 7)
+	copy(raw[8:24], "curl")
+	raw[24] = denyProtoTCP
+	raw[25] = denyReasonDstNotAllowlisted
+	raw[26] = linuxAFInet6
+	ip6 := net.ParseIP("2001:db8::1").To16()
+	copy(raw[28:44], ip6)
+	binary.BigEndian.PutUint16(raw[44:46], 443)
+
+	deny, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "cgroup", nil)
+	if err != nil {
+		t.Fatalf("appendDenyFromRaw: %v", err)
+	}
+	if deny.Dst != "2001:db8::1" {
+		t.Fatalf("Dst=%q want 2001:db8::1", deny.Dst)
+	}
+	if deny.Dport != 443 || deny.Protocol != "tcp" {
+		t.Fatalf("Dport=%d Protocol=%q", deny.Dport, deny.Protocol)
+	}
+	data, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read events.jsonl: %v", err)
+	}
+	if !bytes.Contains(data, []byte(`"dst":"2001:db8::1"`)) {
+		t.Fatalf("expected IPv6 dst in JSONL, got %s", string(data))
 	}
 }
 
@@ -1214,83 +1253,6 @@ func TestAppendDenyFromRaw_NoEventsLogDoesNotConsumeSeq(t *testing.T) {
 	}
 }
 
-// TestReadUint32CounterMap_KeyNotExistReturnsZeroSilently is the M-07 regression for the legitimate
-// "key not yet written" path: BPF programs use BPF_NOEXIST + ATOMIC update before incrementing, so
-// a never-touched counter map has no key 0 entry. Lookup must return ErrKeyNotExist, the helper
-// must surface 0, and it must NOT log (that case is normal at agent startup).
-func TestReadUint32CounterMap_KeyNotExistReturnsZeroSilently(t *testing.T) {
-	spec := &ebpf.MapSpec{
-		Name:       "coldstep_t_counter_nf",
-		Type:       ebpf.Hash,
-		KeySize:    4,
-		ValueSize:  4,
-		MaxEntries: 1,
-	}
-	m, err := ebpf.NewMap(spec)
-	if err != nil {
-		t.Skipf("ebpf test map unavailable: %v (likely missing CAP_BPF/CAP_SYS_ADMIN)", err)
-	}
-	defer m.Close()
-
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	if got := readUint32CounterMap(m, "tester"); got != 0 {
-		t.Fatalf("expected 0 on ErrKeyNotExist, got %d", got)
-	}
-	if buf.Len() != 0 {
-		t.Fatalf("expected no log output on ErrKeyNotExist, got: %q", buf.String())
-	}
-
-	var probeKey uint32
-	var probeVal uint32
-	if err := m.Lookup(&probeKey, &probeVal); !errors.Is(err, ebpf.ErrKeyNotExist) {
-		t.Fatalf("test setup invariant: empty Hash map Lookup must return ErrKeyNotExist, got %v", err)
-	}
-}
-
-// TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs is the M-07 regression for the real-error
-// path: a closed (or otherwise unreadable) map yields a non-ErrKeyNotExist error. The helper must
-// log a WARN with helper + err so operators can distinguish "counter is genuinely zero" from "map
-// is broken", and still return 0 so downstream digest paths keep working.
-func TestReadUint32CounterMap_OtherErrorReturnsZeroAndLogs(t *testing.T) {
-	spec := &ebpf.MapSpec{
-		Name:       "coldstep_t_counter_closed",
-		Type:       ebpf.Hash,
-		KeySize:    4,
-		ValueSize:  4,
-		MaxEntries: 1,
-	}
-	m, err := ebpf.NewMap(spec)
-	if err != nil {
-		t.Skipf("ebpf test map unavailable: %v", err)
-	}
-	if err := m.Close(); err != nil {
-		t.Fatalf("close map: %v", err)
-	}
-
-	var buf bytes.Buffer
-	prev := slog.Default()
-	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
-	t.Cleanup(func() { slog.SetDefault(prev) })
-
-	if got := readUint32CounterMap(m, "tester"); got != 0 {
-		t.Fatalf("expected 0 on closed-map error, got %d", got)
-	}
-	out := buf.String()
-	if !strings.Contains(out, "uint32 counter map lookup failed") {
-		t.Fatalf("expected warn log, got: %q", out)
-	}
-	if !strings.Contains(out, "helper=tester") {
-		t.Fatalf("expected helper=tester attribute in log, got: %q", out)
-	}
-	if !strings.Contains(out, "err=") {
-		t.Fatalf("expected err attribute in log, got: %q", out)
-	}
-}
-
 // TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs mirrors M-07 for PERCPU_ARRAY counters
 // (reserve-failure telemetry maps): unreadable map → WARN + 0, digest paths keep progressing.
 func TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs(t *testing.T) {
@@ -1329,15 +1291,15 @@ func TestReadUint32PerCPUArraySum_OtherErrorReturnsZeroAndLogs(t *testing.T) {
 	}
 }
 
-// TestReadUint32CounterMap_NilMapReturnsZero guards against a nil *ebpf.Map (e.g. a never-loaded
+// TestReadUint32PerCPUArraySum_NilMapReturnsZero guards against a nil *ebpf.Map (e.g. a never-loaded
 // optional collection) panicking inside Lookup. Helper must early-return 0 silently.
-func TestReadUint32CounterMap_NilMapReturnsZero(t *testing.T) {
+func TestReadUint32PerCPUArraySum_NilMapReturnsZero(t *testing.T) {
 	var buf bytes.Buffer
 	prev := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	if got := readUint32CounterMap(nil, "tester"); got != 0 {
+	if got := readUint32PerCPUArraySum(nil, "tester"); got != 0 {
 		t.Fatalf("expected 0 on nil map, got %d", got)
 	}
 	if buf.Len() != 0 {

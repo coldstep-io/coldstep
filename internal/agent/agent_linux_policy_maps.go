@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"os"
 	"sort"
@@ -19,12 +20,6 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/coldstep-io/coldstep/internal/bpf/defend"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -46,8 +41,12 @@ func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver pol
 		return policy.CompileResult{}, perr
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
-	if compiled.AllowedIPv4.Len() == 0 {
-		msg := "defend allowlist effective allowlist is empty (no IPv4 A-record resolutions; add literals to allowed-ips if needed)"
+	// P2-1 Phase 2: an IPv6-only allowlist (AAAA resolutions, no A) is
+	// valid — both BPF defend hooks attach, IPv4 cgroup denies everything,
+	// IPv6 cgroup denies everything outside allowed_ipv6. Only reject
+	// when BOTH families are empty (every domain failed both A and AAAA).
+	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 {
+		msg := "defend allowlist effective allowlist is empty (no A/AAAA resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
 		}
@@ -102,33 +101,17 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 	return programmed, nil
 }
 
-// readUint32CounterMap reads a single-entry uint32-keyed/uint32-valued BPF counter map at key 0.
-//
-// Failure semantics (M-07): "key not found" is the legitimate zero state and is returned silently.
-// Any other Lookup error (map closed, wrong type, EBADF, program unloaded) is logged at WARN and
-// surfaced as zero so digest rendering keeps progressing — losing the distinction between "counter
-// is genuinely zero" and "map is unreadable" was the M-07 anti-pattern. The H-05 instance of this
-// pattern (defend_cfg) is owned by Group A; this helper deliberately stays scoped to read-only
-// counter maps and never touches defend state.
-func readUint32CounterMap(m *ebpf.Map, helperName string) int {
-	if m == nil {
-		return 0
-	}
-	var k uint32
-	var v uint32
-	if err := m.Lookup(&k, &v); err != nil {
-		if errors.Is(err, ebpf.ErrKeyNotExist) {
-			return 0
-		}
-		slog.Warn("uint32 counter map lookup failed", "helper", helperName, "err", err)
-		return 0
-	}
-	return int(v)
-}
-
 // readUint32PerCPUArraySum sums all CPU slots for a BPF_MAP_TYPE_PERCPU_ARRAY map
-// with uint32 values at key 0. Used after migrating reserve-failure maps off a
-// contended global ARRAY slot.
+// with uint32 values at key 0. Used after migrating all hot-path counters off
+// contended global ARRAY slots — every uint32 observability/reserve counter is
+// now per-CPU so the increment side stays lock-free (cgroup-scoped writer code
+// runs with preemption disabled per syscall).
+//
+// Failure semantics (M-07): "key not found" is the legitimate zero state and is
+// returned silently. Any other Lookup error (map closed, wrong type, EBADF,
+// program unloaded) is logged at WARN and surfaced as zero so digest rendering
+// keeps progressing — losing the distinction between "counter is genuinely
+// zero" and "map is unreadable" was the M-07 anti-pattern.
 func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	if m == nil {
 		return 0
@@ -149,83 +132,6 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	return n
 }
 
-func readDenyReserveFailureCount(objs *defend.DefendObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.DenyReserveFailures, "readDenyReserveFailureCount")
-}
-
-func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
-}
-
-func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
-}
-
-func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
-}
-
-func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
-}
-
-func readBPFAuditRingbufReserveFailureCount(objs *tracebpfaudit.TracebpfauditObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
-}
-
-func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
-}
-
-func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
-}
-
-func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.UdpSendmsgMultiIovecObserved, "readUDPSendmsgMultiIovecObservedCount")
-}
-
-func readSendmmsgMultiMessageCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.SendmmsgMultiMessageObserved, "readSendmmsgMultiMessageCount")
-}
-
-func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.TlsWritevMultiIovecObserved, "readTLSWritevMultiIovecObservedCount")
-}
-
 // readPartialEgressCounts returns the BG-01 per-syscall partial-observe
 // counters (sendfile, splice, sendmmsg) summed across CPUs. Slots:
 //
@@ -234,13 +140,13 @@ func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects
 //	2 = sendmmsg (first-message-only observed)
 //
 // Reads each slot independently because PERCPU_ARRAY Lookup is per-key.
-func readPartialEgressCounts(objs *traceconnect.TraceconnectObjects) (sendfile, splice, sendmmsg int) {
-	if objs == nil || objs.PartialEgressObserved == nil {
+func readPartialEgressCounts(m *ebpf.Map) (sendfile, splice, sendmmsg int) {
+	if m == nil {
 		return 0, 0, 0
 	}
 	read := func(key uint32, label string) int {
 		var vals []uint32
-		if err := objs.PartialEgressObserved.Lookup(&key, &vals); err != nil {
+		if err := m.Lookup(&key, &vals); err != nil {
 			if errors.Is(err, ebpf.ErrKeyNotExist) {
 				return 0
 			}
@@ -259,53 +165,59 @@ func readPartialEgressCounts(objs *traceconnect.TraceconnectObjects) (sendfile, 
 	return
 }
 
-func readIoUringSetupObservedCount(objs *traceconnect.TraceconnectObjects) int {
+// readIPv6ConnectObservedCount returns the per-CPU sum of the
+// ipv6_connect_observed counter populated by the cgroup/connect6
+// observe-only hook (P0-1 Phase 1). Returns 0 when the map is absent
+// (stubs predate the regeneration on Linux).
+// TODO: wire to defend objects after regeneration on Linux — this is a
+// no-op until defendObjs.Ipv6ConnectObserved is populated by the
+// generated bindings.
+func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.IoUringSetupObserved, "readIoUringSetupObservedCount")
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6ConnectObserved, "readIPv6ConnectObservedCount"))
 }
 
-func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
+// readIPv6SendmsgObservedCount mirrors readIPv6ConnectObservedCount for
+// the cgroup/sendmsg6 observe-only hook (P0-1 Phase 1).
+// TODO: wire to defend objects after regeneration on Linux.
+func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.TcpDnsResponsesObserved, "readTCPDNSResponsesObservedCount")
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
 }
 
-func readTCPDNSSkippedShortReadCount(objs *tracedns.TracednsObjects) int {
+// readSendpageObservedCount returns the per-CPU sum of the sendpage_observed
+// counter populated by the lsm/socket_sendpage hook. The hook closes the
+// kernel-5.15 sendfile(2)/splice(2) egress gap (sock_sendpage path skips
+// cgroup/sendmsg4 and lsm/socket_sendmsg); non-zero values mean sendfile or
+// splice fired in defend mode and was gated against the IPv4 allowlist.
+// Returns 0 when the map is absent (stubs predate the regeneration on Linux
+// or LSM was disabled at load time).
+// TODO: remove the missing-map tolerance once defend objects are regenerated
+// on Linux with bpf/trace_lsm_defend_lsm.inc's sendpage_observed map.
+func readSendpageObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
 	}
-	return readUint32CounterMap(objs.TcpDnsSkippedShortRead, "readTCPDNSSkippedShortReadCount")
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.SendpageObserved, "readSendpageObservedCount"))
 }
 
-func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
-	if objs == nil {
+// clampPerCPUSumToUint32 narrows the int sum returned by
+// readUint32PerCPUArraySum down to uint32 with explicit saturation. The
+// per-cpu values are uint32 but summed into an int across the CPU set;
+// in practice the result fits, but gosec G115 wants an explicit bounded
+// conversion before the narrowing cast.
+func clampPerCPUSumToUint32(n int) uint32 {
+	if n <= 0 {
 		return 0
 	}
-	return readUint32PerCPUArraySum(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
-}
-
-func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
-	if objs == nil {
-		return 0
+	if n > math.MaxUint32 {
+		return math.MaxUint32
 	}
-	return readUint32PerCPUArraySum(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
-}
-
-func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
-}
-
-func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
+	return uint32(n)
 }
 
 // buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the
@@ -313,6 +225,12 @@ func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
 // literal IPv4 entries from the policy, and produce an LPM plan ready to write
 // into the BPF allowlist map identified by mapName. The two callers differ only
 // in which BPF map (allowed_ipv4 vs lsm_allowed_ipv4) receives the result.
+//
+// Empty IPv4 plan is allowed: under Phase 2 a defend mode run can have
+// AAAA-only resolutions and still defend coherently — the IPv4 cgroup
+// hook simply blocks every non-ignored destination. compileDefendAllowlist
+// already rejects the truly-empty case (both families empty) before this
+// builder runs.
 func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *policy.Policy) (allowedLPMPlan, error) {
 	v4keys := make(map[[4]byte]struct{}, compiled.AllowedIPv4.Len())
 	compiled.AllowedIPv4.ForEach(func(k [4]byte) { v4keys[k] = struct{}{} })
@@ -325,44 +243,76 @@ func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *
 	if plan.totalEntries > policy.MaxAllowedDefendIPv4Keys {
 		return allowedLPMPlan{}, fmt.Errorf("%s: %d entries exceeds BPF max %d", mapName, plan.totalEntries, policy.MaxAllowedDefendIPv4Keys)
 	}
-	if plan.totalEntries == 0 {
-		return allowedLPMPlan{}, fmt.Errorf("defend allowlist effective allowlist is empty (no map entries)")
-	}
 	return plan, nil
+}
+
+// defendMapSet groups the four BPF maps loadDefendMapsForBackend programs,
+// plus the map-name strings used for diagnostics. cgroup and LSM backends
+// supply different *ebpf.Map field references; the load steps are identical.
+type defendMapSet struct {
+	cfgName, allowedName                        string
+	cfg, ignoredLPM, allowedLPM, allowedDomains *ebpf.Map
+}
+
+// loadDefendMapsForBackend programs BPF allowlist maps from compiled domain
+// resolutions + literal policy entries for a single defend backend.
+//
+// PR-G: allowed_ipv4 is a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP allowlist
+// entries (resolved domain IPs + literal /32s from --allowed-ips) are programmed
+// individually with prefixlen=32. Literal CIDR entries from --allowed-ips (e.g.
+// "10.0.0.0/8") are programmed once as a single LPM key covering the range.
+//
+// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are not
+// reflected. The agent resolves domains once during compileDefendAllowlist and
+// writes the resulting /32 set + literal CIDRs into the LPM trie here. If a
+// domain's A-record set changes after this point (DNS rotation, CDN edge
+// migration), the BPF allowlist still reflects the startup snapshot until the
+// next agent restart. Operators relying on DNS-backed domain rules should treat
+// the agent's lifetime as the freshness window for the allowlist and add literal
+// CIDRs / IPs for any destinations that need to survive DNS rotation. The
+// dns_cache map (populated by trace_dns.bpf.c at runtime) is consulted as a
+// fallback for reverse lookups in defend_policy.inc:dst_is_allowlisted, but the
+// primary LPM map is snapshot-only.
+func loadDefendMapsForBackend(maps defendMapSet, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+	keyMode := uint32(0)
+	modeDefend := uint32(1)
+	if err := maps.cfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
+		return 0, 0, fmt.Errorf("load %s map: %w", maps.cfgName, err)
+	}
+	ignoredCount := 0
+	if pol != nil {
+		var err error
+		ignoredCount, err = loadIgnoredLPMMap(maps.ignoredLPM, pol.IgnoredIPv4Nets())
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	plan, err := buildDefendAllowedPlan(maps.allowedName, compiled, pol)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := loadAllowedLPMMap(maps.allowedLPM, plan); err != nil {
+		return 0, 0, err
+	}
+	if err := loadAllowedDomainsMap(maps.allowedDomains, pol); err != nil {
+		return 0, 0, err
+	}
+	slog.Info("allowlist loaded into BPF map", "map", maps.allowedName, "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
+	return plan.totalEntries, ignoredCount, nil
 }
 
 func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
 		return 0, 0, fmt.Errorf("defend objects are required for LSM defend mode")
 	}
-	keyMode := uint32(0)
-	modeDefend := uint32(1)
-	if err := objs.LsmDefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load lsm_defend_cfg map: %w", err)
-	}
-	ignoredCount := 0
-	if pol != nil {
-		var err error
-		ignoredCount, err = loadIgnoredLPMMap(objs.LsmIgnoredIpv4Lpm, pol.IgnoredIPv4Nets())
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-
-	plan, err := buildDefendAllowedPlan("lsm_allowed_ipv4", compiled, pol)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, plan); err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
-		return 0, 0, err
-	}
-
-	return plan.totalEntries, ignoredCount, nil
+	return loadDefendMapsForBackend(defendMapSet{
+		cfgName:        "lsm_defend_cfg",
+		allowedName:    "lsm_allowed_ipv4",
+		cfg:            objs.LsmDefendCfg,
+		ignoredLPM:     objs.LsmIgnoredIpv4Lpm,
+		allowedLPM:     objs.LsmAllowedIpv4,
+		allowedDomains: objs.AllowedDomains,
+	}, compiled, pol)
 }
 
 // loadDefendMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
@@ -372,38 +322,40 @@ func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult
 // are still programmed individually but with prefixlen=32. Literal CIDR
 // entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
 // single LPM key and cover every address inside the range.
-func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+//
+// Returns (ipv4Entries, ipv6Entries, ignoredCidrs, error). The IPv6 count
+// flows into defendState.setIPv6AllowlistSize so the digest can choose
+// between ✅ "gated" and 🚨 "block-all" Phase 2 verdicts.
+func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, int, error) {
 	if objs == nil {
-		return 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
+		return 0, 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
 	}
-	keyMode := uint32(0)
-	modeDefend := uint32(1)
-	if err := objs.DefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load defend_cfg map: %w", err)
-	}
-	ignoredCount := 0
-	if pol != nil {
-		var err error
-		ignoredCount, err = loadIgnoredLPMMap(objs.IgnoredIpv4Lpm, pol.IgnoredIPv4Nets())
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-
-	plan, err := buildDefendAllowedPlan("allowed_ipv4", compiled, pol)
+	ipv4Entries, ignoredCount, err := loadDefendMapsForBackend(defendMapSet{
+		cfgName:        "defend_cfg",
+		allowedName:    "allowed_ipv4",
+		cfg:            objs.DefendCfg,
+		ignoredLPM:     objs.IgnoredIpv4Lpm,
+		allowedLPM:     objs.AllowedIpv4,
+		allowedDomains: objs.AllowedDomains,
+	}, compiled, pol)
 	if err != nil {
-		return 0, 0, err
+		return 0, 0, 0, err
 	}
 
-	if err := loadAllowedLPMMap(objs.AllowedIpv4, plan); err != nil {
-		return 0, 0, err
+	// P2-1 Phase 2: program AAAA-resolved destinations into allowed_ipv6
+	// when the map is present in the loaded objects. Loader stripped this
+	// to nil if the BPF stubs predate Phase 2 — populate returns (0, nil)
+	// in that case, so older stubs continue to load IPv4-only defend.
+	ipv6Programmed, err := populateAllowedIPv6Map(objs.AllowedIpv6, compiled)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	if ipv6Programmed > 0 {
+		slog.Info("allowlist loaded into BPF map", "map", "allowed_ipv6",
+			"ipv6_entries", ipv6Programmed)
 	}
 
-	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
-		return 0, 0, err
-	}
-
-	return plan.totalEntries, ignoredCount, nil
+	return ipv4Entries, ipv6Programmed, ignoredCount, nil
 }
 
 // loadAllowedLPMMap programs the allowed_ipv4 LPM trie (PR-G).
@@ -500,6 +452,47 @@ func loadAllowedLPMMap(m *ebpf.Map, plan allowedLPMPlan) error {
 	return nil
 }
 
+// populateAllowedIPv6Map writes AAAA-resolved /128 entries from the
+// compiled allowlist into the BPF allowed_ipv6 LPM trie. Wire format is
+// the userspace mirror of `struct lpm_v6_key`: 20-byte buffer where bytes
+// [0:4] are the prefix length in CPU/little-endian order (BPF_MAP_TYPE_LPM_TRIE
+// reads it as u32) and bytes [4:20] are the IPv6 address in network byte
+// order. Drift between this layout and bpf/defend_lpm_v6_key.h equals
+// silent EINVAL on Update at startup — both sides MUST move together.
+//
+// Returns the number of entries actually programmed. Missing map (older
+// stubs that predate Phase 2) is tolerated: 0 returned, no error — the
+// BPF program also degrades gracefully because cgroup/connect6 +
+// sendmsg6 will be missing, leaving IPv4-only defend.
+func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult) (int, error) {
+	if m == nil {
+		return 0, nil
+	}
+	// Deterministic ordering for reproducibility (tests, logs).
+	keys := make([][16]byte, 0, compiled.AllowedIPv6.Len())
+	compiled.AllowedIPv6.ForEach(func(k [16]byte) { keys = append(keys, k) })
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare(keys[i][:], keys[j][:]) < 0
+	})
+	if len(keys) > policy.MaxAllowedDefendIPv6Keys {
+		return 0, fmt.Errorf("allowed_ipv6: %d entries exceeds BPF max %d",
+			len(keys), policy.MaxAllowedDefendIPv6Keys)
+	}
+	val := uint8(1)
+	programmed := 0
+	for _, addr := range keys {
+		var key [20]byte
+		binary.LittleEndian.PutUint32(key[0:4], 128)
+		copy(key[4:20], addr[:])
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			return programmed, fmt.Errorf("load allowed_ipv6 map (/128 %s): %w",
+				net.IP(addr[:]).String(), err)
+		}
+		programmed++
+	}
+	return programmed, nil
+}
+
 func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, state *defendState, signer *telemetry.Signer, hookFamily string, dns *DNSCache) (telemetry.DenyEvent, error) {
 	tgid, tid, commb, protocolRaw, reasonRaw, af, daddr16, dport, ok := decodeDenyEvent(raw)
 	if !ok {
@@ -507,12 +500,25 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	}
 	protocol := denyProtocolLabel(protocolRaw)
 	reason := denyReasonLabel(reasonRaw)
-	if af != linuxAFInet {
-		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4 only)", af)
+	var dstIP net.IP
+	switch af {
+	case linuxAFInet:
+		dstIP = net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
+	case linuxAFInet6:
+		// P2-1 Phase 2: IPv6 deny events. daddr16 holds the 16-byte address
+		// in network byte order; net.IP shares that layout so we can copy
+		// it verbatim. String() picks the canonical zero-compressed form.
+		ip := make(net.IP, net.IPv6len)
+		copy(ip, daddr16[:])
+		dstIP = ip
+	default:
+		return telemetry.DenyEvent{}, fmt.Errorf("deny event: unsupported address family %d (IPv4/IPv6 only)", af)
 	}
-	dstIP := net.IPv4(daddr16[0], daddr16[1], daddr16[2], daddr16[3])
 	dst := dstIP.String()
-	comm := string(bytes.TrimRight(commb[:], "\x00"))
+	// P1-5: sanitize attacker-controlled comm before it lands in JSONL — a
+	// blocked process whose argv[0] embeds newline / control bytes must not
+	// be able to forge an extra record in the event log.
+	comm := telemetry.SanitizeField(string(bytes.TrimRight(commb[:], "\x00")), 16)
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
 	matchKind := "unknown"
 	if dns != nil && dns.Lookup(dstIP) != "" {

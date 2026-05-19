@@ -15,6 +15,7 @@ type defendState struct {
 	mu                     sync.Mutex
 	mode                   string
 	allowlistSize          int
+	allowlistIPv6Size      int
 	denyCountN             int
 	denyReserveFailuresN   int
 	mapIntegrityFailures   int
@@ -26,6 +27,7 @@ type defendState struct {
 type defendSnapshot struct {
 	mode                 string
 	allowlistSize        int
+	allowlistIPv6Size    int
 	denyCount            int
 	denyReserveFailures  int
 	mapIntegrityFailures int
@@ -105,6 +107,16 @@ func (s *defendState) setModeAndAllowlist(mode string, allowlistSize, ignoredSiz
 	s.expectedIgnoredEntries = ignoredSize
 }
 
+// setIPv6AllowlistSize records the number of /128 entries written into the
+// BPF allowed_ipv6 LPM trie at startup. Called from loadDefendMaps after
+// populateAllowedIPv6Map. Zero means defend is in pure block-all IPv6
+// posture (every non-loopback / non-link-local IPv6 destination denied).
+func (s *defendState) setIPv6AllowlistSize(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowlistIPv6Size = n
+}
+
 func (s *defendState) addMapIntegrityFailure() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -149,6 +161,7 @@ func (s *defendState) snapshot() defendSnapshot {
 	out := defendSnapshot{
 		mode:                 s.mode,
 		allowlistSize:        s.allowlistSize,
+		allowlistIPv6Size:    s.allowlistIPv6Size,
 		denyCount:            s.denyCountN,
 		denyReserveFailures:  s.denyReserveFailuresN,
 		mapIntegrityFailures: s.mapIntegrityFailures,

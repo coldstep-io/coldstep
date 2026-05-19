@@ -1,6 +1,6 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.5`** (or a newer tag from [Releases](https://github.com/coldstep-io/coldstep/releases)). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`**). There is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.2.6`** (or a newer tag from [Releases](https://github.com/coldstep-io/coldstep/releases)). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`**). There is no maintained local build path for the Linux agent.
 
 ## Two modes (read this first)
 
@@ -11,7 +11,32 @@ Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`d
 | Observe-only telemetry (default) | `mode: detect` or omit `mode` |
 | Block egress not on the allowlist | `mode: defend` + non-empty **`allow`** / **`allow-file`** |
 
+**IPv6:** Both modes observe IPv6 egress via `cgroup/connect6`/`cgroup/sendmsg6` (Phase 1, observe-only). IPv6 blocking is not yet implemented.
+
 If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`defend`**. See **[CHANGELOG — Breaking](CHANGELOG.md)**.
+
+---
+
+## Promoting detect observations to an allowlist
+
+Detect mode records **everything** your build talks to. The whole point is to use those JSONL records to build the `allow:` list you will run in `defend`. **A supply-chain compromise that occurs while you are still recording will get baked straight into the allowlist** — there is no built-in trust signal that says "this domain is legitimate, that one is the attacker." Treat allowlist promotion as a code change with the same review bar as any other security-sensitive merge.
+
+Recommended workflow:
+
+1. **Collect ≥ 3 builds.** Run detect across at least three different PRs or branches (preferably touching different parts of the codebase). One short run on one branch is the easiest poisoning target.
+2. **Diff against a baseline.** Before promoting domains to `allow:`, compare the new JSONL against a known-good baseline:
+   ```bash
+   coldstep-report diff \
+     --baseline baseline.jsonl \
+     --current  .coldstep-events.jsonl \
+     --summary  diff-summary.md \
+     --fail-on-new-domain
+   ```
+   `--fail-on-new-domain` exits non-zero when any FQDN appears in the current run but not the baseline. Wire it into CI on PRs that touch `.github/coldstep/egress-allow.txt`.
+3. **Reject short windows.** Use `coldstep-report build-model --min-observation-hours 24` (or set `COLDSTEP_MIN_OBS_HOURS=24`) so a run that observed less than 24 hours of wall-clock traffic flags `short_observation_window=true` in the model — `coldstep-report assert-integrity` then hard-fails. Tune the threshold to whatever observation period your team actually trusts.
+4. **Require a second-engineer review.** Newly observed domains in the diff output get a separate human approval before they land in the `allow:` list. Treat the diff as a code review, not as an automated step that closes itself.
+
+`build-model` additionally flags **suspicious domains** in the report model (`suspicious_domains` field): high-entropy subdomains (Shannon entropy > 3.5 bits/char on labels longer than 8 chars), domains observed only once across the entire run, and HTTP/TLS observations on non-standard ports. `render-summary` surfaces a `[!WARNING]` block when any are present so reviewers see them before approving the diff.
 
 ---
 
@@ -25,7 +50,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.5
+      - uses: coldstep-io/coldstep@v0.2.6
       - run: echo "your build/test steps here"
 ```
 
@@ -49,7 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.5
+      - uses: coldstep-io/coldstep@v0.2.6
       - run: echo "build/test/deploy steps"
 ```
 
@@ -88,7 +113,7 @@ Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, n
 
 ## Versioning
 
-- Prefer **`coldstep-io/coldstep@v0.2.5`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
+- Prefer **`coldstep-io/coldstep@v0.2.6`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
 - The early **`v0.1.0`** tag is not usable (it lacks repo-root **`action.yml`**); use **`v0.2.1`** or a newer published tag that includes **`action.yml`**.
 
 **Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`** except **`coldstep-detect-demo-dev`** which also runs on **`push` to `dev`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-defend.yml`](.github/workflows/coldstep-demo-defend.yml)** (minimal **defend**), **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift), and **[`coldstep-detect-demo-dev.yml`](.github/workflows/coldstep-detect-demo-dev.yml)** — same agent detect setup on **`dev`** with full BLUF + HTML artifact plus an extra **IP classification** Job Summary section.
@@ -103,7 +128,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.5
+      - uses: coldstep-io/coldstep@v0.2.6
         with:
           detect-profile: enhanced
           report: job-summary
@@ -122,10 +147,10 @@ jobs:
 
 ## Defend mode (optional)
 
-Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.5`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
+Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.2.6`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.2.5
+- uses: coldstep-io/coldstep@v0.2.6
   with:
     mode: defend
     allow: |
@@ -151,7 +176,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 **Example**
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.2.5
+- uses: coldstep-io/coldstep@v0.2.6
   with:
     mode: defend
     allow: api.github.com

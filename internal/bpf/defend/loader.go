@@ -4,8 +4,10 @@ package defend
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 )
 
 // LoadDefendObjectsForKernel populates obj with the cgroup defend programs
@@ -27,16 +29,49 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 	if !wantLSM {
 		delete(spec.Programs, "lsm_socket_connect")
 		delete(spec.Programs, "lsm_socket_sendmsg")
+		// lsm_socket_sendpage closes the sendfile/splice gap (kernel 5.15);
+		// the program is only present after the BPF stubs have been
+		// regenerated on Linux with the new SEC, hence the silent delete.
+		delete(spec.Programs, "lsm_socket_sendpage")
 		delete(spec.Maps, "lsm_deny_events")
 		delete(spec.Maps, "lsm_deny_reserve_failures")
 		delete(spec.Maps, "lsm_defend_cfg")
 		delete(spec.Maps, "lsm_allowed_ipv4")
 		delete(spec.Maps, "lsm_ignored_ipv4_lpm")
+		// sendpage_observed lives in the LSM section; strip it when LSM is
+		// disabled so we don't pin a per-cpu counter nobody reads.
+		delete(spec.Maps, "sendpage_observed")
+	} else if !kernelHasLSMHook("socket_sendpage") {
+		// Kernel 6.5+ removed the socket_sendpage LSM hook (proto_ops
+		// ->sendpage and security_socket_sendpage were dropped together).
+		// On those kernels sendfile(2)/splice(2) route through sendmsg
+		// with MSG_SPLICE_PAGES, so cgroup/sendmsg4 + lsm/socket_sendmsg
+		// already cover them. Leaving the program in the spec would fail
+		// prog_load (ENOENT on the BTF attach target) and bring down the
+		// whole defend collection. The sendpage_observed counter is also
+		// stripped because nothing will write to it.
+		delete(spec.Programs, "lsm_socket_sendpage")
+		delete(spec.Maps, "sendpage_observed")
 	}
 
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
-		return err
+		// Defensive fallback: BTF lookup may have succeeded but prog_load
+		// still rejected sendpage for some other reason (BTF mismatch,
+		// CONFIG_SECURITY_NETWORK off, etc.). Strip the program and retry
+		// once so the rest of the LSM section still loads.
+		if wantLSM && isSendpageLoadFailure(err) {
+			spec2, err2 := LoadDefend()
+			if err2 != nil {
+				return err2
+			}
+			delete(spec2.Programs, "lsm_socket_sendpage")
+			delete(spec2.Maps, "sendpage_observed")
+			coll, err = ebpf.NewCollection(spec2)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	success := false
 	defer func() {
@@ -58,6 +93,23 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		}
 	}
 
+	// P0-1 Phase 1: IPv6 observe-only programs. Detach when present in the
+	// generated spec; tolerate absence so kernels (or generated stubs)
+	// without these sections still load the IPv4 path.
+	// TODO: remove the missing-program tolerance once defend objects are
+	// regenerated on Linux and the cgroup/connect6 + cgroup/sendmsg6
+	// sections are guaranteed in the embedded ELF.
+	cgIPv6Programs := []struct {
+		name string
+		dst  **ebpf.Program
+	}{
+		{"defend_cgroup_connect6", &obj.DefendCgroupConnect6},
+		{"defend_cgroup_sendmsg6", &obj.DefendCgroupSendmsg6},
+	}
+	for _, p := range cgIPv6Programs {
+		detachProgramIfPresent(coll, p.name, p.dst)
+	}
+
 	cgAndSharedMaps := []struct {
 		name string
 		dst  **ebpf.Map
@@ -75,6 +127,33 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 			return err
 		}
 	}
+
+	// P0-1 Phase 1: IPv6 observe counters. Optional in older generated
+	// stubs; tolerate absence so the cgroup IPv4 path keeps loading.
+	// TODO: remove the missing-map tolerance once defend objects are
+	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
+	// ipv6_connect_observed / ipv6_sendmsg_observed maps.
+	cgIPv6Maps := []struct {
+		name string
+		dst  **ebpf.Map
+	}{
+		{"ipv6_connect_observed", &obj.Ipv6ConnectObserved},
+		{"ipv6_sendmsg_observed", &obj.Ipv6SendmsgObserved},
+	}
+	for _, m := range cgIPv6Maps {
+		detachMapIfPresent(coll, m.name, m.dst)
+	}
+
+	// P2-1 Phase 2: IPv6 allowlist LPM trie. Optional in older generated
+	// stubs (same regeneration window as the connect6/sendmsg6 enforcement
+	// path). When absent, defend mode still loads but cgroup/connect6 and
+	// cgroup/sendmsg6 fall back to Phase 1 observe-only behaviour because
+	// the bpf2go binding's defend_cgroup_connect6 program reference will
+	// also be missing.
+	// TODO: remove the missing-map tolerance once defend objects are
+	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
+	// allowed_ipv6 map.
+	detachMapIfPresent(coll, "allowed_ipv6", &obj.AllowedIpv6)
 
 	if wantLSM {
 		lsmPrograms := []struct {
@@ -104,6 +183,16 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 				return err
 			}
 		}
+
+		// Sendfile/splice gap (kernel 5.15): lsm/socket_sendpage and its
+		// observe-only counter. Optional in older generated stubs; tolerate
+		// absence so existing LSM-enabled kernels still load the connect +
+		// sendmsg path.
+		// TODO: remove the missing-program tolerance once defend objects are
+		// regenerated on Linux with bpf/trace_lsm_defend_lsm.inc's
+		// lsm_socket_sendpage section and sendpage_observed map.
+		detachProgramIfPresent(coll, "lsm_socket_sendpage", &obj.LsmSocketSendpage)
+		detachMapIfPresent(coll, "sendpage_observed", &obj.SendpageObserved)
 	}
 
 	success = true
@@ -128,4 +217,48 @@ func detachMap(coll *ebpf.Collection, name string, dst **ebpf.Map) error {
 	*dst = m
 	delete(coll.Maps, name)
 	return nil
+}
+
+// detachProgramIfPresent moves a program out of the collection into dst
+// when present. Missing programs are silently ignored — used for optional
+// observe-only paths (e.g. IPv6 hooks) so a stub built without them still
+// loads the rest of the defend collection.
+func detachProgramIfPresent(coll *ebpf.Collection, name string, dst **ebpf.Program) {
+	if p, ok := coll.Programs[name]; ok {
+		*dst = p
+		delete(coll.Programs, name)
+	}
+}
+
+// detachMapIfPresent is the map analogue of detachProgramIfPresent.
+func detachMapIfPresent(coll *ebpf.Collection, name string, dst **ebpf.Map) {
+	if m, ok := coll.Maps[name]; ok {
+		*dst = m
+		delete(coll.Maps, name)
+	}
+}
+
+// kernelHasLSMHook reports whether the running kernel's BTF declares
+// bpf_lsm_<name>, indicating the LSM hook is attachable. Returns false
+// when kernel BTF cannot be loaded or the symbol is absent — caller
+// should treat false as "do not load this hook".
+func kernelHasLSMHook(name string) bool {
+	spec, err := btf.LoadKernelSpec()
+	if err != nil {
+		return false
+	}
+	var fn *btf.Func
+	return spec.TypeByName("bpf_lsm_"+name, &fn) == nil
+}
+
+// isSendpageLoadFailure pattern-matches an ebpf.NewCollection error to
+// detect prog_load rejection of lsm_socket_sendpage specifically. Used
+// as a defensive fallback when the BTF pre-check missed the kernel's
+// removal of the hook.
+func isSendpageLoadFailure(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "lsm_socket_sendpage") || strings.Contains(s, "socket_sendpage")
 }

@@ -70,3 +70,122 @@ func TestDenyReserveFailuresMapsArePerCPUArray(t *testing.T) {
 		}
 	}
 }
+
+// TestIPv6ObserveMapsArePerCPUArray asserts the P0-1 Phase 1 observe-only
+// counter maps (ipv6_connect_observed, ipv6_sendmsg_observed) have the
+// PERCPU_ARRAY shape userspace expects to sum. Maps are added in
+// bpf/trace_defend_cgroup.inc; the test skips itself until the defend
+// stubs have been regenerated on Linux to include them.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestIPv6ObserveMapsArePerCPUArray(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	for _, name := range []string{"ipv6_connect_observed", "ipv6_sendmsg_observed"} {
+		ms, ok := spec.Maps[name]
+		if !ok {
+			t.Skipf("defend stubs not regenerated yet: map %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+		}
+		if ms.Type != ebpf.PerCPUArray {
+			t.Errorf("%s type = %v, want ebpf.PerCPUArray", name, ms.Type)
+		}
+		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+			t.Errorf("%s shape MaxEntries=%d KeySize=%d ValueSize=%d, want MaxEntries=1 KeySize=4 ValueSize=4",
+				name, ms.MaxEntries, ms.KeySize, ms.ValueSize)
+		}
+	}
+}
+
+// TestIPv6ObservePrograms asserts the cgroup/connect6 + cgroup/sendmsg6
+// programs are present in the spec with the CGroupSockAddr program type.
+// Skips until the stubs are regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestIPv6ObservePrograms(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	for _, name := range []string{"defend_cgroup_connect6", "defend_cgroup_sendmsg6"} {
+		ps, ok := spec.Programs[name]
+		if !ok {
+			t.Skipf("defend stubs not regenerated yet: program %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+		}
+		if ps.Type != ebpf.CGroupSockAddr {
+			t.Errorf("%s type = %v, want ebpf.CGroupSockAddr", name, ps.Type)
+		}
+	}
+}
+
+// TestAllowedIPv6MapShape asserts the P2-1 Phase 2 allowed_ipv6 LPM trie
+// has the shape userspace expects when programming AAAA-resolved
+// destinations: BPF_MAP_TYPE_LPM_TRIE, key size 20 bytes
+// (4-byte prefixlen + 16-byte address), value size 1 byte, max_entries
+// matching policy.MaxAllowedDefendIPv6Keys. Drift on any of these results
+// in silent EINVAL on Update at agent start, surfacing as defend-bypass.
+// Skips until stubs are regenerated on Linux.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestAllowedIPv6MapShape(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ms, ok := spec.Maps["allowed_ipv6"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: map \"allowed_ipv6\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ms.Type != ebpf.LPMTrie {
+		t.Errorf("allowed_ipv6 type = %v, want ebpf.LPMTrie", ms.Type)
+	}
+	if ms.KeySize != 20 {
+		t.Errorf("allowed_ipv6 KeySize = %d, want 20 (4-byte prefixlen + 16-byte addr)", ms.KeySize)
+	}
+	if ms.ValueSize != 1 {
+		t.Errorf("allowed_ipv6 ValueSize = %d, want 1", ms.ValueSize)
+	}
+	if ms.MaxEntries != uint32(policy.MaxAllowedDefendIPv6Keys) {
+		t.Errorf("allowed_ipv6 MaxEntries = %d, want %d (policy.MaxAllowedDefendIPv6Keys)",
+			ms.MaxEntries, policy.MaxAllowedDefendIPv6Keys)
+	}
+}
+
+// TestSendpageObserveMapIsPerCPUArray asserts the sendpage_observed counter
+// map (kernel-5.15 sendfile/splice gap) has the PERCPU_ARRAY shape userspace
+// expects to sum. Added in bpf/trace_lsm_defend_lsm.inc; the test skips
+// itself until the defend stubs have been regenerated on Linux to include it.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestSendpageObserveMapIsPerCPUArray(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ms, ok := spec.Maps["sendpage_observed"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: map \"sendpage_observed\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ms.Type != ebpf.PerCPUArray {
+		t.Errorf("sendpage_observed type = %v, want ebpf.PerCPUArray", ms.Type)
+	}
+	if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+		t.Errorf("sendpage_observed shape MaxEntries=%d KeySize=%d ValueSize=%d, want MaxEntries=1 KeySize=4 ValueSize=4",
+			ms.MaxEntries, ms.KeySize, ms.ValueSize)
+	}
+}
+
+// TestSendpageHookProgram asserts the lsm/socket_sendpage program is
+// present in the spec with the LSM program type. Skips until stubs are
+// regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestSendpageHookProgram(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ps, ok := spec.Programs["lsm_socket_sendpage"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: program \"lsm_socket_sendpage\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ps.Type != ebpf.LSM {
+		t.Errorf("lsm_socket_sendpage type = %v, want ebpf.LSM", ps.Type)
+	}
+}

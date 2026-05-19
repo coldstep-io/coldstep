@@ -1,0 +1,85 @@
+# Kernel compatibility matrix — P2-4 kernel coupling regression harness.
+#
+# Goal: catch BPF verifier or kernel API regressions before they reach users
+# by running the agent's unit + integration tests against multiple kernel
+# versions on a recurring schedule.
+#
+# NOTE: Full kernel pinning on GitHub-hosted runners is not yet wired up. The
+# practical options (qemu/vmtest, lima, or a self-hosted runner pool) are
+# out of scope for the first cut. For now this workflow:
+#
+#   * runs on the kernel the GitHub-hosted runner happens to be on,
+#   * records the observed kernel release + BTF availability per matrix row,
+#   * gives a stable scaffold to plug a qemu/vmtest harness into later
+#     (drop the kernel image into the "Set up kernel" step and replace the
+#     uname check with a boot-the-kernel-then-run-tests dance).
+#
+# Matrix rows are named with the kernel versions we *want* to pin, so PR
+# annotations already mention the target even while every row runs on the
+# same host kernel. When the qemu harness lands, only the "Set up kernel"
+# step needs to change.
+
+name: Kernel compatibility matrix
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'   # weekly, Monday 03:00 UTC
+  workflow_dispatch:
+    inputs:
+      kernel_versions:
+        description: 'Space-separated kernel versions to test (default: full matrix)'
+        required: false
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  kernel-matrix:
+    name: "Kernel ${{ matrix.kernel }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        kernel:
+          - "5.15"   # LTS — minimum supported (Ubuntu 22.04 baseline)
+          - "6.1"    # LTS
+          - "6.6"    # LTS (current GHA default range)
+          - "6.8"    # current GHA ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Set up kernel ${{ matrix.kernel }}
+        # Scaffold step — see file header. Full kernel pinning requires a
+        # qemu/vmtest or self-hosted runner harness; for now the host kernel
+        # is whatever ubuntu-latest provides. The annotation makes the gap
+        # visible in PR logs so we don't pretend we're pinning when we are not.
+        run: |
+          echo "Target kernel: ${{ matrix.kernel }}"
+          echo "Host kernel:   $(uname -r)"
+          echo "::notice title=Kernel pinning::Full kernel pinning requires self-hosted runner or qemu/vmtest setup (P2-4 follow-up)"
+
+      - name: BTF availability probe (host)
+        run: |
+          if [ -r /sys/kernel/btf/vmlinux ]; then
+            sz=$(stat -c%s /sys/kernel/btf/vmlinux)
+            echo "BTF available: yes ($sz bytes)"
+          else
+            echo "::warning title=No kernel BTF::Host kernel lacks /sys/kernel/btf/vmlinux — CO-RE loads will fail"
+          fi
+
+      - name: Build agent (Linux)
+        run: bash scripts/build-agent-linux.sh "$PWD"
+
+      - name: Run unit tests
+        run: go test ./... -count=1 -timeout 5m
+
+      - name: Run integration tests (root + BPF)
+        run: sudo env "PATH=$PATH" go test -tags=integration ./internal/agent/... -count=1 -parallel 1 -timeout 15m

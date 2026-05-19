@@ -6,7 +6,7 @@
     <title>ColdStep — eBPF observability for GitHub-hosted Ubuntu runners</title>
     <meta
       name="description"
-      content="ColdStep is a GitHub Action and Linux eBPF agent for ubuntu-latest runners. Detect mode records process and network signals; defend mode enforces an egress allowlist."
+      content="ColdStep is a GitHub Action and Linux eBPF agent for ubuntu-latest runners. Detect mode records process and network signals; defend mode blocks non-allowlisted IPv4 egress. Every run reports its coverage scope — IPv4, IPv6, QUIC, and payload visibility — so reviewers can trust the gaps as well as the data."
     />
     <link rel="stylesheet" href="styles.css" />
     <link rel="icon" href="favicon.svg" type="image/svg+xml" />
@@ -34,8 +34,10 @@
             <p class="hero-lede">
               A composite GitHub Action and small Linux <strong>eBPF</strong> agent for
               <strong>GitHub-hosted Ubuntu</strong> runners. Record process and network signals in
-              <strong>detect</strong> mode, or enforce an egress allowlist in
-              <strong>defend</strong> mode when you're ready to harden the boundary.
+              <strong>detect</strong> mode, or block non-allowlisted IPv4 egress in
+              <strong>defend</strong> mode when you're ready to harden the boundary. Every digest
+              leads with a <strong>coverage scope</strong> line so you know what was observed —
+              and what wasn't — before reading the counts.
             </p>
             <div class="hero-actions">
               <a class="btn-primary" href="https://github.com/coldstep-io/coldstep/blob/main/QUICK_START.md">Get started</a>
@@ -63,14 +65,24 @@
                 <h3>Progressive hardening</h3>
                 <p>
                   Start in detect mode to baseline normal egress. Switch to defend mode with an explicit allowlist
-                  so unexpected destinations fail the job instead of silently leaking.
+                  so unexpected IPv4 destinations fail the job instead of silently leaking. IPv6 egress is
+                  observed in both modes and surfaces as a warning in the digest.
+                </p>
+              </article>
+              <article class="feature">
+                <h3>Honest coverage</h3>
+                <p>
+                  Every run writes a <strong>Coverage this run</strong> line — IPv4 TCP/UDP, IPv6,
+                  QUIC/HTTP3, and payloads beyond <code>iov[0]</code> — plus ringbuf-drop totals,
+                  so reviewers can tell what the agent <em>didn't</em> see, not just what it did.
                 </p>
               </article>
               <article class="feature">
                 <h3>CI-native outputs</h3>
                 <p>
-                  JSONL event stream, shutdown telemetry JSON, and a Markdown digest that merges into the job
-                  Summary — so reviewers see the full picture in the PR thread.
+                  JSONL event stream, shutdown telemetry JSON, and a compact GFM Markdown digest
+                  (≤ ~30 lines, single-row KPI table) that merges into the job Summary —
+                  reviewers see the full picture in the PR thread.
                 </p>
               </article>
             </div>
@@ -94,7 +106,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.2.4
+      - uses: coldstep-io/coldstep@v0.2.6
 </code></pre>
             </div>
           </div>
@@ -104,24 +116,79 @@ jobs:
           <div class="inner">
             <h2 id="modes-heading">Two modes, one agent</h2>
             <p class="section-intro">
-              Pin a release tag (e.g. <code>coldstep-io/coldstep@v0.2.4</code>) rather than tracking
-              <code>@main</code>.
+              Pin a release tag (e.g. <code>coldstep-io/coldstep@v0.2.6</code>) rather than tracking
+              <code>@main</code>. The legacy <code>enforce</code> mode string is rejected — use
+              <code>defend</code>.
             </p>
             <div class="modes">
               <div class="mode">
                 <h3>Detect</h3>
-                <p>Observe and record. No egress blocking. Ideal for baselining and building incident-friendly timelines.</p>
+                <p>
+                  Observe and record. No egress blocking. Ideal for baselining normal traffic and
+                  building incident-friendly timelines. IPv6 egress is observed and reported in
+                  the digest.
+                </p>
                 <span class="tag">Default</span>
               </div>
               <div class="mode">
                 <h3>Defend</h3>
                 <p>
                   Block IPv4 egress outside your allowlist via cgroup <code>connect4</code> / <code>sendmsg4</code>
-                  and BPF LSM where available. Requires a non-empty allowlist. IPv6 is out of scope.
+                  and BPF LSM where available. Requires a non-empty allowlist.
+                  <strong>IPv6 egress is observed and surfaced as a warning</strong> — defend
+                  allowlists are IPv4-only, so any IPv6 destination escapes enforcement and is
+                  flagged 🚨 in the digest.
                 </p>
                 <span class="tag">Opt-in</span>
               </div>
             </div>
+          </div>
+        </section>
+
+        <section class="section" aria-labelledby="coverage-heading">
+          <div class="inner">
+            <h2 id="coverage-heading">Coverage you can see</h2>
+            <p class="section-intro">
+              Every detect digest now leads with a <strong>Coverage this run</strong> line and a
+              compact KPI table — so reviewers can tell what the agent observed before deciding
+              what the counts mean.
+            </p>
+            <ul class="outputs">
+              <li>
+                <code>Coverage block</code>
+                <span>
+                  One Markdown line per run — e.g.
+                  <code>IPv4 TCP/UDP ✓ observed | IPv6 ✗ not observed | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: ✓ observed</code>.
+                  Partial-observe paths (split <code>sendmmsg</code>, <code>sendfile</code>,
+                  <code>splice</code>) flip the payload state to <code>⚠️ partial</code>.
+                </span>
+              </li>
+              <li>
+                <code>IPv6 egress (Phase 1)</code>
+                <span>
+                  <code>cgroup/connect6</code> and <code>cgroup/sendmsg6</code> hooks count
+                  non-loopback IPv6 destinations and surface them as <strong>⚠️ in detect</strong>
+                  or <strong>🚨 in defend</strong>. Defend allowlists remain IPv4-only, so IPv6
+                  traffic is reported, not blocked.
+                </span>
+              </li>
+              <li>
+                <code>Ringbuf drops</code>
+                <span>
+                  The Full KPI fold shows total ringbuf reserve failures, so you can spot
+                  detect-path data loss before treating "zero events" as "zero traffic".
+                </span>
+              </li>
+              <li>
+                <code>sendmmsg multi-message</code>
+                <span>
+                  The agent inspects up to <code>vlen=8</code> messages per
+                  <code>sendmmsg(2)</code> call; anything past that bumps the
+                  <code>sendmmsg_unobserved_extra</code> counter, which flows into the digest's
+                  capture-gaps row.
+                </span>
+              </li>
+            </ul>
           </div>
         </section>
 
@@ -139,7 +206,11 @@ jobs:
               </li>
               <li>
                 <code>.coldstep-detect.md</code>
-                <span>Shutdown digest with KPI tables and collapsible sections for quick scans.</span>
+                <span>
+                  Compact, GFM-compliant shutdown digest — verdict badge, single-row KPI table,
+                  Coverage scope line, and a collapsible Full KPI fold (per-channel counts and
+                  ringbuf drops).
+                </span>
               </li>
               <li>
                 <code>.coldstep-telemetry.json</code>

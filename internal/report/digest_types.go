@@ -108,7 +108,16 @@ type DigestInput struct {
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
 	TLSSNIGate                                         bool
-	PolicyCounts                                       map[string]int
+	// TLSConfidenceFull / Partial / Inferred / Unknown count TLS events by the
+	// reliability of the captured SNI. The digest surfaces these as a
+	// `full=N partial=M unknown=K` row when at least one TLS event exists, so
+	// operators can weigh how trustworthy an SNI-based allow/deny match is on
+	// this run.
+	TLSConfidenceFull     int
+	TLSConfidencePartial  int
+	TLSConfidenceInferred int
+	TLSConfidenceUnknown  int
+	PolicyCounts          map[string]int
 
 	ExecRows  []ExecDigestRow
 	TCPRows   []TCPDigestRow
@@ -170,7 +179,13 @@ type DigestInput struct {
 	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
 	// length, distinct from per-message msg_iovlen). Messages 2..N are not
 	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
-	SendmmsgMultiMessage        int
+	SendmmsgMultiMessage int
+	// SendmmsgUnobservedExtra counts individual sendmmsg(2) extra messages
+	// (beyond the unrolled SENDMMSG_EXTRA_MAX bound) that the BPF observation
+	// loop could not reach. BG-03 Gap 3 introduced bounded per-message
+	// observation for indices 1..7; this counter sums message slots from
+	// index 8 onward that remain silent on vlen >= 9 calls.
+	SendmmsgUnobservedExtra     int
 	TLSWritevMultiIovecObserved int
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters (supersedes the PR-E aggregate
@@ -185,6 +200,32 @@ type DigestInput struct {
 	SendfileObserved  int
 	SpliceObserved    int
 	SendmmsgFirstOnly int
+	// IPv6ConnectObserved / IPv6SendmsgObserved count non-loopback IPv6
+	// egress attempts observed by the cgroup/connect6 and cgroup/sendmsg6
+	// hooks. Under P2-1 Phase 2 these hooks enforce in defend mode (LPM
+	// trie lookup against allowed_ipv6). In detect mode non-zero values
+	// remain a visibility row (no enforcement); in defend mode the digest
+	// pivots on DefendIPv6AllowlistSize — non-zero means traffic was gated
+	// by an explicit AAAA-resolved allowlist, zero means defend is in a
+	// pure block-all IPv6 posture.
+	IPv6ConnectObserved uint32
+	IPv6SendmsgObserved uint32
+	// DefendIPv6AllowlistSize is the number of /128 entries programmed
+	// into the BPF allowed_ipv6 LPM trie at agent startup. Used by the
+	// digest to distinguish two Phase 2 defend postures:
+	//   - allowlist > 0: ✅ blocked (AAAA-resolved entries gating IPv6)
+	//   - allowlist == 0: ⚠️ pure block-all (all non-loopback/non-link-local
+	//     IPv6 denied — works, but operators should know their config has
+	//     no AAAA destinations and may surprise users who expect IPv6
+	//     services).
+	DefendIPv6AllowlistSize int
+	// SendpageObserved counts security_socket_sendpage invocations recorded
+	// by the lsm/socket_sendpage hook. Non-zero means sendfile(2) or splice(2)
+	// reached a socket via the sock_sendpage path — which cgroup/sendmsg4 and
+	// lsm/socket_sendmsg cannot gate on kernels < 6.8. The KPI/coverage row
+	// flips to reflect that sendfile/splice are observed (and, in defend
+	// mode, gated) once this counter fires.
+	SendpageObserved uint32
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
 	// dispatch arm. Non-zero means some workload attempted async I/O setup;
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.
@@ -194,6 +235,10 @@ type DigestInput struct {
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool
 	CanaryFailCount  int
+	// QUICCandidateCount counts UDP/443 egress to non-loopback IPv4 observed in
+	// this run, classified as likely QUIC/HTTP3 flows. The payload is encrypted
+	// and not inspected — non-zero surfaces the visibility gap in the KPI table.
+	QUICCandidateCount int
 	// TCPDNSResponsesObserved counts TCP DNS length-framed replies where the BPF
 	// path could inspect the QR bit (trace_dns.bpf.c read/recvfrom sys_exit).
 	TCPDNSResponsesObserved int
@@ -216,6 +261,24 @@ type DigestInput struct {
 	BPFMapIntegrityFailures        int
 	BPFAuditRingbufReserveFailures int
 	DroppedCounts                  map[string]int
+
+	// P1-1 DNS Allowlist Trust Model hardening surface.
+	//
+	// UnresolvedAllowlistDomains lists allowlist domains that did not yield any
+	// IPv4 A-record at compile time. Empty when all domains resolved or no
+	// allowlist was compiled.
+	UnresolvedAllowlistDomains []string
+	// WildcardRiskDomains lists allowlist entries that match a known multi-tenant
+	// shared-infrastructure wildcard surface (e.g. `*.s3.amazonaws.com`). Empty
+	// when no such entries are present.
+	WildcardRiskDomains []string
+	// AllowlistAgeMinutes is minutes between allowlist compile time and digest
+	// build time. Surfaces a TTL re-validation hint for long jobs; zero when no
+	// allowlist was compiled.
+	AllowlistAgeMinutes float64
+	// DomainContactCounts maps observed FQDN → observation count across TCP +
+	// UDP egress. Sorted descending by count in the digest section.
+	DomainContactCounts map[string]int
 }
 
 // TruncateUTF8ToMaxBytes cuts s so len(result) <= maxBytes without splitting a UTF-8 code point.

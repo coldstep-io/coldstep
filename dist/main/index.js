@@ -20430,11 +20430,11 @@ async function startAgent() {
   const featureGates = resolveFeatureGates();
   if (ioUringDisable) {
     try {
-      (0, import_child_process.execFileSync)("sudo", ["sysctl", "-w", "io_uring_disabled=2"], { stdio: "inherit" });
-      info("io_uring disabled via sysctl (io_uring_disabled=2) \u2014 closes io_uring eBPF bypass vector");
+      (0, import_child_process.execFileSync)("sudo", ["sysctl", "-w", "kernel.io_uring_disabled=2"], { stdio: "inherit" });
+      info("io_uring disabled via sysctl (kernel.io_uring_disabled=2) \u2014 closes io_uring eBPF bypass vector");
     } catch (e) {
       warning(
-        `io-uring-disable: sysctl io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); io_uring-based syscall bypasses may not be blocked on this runner`
+        `io-uring-disable: sysctl kernel.io_uring_disabled=2 failed (${e instanceof Error ? e.message : String(e)}); io_uring-based syscall bypasses may not be blocked on this runner`
       );
     }
   }

@@ -8,10 +8,29 @@ import (
 // SchemaVersion is bumped when JSONL field shapes change incompatibly.
 const SchemaVersion = 2
 
+// EventTypeQUICCandidate is the JSONL "type" value for synthetic QUIC/HTTP3
+// candidate events derived from UDP egress on port 443 to non-loopback IPv4.
+const EventTypeQUICCandidate = "quic_candidate"
+
 // BPFStatus records attach outcome for forensics (meta + shutdown summary).
 type BPFStatus struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+	// BTFAvailable, when set, records the result of the early kernel BTF
+	// availability probe (see internal/agent.probeBTF). It is populated on
+	// the synthetic "btf" status row so .coldstep-telemetry.json carries
+	// an explicit signal that all CO-RE-relocated programs had a kernel
+	// BTF spec to bind against.
+	BTFAvailable bool `json:"btf_available,omitempty"`
+}
+
+// CompatWarning is a non-fatal runner-compatibility signal emitted at agent
+// startup. Detect mode always proceeds even when warnings fire — these are
+// observations for operators about runner environments (DinD, BuildKit,
+// service containers) that may interfere with cgroup BPF attachment.
+type CompatWarning struct {
+	Code   string `json:"code"`
 	Detail string `json:"detail,omitempty"`
 }
 
@@ -26,7 +45,14 @@ type MetaEvent struct {
 	BPF           []BPFStatus     `json:"bpf"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
 	DetectProfile string          `json:"detect_profile,omitempty"` // "standard" | "enhanced" (from COLDSTEP_DETECT_PROFILE)
-	Sig           string          `json:"sig,omitempty"`
+	// AllowlistIPCount snapshots the number of unique IPv4 addresses produced by
+	// compiling the domain allowlist (P1-1 6a). Zero when not in defend mode.
+	AllowlistIPCount int `json:"allowlist_ip_count,omitempty"`
+	// WildcardRiskDomains lists allowlist entries (e.g. `*.s3.amazonaws.com`)
+	// whose wildcard suffix matches a known multi-tenant shared-infrastructure
+	// surface (P1-1 6c). Operators can review and tighten if desired.
+	WildcardRiskDomains []string `json:"wildcard_risk_domains,omitempty"`
+	Sig                 string   `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.
@@ -145,21 +171,90 @@ type HTTPEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
+// TLSConfidence indicates how reliably the SNI on a TLSEvent was captured.
+//
+//   - "full":     SNI present in ClientHello, length below the RFC 1035
+//     server-name boundary — best-effort but not truncated.
+//   - "partial":  SNI length hit the BPF/RFC capture boundary (TLSSNIMaxLen);
+//     the captured value may be a prefix of the real server name.
+//   - "inferred": SNI was inferred from rDNS or prior connection state
+//     (reserved for future enrichers; not yet emitted by the BPF path).
+//   - "unknown":  no usable SNI signal was captured.
+//
+// Operators reading the JSONL / digest can use the field to weigh how much to
+// trust an SNI-based allow/deny match.
+type TLSConfidence string
+
+const (
+	TLSConfidenceFull     TLSConfidence = "full"
+	TLSConfidencePartial  TLSConfidence = "partial"
+	TLSConfidenceInferred TLSConfidence = "inferred"
+	TLSConfidenceUnknown  TLSConfidence = "unknown"
+)
+
+// TLSSNIMaxLen is the maximum SNI host_name length the SNI parser accepts
+// (RFC 1035 §2.3.4 — labels add to 255 octets max). When the captured SNI
+// length is exactly TLSSNIMaxLen we cannot tell whether the real server name
+// was longer, so confidence drops to TLSConfidencePartial.
+const TLSSNIMaxLen = 255
+
+// ScoreTLSConfidence classifies the SNI captured for a TLS ClientHello event
+// using only the parsed SNI string. The function is intentionally a pure
+// helper so it is straightforward to unit-test and reuse from non-Linux
+// callers (replay, fuzz tooling).
+//
+// Inputs:
+//
+//   - sni: the host_name parsed out of the ClientHello (lower-cased,
+//     trimmed). Empty when no SNI was usable.
+//
+// The function does not consult rDNS or any prior connection state today;
+// TLSConfidenceInferred is reserved for a future enricher.
+func ScoreTLSConfidence(sni string) TLSConfidence {
+	if sni == "" {
+		return TLSConfidenceUnknown
+	}
+	if len(sni) >= TLSSNIMaxLen {
+		return TLSConfidencePartial
+	}
+	return TLSConfidenceFull
+}
+
 // TLSEvent is one JSONL record for TLS ClientHello SNI observed on egress (detect).
 type TLSEvent struct {
-	Type     string `json:"type"` // "tls"
-	TS       string `json:"ts"`
-	Seq      uint64 `json:"seq"`
-	PID      uint32 `json:"pid"`
-	TGID     uint32 `json:"tgid"`
-	ThreadID uint32 `json:"thread_id"`
-	Comm     string `json:"comm"`
-	SNI      string `json:"sni"`
-	Dst      string `json:"dst"`
-	Dport    uint16 `json:"dport"`
-	Policy   string `json:"policy"`
-	Note     string `json:"note,omitempty"`
-	Sig      string `json:"sig,omitempty"`
+	Type       string        `json:"type"` // "tls"
+	TS         string        `json:"ts"`
+	Seq        uint64        `json:"seq"`
+	PID        uint32        `json:"pid"`
+	TGID       uint32        `json:"tgid"`
+	ThreadID   uint32        `json:"thread_id"`
+	Comm       string        `json:"comm"`
+	SNI        string        `json:"sni"`
+	Confidence TLSConfidence `json:"confidence,omitempty"`
+	Dst        string        `json:"dst"`
+	Dport      uint16        `json:"dport"`
+	Policy     string        `json:"policy"`
+	Note       string        `json:"note,omitempty"`
+	Sig        string        `json:"sig,omitempty"`
+}
+
+// QUICCandidateEvent is emitted when a UDP egress to port 443 on a non-loopback
+// IPv4 address is observed. QUIC payloads are encrypted at the transport layer
+// and cannot be inspected by the BPF probes — this event signals a *likely*
+// QUIC/HTTP3 flow so operators can see the visibility gap without scanning
+// raw UDP JSONL. It is a userspace-derived heuristic emitted alongside the
+// underlying UDPEvent, not a separate BPF ringbuf source.
+type QUICCandidateEvent struct {
+	Type    string `json:"type"` // "quic_candidate"
+	TS      string `json:"ts"`
+	Seq     uint64 `json:"seq"`
+	PID     uint32 `json:"pid"` // tgid (compat field name)
+	TGID    uint32 `json:"tgid"`
+	Comm    string `json:"comm"`
+	DstIP   string `json:"dst_ip"`
+	DstPort uint16 `json:"dst_port"` // always 443
+	Note    string `json:"note,omitempty"`
+	Sig     string `json:"sig,omitempty"`
 }
 
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).

@@ -61,6 +61,8 @@ bash scripts/agent-linux-verify.sh    # wraps both, writes .coldstep-verify-last
 
 Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`). On Windows: `scripts\agent-linux-verify.cmd` or the `.ps1` / `.py` siblings.
 
+**Kernel coupling:** BTF availability is required (kernel 5.5+, `CONFIG_DEBUG_INFO_BTF=y`). `internal/agent.probeBTF` runs at startup and fails Main with a named error if `/sys/kernel/btf/vmlinux` is missing; the synthetic `btf` row in `.coldstep-telemetry.json` carries the positive signal on the happy path. The `coldstep-kernel-matrix.yml` workflow runs weekly to catch regressions across the 5.15 / 6.1 / 6.6 / 6.8 row set. Known kernel-version sensitivities: `lsm/socket_sendpage` was removed in 6.5 and is handled by the BTF pre-check in `internal/bpf/defend/loader.go` (`LoadDefendObjectsForKernel` strips the LSM section when the hook is absent).
+
 ## Architecture
 
 ### Three Go binaries, one composite action
@@ -90,6 +92,8 @@ Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `def
 
 The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep-report build-model` step so integrity scoring matches.
 
+**QUIC / HTTP3 visibility note (P2-2).** QUIC payloads are encrypted at the transport layer and cannot be inspected by the BPF probes, so coldstep treats UDP/443 egress to non-loopback IPv4 as a *likely* QUIC/HTTP3 flow and emits a synthetic `quic_candidate` JSONL line alongside the underlying `udp` event (see `IsQUICCandidate` in `internal/agent/quic_candidate.go` and the `QUIC (port-443 UDP)` KPI row in the digest). This is a userspace heuristic — no BPF/clang work involved — and surfaces the visibility gap explicitly rather than letting QUIC traffic look like silent UDP.
+
 ### Config + policy compilation
 
 `internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep-action` from action inputs):
@@ -103,6 +107,10 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 ### Report model + integrity gates
 
 `internal/report/model/` defines the on-disk JSON model that `coldstep-report build-model` produces from JSONL. `internal/report/integrity/` scores it: `RequiredTypesForDetectProfile("enhanced")` expands required event types from `{meta, exec, tcp}` to `{meta, exec, tcp, udp, http, tls, proc_fork, fs_event}`. Detect workflows in CI run `assert-integrity` as an anti-blindness gate.
+
+### Reputation enrichment interface (`internal/reputation/`)
+
+Plug-in surface for IP reputation backends (OTX, VirusTotal, PassiveDNS, …). The public types — `reputation.Enricher`, `reputation.Result`, `reputation.Register`, `reputation.Registered`, `reputation.EnrichAll` — are considered stable once shipped; external integrators may build their own enrichers against them. Concrete backends live in subpackages (`internal/reputation/otx`, `internal/reputation/passivedns`); the env-driven assembly lives in `internal/reputation/loader` (kept in a subpackage to avoid an import cycle with the backends). Enrichment is **post-processing only** — `coldstep-report rdns-enrich` and `otx-enrich` invoke `loader.LoadFromEnv()` and then `reputation.EnrichAll(ctx, ip)`, never the agent's hot path. Backends are opt-in: `COLDSTEP_OTX_API_KEY`, `COLDSTEP_VIRUSTOTAL_API_KEY`, `COLDSTEP_PASSIVEDNS_SERVER`. When the env var is empty the loader returns a `NoOpEnricher` for that slot so the registry shape stays stable.
 
 ### Artifacts written to `$GITHUB_WORKSPACE`
 
@@ -118,6 +126,7 @@ Note GitHub freezes per-step summary files when a step ends, so the agent writes
 
 - **`coldstep-ci.yml`** (PR / push to main / dispatch) calls reusable **`coldstep-ci-runner.yml`**, which runs: `gofmt`, encoding scan, `unit` (ubuntu-latest + ubuntu-22.04 amd64), `unit-arm64` (ubuntu-24.04-arm + ubuntu-22.04-arm), `integration` (matrix, root, BPF), `action_bundle`, `detect-mode`, `defend-mode`. Concurrency does **not** cancel in-progress runs — defend mode can sit 20+ min in the BPF verifier and a new push must not cancel it.
 - **`coldstep-ci-nightly.yml`** — `go test -shuffle`, `govulncheck`, full-module race detector.
+- **`coldstep-runner-compat.yml`** (weekly Mon 04:00 UTC + `workflow_dispatch`) — runs detect mode across four runner variants: `vanilla` (plain `ubuntu-latest`), `dind` (`docker:dind` service), `buildkit` (`DOCKER_BUILDKIT=1`), `service-containers` (postgres sidecar). Each variant is its own job with `continue-on-error: true`; an `aggregate` job converts `needs.*.result` into the final pass/fail so one broken variant does not cancel the others. Asserts `.coldstep-events.jsonl` is non-empty, `.coldstep-ready.json` shows `ok:true`, and surfaces (without failing) any BPF `ok=false` entries or `compat_warnings` from the agent's `CheckRunnerCompat()` startup probe (`internal/agent/compat_check_linux.go`). Shared assertion helper: `.github/workflows/scripts/runner-compat-assert.sh`.
 - **`coldstep-demo.yml`**, **`coldstep-redteam-ebpf.yml`**, **`coldstep-pages.yml`**, **`supply-chain-attest.yml`** (tag `v*`, attestations + Linux agent upload to the Release).
 
 When CI fails on BPF verifier or generated-stub drift, run `bash scripts/agent-linux-verify.sh` locally (or via Docker) — its emitted `COLDSTEP_AGENT_VERIFY_BUNDLE_*` block is the recommended fix-loop format.

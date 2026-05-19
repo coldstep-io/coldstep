@@ -141,6 +141,43 @@ func hotKindTags(kinds map[string]struct{}) string {
 	return strings.Join(tags, ", ")
 }
 
+// hasPartialCoverageSignals is true when any counter indicates traffic was
+// recorded with reduced fidelity: ringbuf reserve drops (events lost), the
+// BG-01 per-syscall partial-observe paths (sendfile / splice / sendmmsg first-
+// message-only), or scatter/gather syscalls whose iov[1..N] / msg[1..N] payload
+// is not captured. Drives the headline note that the ✅ badge would otherwise
+// imply complete observation.
+func hasPartialCoverageSignals(in DigestInput) bool {
+	return totalDetectRingbufReserveFailures(in) > 0 ||
+		partialEgressTotal(in) > 0 ||
+		in.UDPSendmsgMultiIovecObserved > 0 ||
+		in.TLSWritevMultiIovecObserved > 0 ||
+		in.SendmmsgMultiMessage > 0 ||
+		in.DefendDenyReserveFailures > 0
+}
+
+// coveragePayloadState returns the "Payloads beyond iov[0]" cell text used in
+// the headline Coverage block. Partial when any BG-01 partial-observe counter
+// fired this run.
+//
+// sendpage_observed (lsm/socket_sendpage) closes the kernel-5.15
+// sendfile(2)/splice(2) sock_sendpage gap: when the hook is attached and
+// firing in defend mode, the underlying payload is gated even though the
+// detect path's HTTP/TLS sniff is still skipped. Treat the "Payloads beyond
+// iov[0]" cell as observed when SendpageObserved > 0 *and* no other partial
+// counter fired — operators reading this in defend mode should see that
+// sendfile/splice are not silently unenforced.
+func coveragePayloadState(in DigestInput) string {
+	sendfileGapClosed := in.SendpageObserved > 0
+	if !sendfileGapClosed && (in.SendfileObserved > 0 || in.SpliceObserved > 0) {
+		return "⚠️ partial"
+	}
+	if in.SendmmsgFirstOnly > 0 {
+		return "⚠️ partial"
+	}
+	return "✓ observed"
+}
+
 // totalDetectRingbufReserveFailures sums ringbuf reserve failures across detect-path
 // telemetry channels (excludes defend deny-event reserves; those are separate).
 func totalDetectRingbufReserveFailures(in DigestInput) int {
@@ -179,6 +216,26 @@ func procForkKPIVisible(in DigestInput) bool {
 
 func tlsKPIVisible(in DigestInput) bool {
 	return in.TLSSNIGate
+}
+
+// formatTLSConfidenceCell renders the per-tier TLS SNI confidence counters as
+// a compact `full=N partial=M unknown=K` cell. Inferred is only included when
+// non-zero (no enricher emits it today, so callers can keep the cell short).
+// Callers should gate the row on TLSTotal > 0; we still defend with the same
+// check so an accidental call with zero events does not show a misleading row.
+func formatTLSConfidenceCell(in DigestInput) string {
+	if in.TLSTotal == 0 {
+		return "—"
+	}
+	parts := []string{
+		fmt.Sprintf("full=%d", in.TLSConfidenceFull),
+		fmt.Sprintf("partial=%d", in.TLSConfidencePartial),
+	}
+	if in.TLSConfidenceInferred > 0 {
+		parts = append(parts, fmt.Sprintf("inferred=%d", in.TLSConfidenceInferred))
+	}
+	parts = append(parts, fmt.Sprintf("unknown=%d", in.TLSConfidenceUnknown))
+	return strings.Join(parts, " · ")
 }
 
 func fsKPIVisible(in DigestInput) bool {

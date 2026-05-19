@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/proctree"
@@ -87,6 +88,7 @@ func buildDigestInput(
 	canarySnap canarySnapshot,
 ) report.DigestInput {
 	execN, tcpN, udpN, httpN, tlsN, fsN := stats.counts()
+	tlsConfFull, tlsConfPartial, tlsConfInferred, tlsConfUnknown := stats.tlsConfidenceCounts()
 	rawTPName := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 	in := report.DigestInput{
 		DetectProfile:                  cfg.DetectProfile,
@@ -96,6 +98,10 @@ func buildDigestInput(
 		UDPTotal:                       udpN,
 		HTTPTotal:                      httpN,
 		TLSTotal:                       tlsN,
+		TLSConfidenceFull:              tlsConfFull,
+		TLSConfidencePartial:           tlsConfPartial,
+		TLSConfidenceInferred:          tlsConfInferred,
+		TLSConfidenceUnknown:           tlsConfUnknown,
 		TLSSNIGate:                     tlsSNIGate,
 		PolicyCounts:                   stats.snapshotPolicyCounts(),
 		TCPResultCounts:                stats.snapshotTCPResultCounts(),
@@ -123,6 +129,7 @@ func buildDigestInput(
 		TLSReaderErrors:                sectionState.tlsReadErrors + sectionState.tlsDecodeErrors,
 		DefendMode:                     digestDefendLabel(cfg, defendState),
 		DefendAllowlistSize:            defendState.allowlistSize,
+		DefendIPv6AllowlistSize:        defendState.allowlistIPv6Size,
 		DefendDenyCount:                defendState.denyCount,
 		DefendDenyReserveFailures:      defendState.denyReserveFailures,
 		DefendFirstDeny:                defendState.firstDeny,
@@ -137,15 +144,20 @@ func buildDigestInput(
 		FSRingbufReserveFailures:       stats.fsRingbufReserveFailures(),
 		UDPSendmsgMultiIovecObserved:   stats.udpSendmsgMultiIovecObserved(),
 		SendmmsgMultiMessage:           stats.sendmmsgMultiMessage(),
+		SendmmsgUnobservedExtra:        stats.sendmmsgUnobservedExtra(),
 		TLSWritevMultiIovecObserved:    stats.tlsWritevMultiIovecObserved(),
 		SendfileObserved:               stats.sendfileObserved(),
 		SpliceObserved:                 stats.spliceObserved(),
 		SendmmsgFirstOnly:              stats.sendmmsgFirstOnly(),
+		IPv6ConnectObserved:            stats.ipv6ConnectObserved(),
+		IPv6SendmsgObserved:            stats.ipv6SendmsgObserved(),
+		SendpageObserved:               stats.sendpageObserved(),
 		IoUringSetupObserved:           stats.ioUringSetupObserved(),
 		CanaryPipelineOK:               canarySnap.pipelineOK,
 		CanaryFailCount:                canarySnap.failCount,
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
 		TCPDNSSkippedShortRead:         stats.tcpDNSSkippedShortRead(),
+		QUICCandidateCount:             stats.quicCandidateTotal(),
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
@@ -172,5 +184,14 @@ func buildDigestInput(
 	if seqLast == 0 {
 		in.SeqFirst = 0
 	}
+
+	compileTime, _, unresolved, wildcardRisk := stats.allowlistSnapshot()
+	in.UnresolvedAllowlistDomains = unresolved
+	in.WildcardRiskDomains = wildcardRisk
+	if !compileTime.IsZero() {
+		in.AllowlistAgeMinutes = time.Since(compileTime).Minutes()
+	}
+	in.DomainContactCounts = stats.snapshotDomainCounts()
+
 	return in
 }

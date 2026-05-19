@@ -84,40 +84,32 @@ func mergeInlineAndAllowlistFiles(workspaceRoot, inline, filesCSV string) (strin
 	return strings.Join(all, ","), nil
 }
 
-func splitCommaPaths(csv string) []string {
-	s := strings.TrimSpace(csv)
-	if s == "" {
-		return nil
-	}
-	var out []string
-	for _, p := range strings.Split(s, ",") {
-		p = strings.TrimSpace(p)
-		if p != "" {
+// splitTrimNonEmpty splits s using sep, trims whitespace from each token, and
+// drops empty entries. Shared by the comma-path, inline-token, and per-line
+// token parsers below; they only differ in which separator runes they accept.
+func splitTrimNonEmpty(s string, sep func(r rune) bool) []string {
+	parts := strings.FieldsFunc(s, sep)
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if p = strings.TrimSpace(p); p != "" {
 			out = append(out, p)
 		}
 	}
 	return out
+}
+
+func splitCommaPaths(csv string) []string {
+	return splitTrimNonEmpty(csv, func(r rune) bool { return r == ',' })
 }
 
 func splitAllowInlineTokens(inline string) []string {
-	s := strings.TrimSpace(inline)
-	if s == "" {
-		return nil
-	}
-	parts := strings.FieldsFunc(s, func(r rune) bool {
+	return splitTrimNonEmpty(inline, func(r rune) bool {
 		return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t'
 	})
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		p = strings.TrimSpace(p)
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
 }
 
 func parseAllowlistFileBody(data []byte) []string {
+	lineSep := func(r rune) bool { return r == ',' || r == ' ' || r == '\t' }
 	var out []string
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -130,14 +122,7 @@ func parseAllowlistFileBody(data []byte) []string {
 		if line == "" {
 			continue
 		}
-		for _, tok := range strings.FieldsFunc(line, func(r rune) bool {
-			return r == ',' || r == ' ' || r == '\t'
-		}) {
-			tok = strings.TrimSpace(tok)
-			if tok != "" {
-				out = append(out, tok)
-			}
-		}
+		out = append(out, splitTrimNonEmpty(line, lineSep)...)
 	}
 	return out
 }

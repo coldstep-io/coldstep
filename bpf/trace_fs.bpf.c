@@ -75,6 +75,7 @@ struct {
 static __always_inline void note_fs_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!v` returns before deref. */
 	__u32 *v = bpf_map_lookup_elem(&fs_ringbuf_reserve_failures, &k);
 
 	if (!v)
@@ -85,6 +86,7 @@ static __always_inline void note_fs_ringbuf_reserve_failed(void)
 static __always_inline int fs_enabled(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `v &&` short-circuits before `*v`. */
 	__u8 *v = bpf_map_lookup_elem(&fs_agent_cfg, &k);
 
 	return v && *v;
@@ -97,6 +99,10 @@ static __always_inline void submit_fs_event(unsigned long path_ptr, __u8 op)
 
 	if (!path_ptr)
 		return;
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional;
+	 * probe_read_user_str return is intentionally ignored (ev->path was
+	 * memset to zero so failure leaves an empty path). */
 	ev = bpf_ringbuf_reserve(&fs_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_fs_ringbuf_reserve_failed();
@@ -110,6 +116,8 @@ static __always_inline void submit_fs_event(unsigned long path_ptr, __u8 op)
 	__builtin_memset(ev->comm, 0, sizeof(ev->comm));
 	__builtin_memset(ev->path, 0, sizeof(ev->path));
 	bpf_get_current_comm(ev->comm, sizeof(ev->comm));
+	/* AUDIT(5f): return intentionally not checked — destination was memset
+	 * to zero above so failure yields an empty path string. */
 	bpf_probe_read_user_str(ev->path, sizeof(ev->path), (const void *)path_ptr);
 
 	bpf_ringbuf_submit(ev, 0);

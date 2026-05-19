@@ -13,7 +13,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 # Must match the Git tag published on GitHub Releases for coldstep-io/coldstep.
-MARKETPLACE_COLDSTEP_TAG = "v0.2.5"
+MARKETPLACE_COLDSTEP_TAG = "v0.2.6"
 
 PIN_PREFIX = "coldstep-io/coldstep@"
 EXPECTED = f"{PIN_PREFIX}{MARKETPLACE_COLDSTEP_TAG}"

@@ -11,6 +11,11 @@
 //     ringbuf summing, KPI visibility predicates, empty-state reasons).
 //   - digest.go (this file): the markdown writers and the top-level
 //     BuildDetectMarkdown / WriteDetectDigest entry points.
+//
+// Output is GitHub Flavored Markdown (GFM) only — standard Markdown plus the
+// GFM HTML subset (<details>, <summary>, <br>, <hr>, <table>). No <font>,
+// <p align>, <sub>, or <center>; those are not in the GFM allowlist and render
+// as literal text in Job Summaries.
 package report
 
 import (
@@ -22,22 +27,42 @@ import (
 )
 
 // partialEgressTotal sums the BG-01 per-syscall partial-observe counters so the
-// headline-badge "Review" threshold can flip on any non-zero partial-observe
-// without the user having to scroll into the KPI table.
+// headline-verdict "Review" threshold flips on any non-zero partial-observe.
 func partialEgressTotal(in DigestInput) int {
 	return in.SendfileObserved + in.SpliceObserved + in.SendmmsgFirstOnly
 }
 
-// writeHeadlineBadge renders a one-line summary verdict immediately under the
-// `## Coldstep · …` header. Levels: 🚨 Alert, ⚠️ Review, ✅ Clean run. The badge
-// is a blockquote so it survives GitHub Job Summary's tight vertical budget
-// even when the rest of the digest is collapsed.
-func writeHeadlineBadge(b *strings.Builder, in DigestInput) {
-	mode := "detect"
-	if isBlockingDigestMode(in.DefendMode) {
-		mode = "defend"
+func droppedTotal(in DigestInput) int {
+	t := 0
+	for _, v := range in.DroppedCounts {
+		t += v
 	}
+	return t
+}
 
+// ipv6EgressObserved returns the total non-loopback IPv6 egress attempts
+// observed by the cgroup/connect6 + cgroup/sendmsg6 hooks. Non-zero means
+// IPv6 destinations were contacted during the run. Under Phase 2, defend
+// mode enforces on these — see ipv6DefendActive for the predicate that
+// chooses the ✅/⚠️ verdict.
+func ipv6EgressObserved(in DigestInput) uint32 {
+	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved
+}
+
+// ipv6DefendActive reports whether Phase 2 IPv6 enforcement is fully
+// configured for this defend run. It returns true when defend mode is
+// active AND the agent programmed at least one entry into the BPF
+// allowed_ipv6 LPM trie (AAAA-resolved or literal). False covers two
+// cases: detect mode (no enforcement at all) and defend mode with a
+// pure block-all IPv6 posture (allowlist empty), which is functional
+// but should be flagged so operators can spot a missing AAAA config.
+func ipv6DefendActive(in DigestInput) bool {
+	return isBlockingDigestMode(in.DefendMode) && in.DefendIPv6AllowlistSize > 0
+}
+
+// verdictEmoji returns ✅ / ⚠️ / 🚨 for the headline. Mirrors the prior
+// blockquote badge logic but is now embedded directly in the `##` heading.
+func verdictEmoji(in DigestInput) string {
 	bpfOK := true
 	for _, row := range in.BPF {
 		if !row.OK {
@@ -45,65 +70,137 @@ func writeHeadlineBadge(b *strings.Builder, in DigestInput) {
 			break
 		}
 	}
-
+	// P2-1 Phase 2: IPv6 in defend mode is gated by the allowed_ipv6 LPM
+	// trie when populated (any traffic outside it gets EPERM at the
+	// cgroup/connect6+sendmsg6 hooks). The "bypass" alert only fires when
+	// defend mode observed IPv6 egress AND the IPv6 allowlist is empty —
+	// in that block-all posture the events were denied, but the operator
+	// likely meant to add AAAA destinations and should see it. Detect
+	// mode still flags IPv6 as a ⚠️ visibility gap (handled in the review
+	// check below).
+	defendIPv6Bypass := isBlockingDigestMode(in.DefendMode) &&
+		ipv6EgressObserved(in) > 0 &&
+		in.DefendIPv6AllowlistSize == 0
 	alert := (!in.CanaryPipelineOK && in.CanaryFailCount > 0) ||
 		in.BPFHeartbeatFailures > 0 ||
 		in.BPFMapIntegrityFailures > 0 ||
-		(len(in.BPF) > 0 && !bpfOK)
-
-	rbTotal := totalDetectRingbufReserveFailures(in)
-	review := rbTotal > 0 ||
+		(len(in.BPF) > 0 && !bpfOK) ||
+		defendIPv6Bypass
+	if alert {
+		return "🚨"
+	}
+	// IPv6 egress is a ⚠️ when there's no Phase 2 enforcement to gate it
+	// (detect mode — visibility-only). In defend mode with a populated
+	// allowed_ipv6 trie the traffic was actually checked, so it's no
+	// longer a review trigger on its own.
+	ipv6Review := ipv6EgressObserved(in) > 0 && !ipv6DefendActive(in) && !isBlockingDigestMode(in.DefendMode)
+	review := totalDetectRingbufReserveFailures(in) > 0 ||
 		in.UDPSendmsgMultiIovecObserved > 0 ||
 		in.TLSWritevMultiIovecObserved > 0 ||
 		in.SendmmsgMultiMessage > 0 ||
-		partialEgressTotal(in) > 0
-
-	var emoji, label string
-	switch {
-	case alert:
-		emoji, label = "🚨", "Alert"
-	case review:
-		emoji, label = "⚠️", "Review"
-	default:
-		emoji, label = "✅", "Clean run"
+		in.SendmmsgUnobservedExtra > 0 ||
+		partialEgressTotal(in) > 0 ||
+		in.Connect4TupleUpdateFailures > 0 ||
+		in.DefendDenyReserveFailures > 0 ||
+		droppedTotal(in) > 0 ||
+		in.IoUringSetupObserved > 0 ||
+		ipv6Review
+	if review {
+		return "⚠️"
 	}
-
-	bpfNote := "BPF OK"
-	if !bpfOK {
-		bpfNote = "BPF degraded"
-	}
-	if len(in.BPF) == 0 {
-		bpfNote = "BPF status n/a"
-	}
-
-	parts := []string{
-		fmt.Sprintf("%s **%s**", emoji, label),
-		mode,
-		bpfNote,
-		fmt.Sprintf("%d exec", in.ExecTotal),
-		fmt.Sprintf("%d tcp", in.TCPTotal),
-	}
-	b.WriteString("> ")
-	b.WriteString(strings.Join(parts, " · "))
-	b.WriteString("\n\n")
+	return "✅"
 }
 
-func writeTriageRibbon(b *strings.Builder, in DigestInput) {
-	b.WriteString("### Triage\n\n")
-	b.WriteString("| Question | Answer |\n|:--|:--|\n")
+// writeHeader renders the single-line `## <emoji> coldstep — <mode>` heading.
+// When partial-coverage signals fired (ringbuf drops or partial-observe
+// counters), a blockquote note steers the reader to the Coverage block — the ✅
+// badge alone would otherwise imply complete observation.
+func writeHeader(b *strings.Builder, in DigestInput) {
+	mode := "detect"
+	if isBlockingDigestMode(in.DefendMode) {
+		mode = "defend"
+	}
+	fmt.Fprintf(b, "## %s coldstep — %s\n\n", verdictEmoji(in), mode)
+	if hasPartialCoverageSignals(in) {
+		b.WriteString("> ⚠️ Partial coverage — see Coverage block below.\n\n")
+	}
+}
+
+// writeCoverage emits a one-line scope statement so users do not misread ✅ as
+// "every byte of egress observed". IPv6 coverage flips state per run:
+//   - detect or defend without allowed_ipv6: "observed" (cgroup/connect6 +
+//     sendmsg6 always counts; defend with empty trie still gates by denying).
+//   - defend with allowed_ipv6 entries: "gated" (Phase 2 active).
+//
+// QUIC/HTTP3 remains statically out of scope (no BPF coverage). The
+// "Payloads beyond iov[0]" cell flips to ⚠️ partial when BG-01
+// partial-observe counters fired this run.
+func writeCoverage(b *strings.Builder, in DigestInput) {
+	ipv6State := "observed (detect — no enforcement)"
+	if ipv6DefendActive(in) {
+		ipv6State = "gated (defend allowed_ipv6 active)"
+	} else if isBlockingDigestMode(in.DefendMode) {
+		ipv6State = "denied (defend block-all — empty allowed_ipv6)"
+	}
+	fmt.Fprintf(b, "**Coverage this run:** IPv4 TCP/UDP ✓ observed | IPv6 %s | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: %s\n\n",
+		ipv6State, coveragePayloadState(in))
+}
+
+// writeCompactKPI emits a single-row 5-column KPI table. The full per-channel
+// KPI breakdown (ringbuf reserves, partial-observe counters, health rows) sits
+// inside the Technical details fold instead.
+func writeCompactKPI(b *strings.Builder, in DigestInput) {
+	tlsCell := "—"
+	if tlsKPIVisible(in) {
+		tlsCell = fmt.Sprintf("%d", in.TLSTotal)
+	}
+	b.WriteString("| exec | tcp | udp | http | tls |\n")
+	b.WriteString("|--:|--:|--:|--:|--:|\n")
+	fmt.Fprintf(b, "| %d | %d | %d | %d | %s |\n\n",
+		in.ExecTotal, in.TCPTotal, in.UDPTotal, in.HTTPTotal, tlsCell)
+}
+
+// writeTopDestinations emits the top-10 hot egress destinations. Hidden when
+// no egress was observed.
+func writeTopDestinations(b *strings.Builder, in DigestInput) {
+	hot := buildHotEgressList(in)
+	if len(hot) == 0 {
+		return
+	}
+	if len(hot) > 10 {
+		hot = hot[:10]
+	}
+	b.WriteString("### Top destinations\n\n")
+	b.WriteString("| Rank | Entity | Rows | Channels |\n")
+	b.WriteString("|--:|:--|--:|:--|\n")
+	for i, e := range hot {
+		tags := hotKindTags(e.kinds)
+		if tags == "" {
+			tags = "—"
+		}
+		fmt.Fprintf(b, "| %d | %s | %d | %s |\n",
+			i+1, sanitizeCell(e.key), e.count, sanitizeCell(tags))
+	}
+	b.WriteString("\n")
+}
+
+// buildTriageRows returns (label, value) pairs for the compact Triage table.
+// Empty rows are skipped — only signals that actually matter surface.
+func buildTriageRows(in DigestInput) [][2]string {
+	var rows [][2]string
 
 	mode := "detect"
 	if isBlockingDigestMode(in.DefendMode) {
 		mode = "defend"
 	}
-	b.WriteString(fmt.Sprintf("| **Mode** | `%s`", sanitizeCell(mode)))
+	modeCell := fmt.Sprintf("`%s`", mode)
 	if isBlockingDigestMode(in.DefendMode) {
-		b.WriteString(fmt.Sprintf(" — **deny events:** %d", in.DefendDenyCount))
+		modeCell += fmt.Sprintf(" — **deny events:** %d", in.DefendDenyCount)
 		if in.DefendDenyReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf(" (**+%d** deny reserve failures)", in.DefendDenyReserveFailures))
+			modeCell += fmt.Sprintf(" (**+%d** deny reserve failures)", in.DefendDenyReserveFailures)
 		}
 	}
-	b.WriteString(" |\n")
+	rows = append(rows, [2]string{"**Mode**", modeCell})
 
 	bpfOK := true
 	var badBPF []string
@@ -113,115 +210,272 @@ func writeTriageRibbon(b *strings.Builder, in DigestInput) {
 			badBPF = append(badBPF, row.Name)
 		}
 	}
-	if len(in.BPF) == 0 {
-		b.WriteString("| **BPF hooks** | *(no status rows)* |\n")
-	} else if bpfOK {
-		b.WriteString("| **BPF hooks** | ✅ All probes OK |\n")
-	} else {
+	switch {
+	case len(in.BPF) == 0:
+		rows = append(rows, [2]string{"**BPF hooks**", "*(no status rows)*"})
+	case bpfOK:
+		rows = append(rows, [2]string{"**BPF hooks**", "✅ All probes OK"})
+	default:
 		sort.Strings(badBPF)
-		b.WriteString(fmt.Sprintf("| **BPF hooks** | 🚨 **Review** — degraded: %s |\n", sanitizeCell(strings.Join(badBPF, ", "))))
+		rows = append(rows, [2]string{"**BPF hooks**", fmt.Sprintf("🚨 **Review** — degraded: %s", sanitizeCell(strings.Join(badBPF, ", ")))})
 	}
 
-	droppedTotal := 0
-	for _, v := range in.DroppedCounts {
-		droppedTotal += v
-	}
-	if droppedTotal == 0 {
-		b.WriteString("| **JSONL decode drops** | ✅ None |\n")
-	} else {
-		b.WriteString(fmt.Sprintf("| **JSONL decode drops** | ⚠️ **%d** total — see rollups below |\n", droppedTotal))
+	if dt := droppedTotal(in); dt > 0 {
+		rows = append(rows, [2]string{"**JSONL decode drops**", fmt.Sprintf("⚠️ **%d** total — see Technical details", dt)})
 	}
 
 	var gapParts []string
-	if in.Connect4TupleUpdateFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("connect4 map failures=%d", in.Connect4TupleUpdateFailures))
+	gapAdd := func(label string, n int) {
+		if n > 0 {
+			gapParts = append(gapParts, fmt.Sprintf("%s=%d", label, n))
+		}
 	}
-	if in.UDPRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("udp ringbuf reserve=%d", in.UDPRingbufReserveFailures))
-	}
-	if in.DNSRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("dns ringbuf reserve=%d", in.DNSRingbufReserveFailures))
-	}
-	if in.ConnectRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("connect ringbuf reserve=%d", in.ConnectRingbufReserveFailures))
-	}
-	if in.HTTPRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("http ringbuf reserve=%d", in.HTTPRingbufReserveFailures))
-	}
-	if in.TLSRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("tls ringbuf reserve=%d", in.TLSRingbufReserveFailures))
-	}
-	if in.ExecRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("exec ringbuf reserve=%d", in.ExecRingbufReserveFailures))
-	}
-	if in.ForkRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("fork ringbuf reserve=%d", in.ForkRingbufReserveFailures))
-	}
-	if in.FSRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("fs ringbuf reserve=%d", in.FSRingbufReserveFailures))
-	}
-	if in.UDPSendmsgMultiIovecObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("udp multi-iovec=%d", in.UDPSendmsgMultiIovecObserved))
-	}
-	if in.SendmmsgMultiMessage > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("sendmmsg multi-message=%d", in.SendmmsgMultiMessage))
-	}
-	if in.TLSWritevMultiIovecObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("tls writev multi-iovec=%d", in.TLSWritevMultiIovecObserved))
-	}
-	if in.SendfileObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("sendfile partial-observe=%d", in.SendfileObserved))
-	}
-	if in.SpliceObserved > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("splice partial-observe=%d", in.SpliceObserved))
-	}
-	if in.SendmmsgFirstOnly > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("sendmmsg first-message-only=%d", in.SendmmsgFirstOnly))
-	}
-	if in.TCPDNSSkippedShortRead > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("tcp dns short read=%d", in.TCPDNSSkippedShortRead))
-	}
+	gapAdd("connect4 map failures", in.Connect4TupleUpdateFailures)
+	gapAdd("udp ringbuf reserve", in.UDPRingbufReserveFailures)
+	gapAdd("dns ringbuf reserve", in.DNSRingbufReserveFailures)
+	gapAdd("connect ringbuf reserve", in.ConnectRingbufReserveFailures)
+	gapAdd("http ringbuf reserve", in.HTTPRingbufReserveFailures)
+	gapAdd("tls ringbuf reserve", in.TLSRingbufReserveFailures)
+	gapAdd("exec ringbuf reserve", in.ExecRingbufReserveFailures)
+	gapAdd("fork ringbuf reserve", in.ForkRingbufReserveFailures)
+	gapAdd("fs ringbuf reserve", in.FSRingbufReserveFailures)
+	gapAdd("udp multi-iovec", in.UDPSendmsgMultiIovecObserved)
+	gapAdd("sendmmsg multi-message", in.SendmmsgMultiMessage)
+	gapAdd("sendmmsg unobserved-extra-msgs", in.SendmmsgUnobservedExtra)
+	gapAdd("tls writev multi-iovec", in.TLSWritevMultiIovecObserved)
+	gapAdd("sendfile partial-observe", in.SendfileObserved)
+	gapAdd("splice partial-observe", in.SpliceObserved)
+	gapAdd("sendmmsg first-message-only", in.SendmmsgFirstOnly)
+	gapAdd("tcp dns short read", in.TCPDNSSkippedShortRead)
+	gapAdd("bpf audit ringbuf reserve", in.BPFAuditRingbufReserveFailures)
 	if in.IoUringSetupObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("⚠️ io_uring_setup (syscall-hook bypass class)=%d", in.IoUringSetupObserved))
-	}
-	if in.BPFAuditRingbufReserveFailures > 0 {
-		gapParts = append(gapParts, fmt.Sprintf("bpf audit ringbuf reserve=%d", in.BPFAuditRingbufReserveFailures))
 	}
 	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
 	}
 	if len(gapParts) > 0 {
-		b.WriteString(fmt.Sprintf("| **Capture gaps** | ⚠️ **Review** — %s |\n", sanitizeCell(strings.Join(gapParts, "; "))))
+		rows = append(rows, [2]string{"**Capture gaps**", fmt.Sprintf("⚠️ %s", sanitizeCell(strings.Join(gapParts, "; ")))})
 	}
 
 	if interp := truthfulnessInterpretation(in); interp != "" {
-		b.WriteString(fmt.Sprintf("| **Observability (partial / bypass-class)** | %s |\n", sanitizeCell(interp)))
+		rows = append(rows, [2]string{"**Observability (partial / bypass-class)**", sanitizeCell(interp)})
 	}
 
-	if rbTotal := totalDetectRingbufReserveFailures(in); rbTotal > 0 {
-		b.WriteString(fmt.Sprintf("| **Ringbuf reserve pressure (total)** | **%d** across detect-path channels (per-channel KPI rows below) |\n", rbTotal))
+	// Gap 1+2 (sendfile/splice): when defend is on and lsm/socket_sendpage
+	// fired, surface the gap-closed state explicitly so operators can see
+	// that sendfile(2)/splice(2) were gated against the same IPv4 allowlist
+	// even though the cgroup/sendmsg4 path missed them. In detect mode the
+	// counter is informational only.
+	if in.SendpageObserved > 0 {
+		if isBlockingDigestMode(in.DefendMode) {
+			rows = append(rows, [2]string{
+				"**Sendfile/splice (sock_sendpage)**",
+				fmt.Sprintf("✅ **%d** events gated by `lsm/socket_sendpage`", in.SendpageObserved),
+			})
+		} else {
+			rows = append(rows, [2]string{
+				"**Sendfile/splice (sock_sendpage)**",
+				fmt.Sprintf("ℹ️ **%d** events observed via `lsm/socket_sendpage`", in.SendpageObserved),
+			})
+		}
 	}
 
+	// P2-1 Phase 2: surface IPv6 egress as a triage row. Three states:
+	//   - detect mode: ⚠️ visibility-only (no enforcement, by design).
+	//   - defend mode + allowed_ipv6 populated: ✅ gated by AAAA-resolved
+	//     LPM trie; non-matches were denied with EPERM.
+	//   - defend mode + allowed_ipv6 empty: 🚨 pure block-all posture —
+	//     functional, but operator likely forgot to configure AAAA
+	//     destinations for any service they want reachable over IPv6.
+	if n := ipv6EgressObserved(in); n > 0 {
+		var badge, suffix string
+		switch {
+		case ipv6DefendActive(in):
+			badge = "✅"
+			suffix = fmt.Sprintf("**gated by %d-entry allowed_ipv6 LPM trie (AAAA-resolved)**", in.DefendIPv6AllowlistSize)
+		case isBlockingDigestMode(in.DefendMode):
+			badge = "🚨"
+			suffix = "**defend has no allowed_ipv6 entries — all non-loopback IPv6 denied (block-all). Add AAAA destinations to `allow:` if this was unintentional.**"
+		default:
+			badge = "⚠️"
+			suffix = "detect mode — IPv6 visibility only, Phase 2 enforcement runs in defend"
+		}
+		rows = append(rows, [2]string{
+			"**IPv6 egress detected**",
+			fmt.Sprintf("%s **%d** non-loopback IPv6 destinations (connect=%d sendmsg=%d) — %s",
+				badge, n, in.IPv6ConnectObserved, in.IPv6SendmsgObserved, suffix),
+		})
+	}
+
+	if rb := totalDetectRingbufReserveFailures(in); rb > 0 {
+		rows = append(rows, [2]string{"**Ringbuf reserve pressure (total)**", fmt.Sprintf("**%d** across detect-path channels", rb)})
+	}
+
+	return rows
+}
+
+func writeTriageTable(b *strings.Builder, in DigestInput) {
+	rows := buildTriageRows(in)
+	b.WriteString("### Triage\n\n")
+	b.WriteString("| Signal | Detail |\n|:--|:--|\n")
+	for _, r := range rows {
+		fmt.Fprintf(b, "| %s | %s |\n", r[0], r[1])
+	}
 	b.WriteString("\n")
 }
 
-func writeHotEgressTable(b *strings.Builder, in DigestInput) {
-	hot := buildHotEgressList(in)
-	if len(hot) == 0 {
-		return
+// writeFullKPITable emits the long-form per-channel KPI table that used to be
+// in the main body. Now sits inside Technical details.
+func writeFullKPITable(b *strings.Builder, in DigestInput) {
+	b.WriteString("#### Full KPI\n\n")
+	b.WriteString("| Signal | Count |\n|:--|--:|\n")
+	writeDetectProfileKPI(b, in)
+
+	// --- network ---
+	fmt.Fprintf(b, "| **tcp** | %d |\n", in.TCPTotal)
+	if breakdown := formatTCPResultBreakdown(in.TCPResultCounts); breakdown != "" {
+		fmt.Fprintf(b, "| **TCP connections** | %s |\n", breakdown)
 	}
-	b.WriteString("### Hot egress destinations\n\n")
-	b.WriteString("Ranked by **event rows in this digest window** (not global uniqueness across the full JSONL). ")
-	b.WriteString("Prefer **Host** / **SNI** / **FQDN** columns when present.\n\n")
-	b.WriteString("| Rank | Entity | Rows | Channels |\n")
-	b.WriteString("|--:|:-|--:|:-|\n")
-	for i, e := range hot {
-		tags := hotKindTags(e.kinds)
-		if tags == "" {
-			tags = "—"
+	if in.Connect4TupleUpdateFailures > 0 {
+		fmt.Fprintf(b, "| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures)
+	}
+	if in.ConnectRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **connect_events ringbuf reserve failures** | %d |\n", in.ConnectRingbufReserveFailures)
+	}
+	if in.DNSRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures)
+	}
+	if in.TCPDNSResponsesObserved > 0 {
+		fmt.Fprintf(b, "| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved)
+	}
+	if in.TCPDNSSkippedShortRead > 0 {
+		fmt.Fprintf(b, "| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead)
+	}
+
+	fmt.Fprintf(b, "| **udp** | %d |\n", in.UDPTotal)
+	if in.UDPRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures)
+	}
+	if in.UDPSendmsgMultiIovecObserved > 0 {
+		fmt.Fprintf(b, "| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved)
+	}
+	if in.SendmmsgMultiMessage > 0 {
+		fmt.Fprintf(b, "| **sendmmsg multi-message calls (msg[1..n] not introspected)** | %d |\n", in.SendmmsgMultiMessage)
+	}
+	if in.SendmmsgUnobservedExtra > 0 {
+		fmt.Fprintf(b, "| **sendmmsg extra messages dropped past unroll bound (vlen>8)** | %d |\n", in.SendmmsgUnobservedExtra)
+	}
+	if in.QUICCandidateCount > 0 {
+		fmt.Fprintf(b, "| **QUIC (port-443 UDP)** | %d flows · payload not inspected |\n", in.QUICCandidateCount)
+	}
+
+	fmt.Fprintf(b, "| **http** | %d |\n", in.HTTPTotal)
+	if in.HTTPRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **http_events ringbuf reserve failures** | %d |\n", in.HTTPRingbufReserveFailures)
+	}
+
+	if tlsKPIVisible(in) {
+		fmt.Fprintf(b, "| **tls** | %d |\n", in.TLSTotal)
+		if in.TLSTotal > 0 {
+			fmt.Fprintf(b, "| **tls SNI confidence** | %s |\n", formatTLSConfidenceCell(in))
 		}
-		b.WriteString(fmt.Sprintf("| %d | %s | %d | %s |\n",
-			i+1, sanitizeCell(e.key), e.count, sanitizeCell(tags)))
+		if in.TLSRingbufReserveFailures > 0 {
+			fmt.Fprintf(b, "| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures)
+		}
+		if in.TLSWritevMultiIovecObserved > 0 {
+			fmt.Fprintf(b, "| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved)
+		}
+	}
+
+	if in.SendfileObserved > 0 {
+		fmt.Fprintf(b, "| **sendfile partial-observe (dest+len, no payload sniff)** | %d |\n", in.SendfileObserved)
+	}
+	if in.SpliceObserved > 0 {
+		fmt.Fprintf(b, "| **splice partial-observe (dest+len, no payload sniff)** | %d |\n", in.SpliceObserved)
+	}
+	if in.SendmmsgFirstOnly > 0 {
+		fmt.Fprintf(b, "| **sendmmsg first-message-only (msgs 2..N not introspected)** | %d |\n", in.SendmmsgFirstOnly)
+	}
+	if in.SendpageObserved > 0 {
+		label := "**lsm/socket_sendpage events (sendfile/splice path)**"
+		if isBlockingDigestMode(in.DefendMode) {
+			label = "**✅ lsm/socket_sendpage events gated (sendfile/splice closed)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.SendpageObserved)
+	}
+	if in.IoUringSetupObserved > 0 {
+		fmt.Fprintf(b, "| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved)
+	}
+	if in.IPv6ConnectObserved > 0 {
+		label := "**⚠️ ipv6 connect6 observed (detect — no enforcement)**"
+		if ipv6DefendActive(in) {
+			label = "**✅ ipv6 connect6 gated by allowed_ipv6**"
+		} else if isBlockingDigestMode(in.DefendMode) {
+			label = "**🚨 ipv6 connect6 denied (defend has empty allowed_ipv6 — block-all)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.IPv6ConnectObserved)
+	}
+	if in.IPv6SendmsgObserved > 0 {
+		label := "**⚠️ ipv6 sendmsg6 observed (detect — no enforcement)**"
+		if ipv6DefendActive(in) {
+			label = "**✅ ipv6 sendmsg6 gated by allowed_ipv6**"
+		} else if isBlockingDigestMode(in.DefendMode) {
+			label = "**🚨 ipv6 sendmsg6 denied (defend has empty allowed_ipv6 — block-all)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.IPv6SendmsgObserved)
+	}
+
+	// --- processes ---
+	fmt.Fprintf(b, "| **exec** | %d |\n", in.ExecTotal)
+	if in.ExecRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **exec_events ringbuf reserve failures** | %d |\n", in.ExecRingbufReserveFailures)
+	}
+	if procForkKPIVisible(in) {
+		fmt.Fprintf(b, "| **proc_fork** | %d |\n", in.ProcForkTotal)
+		if in.ForkRingbufReserveFailures > 0 {
+			fmt.Fprintf(b, "| **proc_fork_events ringbuf reserve failures** | %d |\n", in.ForkRingbufReserveFailures)
+		}
+	}
+	if in.BPFAuditTotal > 0 {
+		fmt.Fprintf(b, "| **bpf_audit** | %d |\n", in.BPFAuditTotal)
+	}
+	if in.BPFAuditRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures)
+	}
+
+	// --- filesystem ---
+	if fsKPIVisible(in) {
+		fmt.Fprintf(b, "| **fs_event** | %d |\n", in.FSTotal)
+		if in.FSRingbufReserveFailures > 0 {
+			fmt.Fprintf(b, "| **fs_events ringbuf reserve failures** | %d |\n", in.FSRingbufReserveFailures)
+		}
+	}
+
+	if dt := droppedTotal(in); dt > 0 {
+		fmt.Fprintf(b, "| **dropped events (decode/jsonl)** | %d |\n", dt)
+	}
+	if rb := totalDetectRingbufReserveFailures(in); rb > 0 {
+		fmt.Fprintf(b, "| **⚠️ Ringbuf drops (detect-path total)** | %d events dropped |\n", rb)
+	}
+
+	// --- health (last) ---
+	if in.BPFMapIntegrityFailures > 0 {
+		fmt.Fprintf(b, "| **bpf_map_integrity_failures** | **%d** |\n", in.BPFMapIntegrityFailures)
+	}
+	if in.CanaryFailCount > 0 {
+		status := "✅ OK"
+		if !in.CanaryPipelineOK {
+			status = "🚨 FAILED"
+		}
+		fmt.Fprintf(b, "| **Telemetry integrity canary** | %s (failures=%d) |\n", status, in.CanaryFailCount)
+	} else {
+		b.WriteString("| **Telemetry integrity canary** | ✅ OK |\n")
+	}
+	if in.BPFHeartbeatFailures > 0 {
+		fmt.Fprintf(b, "| **🚨 BPF Self-protection Heartbeat Failures** | %d |\n", in.BPFHeartbeatFailures)
+	} else {
+		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
 	}
 	b.WriteString("\n")
 }
@@ -238,133 +492,7 @@ func writeDetectProfileKPI(b *strings.Builder, in DigestInput) {
 	b.WriteString("| **detect profile** | standard |\n")
 }
 
-// writeKPITable emits the KPI rows ordered network → process → fs → health.
-// Ringbuf reserve / multi-iovec / partial-egress counters sit directly under
-// the metric they relate to instead of being scattered across the table.
-func writeKPITable(b *strings.Builder, in DigestInput) {
-	b.WriteString("### KPI\n\n")
-	b.WriteString("| Signal | Count |\n|:--|--:|\n")
-	writeDetectProfileKPI(b, in)
-
-	// --- network ---
-	b.WriteString(fmt.Sprintf("| **tcp** | %d |\n", in.TCPTotal))
-	if breakdown := formatTCPResultBreakdown(in.TCPResultCounts); breakdown != "" {
-		b.WriteString(fmt.Sprintf("| **TCP connections** | %s |\n", breakdown))
-	}
-	if in.Connect4TupleUpdateFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures))
-	}
-	if in.ConnectRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **connect_events ringbuf reserve failures** | %d |\n", in.ConnectRingbufReserveFailures))
-	}
-	if in.DNSRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **dns_events ringbuf reserve failures** | %d |\n", in.DNSRingbufReserveFailures))
-	}
-	if in.TCPDNSResponsesObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS responses observed** | %d |\n", in.TCPDNSResponsesObserved))
-	}
-	if in.TCPDNSSkippedShortRead > 0 {
-		b.WriteString(fmt.Sprintf("| **TCP DNS short reads (<6 B)** | %d |\n", in.TCPDNSSkippedShortRead))
-	}
-
-	b.WriteString(fmt.Sprintf("| **udp** | %d |\n", in.UDPTotal))
-	if in.UDPRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **udp_events ringbuf reserve failures** | %d |\n", in.UDPRingbufReserveFailures))
-	}
-	if in.UDPSendmsgMultiIovecObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **udp_sendmsg multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.UDPSendmsgMultiIovecObserved))
-	}
-	if in.SendmmsgMultiMessage > 0 {
-		b.WriteString(fmt.Sprintf("| **sendmmsg multi-message calls (msg[1..n] not introspected)** | %d |\n", in.SendmmsgMultiMessage))
-	}
-
-	b.WriteString(fmt.Sprintf("| **http** | %d |\n", in.HTTPTotal))
-	if in.HTTPRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **http_events ringbuf reserve failures** | %d |\n", in.HTTPRingbufReserveFailures))
-	}
-
-	if tlsKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **tls** | %d |\n", in.TLSTotal))
-		if in.TLSRingbufReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf("| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures))
-		}
-		if in.TLSWritevMultiIovecObserved > 0 {
-			b.WriteString(fmt.Sprintf("| **tls writev multi-iovec calls (iov[1..n] not captured)** | %d |\n", in.TLSWritevMultiIovecObserved))
-		}
-	}
-
-	// BG-01 per-syscall partial-observe.
-	if in.SendfileObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **sendfile partial-observe (dest+len, no payload sniff)** | %d |\n", in.SendfileObserved))
-	}
-	if in.SpliceObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **splice partial-observe (dest+len, no payload sniff)** | %d |\n", in.SpliceObserved))
-	}
-	if in.SendmmsgFirstOnly > 0 {
-		b.WriteString(fmt.Sprintf("| **sendmmsg first-message-only (msgs 2..N not introspected)** | %d |\n", in.SendmmsgFirstOnly))
-	}
-	if in.IoUringSetupObserved > 0 {
-		b.WriteString(fmt.Sprintf("| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
-	}
-
-	// --- processes ---
-	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))
-	if in.ExecRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **exec_events ringbuf reserve failures** | %d |\n", in.ExecRingbufReserveFailures))
-	}
-	if procForkKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **proc_fork** | %d |\n", in.ProcForkTotal))
-		if in.ForkRingbufReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf("| **proc_fork_events ringbuf reserve failures** | %d |\n", in.ForkRingbufReserveFailures))
-		}
-	}
-	if in.BPFAuditTotal > 0 {
-		b.WriteString(fmt.Sprintf("| **bpf_audit** | %d |\n", in.BPFAuditTotal))
-	}
-	if in.BPFAuditRingbufReserveFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **bpf_audit_events ringbuf reserve failures** | %d |\n", in.BPFAuditRingbufReserveFailures))
-	}
-
-	// --- filesystem ---
-	if fsKPIVisible(in) {
-		b.WriteString(fmt.Sprintf("| **fs_event** | %d |\n", in.FSTotal))
-		if in.FSRingbufReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf("| **fs_events ringbuf reserve failures** | %d |\n", in.FSRingbufReserveFailures))
-		}
-	}
-
-	// --- decode/jsonl drops near the dropped-counter rollup ---
-	droppedTotal := 0
-	for _, v := range in.DroppedCounts {
-		droppedTotal += v
-	}
-	if droppedTotal > 0 {
-		b.WriteString(fmt.Sprintf("| **dropped events (decode/jsonl)** | %d |\n", droppedTotal))
-	}
-
-	// --- health (last) ---
-	if in.BPFMapIntegrityFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **bpf_map_integrity_failures** | <font color=\"red\">%d</font> |\n", in.BPFMapIntegrityFailures))
-	}
-	if in.CanaryFailCount > 0 {
-		status := "✅ OK"
-		if !in.CanaryPipelineOK {
-			status = "🚨 FAILED"
-		}
-		b.WriteString(fmt.Sprintf("| **Telemetry integrity canary** | %s (failures=%d) |\n", status, in.CanaryFailCount))
-	} else {
-		b.WriteString("| **Telemetry integrity canary** | ✅ OK |\n")
-	}
-	if in.BPFHeartbeatFailures > 0 {
-		b.WriteString(fmt.Sprintf("| **🚨 BPF Self-protection Heartbeat Failures** | %d |\n", in.BPFHeartbeatFailures))
-	} else {
-		b.WriteString("| **BPF Self-protection Heartbeat** | ✅ OK |\n")
-	}
-	b.WriteString("\n")
-}
-
 // writeRollups emits the policy-classification and dropped-event rollup lines.
-// Kept separate from writeKPITable so KPI stays one Markdown table.
 func writeRollups(b *strings.Builder, in DigestInput) {
 	if len(in.PolicyCounts) > 0 {
 		rollupLabel := "TCP / UDP / HTTP classification"
@@ -394,11 +522,7 @@ func writeRollups(b *strings.Builder, in DigestInput) {
 		b.WriteString("\n\n")
 	}
 
-	droppedTotal := 0
-	for _, v := range in.DroppedCounts {
-		droppedTotal += v
-	}
-	if droppedTotal > 0 {
+	if dt := droppedTotal(in); dt > 0 {
 		b.WriteString("**Dropped event counters**: ")
 		type kv struct {
 			k string
@@ -426,29 +550,242 @@ func writeRollups(b *strings.Builder, in DigestInput) {
 	}
 }
 
-// writeRunInfo emits a compact 2-row table with the JSONL canonical-log path and
-// the userspace event-sequence range. Sits above the Technical details fold.
+// writeDefendDetails emits the defend section (allowlist size, deny count,
+// first deny row) inside Technical details when defend was active.
+func writeDefendDetails(b *strings.Builder, in DigestInput) {
+	if in.DefendMode == "" && in.DefendAllowlistSize == 0 && in.DefendDenyCount == 0 &&
+		in.DefendDenyReserveFailures == 0 && in.DefendFirstDeny == nil {
+		return
+	}
+	b.WriteString("#### Defend\n\n")
+	b.WriteString("| Field | Value |\n|:--|:--|\n")
+	mode := digestModeCell(in.DefendMode)
+	fmt.Fprintf(b, "| Mode | `%s` |\n", sanitizeCell(mode))
+	fmt.Fprintf(b, "| Allowlist size | %d |\n", in.DefendAllowlistSize)
+	fmt.Fprintf(b, "| Deny count | %d |\n", in.DefendDenyCount)
+	if in.DefendDenyReserveFailures > 0 {
+		fmt.Fprintf(b, "| Deny ringbuf reserve failures (blocked, no JSONL) | %d |\n", in.DefendDenyReserveFailures)
+	}
+	b.WriteString("\n")
+
+	if in.DefendFirstDeny != nil {
+		row := in.DefendFirstDeny
+		b.WriteString("**First deny**\n\n")
+		b.WriteString("| Time (UTC) | PID | Comm | Protocol | Remote | Reason |\n|:--|--:|:-|:-|:-|:-|\n")
+		fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | `%s:%d` | `%s` |\n\n",
+			sanitizeCell(row.TS),
+			row.PID,
+			sanitizeCell(row.Comm),
+			sanitizeCell(row.Protocol),
+			sanitizeCell(row.Dst),
+			row.Dport,
+			sanitizeCell(row.Reason),
+		)
+	}
+}
+
 func writeRunInfo(b *strings.Builder, in DigestInput) {
 	if in.JSONLPath == "" && (in.SeqFirst == 0 || in.SeqLast < in.SeqFirst) {
 		return
 	}
-	b.WriteString("### Run info\n\n")
+	b.WriteString("#### Run info\n\n")
 	b.WriteString("| Field | Value |\n|:--|:--|\n")
 	if in.JSONLPath != "" {
-		b.WriteString(fmt.Sprintf("| **Canonical log (JSONL)** | `%s` |\n", sanitizeCell(in.JSONLPath)))
+		fmt.Fprintf(b, "| **Canonical log (JSONL)** | `%s` |\n", sanitizeCell(in.JSONLPath))
 	}
 	if in.SeqFirst > 0 && in.SeqLast >= in.SeqFirst {
-		b.WriteString(fmt.Sprintf("| **Event sequence range (userspace)** | %d–%d |\n", in.SeqFirst, in.SeqLast))
+		fmt.Fprintf(b, "| **Event sequence range (userspace)** | %d–%d |\n", in.SeqFirst, in.SeqLast)
 	}
 	b.WriteString("\n")
 }
 
-// writeTechnicalDetails folds the long-form KPI semantics, truncation note,
-// per-protocol caveats, and the BPF hook status table into a single `<details>`
-// block at the bottom of the digest.
-func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
-	b.WriteString("<details>\n<summary>Technical details — KPI semantics and capture notes</summary>\n\n")
+// writeEventTables emits per-protocol row tables inside Technical details.
+// Each protocol gets its own nested <details> so operators can drill in without
+// scrolling past every event type when only one is interesting.
+func writeEventTables(b *strings.Builder, in DigestInput, max int) {
+	writeExecSection(b, in)
+	writeBPFAuditSection(b, in)
+	writeProcessTreeSection(b, in)
+	writeTCPSection(b, in)
+	writeUDPSection(b, in)
+	writeHTTPSection(b, in)
+	writeTLSSection(b, in)
+	writeFSSection(b, in, max)
+}
 
+func writeExecSection(b *strings.Builder, in DigestInput) {
+	b.WriteString("<details>\n<summary><strong>Exec (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID (TGID) | TID | Comm | Executable (BPF-capped) |\n|:--|--:|--:|:-|:-|\n")
+	for _, r := range in.ExecRows {
+		fmt.Fprintf(b, "| %s | `%d` | `%d` | `%s` | `%s` |\n",
+			sanitizeCell(r.TS), r.PID, r.ThreadID, sanitizeCell(r.Comm), sanitizeCell(r.Exe))
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeProcessTreeSection(b *strings.Builder, in DigestInput) {
+	if !procForkKPIVisible(in) {
+		return
+	}
+	b.WriteString("<details>\n<summary><strong>Process tree (recent)</strong></summary>\n\n")
+	b.WriteString("| Outline |\n|:-|\n")
+	if len(in.ProcessTreeLines) == 0 {
+		fmt.Fprintf(b, "| %s |\n", sanitizeCell(protocolEmptyReason(in.ProcForkDegraded, in.ProcForkReaderErrors)))
+	} else {
+		for _, line := range in.ProcessTreeLines {
+			fmt.Fprintf(b, "| %s |\n", sanitizeCell(line))
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeTCPSection(b *strings.Builder, in DigestInput) {
+	b.WriteString("<details>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
+	if len(in.TCPRows) == 0 {
+		fmt.Fprintf(b, "| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TCPDegradedHook, in.TCPReaderErrors)))
+	} else {
+		for _, r := range in.TCPRows {
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | %s | %s | %s |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+				sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy))
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeUDPSection(b *strings.Builder, in DigestInput) {
+	b.WriteString("<details>\n<summary><strong>UDP sendto (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID | Comm | Remote | Len | FQDN | Policy |\n|:--|--:|:-|:-|--:|:-|:-|\n")
+	if len(in.UDPRows) == 0 {
+		fmt.Fprintf(b, "| — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.UDPDegradedHook, in.UDPReaderErrors)))
+	} else {
+		for _, r := range in.UDPRows {
+			fq := r.FQDN
+			if fq == "" {
+				fq = "—"
+			}
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | %s | %d | %s | %s |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+				sanitizeCell(r.Remote), r.DgramLen, sanitizeCell(fq), sanitizeCell(r.Policy))
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeHTTPSection(b *strings.Builder, in DigestInput) {
+	b.WriteString("<details>\n<summary><strong>HTTP/1 cleartext (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID | Comm | Method | Host | Path (summary) | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|:-|:-|\n")
+	if len(in.HTTPRows) == 0 {
+		fmt.Fprintf(b, "| — | — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.HTTPDegradedHook, in.HTTPReaderErrors)))
+	} else {
+		for _, r := range in.HTTPRows {
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | `%s` | `%s` | %s | %s |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+				sanitizeCell(r.Method), sanitizeCell(r.Host), sanitizeCell(r.Path),
+				sanitizeCell(r.Remote), sanitizeCell(r.Policy))
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeTLSSection(b *strings.Builder, in DigestInput) {
+	if !tlsKPIVisible(in) {
+		return
+	}
+	b.WriteString("<details>\n<summary><strong>TLS ClientHello / SNI (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
+	if len(in.TLSRows) == 0 {
+		fmt.Fprintf(b, "| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors)))
+	} else {
+		for _, r := range in.TLSRows {
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | %s | %s |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
+				sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy))
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeFSSection(b *strings.Builder, in DigestInput, _ int) {
+	if !in.FSGate {
+		return
+	}
+	b.WriteString("<details>\n<summary><strong>Filesystem (recent)</strong></summary>\n\n")
+	b.WriteString("| Time | PID | Comm | Op | Path |\n|:--|--:|:--|:--|:--|\n")
+	if len(in.FSRows) == 0 {
+		reason := "no events"
+		if in.FSDegradedHook {
+			reason = "degraded hook"
+		} else if in.FSReaderErrors > 0 {
+			reason = fmt.Sprintf("reader errors (%d)", in.FSReaderErrors)
+		}
+		fmt.Fprintf(b, "| — | — | — | — | %s |\n", reason)
+	} else {
+		for _, r := range in.FSRows {
+			fmt.Fprintf(b, "| `%s` | %d | `%s` | `%s` | `%s` |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(r.Op), sanitizeCell(r.Path))
+		}
+		if in.TruncatedFS {
+			fmt.Fprintf(b, "\n*Showing last %d of %d — full stream in JSONL.*\n",
+				len(in.FSRows), in.FSTotal)
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+func writeBPFAuditSection(b *strings.Builder, in DigestInput) {
+	if in.BPFAuditTotal == 0 && !in.BPFAuditDegradedHook && in.BPFAuditReaderErrors == 0 {
+		return
+	}
+	b.WriteString("<details>\n<summary><strong>BPF audit (recent)</strong></summary>\n\n")
+	b.WriteString("| Time (UTC) | PID | Comm | Command |\n|:--|--:|:-|:-|\n")
+	if len(in.BPFAuditRows) == 0 {
+		reason := "no events"
+		if in.BPFAuditDegradedHook {
+			reason = "degraded hook"
+		} else if in.BPFAuditReaderErrors > 0 {
+			reason = fmt.Sprintf("reader errors (%d)", in.BPFAuditReaderErrors)
+		}
+		fmt.Fprintf(b, "| — | — | — | %s |\n", reason)
+	} else {
+		for _, r := range in.BPFAuditRows {
+			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` (%d) |\n",
+				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(BPFCmdName(r.Cmd)), r.Cmd)
+		}
+		if in.TruncatedBPFAudit {
+			fmt.Fprintf(b, "\n*Showing last %d of %d — full stream in JSONL.*\n",
+				len(in.BPFAuditRows), in.BPFAuditTotal)
+		}
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+// writeBPFHookStatusTable lists every BPF probe and its load status.
+func writeBPFHookStatusTable(b *strings.Builder, in DigestInput) {
+	if len(in.BPF) == 0 {
+		return
+	}
+	b.WriteString("#### BPF hook status\n\n")
+	b.WriteString("| BPF hook | Status |\n|:--|:--|\n")
+	for _, row := range in.BPF {
+		st := "ok"
+		if !row.OK {
+			st = "skipped/degraded"
+		}
+		detail := ""
+		if row.Detail != "" {
+			detail = " — " + sanitizeCell(row.Detail)
+		}
+		fmt.Fprintf(b, "| `%s` | %s%s |\n", sanitizeCell(row.Name), st, detail)
+	}
+	b.WriteString("\n")
+}
+
+// writeKPISemantics emits the long-form KPI prose (truncation note, TCP/TLS
+// caveats, etc.) as a bulleted list.
+func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
+	b.WriteString("#### Notes\n\n")
 	b.WriteString("- **UDP KPI** counts IPv4 `sendto` and `sendmsg` egress (first iovec length; destination from `msg_name` or connected-socket cache).\n")
 	b.WriteString("- **HTTP KPI** counts cleartext HTTP/1 request bytes on `sendto` to destination port 80 only; HTTPS traffic appears as TCP connect events.\n")
 	if tlsKPIVisible(in) {
@@ -493,11 +830,24 @@ func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
 	if in.SendmmsgMultiMessage > 0 {
 		b.WriteString("- **sendmmsg multi-message** counts `sendmmsg(2)` calls with `vlen>1` (multi-message batch); only the first `mmsghdr` is introspected today.\n")
 	}
+	if in.QUICCandidateCount > 0 {
+		b.WriteString("- **QUIC (port-443 UDP)** counts UDP egress to non-loopback IPv4 on port 443 — a heuristic for QUIC/HTTP3 flows. Payload content is encrypted at the transport layer and **not inspected** by the BPF probes; the JSONL `quic_candidate` event records pid, comm, and destination only. Use this to gauge how much of the run is invisible to HTTP/TLS sniff paths.\n")
+	}
 	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
 		b.WriteString("- **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.\n")
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
+	}
+	if ipv6EgressObserved(in) > 0 {
+		switch {
+		case ipv6DefendActive(in):
+			fmt.Fprintf(b, "- **✅ IPv6 egress** observed and gated by the `cgroup/connect6` + `cgroup/sendmsg6` defend hooks against the `allowed_ipv6` LPM trie (%d AAAA-resolved entries). `::1` (loopback) and `fe80::/10` (link-local) bypass the lookup.\n", in.DefendIPv6AllowlistSize)
+		case isBlockingDigestMode(in.DefendMode):
+			b.WriteString("- **🚨 IPv6 egress** observed under defend mode with an empty `allowed_ipv6` LPM trie — every non-loopback / non-link-local IPv6 destination was denied (block-all). If any of these were legitimate, add the relevant AAAA hostnames to `allow:` so the next run programs the LPM trie.\n")
+		default:
+			b.WriteString("- **⚠️ IPv6 egress** observed in detect mode. coldstep records the attempts here; switching to `mode: defend` activates the Phase 2 `cgroup/connect6` + `cgroup/sendmsg6` LPM-trie enforcement.\n")
+		}
 	}
 	if in.TCPDNSSkippedShortRead > 0 {
 		b.WriteString("- **TCP DNS short reads** counts TCP `read(2)` returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.\n")
@@ -526,10 +876,10 @@ func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
 		trunc = append(trunc, "fs_event")
 	}
 	if len(trunc) > 0 {
-		b.WriteString(fmt.Sprintf("- **Truncated sections:** %s — showing up to **%d** newest rows per section; totals in KPI are full counts.\n",
-			strings.Join(trunc, ", "), max))
+		fmt.Fprintf(b, "- **Truncated sections:** %s — showing up to **%d** newest rows per section; totals in KPI are full counts.\n",
+			strings.Join(trunc, ", "), max)
 	} else {
-		b.WriteString(fmt.Sprintf("- **Row cap:** up to **%d** rows per section when activity exceeds the cap.\n", max))
+		fmt.Fprintf(b, "- **Row cap:** up to **%d** rows per section when activity exceeds the cap.\n", max)
 	}
 	if hasTCPResultBreakdown(in.TCPResultCounts) {
 		b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter; the **TCP connections** KPI splits them by `tcp_v4_connect` return code (paired kprobe/kretprobe), so established / refused / timeout / unreachable are distinguishable.\n")
@@ -544,28 +894,101 @@ func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
 	if procForkKPIVisible(in) {
 		b.WriteString("- **Process tree:** parent/child IDs come from `sched_process_fork`; correlation with TGID/exec is best-effort on shared runners.\n")
 	}
+	b.WriteString("\n")
+}
 
-	// BPF hook status table — moved out of the main body, Fix 5.
-	if len(in.BPF) > 0 {
-		b.WriteString("\n**BPF hook status**\n\n")
-		b.WriteString("| BPF hook | Status |\n|:--|:--|\n")
-		for _, row := range in.BPF {
-			st := "ok"
-			if !row.OK {
-				st = "skipped/degraded"
-			}
-			detail := ""
-			if row.Detail != "" {
-				detail = " — " + sanitizeCell(row.Detail)
-			}
-			b.WriteString(fmt.Sprintf("| `%s` | %s%s |\n", sanitizeCell(row.Name), st, detail))
-		}
+func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
+	b.WriteString("<details>\n<summary>Technical details — full KPI, event rows, BPF status, notes</summary>\n\n")
+	writeFullKPITable(b, in)
+	writeRollups(b, in)
+	writeDefendDetails(b, in)
+	writeRunInfo(b, in)
+	writeEventTables(b, in, max)
+	writeBPFHookStatusTable(b, in)
+	writeKPISemantics(b, in, max)
+	b.WriteString("</details>\n\n")
+}
+
+func writeFooter(b *strings.Builder, in DigestInput) {
+	path := in.JSONLPath
+	if path == "" {
+		path = ".coldstep-events.jsonl"
+	}
+	fmt.Fprintf(b, "> Full event log: `%s`\n", sanitizeCell(path))
+}
+
+// writeAllowlistTrust emits P1-1 (DNS Allowlist Trust Model hardening)
+// surface: unresolved allowlist domains (defend-mode warning), high-risk
+// wildcard entries, and a TTL-age info note when the compile is >5 minutes
+// old. The section is skipped when there is nothing to show.
+func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
+	hasUnresolved := isBlockingDigestMode(in.DefendMode) && len(in.UnresolvedAllowlistDomains) > 0
+	hasWildcard := len(in.WildcardRiskDomains) > 0
+	hasAgeNote := in.AllowlistAgeMinutes > 5
+	if !hasUnresolved && !hasWildcard && !hasAgeNote {
+		return
 	}
 
+	b.WriteString("### Allowlist trust model\n\n")
+
+	if hasUnresolved {
+		b.WriteString("> ⚠️ **Unresolved allowlist domains** — legitimate traffic to these domains may be blocked under defend.\n>\n")
+		for _, d := range in.UnresolvedAllowlistDomains {
+			b.WriteString(fmt.Sprintf("> - `%s`\n", sanitizeCell(d)))
+		}
+		b.WriteString("\n")
+	}
+
+	if hasWildcard {
+		b.WriteString("> ⚠️ **High-risk wildcards** — these entries grant reach across a shared multi-tenant surface. Prefer tighter literal hostnames where possible.\n>\n")
+		for _, d := range in.WildcardRiskDomains {
+			b.WriteString(fmt.Sprintf("> - `%s`\n", sanitizeCell(d)))
+		}
+		b.WriteString("\n")
+	}
+
+	if hasAgeNote {
+		b.WriteString(fmt.Sprintf("> ℹ️ Allowlist was compiled %.0f minutes ago — DNS TTLs may have expired. Consider shorter jobs or re-running for long CI pipelines.\n\n",
+			in.AllowlistAgeMinutes))
+	}
+}
+
+// writeDomainContactCounts emits a collapsible section listing observed FQDNs
+// across TCP + UDP egress sorted by count descending. Skipped when no FQDNs
+// were observed.
+func writeDomainContactCounts(b *strings.Builder, in DigestInput) {
+	if len(in.DomainContactCounts) == 0 {
+		return
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	list := make([]kv, 0, len(in.DomainContactCounts))
+	for k, v := range in.DomainContactCounts {
+		list = append(list, kv{k, v})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].v != list[j].v {
+			return list[i].v > list[j].v
+		}
+		return list[i].k < list[j].k
+	})
+
+	b.WriteString("<details>\n<summary><strong>Domain contact counts</strong></summary>\n\n")
+	b.WriteString("Observation counts per FQDN across TCP + UDP egress (correlated via DNS cache).\n\n")
+	b.WriteString("| Domain | Count |\n|:--|--:|\n")
+	for _, e := range list {
+		b.WriteString(fmt.Sprintf("| `%s` | %d |\n", sanitizeCell(e.k), e.v))
+	}
 	b.WriteString("\n</details>\n\n")
 }
 
-// BuildDetectMarkdown returns GFM + limited HTML for `.coldstep-detect.md`.
+// BuildDetectMarkdown returns GFM + the GFM HTML subset (<details>, <summary>,
+// <br>, <hr>, <table>) for `.coldstep-detect.md` / GITHUB_STEP_SUMMARY. The
+// visible portion (above the Technical details fold) is intentionally compact:
+// header, one-row KPI, optional Top destinations, Triage, footer. Allowlist
+// trust-model warnings (P1-1) surface above the fold when applicable.
 func BuildDetectMarkdown(in DigestInput) string {
 	max := in.MaxRowsPerSection
 	if max <= 0 {
@@ -573,202 +996,15 @@ func BuildDetectMarkdown(in DigestInput) string {
 	}
 
 	var b strings.Builder
-	if isBlockingDigestMode(in.DefendMode) {
-		b.WriteString("## Coldstep · defend\n\n")
-		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Defend mode: cgroup-scoped IPv4 egress is allowlisted on GitHub-hosted ephemeral Linux runners (not a substitute for self-hosted hardening); denied connects and UDP sends are blocked and appear as <code>deny</code> JSONL. Cleartext HTTP/80 is still observed via syscall hooks where enabled. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
-	} else {
-		b.WriteString("## Coldstep · detect\n\n")
-		b.WriteString("<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n")
-		b.WriteString("<sub>Detect-only: observe, do not block. <code>comm</code> is the kernel task name (16 bytes), not argv. Executable path comes from the tracepoint (BPF-capped).</sub></p>\n\n")
-	}
-	writeHeadlineBadge(&b, in)
-	writeHotEgressTable(&b, in)
-	writeTriageRibbon(&b, in)
-	writeKPITable(&b, in)
-	writeRollups(&b, in)
-	// Marker: end of new writer chain; the legacy inline KPI / sub blob / standalone
-	// BPF hook table that used to live here is removed below this point.
-	if in.DefendMode != "" || in.DefendAllowlistSize > 0 || in.DefendDenyCount > 0 || in.DefendDenyReserveFailures > 0 || in.DefendFirstDeny != nil {
-		b.WriteString("### Defend\n\n")
-		b.WriteString("| Field | Value |\n|:--|:--|\n")
-		mode := digestModeCell(in.DefendMode)
-		b.WriteString(fmt.Sprintf("| Mode | `%s` |\n", sanitizeCell(mode)))
-		b.WriteString(fmt.Sprintf("| Allowlist size | %d |\n", in.DefendAllowlistSize))
-		b.WriteString(fmt.Sprintf("| Deny count | %d |\n", in.DefendDenyCount))
-		if in.DefendDenyReserveFailures > 0 {
-			b.WriteString(fmt.Sprintf("| Deny ringbuf reserve failures (blocked, no JSONL) | %d |\n", in.DefendDenyReserveFailures))
-		}
-		b.WriteString("\n")
-
-		if in.DefendFirstDeny != nil {
-			row := in.DefendFirstDeny
-			b.WriteString("**First deny**\n\n")
-			b.WriteString("| Time (UTC) | PID | Comm | Protocol | Remote | Reason |\n|:--|--:|:-|:-|:-|:-|\n")
-			b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | `%s:%d` | `%s` |\n\n",
-				sanitizeCell(row.TS),
-				row.PID,
-				sanitizeCell(row.Comm),
-				sanitizeCell(row.Protocol),
-				sanitizeCell(row.Dst),
-				row.Dport,
-				sanitizeCell(row.Reason),
-			))
-		}
-	}
-
-	writeExec := func() {
-		b.WriteString("<details>\n<summary><strong>Exec (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID (TGID) | TID | Comm | Executable (BPF-capped) |\n|:--|--:|--:|:-|:-|\n")
-		for _, r := range in.ExecRows {
-			b.WriteString(fmt.Sprintf("| %s | `%d` | `%d` | `%s` | `%s` |\n",
-				sanitizeCell(r.TS), r.PID, r.ThreadID, sanitizeCell(r.Comm), sanitizeCell(r.Exe)))
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeProcessTree := func() {
-		if !procForkKPIVisible(in) {
-			return
-		}
-		b.WriteString("<details>\n<summary><strong>Process tree (recent)</strong></summary>\n\n")
-		b.WriteString("| Outline |\n|:-|\n")
-		if len(in.ProcessTreeLines) == 0 {
-			b.WriteString(fmt.Sprintf("| %s |\n", sanitizeCell(protocolEmptyReason(in.ProcForkDegraded, in.ProcForkReaderErrors))))
-		} else {
-			for _, line := range in.ProcessTreeLines {
-				b.WriteString(fmt.Sprintf("| %s |\n", sanitizeCell(line)))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeTCP := func() {
-		b.WriteString("<details>\n<summary><strong>TCP connect attempts (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | Remote | Notes | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
-		if len(in.TCPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TCPDegradedHook, in.TCPReaderErrors))))
-		} else {
-			for _, r := range in.TCPRows {
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %s | %s |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-					sanitizeCell(r.Remote), sanitizeCell(r.Notes), sanitizeCell(r.Policy)))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeUDP := func() {
-		b.WriteString("<details>\n<summary><strong>UDP sendto (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | Remote | Len | FQDN | Policy |\n|:--|--:|:-|:-|--:|:-|:-|\n")
-		if len(in.UDPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.UDPDegradedHook, in.UDPReaderErrors))))
-		} else {
-			for _, r := range in.UDPRows {
-				fq := r.FQDN
-				if fq == "" {
-					fq = "—"
-				}
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | %s | %d | %s | %s |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-					sanitizeCell(r.Remote), r.DgramLen, sanitizeCell(fq), sanitizeCell(r.Policy)))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeHTTP := func() {
-		b.WriteString("<details>\n<summary><strong>HTTP/1 cleartext (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | Method | Host | Path (summary) | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|:-|:-|\n")
-		if len(in.HTTPRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.HTTPDegradedHook, in.HTTPReaderErrors))))
-		} else {
-			for _, r := range in.HTTPRows {
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | `%s` | `%s` | %s | %s |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-					sanitizeCell(r.Method), sanitizeCell(r.Host), sanitizeCell(r.Path),
-					sanitizeCell(r.Remote), sanitizeCell(r.Policy)))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeTLS := func() {
-		if !tlsKPIVisible(in) {
-			return
-		}
-		b.WriteString("<details>\n<summary><strong>TLS ClientHello / SNI (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
-		if len(in.TLSRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors))))
-		} else {
-			for _, r := range in.TLSRows {
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | %s | %s |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-					sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy)))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeFS := func() {
-		if !in.FSGate {
-			return
-		}
-		b.WriteString("<details>\n<summary><strong>Filesystem (recent)</strong></summary>\n\n")
-		b.WriteString("| Time | PID | Comm | Op | Path |\n|:--|--:|:--|:--|:--|\n")
-		if len(in.FSRows) == 0 {
-			reason := "no events"
-			if in.FSDegradedHook {
-				reason = "degraded hook"
-			} else if in.FSReaderErrors > 0 {
-				reason = fmt.Sprintf("reader errors (%d)", in.FSReaderErrors)
-			}
-			b.WriteString(fmt.Sprintf("| — | — | — | — | %s |\n", reason))
-		} else {
-			for _, r := range in.FSRows {
-				b.WriteString(fmt.Sprintf("| `%s` | %d | `%s` | `%s` | `%s` |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(r.Op), sanitizeCell(r.Path)))
-			}
-			if in.TruncatedFS {
-				b.WriteString(fmt.Sprintf("\n*Showing last %d of %d — full stream in JSONL.*\n",
-					len(in.FSRows), in.FSTotal))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-	writeBPFAudit := func() {
-		if in.BPFAuditTotal == 0 && !in.BPFAuditDegradedHook && in.BPFAuditReaderErrors == 0 {
-			return
-		}
-		b.WriteString("<details>\n<summary><strong>BPF audit (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | Command |\n|:--|--:|:-|:-|\n")
-		if len(in.BPFAuditRows) == 0 {
-			reason := "no events"
-			if in.BPFAuditDegradedHook {
-				reason = "degraded hook"
-			} else if in.BPFAuditReaderErrors > 0 {
-				reason = fmt.Sprintf("reader errors (%d)", in.BPFAuditReaderErrors)
-			}
-			b.WriteString(fmt.Sprintf("| — | — | — | %s |\n", reason))
-		} else {
-			for _, r := range in.BPFAuditRows {
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` (%d) |\n",
-					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm), sanitizeCell(BPFCmdName(r.Cmd)), r.Cmd))
-			}
-			if in.TruncatedBPFAudit {
-				b.WriteString(fmt.Sprintf("\n*Showing last %d of %d — full stream in JSONL.*\n",
-					len(in.BPFAuditRows), in.BPFAuditTotal))
-			}
-		}
-		b.WriteString("\n</details>\n\n")
-	}
-
-	writeExec()
-	writeBPFAudit()
-	writeProcessTree()
-	writeTCP()
-	writeUDP()
-	writeHTTP()
-	writeTLS()
-	writeFS()
-
-	writeRunInfo(&b, in)
+	writeHeader(&b, in)
+	writeCompactKPI(&b, in)
+	writeCoverage(&b, in)
+	writeTopDestinations(&b, in)
+	writeTriageTable(&b, in)
+	writeAllowlistTrust(&b, in)
+	writeDomainContactCounts(&b, in)
 	writeTechnicalDetails(&b, in, max)
+	writeFooter(&b, in)
 
 	s := b.String()
 	if len(s) > summarySoftByteBudget {

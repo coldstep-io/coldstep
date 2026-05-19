@@ -99,7 +99,13 @@ type Summary struct {
 	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
 	// length, distinct from per-message msg_iovlen). Messages 2..N are not
 	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
-	SendmmsgMultiMessage        int `json:"sendmmsg_multi_message_observed,omitempty"`
+	SendmmsgMultiMessage int `json:"sendmmsg_multi_message_observed,omitempty"`
+	// SendmmsgUnobservedExtra counts individual sendmmsg(2) extra messages
+	// (beyond the unrolled SENDMMSG_EXTRA_MAX bound) that the BPF observation
+	// loop could not reach. The loop walks messages 1..7 inline; this counter
+	// quantifies how many message slots remain silent on vlen >= 9 calls
+	// (BG-03 Gap 3 follow-up).
+	SendmmsgUnobservedExtra     int `json:"sendmmsg_unobserved_extra,omitempty"`
 	TLSWritevMultiIovecObserved int `json:"tls_writev_multi_iovec_observed,omitempty"`
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters that supersede the previous aggregate
@@ -107,25 +113,43 @@ type Summary struct {
 	//   - sendfile_observed:     sendfile(2) / sendfile64(2)
 	//   - splice_observed:       splice(2)
 	//   - sendmmsg_first_only:   sendmmsg(2) — only the first mmsghdr inspected
-	SendfileObserved               int `json:"sendfile_observed,omitempty"`
-	SpliceObserved                 int `json:"splice_observed,omitempty"`
-	SendmmsgFirstOnly              int `json:"sendmmsg_first_only,omitempty"`
-	IoUringSetupObserved           int `json:"io_uring_setup_observed,omitempty"`
-	TCPDNSResponsesObserved        int `json:"tcp_dns_responses_observed,omitempty"`
-	TCPDNSSkippedShortRead         int `json:"tcp_dns_skipped_short_read,omitempty"`
-	BPFAuditEvents                 int `json:"bpf_audit_events,omitempty"`
-	BPFHeartbeatFailures           int `json:"bpf_heartbeat_failures,omitempty"`
-	BPFMapIntegrityFailures        int `json:"bpf_map_integrity_failures,omitempty"`
-	BPFDNSCacheUpdateFailures      int `json:"bpf_dns_cache_update_failures,omitempty"`
-	BPFAuditRingbufReserveFailures int `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
+	SendfileObserved  int `json:"sendfile_observed,omitempty"`
+	SpliceObserved    int `json:"splice_observed,omitempty"`
+	SendmmsgFirstOnly int `json:"sendmmsg_first_only,omitempty"`
+	// IPv6ConnectObserved / IPv6SendmsgObserved count non-loopback IPv6
+	// egress attempts observed by the P0-1 Phase 1 cgroup/connect6 and
+	// cgroup/sendmsg6 hooks. Phase 1 is observe-only — IPv6 enforcement
+	// is not yet implemented, so non-zero values mean traffic escaped
+	// the IPv4-only defend allowlist. The digest surfaces this gap.
+	IPv6ConnectObserved uint32 `json:"ipv6_connect_observed,omitempty"`
+	IPv6SendmsgObserved uint32 `json:"ipv6_sendmsg_observed,omitempty"`
+	// SendpageObserved counts security_socket_sendpage() invocations recorded
+	// by the lsm/socket_sendpage hook. Non-zero values mean sendfile(2) or
+	// splice(2) reached a socket via the sock_sendpage path that
+	// cgroup/sendmsg4 and lsm/socket_sendmsg cannot gate (kernel ≤ 6.7).
+	// In defend mode the hook also enforces; in detect mode it's
+	// visibility-only.
+	SendpageObserved               uint32 `json:"sendpage_observed,omitempty"`
+	IoUringSetupObserved           int    `json:"io_uring_setup_observed,omitempty"`
+	TCPDNSResponsesObserved        int    `json:"tcp_dns_responses_observed,omitempty"`
+	TCPDNSSkippedShortRead         int    `json:"tcp_dns_skipped_short_read,omitempty"`
+	BPFAuditEvents                 int    `json:"bpf_audit_events,omitempty"`
+	BPFHeartbeatFailures           int    `json:"bpf_heartbeat_failures,omitempty"`
+	BPFMapIntegrityFailures        int    `json:"bpf_map_integrity_failures,omitempty"`
+	BPFDNSCacheUpdateFailures      int    `json:"bpf_dns_cache_update_failures,omitempty"`
+	BPFAuditRingbufReserveFailures int    `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
 	// RingbufReserveFailuresTotal is the sum of per-channel ringbuf reserve failure
 	// counters (detect-path telemetry only; excludes defend deny-event reserves).
 	RingbufReserveFailuresTotal int            `json:"ringbuf_reserve_failures_total,omitempty"`
 	DroppedCounts               map[string]int `json:"dropped_counts,omitempty"`
 	PolicyCounts                map[string]int `json:"policy_counts"`
 	BPF                         []BPFStatus    `json:"bpf,omitempty"`
-	Signature                   string         `json:"signature,omitempty"`
-	PublicKey                   string         `json:"public_key,omitempty"`
+	// CompatWarnings carries non-fatal runner-compatibility signals
+	// captured at agent startup (cgroup-v1 detection, container-namespace
+	// delegation, deep cgroup nesting). Empty when the runner looks normal.
+	CompatWarnings []CompatWarning `json:"compat_warnings,omitempty"`
+	Signature      string          `json:"signature,omitempty"`
+	PublicKey      string          `json:"public_key,omitempty"`
 }
 
 // WriteSummary writes telemetry summary JSON (overwrites).

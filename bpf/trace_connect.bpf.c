@@ -115,7 +115,7 @@ struct {
  * full multi-iovec capture (would require unrolled bounded loops in BPF).
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -136,8 +136,29 @@ struct {
 	__type(value, __u32);
 } sendmmsg_multi_message_observed SEC(".maps");
 
+/*
+ * BG-03 (Gap 3): NR_SENDMMSG per-message extra-message visibility.
+ *
+ * Messages 1..SENDMMSG_EXTRA_MAX (7) are introspected by an unrolled
+ * #pragma unroll loop in the sys_enter dispatcher; messages with index
+ * > SENDMMSG_EXTRA_MAX are not introspected (defend mode is unaffected
+ * because cgroup/sendmsg4 fires per-message inside __sys_sendmmsg).
+ *
+ * This counter sums (vlen - SENDMMSG_EXTRA_MAX - 1) across every
+ * sendmmsg call whose vlen > SENDMMSG_EXTRA_MAX + 1, i.e. the count of
+ * individual extra messages we could not observe. Distinct from
+ * sendmmsg_multi_message_observed which counts CALLS (not messages).
+ * PERCPU_ARRAY for write-side contention.
+ */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} sendmmsg_unobserved_extra SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -181,7 +202,7 @@ struct {
  * counter catches cases where the sysctl is off or was not applied.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -220,6 +241,10 @@ struct {
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
 
+/*
+ * AUDIT(5a): null checked — every `note_*` counter helper below follows the
+ * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
+ */
 static __always_inline void note_connect4_tuple_update_failed(void)
 {
 	__u32 k = 0;
@@ -278,7 +303,8 @@ static __always_inline void note_udp_sendmsg_multi_iovec(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	/* PERCPU_ARRAY: each CPU owns its slot; no global atomic contention. */
+	(*v)++;
 }
 
 static __always_inline void note_tls_writev_multi_iovec(void)
@@ -288,7 +314,7 @@ static __always_inline void note_tls_writev_multi_iovec(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_io_uring_setup_observed(void)
@@ -298,7 +324,7 @@ static __always_inline void note_io_uring_setup_observed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 /*
@@ -336,11 +362,14 @@ static __always_inline void note_partial_egress(int slot)
 static __always_inline void maybe_emit_canary(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!seq` short-circuits before `*seq`. */
 	__u64 *seq = bpf_map_lookup_elem(&canary_trigger, &k);
 
 	if (!seq || *seq == 0)
 		return;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct canary_event *ev = bpf_ringbuf_reserve(&connect_events,
 						      sizeof(struct canary_event), 0);
 	if (!ev) {
@@ -519,18 +548,67 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		int rc = handle_udp_obs_sendmsg((__u32)di_ul, msgvec_ptr);
 
 		/*
-		 * BG-03: bump sendmmsg_multi_message_observed when the caller
-		 * passed vlen > 1 — distinct signal from udp_sendmsg_multi_iovec
-		 * (which is per-message scatter/gather). messages 2..N are not
-		 * introspected, so this counter quantifies the silent gap.
+		 * BG-03 (Gap 3): when the caller passed vlen > 1, walk extra
+		 * messages 1..SENDMMSG_EXTRA_MAX via an unrolled bounded loop.
+		 * bpf_loop() requires kernel >= 5.17 which excludes our
+		 * ubuntu-22.04 (5.15) CI matrix; #pragma unroll keeps verifier
+		 * complexity bounded and works back to 5.4.
+		 *
+		 * sendmmsg_multi_message_observed counts CALLS with vlen > 1
+		 * (one bump per call). sendmmsg_unobserved_extra counts the
+		 * INDIVIDUAL extra messages beyond index SENDMMSG_EXTRA_MAX
+		 * that the unrolled loop could not reach.
+		 *
+		 * struct mmsghdr LP64 stride: msg_hdr[56] + msg_len[4] + pad[4] = 64.
 		 */
+#define SENDMMSG_STRIDE 64UL
+#define SENDMMSG_EXTRA_MAX 7
 		if (vlen_ul > 1) {
 			__u32 k = 0;
+			/* AUDIT(5a): null checked — used only inside `if (v)`. */
 			__u32 *v = bpf_map_lookup_elem(&sendmmsg_multi_message_observed, &k);
 
 			if (v)
 				__sync_fetch_and_add(v, 1);
+
+			__u32 vlen32 = (__u32)(vlen_ul & 0xffffff);
+			/*
+			 * No `break` inside the unrolled loop: clang on
+			 * ubuntu-22.04 (clang-14) refuses to unroll a loop with
+			 * a runtime-conditioned break and fails with
+			 * -Wpass-failed=transform-warning under -Werror. Guard
+			 * the body with an `if` instead so all 7 iterations are
+			 * statically present and skipped when i >= vlen32.
+			 *
+			 * AUDIT(5c): pointer arithmetic bounded — `i` is the
+			 * unrolled loop induction variable in [1, 7]; the
+			 * resulting offset (i * 64) is at most 448 bytes from
+			 * the userspace mmsghdr vector base, well within the
+			 * kernel sys_sendmmsg argument range. Pointer is fed
+			 * to bpf_probe_read_user inside the helper, which
+			 * performs the kernel-side bound check.
+			 * AUDIT(5d): loop bound is constant — SENDMMSG_EXTRA_MAX=7,
+			 * verifier-provable. #pragma unroll forces full unroll.
+			 */
+#pragma unroll
+			for (int i = 1; i <= SENDMMSG_EXTRA_MAX; i++) {
+				if ((__u32)i < vlen32) {
+					handle_udp_obs_sendmsg_extra((__u32)di_ul,
+								      msgvec_ptr + (unsigned long)i * SENDMMSG_STRIDE);
+				}
+			}
+
+			if (vlen32 > SENDMMSG_EXTRA_MAX + 1) {
+				__u32 ke = 0;
+				/* AUDIT(5a): null checked — used only inside `if (ve)`. */
+				__u32 *ve = bpf_map_lookup_elem(&sendmmsg_unobserved_extra, &ke);
+
+				if (ve)
+					__sync_fetch_and_add(ve, vlen32 - (SENDMMSG_EXTRA_MAX + 1));
+			}
 		}
+#undef SENDMMSG_STRIDE
+#undef SENDMMSG_EXTRA_MAX
 
 		return rc;
 	}

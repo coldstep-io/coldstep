@@ -11,7 +11,12 @@ inputs:
 
   mode:
     description: >-
-      Runtime mode: detect (default) or defend (blocking, requires allowlist). The enforce spelling is not supported; use defend.
+      Runtime mode: detect (default) or defend (blocking, requires allowlist).
+      defend resolves A and AAAA records for every domain in the allowlist and
+      programs both the BPF allowed_ipv4 and allowed_ipv6 LPM tries. cgroup
+      hooks block non-allowlisted egress on both IPv4 (connect4/sendmsg4) and
+      IPv6 (connect6/sendmsg6); ::1 and fe80::/10 always bypass. The enforce
+      spelling is not supported; use defend.
     required: false
     default: detect
 
@@ -20,7 +25,10 @@ inputs:
       Comma- or newline-separated egress allowlist. Accepts plain domains (example.com), wildcard domains (*.example.com),
       IPv4 literals (1.2.3.4), and CIDRs (10.0.0.0/8). Prefix a CIDR with ! to ignore that net (e.g. !192.168.0.0/16).
       Entries are auto-classified: IP/CIDR → allowed-ips, domain/wildcard → allowed-hosts + allowed-domains.
-      Merged with allow-file and the legacy per-type inputs.
+      Merged with allow-file and the legacy per-type inputs. In defend mode each
+      domain is resolved for both A and AAAA records; matching IPv4 and IPv6
+      addresses populate the BPF allowlists. IPv6 literals are not accepted as
+      input today — use AAAA-bearing hostnames instead.
     required: false
     default: ''
 

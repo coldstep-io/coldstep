@@ -68,7 +68,7 @@ struct {
 } dns_ringbuf_reserve_failures SEC(".maps");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -80,7 +80,7 @@ struct {
  * bump tcp_dns_skipped_short_read; multi-read reassembly is still out of scope.
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
@@ -91,12 +91,16 @@ struct {
  * 2-byte RFC 1035 length prefix plus minimal DNS header inspection (partial TCP segments).
  */
 struct {
-	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
 	__uint(max_entries, 1);
 	__type(key, __u32);
 	__type(value, __u32);
 } tcp_dns_skipped_short_read SEC(".maps");
 
+/*
+ * AUDIT(5a): null checked — every `note_*` counter helper below follows the
+ * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
+ */
 static __always_inline void note_dns_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
@@ -114,7 +118,8 @@ static __always_inline void note_dns_recvfrom_buf_update_failed(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	/* PERCPU_ARRAY: each CPU owns its slot; no global atomic contention. */
+	(*v)++;
 }
 
 static __always_inline void note_tcp_dns_response(void)
@@ -124,7 +129,7 @@ static __always_inline void note_tcp_dns_response(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 static __always_inline void note_tcp_dns_skipped_short_read(void)
@@ -134,7 +139,7 @@ static __always_inline void note_tcp_dns_skipped_short_read(void)
 
 	if (!v)
 		return;
-	__sync_fetch_and_add(v, 1);
+	(*v)++;
 }
 
 SEC("raw_tp/sys_enter")
@@ -198,6 +203,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	/* AUDIT(5a): null checked — `!pending` returns before deref. */
 	pending = bpf_map_lookup_elem(&recvfrom_buf, &pid_tgid);
 	if (!pending)
 		return 0;
@@ -212,6 +218,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	if (orig_nr == (unsigned long)COLDSTEP_NR_RECVFROM) {
+		/* AUDIT(5f): return checked — non-zero aborts before deref. */
 		if (bpf_probe_read_user(hdr, sizeof(hdr), (void *)pending->buf_user))
 			return 0;
 		/* QR bit must be 1 (response) */
@@ -229,6 +236,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 		}
 		__u8 tcp_hdr[5];
+		/* AUDIT(5f): return checked — non-zero aborts before deref. */
 		if (bpf_probe_read_user(tcp_hdr, sizeof(tcp_hdr), (void *)pending->buf_user))
 			return 0;
 		/* QR bit (byte 2 of DNS header) is at offset 4 */
@@ -256,6 +264,8 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	if (copy_len > DNS_SNIFF_MAX)
 		copy_len = DNS_SNIFF_MAX;
 
+	/* AUDIT(5b): submit/discard paired — `!ev` early return holds no slot;
+	 * the probe-read-failure path discards before return; success submits. */
 	ev = bpf_ringbuf_reserve(&dns_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_dns_ringbuf_reserve_failed();
@@ -267,6 +277,7 @@ int handle_raw_sys_exit_dns(struct bpf_raw_tracepoint_args *ctx)
 	__builtin_memset(ev->_pad, 0, sizeof(ev->_pad));
 	_Static_assert(sizeof(ev->data) == DNS_SNIFF_MAX,
 		       "dns sniff data array vs DNS_SNIFF_MAX");
+	/* AUDIT(5f): return checked — non-zero path discards the reserved slot. */
 	if (bpf_probe_read_user(ev->data, sizeof(ev->data), (void *)pending->buf_user)) {
 		bpf_ringbuf_discard(ev, 0);
 		return 0;

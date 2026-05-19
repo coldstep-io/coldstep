@@ -161,9 +161,6 @@ func normalizeCompositeMode(raw string) (string, error) {
 	if mode == "" {
 		mode = "detect"
 	}
-	if mode == "enforce" {
-		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
-	}
 	if mode != "detect" && mode != "defend" {
 		return "", fmt.Errorf("invalid mode %q (use detect or defend)", strings.TrimSpace(raw))
 	}
@@ -198,7 +195,9 @@ func runStart(cfg startConfig) error {
 	}
 
 	if cfg.IoUringDisable {
-		_ = exec.Command("sudo", "sysctl", "-w", "io_uring_disabled=2").Run()
+		if out, err := exec.Command("sudo", "sysctl", "-w", "kernel.io_uring_disabled=2").CombinedOutput(); err != nil {
+			fmt.Printf("::warning::io-uring-disable: sysctl kernel.io_uring_disabled=2 failed (%v): %s; io_uring-based syscall bypasses may not be blocked on this runner\n", err, strings.TrimSpace(string(out)))
+		}
 	}
 
 	if cfg.ReleasePath != "" {
