@@ -70,3 +70,49 @@ func TestDenyReserveFailuresMapsArePerCPUArray(t *testing.T) {
 		}
 	}
 }
+
+// TestIPv6ObserveMapsArePerCPUArray asserts the P0-1 Phase 1 observe-only
+// counter maps (ipv6_connect_observed, ipv6_sendmsg_observed) have the
+// PERCPU_ARRAY shape userspace expects to sum. Maps are added in
+// bpf/trace_defend_cgroup.inc; the test skips itself until the defend
+// stubs have been regenerated on Linux to include them.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestIPv6ObserveMapsArePerCPUArray(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	for _, name := range []string{"ipv6_connect_observed", "ipv6_sendmsg_observed"} {
+		ms, ok := spec.Maps[name]
+		if !ok {
+			t.Skipf("defend stubs not regenerated yet: map %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+		}
+		if ms.Type != ebpf.PerCPUArray {
+			t.Errorf("%s type = %v, want ebpf.PerCPUArray", name, ms.Type)
+		}
+		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+			t.Errorf("%s shape MaxEntries=%d KeySize=%d ValueSize=%d, want MaxEntries=1 KeySize=4 ValueSize=4",
+				name, ms.MaxEntries, ms.KeySize, ms.ValueSize)
+		}
+	}
+}
+
+// TestIPv6ObservePrograms asserts the cgroup/connect6 + cgroup/sendmsg6
+// programs are present in the spec with the CGroupSockAddr program type.
+// Skips until the stubs are regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestIPv6ObservePrograms(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	for _, name := range []string{"defend_cgroup_connect6", "defend_cgroup_sendmsg6"} {
+		ps, ok := spec.Programs[name]
+		if !ok {
+			t.Skipf("defend stubs not regenerated yet: program %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+		}
+		if ps.Type != ebpf.CGroupSockAddr {
+			t.Errorf("%s type = %v, want ebpf.CGroupSockAddr", name, ps.Type)
+		}
+	}
+}

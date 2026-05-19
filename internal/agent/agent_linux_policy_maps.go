@@ -308,6 +308,30 @@ func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
 	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
+// readIPv6ConnectObservedCount returns the per-CPU sum of the
+// ipv6_connect_observed counter populated by the cgroup/connect6
+// observe-only hook (P0-1 Phase 1). Returns 0 when the map is absent
+// (stubs predate the regeneration on Linux).
+// TODO: wire to defend objects after regeneration on Linux — this is a
+// no-op until defendObjs.Ipv6ConnectObserved is populated by the
+// generated bindings.
+func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
+	if objs == nil {
+		return 0
+	}
+	return uint32(readUint32PerCPUArraySum(objs.Ipv6ConnectObserved, "readIPv6ConnectObservedCount"))
+}
+
+// readIPv6SendmsgObservedCount mirrors readIPv6ConnectObservedCount for
+// the cgroup/sendmsg6 observe-only hook (P0-1 Phase 1).
+// TODO: wire to defend objects after regeneration on Linux.
+func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
+	if objs == nil {
+		return 0
+	}
+	return uint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
+}
+
 // buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the
 // cgroup and LSM defend loaders: take compiled domain resolutions, fold in the
 // literal IPv4 entries from the policy, and produce an LPM plan ready to write

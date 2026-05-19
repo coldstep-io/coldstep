@@ -58,6 +58,23 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		}
 	}
 
+	// P0-1 Phase 1: IPv6 observe-only programs. Detach when present in the
+	// generated spec; tolerate absence so kernels (or generated stubs)
+	// without these sections still load the IPv4 path.
+	// TODO: remove the missing-program tolerance once defend objects are
+	// regenerated on Linux and the cgroup/connect6 + cgroup/sendmsg6
+	// sections are guaranteed in the embedded ELF.
+	cgIPv6Programs := []struct {
+		name string
+		dst  **ebpf.Program
+	}{
+		{"defend_cgroup_connect6", &obj.DefendCgroupConnect6},
+		{"defend_cgroup_sendmsg6", &obj.DefendCgroupSendmsg6},
+	}
+	for _, p := range cgIPv6Programs {
+		detachProgramIfPresent(coll, p.name, p.dst)
+	}
+
 	cgAndSharedMaps := []struct {
 		name string
 		dst  **ebpf.Map
@@ -74,6 +91,22 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		if err := detachMap(coll, m.name, m.dst); err != nil {
 			return err
 		}
+	}
+
+	// P0-1 Phase 1: IPv6 observe counters. Optional in older generated
+	// stubs; tolerate absence so the cgroup IPv4 path keeps loading.
+	// TODO: remove the missing-map tolerance once defend objects are
+	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
+	// ipv6_connect_observed / ipv6_sendmsg_observed maps.
+	cgIPv6Maps := []struct {
+		name string
+		dst  **ebpf.Map
+	}{
+		{"ipv6_connect_observed", &obj.Ipv6ConnectObserved},
+		{"ipv6_sendmsg_observed", &obj.Ipv6SendmsgObserved},
+	}
+	for _, m := range cgIPv6Maps {
+		detachMapIfPresent(coll, m.name, m.dst)
 	}
 
 	if wantLSM {
@@ -128,4 +161,23 @@ func detachMap(coll *ebpf.Collection, name string, dst **ebpf.Map) error {
 	*dst = m
 	delete(coll.Maps, name)
 	return nil
+}
+
+// detachProgramIfPresent moves a program out of the collection into dst
+// when present. Missing programs are silently ignored — used for optional
+// observe-only paths (e.g. IPv6 hooks) so a stub built without them still
+// loads the rest of the defend collection.
+func detachProgramIfPresent(coll *ebpf.Collection, name string, dst **ebpf.Program) {
+	if p, ok := coll.Programs[name]; ok {
+		*dst = p
+		delete(coll.Programs, name)
+	}
+}
+
+// detachMapIfPresent is the map analogue of detachProgramIfPresent.
+func detachMapIfPresent(coll *ebpf.Collection, name string, dst **ebpf.Map) {
+	if m, ok := coll.Maps[name]; ok {
+		*dst = m
+		delete(coll.Maps, name)
+	}
 }
