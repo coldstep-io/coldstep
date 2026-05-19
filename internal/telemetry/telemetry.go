@@ -121,8 +121,15 @@ type Summary struct {
 	// cgroup/sendmsg6 hooks. Phase 1 is observe-only — IPv6 enforcement
 	// is not yet implemented, so non-zero values mean traffic escaped
 	// the IPv4-only defend allowlist. The digest surfaces this gap.
-	IPv6ConnectObserved            uint32 `json:"ipv6_connect_observed,omitempty"`
-	IPv6SendmsgObserved            uint32 `json:"ipv6_sendmsg_observed,omitempty"`
+	IPv6ConnectObserved uint32 `json:"ipv6_connect_observed,omitempty"`
+	IPv6SendmsgObserved uint32 `json:"ipv6_sendmsg_observed,omitempty"`
+	// SendpageObserved counts security_socket_sendpage() invocations recorded
+	// by the lsm/socket_sendpage hook. Non-zero values mean sendfile(2) or
+	// splice(2) reached a socket via the sock_sendpage path that
+	// cgroup/sendmsg4 and lsm/socket_sendmsg cannot gate (kernel ≤ 6.7).
+	// In defend mode the hook also enforces; in detect mode it's
+	// visibility-only.
+	SendpageObserved               uint32 `json:"sendpage_observed,omitempty"`
 	IoUringSetupObserved           int    `json:"io_uring_setup_observed,omitempty"`
 	TCPDNSResponsesObserved        int    `json:"tcp_dns_responses_observed,omitempty"`
 	TCPDNSSkippedShortRead         int    `json:"tcp_dns_skipped_short_read,omitempty"`

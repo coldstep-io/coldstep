@@ -27,11 +27,18 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 	if !wantLSM {
 		delete(spec.Programs, "lsm_socket_connect")
 		delete(spec.Programs, "lsm_socket_sendmsg")
+		// lsm_socket_sendpage closes the sendfile/splice gap (kernel 5.15);
+		// the program is only present after the BPF stubs have been
+		// regenerated on Linux with the new SEC, hence the silent delete.
+		delete(spec.Programs, "lsm_socket_sendpage")
 		delete(spec.Maps, "lsm_deny_events")
 		delete(spec.Maps, "lsm_deny_reserve_failures")
 		delete(spec.Maps, "lsm_defend_cfg")
 		delete(spec.Maps, "lsm_allowed_ipv4")
 		delete(spec.Maps, "lsm_ignored_ipv4_lpm")
+		// sendpage_observed lives in the LSM section; strip it when LSM is
+		// disabled so we don't pin a per-cpu counter nobody reads.
+		delete(spec.Maps, "sendpage_observed")
 	}
 
 	coll, err := ebpf.NewCollection(spec)
@@ -137,6 +144,16 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 				return err
 			}
 		}
+
+		// Sendfile/splice gap (kernel 5.15): lsm/socket_sendpage and its
+		// observe-only counter. Optional in older generated stubs; tolerate
+		// absence so existing LSM-enabled kernels still load the connect +
+		// sendmsg path.
+		// TODO: remove the missing-program tolerance once defend objects are
+		// regenerated on Linux with bpf/trace_lsm_defend_lsm.inc's
+		// lsm_socket_sendpage section and sendpage_observed map.
+		detachProgramIfPresent(coll, "lsm_socket_sendpage", &obj.LsmSocketSendpage)
+		detachMapIfPresent(coll, "sendpage_observed", &obj.SendpageObserved)
 	}
 
 	success = true

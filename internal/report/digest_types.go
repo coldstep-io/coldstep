@@ -198,6 +198,13 @@ type DigestInput struct {
 	// surfaces this as ⚠️ in detect mode and 🚨 in defend mode.
 	IPv6ConnectObserved uint32
 	IPv6SendmsgObserved uint32
+	// SendpageObserved counts security_socket_sendpage invocations recorded
+	// by the lsm/socket_sendpage hook. Non-zero means sendfile(2) or splice(2)
+	// reached a socket via the sock_sendpage path — which cgroup/sendmsg4 and
+	// lsm/socket_sendmsg cannot gate on kernels < 6.8. The KPI/coverage row
+	// flips to reflect that sendfile/splice are observed (and, in defend
+	// mode, gated) once this counter fires.
+	SendpageObserved uint32
 	// IoUringSetupObserved counts io_uring_setup(2) calls detected by the BPF
 	// dispatch arm. Non-zero means some workload attempted async I/O setup;
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.
