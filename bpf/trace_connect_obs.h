@@ -238,6 +238,7 @@ static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16
 
 	if (!sockaddr_ptr || !port || !addr)
 		return -1;
+	/* AUDIT(5f): return checked — non-zero return propagates -1 to caller. */
 	if (bpf_probe_read_user(scratch, sizeof(scratch), (void *)sockaddr_ptr))
 		return -1;
 	return coldstep_parse_ipv4_sockaddr16(scratch, port, addr);
@@ -252,6 +253,7 @@ static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr,
 	if (!buf_ptr)
 		return 0;
 	/* Constant size 4 for strict verifiers (see read_ipv4_sockaddr). */
+	/* AUDIT(5f): return checked — non-zero return aborts the sniff (returns 0). */
 	if (bpf_probe_read_user(p, 4, (void *)buf_ptr))
 		return 0;
 	return coldstep_http_prefix_is_request(p);

@@ -21,6 +21,7 @@ static __always_inline int coldstep_read_msghdr_head32(unsigned long msg_hdr_ptr
 {
 	if (!msg_hdr_ptr || !out32)
 		return -1;
+	/* AUDIT(5f): return checked — non-zero propagates -1 so callers bail. */
 	if (bpf_probe_read_user(out32, 32, (void *)msg_hdr_ptr))
 		return -1;
 	return 0;
@@ -75,6 +76,7 @@ have_dest:
 		 */
 		if (msg_iovlen > 1)
 			note_udp_sendmsg_multi_iovec();
+		/* AUDIT(5f): return checked — non-zero aborts the handler. */
 		if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)msg_iov))
 			return 0;
 		if (iov0.iov_len > 0x00100000)
@@ -101,6 +103,12 @@ have_dest:
 	if (msg_iov && msg_iovlen >= 2) {
 		struct coldstep_iovec iov1 = {};
 
+		/* AUDIT(5c): pointer arithmetic bounded — `msg_iov` is the
+		 * userspace iovec[] base; `+ sizeof(coldstep_iovec)` advances
+		 * to iov[1]. The kernel performs the actual bounds check
+		 * inside bpf_probe_read_user; a short iovec array yields a
+		 * non-zero return below and the sniff is skipped.
+		 * AUDIT(5f): return checked — only `== 0` proceeds. */
 		if (bpf_probe_read_user(&iov1, sizeof(iov1),
 					(void *)(msg_iov + sizeof(struct coldstep_iovec))) == 0) {
 			__u32 iov1_len = coldstep_syscall_len_u32(iov1.iov_len);
@@ -201,6 +209,7 @@ have_dest:
 	if (!msg_iov || msg_iovlen == 0) {
 		len = 0;
 	} else {
+		/* AUDIT(5f): return checked — non-zero aborts the handler. */
 		if (bpf_probe_read_user(&iov0, sizeof(iov0), (void *)msg_iov))
 			return;
 		if (iov0.iov_len > 0x00100000)

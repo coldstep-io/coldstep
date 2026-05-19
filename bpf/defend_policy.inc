@@ -46,6 +46,7 @@
 static __always_inline int defense_enabled(void)
 {
 	__u32 key = COLDSTEP_DEFEND_KEY_MODE;
+	/* AUDIT(5a): null checked — `mode &&` guards deref below. */
 	__u32 *mode = bpf_map_lookup_elem(&CS_DEF_ARR_DEFEND_CFG, &key);
 
 	return mode && *mode == COLDSTEP_DEFEND_MODE_DEFEND;
@@ -57,12 +58,15 @@ static __always_inline int dst_is_allowlisted(__be32 addr)
 
 	k.prefixlen = 32;
 	k.addr = addr;
+	/* AUDIT(5a): null checked — only used inside `if (ok)`. */
 	__u8 *ok = bpf_map_lookup_elem(&CS_DEF_TRIE_ALLOWED, &k);
 	if (ok)
 		return 1;
 
+	/* AUDIT(5a): null checked — `if (domain)` guards downstream lookup. */
 	char *domain = bpf_map_lookup_elem(&dns_cache, &addr);
 	if (domain) {
+		/* AUDIT(5a): null checked — only used inside `if (dom_ok)`. */
 		__u8 *dom_ok = bpf_map_lookup_elem(&allowed_domains, domain);
 		if (dom_ok)
 			return 1;
@@ -77,6 +81,7 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 
 	k.prefixlen = 32;
 	k.addr = daddr;
+	/* AUDIT(5a): null checked — pointer used only as boolean (`v != 0`). */
 	__u8 *v = bpf_map_lookup_elem(&CS_DEF_TRIE_IGNORED, &k);
 
 	return v != 0;
@@ -85,6 +90,7 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 static __always_inline void note_deny_ring_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — early return guards `(*v)++`. */
 	__u32 *v = bpf_map_lookup_elem(&CS_DEF_PC_DENY_FAIL, &k);
 
 	if (!v)
@@ -94,6 +100,8 @@ static __always_inline void note_deny_ring_reserve_failed(void)
 
 static __always_inline void emit_deny_event_ipv4(__u8 protocol, const __u8 *dst4, __be16 dport, __u8 reason)
 {
+	/* AUDIT(5b): submit/discard paired — only exit path between reserve and
+	 * submit is the `!de` early return (no slot held). Submit at end. */
 	struct deny_event *de = bpf_ringbuf_reserve(&CS_DEF_RB_DENY, sizeof(*de), 0);
 
 	if (!de) {

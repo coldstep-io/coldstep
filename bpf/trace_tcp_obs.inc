@@ -13,6 +13,8 @@ static __always_inline int handle_tcp_obs_connect(__u32 fd32, unsigned long sock
 	if (read_ipv4_sockaddr(sockaddr_ptr, &sin_port, &sin_addr))
 		return 0;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ce` early return (no slot held). Submit unconditional. */
 	struct connect_event *ce =
 		bpf_ringbuf_reserve(&connect_events, sizeof(*ce), 0);
 	if (!ce) {

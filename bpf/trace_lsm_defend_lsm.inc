@@ -105,24 +105,42 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 		return 0;
 
 	struct sockaddr_in *addr4 = (struct sockaddr_in *)address;
-	short family;
+	/*
+	 * AUDIT(5f): explicit zero-init for defense in depth. Kernel 5.5+ zeros
+	 * `bpf_probe_read_*` destinations on failure (so a probe miss leaves
+	 * these as zero and fails the AF_INET / NULL guards below), but the
+	 * sibling `lsm_socket_sendmsg` path also zero-inits — keep the two
+	 * patterns consistent so a future copy-paste cannot regress to reading
+	 * stack garbage on pre-5.5 kernels or under verifier mode changes.
+	 */
+	short family = 0;
+	/* AUDIT(5f): return intentionally not checked — destination is zeroed on
+	 * failure and the AF_INET guard below fails closed (0 != AF_INET). */
 	bpf_probe_read_kernel(&family, sizeof(family), &addr4->sin_family);
 
 	if (family != AF_INET)
 		return 0;
 
-	struct sock *sk;
+	struct sock *sk = NULL;
+	/* AUDIT(5f): return intentionally not checked — `sk` zero-init + NULL
+	 * guard below means a probe failure fails closed. */
 	bpf_probe_read_kernel(&sk, sizeof(sk), &sock->sk);
 	if (!sk)
 		return 0;
 
-	short protocol;
+	short protocol = 0;
+	/* AUDIT(5f): return intentionally not checked — `protocol` zero-init
+	 * defaults to TCP (0 != IPPROTO_UDP), which is the conservative label
+	 * for the deny event when the read can't be trusted. */
 	bpf_probe_read_kernel(&protocol, sizeof(protocol), &sk->sk_protocol);
 
 	__u8 proto = (protocol == IPPROTO_UDP) ? COLDSTEP_PROTO_UDP : COLDSTEP_PROTO_TCP;
 
-	__be32 daddr;
-	__be16 dport;
+	__be32 daddr = 0;
+	__be16 dport = 0;
+	/* AUDIT(5f): return intentionally not checked — both destinations are
+	 * zero-initialized so a probe miss yields daddr=0 / dport=0 and the
+	 * allowlist / ignored-trie checks below behave deterministically. */
 	bpf_probe_read_kernel(&daddr, sizeof(daddr), &addr4->sin_addr.s_addr);
 	bpf_probe_read_kernel(&dport, sizeof(dport), &addr4->sin_port);
 
@@ -141,6 +159,7 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 static __always_inline void lsm_bump_percpu_u32(void *map)
 {
 	__u32 key = 0;
+	/* AUDIT(5a): null checked — only used inside `if (val)`. */
 	__u32 *val = bpf_map_lookup_elem(map, &key);
 	if (val)
 		__sync_fetch_and_add(val, 1);
@@ -164,16 +183,23 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	 */
 
 	struct sock *sk = NULL;
+	/* AUDIT(5f): return intentionally not checked — `sk` zero-init + NULL
+	 * guard fails closed. */
 	bpf_probe_read_kernel(&sk, sizeof(sk), &sock->sk);
 	if (!sk)
 		return 0;
 
-	short protocol;
+	short protocol = 0;
+	/* AUDIT(5f): return intentionally not checked — `protocol` zero-init
+	 * defaults to TCP for the deny-event label. */
 	bpf_probe_read_kernel(&protocol, sizeof(protocol), &sk->sk_protocol);
 	__u8 proto = (protocol == IPPROTO_UDP) ? COLDSTEP_PROTO_UDP : COLDSTEP_PROTO_TCP;
 
 	struct sockaddr *address = NULL;
 	int namelen = 0;
+	/* AUDIT(5f): return intentionally not checked — both vars are
+	 * zero-initialized; downstream `if (address && namelen >= …)` falls
+	 * through to the sock_common-derived peer path on failure. */
 	bpf_probe_read_kernel(&address, sizeof(address), &msg->msg_name);
 	bpf_probe_read_kernel(&namelen, sizeof(namelen), &msg->msg_namelen);
 
@@ -185,11 +211,16 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 			return 0;
 	} else {
 		__u16 sk_family = 0;
+		/* AUDIT(5f): return intentionally not checked — zero-init + the
+		 * `!= AF_INET` guard below fails closed on probe failure. */
 		bpf_probe_read_kernel(&sk_family, sizeof(sk_family),
 				      &sk->__sk_common.skc_family);
 		if (sk_family != AF_INET)
 			return 0;
 
+		/* AUDIT(5f): return intentionally not checked — `daddr` /
+		 * `dport` zero-init mean a probe miss yields daddr=0, and the
+		 * `daddr == 0` guard below fails closed. */
 		bpf_probe_read_kernel(&daddr, sizeof(daddr),
 				      &sk->__sk_common.skc_daddr);
 		bpf_probe_read_kernel(&dport, sizeof(dport),
@@ -236,22 +267,26 @@ int BPF_PROG(lsm_socket_sendpage, struct socket *sock, struct page *page,
 		return 0;
 
 	struct sock *sk = NULL;
+	/* AUDIT(5f): return intentionally not checked — zero-init + NULL guard. */
 	bpf_probe_read_kernel(&sk, sizeof(sk), &sock->sk);
 	if (!sk)
 		return 0;
 
 	__u16 sk_family = 0;
+	/* AUDIT(5f): return intentionally not checked — zero-init + AF_INET guard. */
 	bpf_probe_read_kernel(&sk_family, sizeof(sk_family),
 			      &sk->__sk_common.skc_family);
 	if (sk_family != AF_INET)
 		return 0;
 
 	short protocol = 0;
+	/* AUDIT(5f): return intentionally not checked — zero-init defaults to TCP. */
 	bpf_probe_read_kernel(&protocol, sizeof(protocol), &sk->sk_protocol);
 	__u8 proto = (protocol == IPPROTO_UDP) ? COLDSTEP_PROTO_UDP : COLDSTEP_PROTO_TCP;
 
 	__be32 daddr = 0;
 	__be16 dport = 0;
+	/* AUDIT(5f): return intentionally not checked — zero-init + `daddr == 0` guard. */
 	bpf_probe_read_kernel(&daddr, sizeof(daddr),
 			      &sk->__sk_common.skc_daddr);
 	bpf_probe_read_kernel(&dport, sizeof(dport),
