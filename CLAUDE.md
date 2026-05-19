@@ -104,6 +104,10 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 
 `internal/report/model/` defines the on-disk JSON model that `coldstep-report build-model` produces from JSONL. `internal/report/integrity/` scores it: `RequiredTypesForDetectProfile("enhanced")` expands required event types from `{meta, exec, tcp}` to `{meta, exec, tcp, udp, http, tls, proc_fork, fs_event}`. Detect workflows in CI run `assert-integrity` as an anti-blindness gate.
 
+### Reputation enrichment interface (`internal/reputation/`)
+
+Plug-in surface for IP reputation backends (OTX, VirusTotal, PassiveDNS, …). The public types — `reputation.Enricher`, `reputation.Result`, `reputation.Register`, `reputation.Registered`, `reputation.EnrichAll` — are considered stable once shipped; external integrators may build their own enrichers against them. Concrete backends live in subpackages (`internal/reputation/otx`, `internal/reputation/passivedns`); the env-driven assembly lives in `internal/reputation/loader` (kept in a subpackage to avoid an import cycle with the backends). Enrichment is **post-processing only** — `coldstep-report rdns-enrich` and `otx-enrich` invoke `loader.LoadFromEnv()` and then `reputation.EnrichAll(ctx, ip)`, never the agent's hot path. Backends are opt-in: `COLDSTEP_OTX_API_KEY`, `COLDSTEP_VIRUSTOTAL_API_KEY`, `COLDSTEP_PASSIVEDNS_SERVER`. When the env var is empty the loader returns a `NoOpEnricher` for that slot so the registry shape stays stable.
+
 ### Artifacts written to `$GITHUB_WORKSPACE`
 
 - `.coldstep-events.jsonl` — append-only event stream (source of truth).

@@ -140,6 +140,16 @@ Detect workflows that build the **report model** can enrich indicators with **Al
 
 Enrichment walks indicators present in the report model when **`OTX_API_KEY`** is set (`coldstep-report otx-enrich`).
 
+### Pluggable reputation enrichment (OTX, VirusTotal, PassiveDNS)
+
+The post-processing step exposes a stable plug-in interface (`internal/reputation`) so additional reputation backends can be wired in without modifying core coldstep code. Enrichment is **opt-in** and runs only after JSONL is on disk — never on the agent's hot path. Configure backends via env on the post-run report step:
+
+- `COLDSTEP_OTX_API_KEY` — AlienVault OTX (new pluggable path; coexists with the legacy `OTX_API_KEY` flow above).
+- `COLDSTEP_VIRUSTOTAL_API_KEY` — VirusTotal (stub: key is accepted, wire protocol pending).
+- `COLDSTEP_PASSIVEDNS_SERVER` — CIRCL-compatible PassiveDNS endpoint (stub).
+
+When a backend's env var is empty, the loader installs a no-op enricher for that slot so the registry shape stays stable. Combined results land in the report model under `reputation_results` plus a `reputation` summary block.
+
 ---
 
 ## Limits (read before relying on signals)
