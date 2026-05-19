@@ -37,6 +37,17 @@ func assertIntegrity(args []string) error {
 		return err
 	}
 
+	// P1-2 / 4a: hard-fail when build-model marked the observation window as
+	// too short. Allowlist promotion off a short detect window is a known
+	// poisoning vector — surface it as an actionable workflow error.
+	if m.ShortObservationWindow {
+		fmt.Printf(
+			"::error title=Coldstep short observation window::observation window %.2fh is shorter than required minimum %.2fh — refusing to promote allowlist (P1-2)\n",
+			m.ObservationHours, m.MinObservationHours,
+		)
+		return errors.New("integrity gate verdict=fail (short_observation_window)")
+	}
+
 	switch m.CapabilityEval.Verdict {
 	case integrity.VerdictPass:
 		fmt.Printf("Coldstep Integrity Pass: verdict=%s score=%d\n", m.CapabilityEval.Verdict, m.CapabilityEval.Score)

@@ -108,6 +108,30 @@ func renderSummary(args []string) error {
 			len(unidentified), maliciousCount)
 	}
 
+	// P1-2 / 4b: surface suspicious-domain heuristics. Counts come from
+	// build-model (model.SuspiciousDomains). We only render the alert when
+	// at least one row was flagged so a clean baseline stays terse.
+	suspRows := suspiciousDomainsFromModel(m)
+	if len(suspRows) > 0 {
+		he, rare, port := countSuspiciousReasons(suspRows)
+		fmt.Fprintf(
+			&sb,
+			"> [!WARNING]\n> %d suspicious domains flagged (high entropy: %d, rare: %d, port anomaly: %d). Review before promoting to `allow:` (P1-2).\n\n",
+			len(suspRows), he, rare, port,
+		)
+	}
+
+	// P1-2 / 4a: surface a short-observation-window warning when build-model
+	// recorded one. The hard fail lives in assert-integrity; the summary
+	// notice keeps eyes on the report even when integrity is disabled.
+	if observationHoursFromModel(m) > 0 && shortObservationWindowFromModel(m) {
+		fmt.Fprintf(
+			&sb,
+			"> [!WARNING]\n> Observation window only %.2fh (< %.2fh threshold). Allowlist promotion off this run is risky (P1-2).\n\n",
+			observationHoursFromModel(m), minObservationHoursFromModel(m),
+		)
+	}
+
 	writeSection := func(heading string, rows []egressRow, showReason bool) {
 		if len(rows) == 0 {
 			return
@@ -326,4 +350,81 @@ func mapFromAny(v any) (map[string]any, bool) {
 func sliceFromAny(v any) ([]any, bool) {
 	s, ok := v.([]any)
 	return s, ok
+}
+
+func floatFromAny(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	case int64:
+		return float64(n)
+	}
+	return 0
+}
+
+func boolFromAny(v any) bool {
+	b, ok := v.(bool)
+	return ok && b
+}
+
+// observationHoursFromModel / shortObservationWindowFromModel /
+// minObservationHoursFromModel pull the P1-2 / 4a fields out of the
+// generic map form used by render-summary (readModelMap unmarshals into
+// map[string]any). They tolerate missing keys / wrong types because the
+// build-model output evolves and old artifacts may not carry them.
+func observationHoursFromModel(m map[string]any) float64 {
+	return floatFromAny(m["observation_hours"])
+}
+
+func shortObservationWindowFromModel(m map[string]any) bool {
+	return boolFromAny(m["short_observation_window"])
+}
+
+func minObservationHoursFromModel(m map[string]any) float64 {
+	return floatFromAny(m["min_observation_hours"])
+}
+
+// suspiciousDomainsFromModel decodes Report.SuspiciousDomains from the
+// generic map form. Returns an empty slice when the field is missing or
+// malformed.
+func suspiciousDomainsFromModel(m map[string]any) []map[string]any {
+	raw, ok := sliceFromAny(m["suspicious_domains"])
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(raw))
+	for _, r := range raw {
+		row, ok := mapFromAny(r)
+		if !ok {
+			continue
+		}
+		out = append(out, row)
+	}
+	return out
+}
+
+func countSuspiciousReasons(rows []map[string]any) (highEntropy, rare, portAnomaly int) {
+	for _, r := range rows {
+		reasons, ok := sliceFromAny(r["reasons"])
+		if !ok {
+			continue
+		}
+		for _, raw := range reasons {
+			s, ok := stringFromAny(raw)
+			if !ok {
+				continue
+			}
+			switch s {
+			case "high_entropy":
+				highEntropy++
+			case "rare":
+				rare++
+			case "port_anomaly":
+				portAnomaly++
+			}
+		}
+	}
+	return
 }
