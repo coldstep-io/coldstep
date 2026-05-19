@@ -178,9 +178,10 @@ const (
 	// in bpf/trace_tcp_connect_kprobe.inc. Sharing the connect_events ringbuf
 	// with connect_event; magic at offset 0 distinguishes the two. Real PIDs
 	// are bounded by PID_MAX_LIMIT (4194304) so the magic cannot collide with
-	// a connect_event's leading tgid field.
+	// a connect_event's leading tgid field. Both constants carry explicit
+	// types so staticcheck SA9004 sees a consistent typing pattern.
 	connectResultMagic         uint32 = 0xC0EE0001
-	connectResultEventWireSize        = 32 // 4 magic + 4 result + 4 tgid + 4 tid + comm[16]
+	connectResultEventWireSize int    = 32 // 4 magic + 4 result + 4 tgid + 4 tid + comm[16]
 
 	ringReadRetryBaseDelay = 5 * time.Millisecond
 	ringReadRetryMaxDelay  = 200 * time.Millisecond

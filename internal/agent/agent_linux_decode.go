@@ -36,6 +36,10 @@ func decodeConnectResultEvent(raw []byte) (tgid, tid uint32, comm [16]byte, resu
 	if len(raw) < connectResultEventWireSize {
 		return 0, 0, [16]byte{}, 0, false
 	}
+	// BPF stores the signed kernel return value (0 or negative errno) as
+	// raw u32 bits via `(__u32)PT_REGS_RC(ctx)` in trace_tcp_connect_kprobe.inc.
+	// Re-interpreting those bits as int32 here is the intended round-trip.
+	//nolint:gosec // G115: intentional reinterpret-cast of BPF wire bits to int32 (signed errno).
 	result = int32(binary.LittleEndian.Uint32(raw[4:8]))
 	tgid = binary.LittleEndian.Uint32(raw[8:12])
 	tid = binary.LittleEndian.Uint32(raw[12:16])
