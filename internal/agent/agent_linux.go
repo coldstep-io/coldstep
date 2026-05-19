@@ -158,6 +158,19 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// Defend mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
 	// syscall egress tracing attaches (defend requires it); sched_process_exec + raw_tp/sys_enter loads
 	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
+	//
+	// AUDIT(5g): all attach paths close links on failure.
+	// - LSM section (lines ~205-247): if lnk2 attach fails after lnk1 succeeded,
+	//   lnk1.Close() runs explicitly before the function returns. cilium/ebpf
+	//   guarantees AttachLSM returns (nil, err) on failure, so a non-nil
+	//   sendpageLnk with attachErr != nil is unreachable.
+	// - Cgroup section (lines ~283-338): defendConnectLnk and defendSendmsgLnk
+	//   register `defer X.Close()` immediately after each successful attach;
+	//   the optional IPv6 hooks and probe failure path therefore unwind via
+	//   defers without leaking a previously-attached link.
+	// - defendObjs.Close() is registered once at the top of this block, so
+	//   the BPF collection is always released even on the partial-attach
+	//   error returns.
 	if cfg.Mode == config.ModeDefend {
 		haveLSM := false
 		if err := features.HaveProgramType(ebpf.LSM); err == nil {

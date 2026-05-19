@@ -66,6 +66,26 @@ When a workflow supplies a non-empty **`OTX_API_KEY`** repository secret to the 
 
 The tracked workflow **`.github/workflows/codeql.yml`** runs CodeQL for **Go**, **JavaScript/TypeScript**, **C/C++**, and **GitHub Actions** only — **not Python**, because this repository does not ship Python sources. If **Code scanning “Default setup”** is also enabled in **Settings → Code security**, either **disable Default setup** in favor of that workflow, or **edit Default setup** and **remove the Python language** so analyses stay aligned and redundant jobs do not run.
 
+### eBPF safety audit (P1-3, 2026-05-19)
+
+A systematic audit of every BPF C translation unit and the Go-side attach
+sequence ran on 2026-05-19 against the seven audit categories below. Inline
+`AUDIT(5x)` comments on each verified call site make the review visible at
+the source; this section is the audit-level summary.
+
+| Category | Sites audited | Issues found | Fix |
+| -------- | :-----------: | :----------: | --- |
+| **5a — Map lookup null checks** | 24 (`bpf_map_lookup_elem`) | 0 | All sites already pair the lookup with a `!ptr` early return or guard the deref behind `if (ptr)`/`&&`. |
+| **5b — Ringbuf reserve/discard pairing** | 11 (`bpf_ringbuf_reserve`) | 0 | Every reservation has a paired `bpf_ringbuf_submit` on success and `bpf_ringbuf_discard` on the probe-read-failure path. The `!ev` early returns hold no slot, so no discard is needed there. |
+| **5c — Pointer arithmetic bounds** | 4 | 0 | `iov_base + sizeof(coldstep_iovec)` (two iov[1] peeks) is bounded by the kernel-side check inside `bpf_probe_read_user`; `msgvec_ptr + i*64` uses a `#pragma unroll` induction variable in [1, 7]; `__data_loc` offset is verifier-guarded `< 4096`. |
+| **5d — Loop bounds** | 1 (`for` loop) | 0 | The only loop is the `#pragma unroll`'d sendmmsg extras walk with `SENDMMSG_EXTRA_MAX = 7`. |
+| **5e — BTF CO-RE field stability** | 5 (`BPF_CORE_READ`) | 0 | All accessed fields (`task_struct.pid`, `task_struct.group_leader`, `signal_struct.pids[PIDTYPE_SID]`, `pid.numbers[0].nr`, `task_struct.nsproxy.pid_ns_for_children.ns.inum`) have been stable on kernels 5.15–6.x. |
+| **5f — Helper return value checks** | 26 (`bpf_probe_read_*`) | 0 (1 hardening) | Probe-read returns are either explicitly checked OR the destination is zero-initialized so a failure fails closed. Hardening: `lsm_socket_connect` was relying on kernel 5.5+ probe-failure zeroing for `family`/`sk`/`protocol`/`daddr`/`dport`; the variables are now explicitly initialized to match the sibling `lsm_socket_sendmsg` pattern (defense in depth, no behavior change on supported kernels). |
+| **5g — Cgroup attach cleanup** | 1 (`agent_linux.go` defend block) | 0 | LSM and cgroup attaches register `defer X.Close()` immediately after each successful attach, and an explicit `lnk1.Close()` runs if `lnk2` attach fails. `defendObjs.Close()` is registered once at the top of the block so the collection is always released on the partial-attach error returns. |
+| **5h — Allowlist TOCTOU note** | 2 (cgroup + LSM loaders) | n/a | Added explicit `slog.Info("allowlist loaded into BPF map", …)` at startup with the entry counts; both loaders carry an `AUDIT(5h)` comment noting that the allowlist is a startup snapshot — runtime DNS rotation is not reflected until the next agent restart. |
+
+The audit categories follow the in-repo security plan. Sites that look suspicious but are verified safe carry an inline note explaining why (e.g. unchecked `bpf_probe_read_kernel_str` paired with a `__builtin_memset` of the destination). The superseded standalone defend translation units (`bpf/trace_defend.bpf.c`, `bpf/trace_lsm_defend.bpf.c`) were not annotated because no Go package generates from them; they share their active logic with `bpf/defend_policy.inc` which is annotated.
+
 ### Further reading
 
 Maintain optional extended design material under repo-root **`design/`** (e.g. **`egress-truthfulness-spec.md`**, **`egress-truthfulness-implementation-plan.md`**) or **`docs/`** in your clone; those trees are **gitignored** and **not** published from Git. The consumer-facing summary is the **GitHub Actions** sections above and **README** → Requirements.
