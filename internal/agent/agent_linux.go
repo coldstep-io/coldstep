@@ -74,6 +74,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
 		{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: "not loaded"},
 		{Name: "dns recvfrom sniff", OK: false, Detail: "not loaded"},
+		// Reaching Run means probeBTF() in Main has already succeeded; record
+		// that explicitly so .coldstep-telemetry.json carries a positive btf
+		// availability signal alongside per-program attach status. Kept last
+		// in the initial slice so bpfSt[0..2] index-sets below remain stable.
+		{Name: "btf", OK: true, BTFAvailable: true},
 	}
 
 	detectDest := cfg.StepSummaryPath
@@ -928,6 +933,11 @@ func Main() error {
 		return err
 	}
 	setupLogging(cfg.LogLevel)
+
+	if err := probeBTF(); err != nil {
+		slog.Error("startup gate failed", "gate", "btf", "btf_available", false, "err", err)
+		return err
+	}
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
