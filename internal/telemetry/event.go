@@ -8,6 +8,10 @@ import (
 // SchemaVersion is bumped when JSONL field shapes change incompatibly.
 const SchemaVersion = 2
 
+// EventTypeQUICCandidate is the JSONL "type" value for synthetic QUIC/HTTP3
+// candidate events derived from UDP egress on port 443 to non-loopback IPv4.
+const EventTypeQUICCandidate = "quic_candidate"
+
 // BPFStatus records attach outcome for forensics (meta + shutdown summary).
 type BPFStatus struct {
 	Name   string `json:"name"`
@@ -197,6 +201,25 @@ type TLSEvent struct {
 	Policy     string        `json:"policy"`
 	Note       string        `json:"note,omitempty"`
 	Sig        string        `json:"sig,omitempty"`
+}
+
+// QUICCandidateEvent is emitted when a UDP egress to port 443 on a non-loopback
+// IPv4 address is observed. QUIC payloads are encrypted at the transport layer
+// and cannot be inspected by the BPF probes — this event signals a *likely*
+// QUIC/HTTP3 flow so operators can see the visibility gap without scanning
+// raw UDP JSONL. It is a userspace-derived heuristic emitted alongside the
+// underlying UDPEvent, not a separate BPF ringbuf source.
+type QUICCandidateEvent struct {
+	Type    string `json:"type"` // "quic_candidate"
+	TS      string `json:"ts"`
+	Seq     uint64 `json:"seq"`
+	PID     uint32 `json:"pid"` // tgid (compat field name)
+	TGID    uint32 `json:"tgid"`
+	Comm    string `json:"comm"`
+	DstIP   string `json:"dst_ip"`
+	DstPort uint16 `json:"dst_port"` // always 443
+	Note    string `json:"note,omitempty"`
+	Sig     string `json:"sig,omitempty"`
 }
 
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).

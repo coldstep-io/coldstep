@@ -156,6 +156,7 @@ func buildDigestInput(
 		CanaryFailCount:                canarySnap.failCount,
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
 		TCPDNSSkippedShortRead:         stats.tcpDNSSkippedShortRead(),
+		QUICCandidateCount:             stats.quicCandidateTotal(),
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
