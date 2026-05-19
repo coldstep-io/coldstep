@@ -578,6 +578,81 @@ func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_CoverageScopeBlock_AlwaysPresent(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   DigestInput
+	}{
+		{"clean detect", DigestInput{
+			BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+			ExecTotal: 1,
+		}},
+		{"defend", DigestInput{
+			DefendMode:          "defend",
+			DefendAllowlistSize: 1,
+			DefendDenyCount:     0,
+			BPF:                 []telemetry.BPFStatus{{Name: "connect", OK: true}},
+		}},
+	}
+	for _, c := range cases {
+		md := BuildDetectMarkdown(c.in)
+		for _, needle := range []string{
+			"**Coverage this run:**",
+			"IPv4 TCP/UDP ✓ observed",
+			"IPv6 ✗ not observed",
+			"QUIC/HTTP3 ✗ not observed",
+			"Payloads beyond iov[0]: ✓ observed",
+		} {
+			if !strings.Contains(md, needle) {
+				t.Fatalf("[%s] missing %q in digest:\n%s", c.name, needle, md)
+			}
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_CoverageScopeBlock_PartialWhenSendmmsgFirstOnly(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		SendmmsgFirstOnly: 2,
+	})
+	for _, needle := range []string{
+		"## ⚠️ coldstep — detect",
+		"> ⚠️ Partial coverage — see Coverage block below.",
+		"Payloads beyond iov[0]: ⚠️ partial",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in digest:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_RingbufDropKPIRow(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                           []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		ConnectRingbufReserveFailures: 4,
+		HTTPRingbufReserveFailures:    1,
+	})
+	for _, needle := range []string{
+		"## ⚠️ coldstep — detect",
+		"> ⚠️ Partial coverage — see Coverage block below.",
+		"| **⚠️ Ringbuf drops (detect-path total)** | 5 events dropped |",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in digest:\n%s", needle, md)
+		}
+	}
+	cleanMD := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		ExecTotal: 1,
+	})
+	if strings.Contains(cleanMD, "Ringbuf drops (detect-path total)") {
+		t.Fatalf("ringbuf drop row should be hidden when no drops; got:\n%s", cleanMD)
+	}
+}
+
 func TestBuildDetectMarkdown_FooterAlwaysPresent(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{})
 	if !strings.Contains(md, "> Full event log:") {

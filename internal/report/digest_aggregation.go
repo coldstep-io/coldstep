@@ -104,6 +104,31 @@ func hotKindTags(kinds map[string]struct{}) string {
 	return strings.Join(tags, ", ")
 }
 
+// hasPartialCoverageSignals is true when any counter indicates traffic was
+// recorded with reduced fidelity: ringbuf reserve drops (events lost), the
+// BG-01 per-syscall partial-observe paths (sendfile / splice / sendmmsg first-
+// message-only), or scatter/gather syscalls whose iov[1..N] / msg[1..N] payload
+// is not captured. Drives the headline note that the ✅ badge would otherwise
+// imply complete observation.
+func hasPartialCoverageSignals(in DigestInput) bool {
+	return totalDetectRingbufReserveFailures(in) > 0 ||
+		partialEgressTotal(in) > 0 ||
+		in.UDPSendmsgMultiIovecObserved > 0 ||
+		in.TLSWritevMultiIovecObserved > 0 ||
+		in.SendmmsgMultiMessage > 0 ||
+		in.DefendDenyReserveFailures > 0
+}
+
+// coveragePayloadState returns the "Payloads beyond iov[0]" cell text used in
+// the headline Coverage block. Partial when any BG-01 partial-observe counter
+// fired this run.
+func coveragePayloadState(in DigestInput) string {
+	if in.SendmmsgFirstOnly > 0 || in.SendfileObserved > 0 || in.SpliceObserved > 0 {
+		return "⚠️ partial"
+	}
+	return "✓ observed"
+}
+
 // totalDetectRingbufReserveFailures sums ringbuf reserve failures across detect-path
 // telemetry channels (excludes defend deny-event reserves; those are separate).
 func totalDetectRingbufReserveFailures(in DigestInput) int {
