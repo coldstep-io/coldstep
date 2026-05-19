@@ -170,7 +170,13 @@ type DigestInput struct {
 	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
 	// length, distinct from per-message msg_iovlen). Messages 2..N are not
 	// introspected — non-zero quantifies the multi-message silent gap (BG-03).
-	SendmmsgMultiMessage        int
+	SendmmsgMultiMessage int
+	// SendmmsgUnobservedExtra counts individual sendmmsg(2) extra messages
+	// (beyond the unrolled SENDMMSG_EXTRA_MAX bound) that the BPF observation
+	// loop could not reach. BG-03 Gap 3 introduced bounded per-message
+	// observation for indices 1..7; this counter sums message slots from
+	// index 8 onward that remain silent on vlen >= 9 calls.
+	SendmmsgUnobservedExtra     int
 	TLSWritevMultiIovecObserved int
 	// SendfileObserved, SpliceObserved, SendmmsgFirstOnly are the BG-01
 	// per-syscall partial-observe counters (supersedes the PR-E aggregate

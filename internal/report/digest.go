@@ -61,6 +61,7 @@ func verdictEmoji(in DigestInput) string {
 		in.UDPSendmsgMultiIovecObserved > 0 ||
 		in.TLSWritevMultiIovecObserved > 0 ||
 		in.SendmmsgMultiMessage > 0 ||
+		in.SendmmsgUnobservedExtra > 0 ||
 		partialEgressTotal(in) > 0 ||
 		in.Connect4TupleUpdateFailures > 0 ||
 		in.DefendDenyReserveFailures > 0 ||
@@ -191,6 +192,7 @@ func buildTriageRows(in DigestInput) [][2]string {
 	gapAdd("fs ringbuf reserve", in.FSRingbufReserveFailures)
 	gapAdd("udp multi-iovec", in.UDPSendmsgMultiIovecObserved)
 	gapAdd("sendmmsg multi-message", in.SendmmsgMultiMessage)
+	gapAdd("sendmmsg unobserved-extra-msgs", in.SendmmsgUnobservedExtra)
 	gapAdd("tls writev multi-iovec", in.TLSWritevMultiIovecObserved)
 	gapAdd("sendfile partial-observe", in.SendfileObserved)
 	gapAdd("splice partial-observe", in.SpliceObserved)
@@ -262,6 +264,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	}
 	if in.SendmmsgMultiMessage > 0 {
 		fmt.Fprintf(b, "| **sendmmsg multi-message calls (msg[1..n] not introspected)** | %d |\n", in.SendmmsgMultiMessage)
+	}
+	if in.SendmmsgUnobservedExtra > 0 {
+		fmt.Fprintf(b, "| **sendmmsg extra messages dropped past unroll bound (vlen>8)** | %d |\n", in.SendmmsgUnobservedExtra)
 	}
 
 	fmt.Fprintf(b, "| **http** | %d |\n", in.HTTPTotal)
