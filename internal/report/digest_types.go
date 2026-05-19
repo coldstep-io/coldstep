@@ -235,6 +235,10 @@ type DigestInput struct {
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool
 	CanaryFailCount  int
+	// QUICCandidateCount counts UDP/443 egress to non-loopback IPv4 observed in
+	// this run, classified as likely QUIC/HTTP3 flows. The payload is encrypted
+	// and not inspected — non-zero surfaces the visibility gap in the KPI table.
+	QUICCandidateCount int
 	// TCPDNSResponsesObserved counts TCP DNS length-framed replies where the BPF
 	// path could inspect the QR bit (trace_dns.bpf.c read/recvfrom sys_exit).
 	TCPDNSResponsesObserved int

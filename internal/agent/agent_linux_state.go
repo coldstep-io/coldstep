@@ -62,6 +62,7 @@ type runStats struct {
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
+	quicCandidateN                  int
 	bpfAuditN                       int
 	bpfMapIntegrityFailuresN        int
 	bpfDNSCacheUpdateFailuresN      int
@@ -451,6 +452,21 @@ func (s *runStats) tcpDNSSkippedShortRead() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.tcpDNSSkippedShortReadN
+}
+
+// addQUICCandidate bumps the per-run counter for UDP/443 non-loopback egress
+// classified as a likely QUIC/HTTP3 flow (payload not inspected). See
+// IsQUICCandidate for the predicate.
+func (s *runStats) addQUICCandidate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quicCandidateN++
+}
+
+func (s *runStats) quicCandidateTotal() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quicCandidateN
 }
 
 func (s *runStats) addBPFHeartbeatFailure() {

@@ -156,6 +156,7 @@ When a backend's env var is empty, the loader installs a no-op enricher for that
 
 - **TCP** rows reflect **`connect(2)` at syscall enter**, not guaranteed established sockets.
 - **HTTP** events are cleartext **HTTP/1 on port 80**; **HTTPS** is not decrypted. Optional **`tls_sni`** surfaces **ClientHello SNI** from the first cleartext handshake buffer seen on **`write(2)`/`writev`/`pwrite(2)`/`pwritev`/`pwritev2`/`sendto`** paths after IPv4 **`connect`** (best-effort); explicit-address TCP **`sendto`** is included when the tuple matches the syscall destination.
+- **QUIC / HTTP3** flows are detected via a **UDP-443 heuristic** (non-loopback IPv4): each match is recorded as a `quic_candidate` JSONL line alongside the underlying `udp` event, and the digest surfaces a **`QUIC (port-443 UDP)`** KPI row. **Payload content is not inspected** — QUIC is encrypted at the transport layer, so coldstep names the visibility gap rather than hiding it.
 - **Shared runners**: attribution is **PID / `comm`**-class; not a perfect global process tree.
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
 - **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.

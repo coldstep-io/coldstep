@@ -474,13 +474,14 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			Policy:   cl.Display(),
 		}, stats)
 
+		ipStr := ip.String()
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
 			n := seq.Next()
 			ev := telemetry.UDPEvent{
 				Type: "udp", TS: ts, Seq: n,
 				PID: tgid, TGID: tgid, ThreadID: tid,
-				Comm: comm, Dst: ip.String(), Dport: port,
+				Comm: comm, Dst: ipStr, Dport: port,
 				DatagramLen: dgramLen, FQDN: fqdn, FQDNProvenance: fqdnProv,
 				Direction: "egress",
 				Policy:    string(cl),
@@ -490,6 +491,28 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 			if err != nil {
 				stats.addDropped("udp_jsonl")
 				slog.Warn("events jsonl", "err", err)
+			}
+		}
+
+		// QUIC/HTTP3 visibility-gap event (P2-2). Emitted alongside the UDP row
+		// when the egress is a likely QUIC flow; payload content is not inspected.
+		if IsQUICCandidate(ipStr, port) {
+			stats.addQUICCandidate()
+			if cfg.EventsLogPath != "" {
+				jsonlMu.Lock()
+				n := seq.Next()
+				qev := telemetry.QUICCandidateEvent{
+					Type: telemetry.EventTypeQUICCandidate, TS: ts, Seq: n,
+					PID: tgid, TGID: tgid, Comm: comm,
+					DstIP: ipStr, DstPort: port,
+					Note: "UDP/443 to non-loopback IPv4; payload encrypted (QUIC) — not inspected",
+				}
+				err := telemetry.AppendJSONL(cfg.EventsLogPath, qev, signer)
+				jsonlMu.Unlock()
+				if err != nil {
+					stats.addDropped("quic_candidate_jsonl")
+					slog.Warn("events jsonl (quic_candidate)", "err", err)
+				}
 			}
 		}
 	}

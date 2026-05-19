@@ -92,6 +92,8 @@ Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `def
 
 The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep-report build-model` step so integrity scoring matches.
 
+**QUIC / HTTP3 visibility note (P2-2).** QUIC payloads are encrypted at the transport layer and cannot be inspected by the BPF probes, so coldstep treats UDP/443 egress to non-loopback IPv4 as a *likely* QUIC/HTTP3 flow and emits a synthetic `quic_candidate` JSONL line alongside the underlying `udp` event (see `IsQUICCandidate` in `internal/agent/quic_candidate.go` and the `QUIC (port-443 UDP)` KPI row in the digest). This is a userspace heuristic — no BPF/clang work involved — and surfaces the visibility gap explicitly rather than letting QUIC traffic look like silent UDP.
+
 ### Config + policy compilation
 
 `internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep-action` from action inputs):
