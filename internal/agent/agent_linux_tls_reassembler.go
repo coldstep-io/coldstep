@@ -155,16 +155,10 @@ func (r *tlsReassembler) appendAndParse(key tlsReassemblyKey, payload []byte) ap
 	return appendResult{bufferLen: len(entry.buf)}
 }
 
-// forget drops any buffered state for a key (e.g. on socket close).
-func (r *tlsReassembler) forget(key tlsReassemblyKey) {
-	r.mu.Lock()
-	delete(r.store, key)
-	r.mu.Unlock()
-}
-
-// sweep evicts expired entries and returns the number removed. Callers may
-// invoke this periodically from a long-running goroutine; the appendAndParse
-// path already calls it lazily on every insertion.
+// sweep evicts expired entries and returns the number removed. The
+// appendAndParse path already calls evictExpiredLocked lazily on every
+// insertion; this method exists so tests can advance the injected clock and
+// exercise eviction without needing another write to trigger the lazy sweep.
 func (r *tlsReassembler) sweep() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
