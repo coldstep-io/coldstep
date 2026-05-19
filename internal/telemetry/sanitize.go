@@ -26,12 +26,16 @@ func SanitizeField(s string, maxLen int) string {
 		return ""
 	}
 	if !utf8.ValidString(s) {
-		s = strings.ToValidUTF8(s, "�")
+		// U+FFFD written as a \u escape so this source file stays free of
+		// raw EF BF BD bytes — scripts/check-encoding.sh rejects any
+		// tracked text file containing the replacement-character byte
+		// sequence (it usually indicates paste / shell damage, not intent).
+		s = strings.ToValidUTF8(s, "\uFFFD")
 	}
 	var b strings.Builder
 	b.Grow(len(s))
 	for _, r := range s {
-		// Strip C0 (U+0000–U+001F), DEL (U+007F), and C1 (U+0080–U+009F)
+		// Strip C0 (U+0000-U+001F), DEL (U+007F), and C1 (U+0080-U+009F)
 		// control characters. Everything else (including all printable
 		// Unicode, including non-ASCII) passes through unchanged.
 		if r < 0x20 || r == 0x7F || (r >= 0x80 && r <= 0x9F) {

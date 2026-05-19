@@ -102,7 +102,7 @@ func TestSanitizeField_InvalidUTF8ReplacedWithU_FFFD(t *testing.T) {
 	// 0xFF is not a valid UTF-8 start byte.
 	in := "ok\xffend"
 	got := SanitizeField(in, 16)
-	if !strings.Contains(got, "�") {
+	if !strings.Contains(got, "\uFFFD") {
 		t.Fatalf("expected replacement char in %q", got)
 	}
 	// Must remain valid JSON when serialized.
