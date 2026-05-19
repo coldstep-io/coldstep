@@ -166,6 +166,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 			// today these are no-ops on stubs without the IPv6 maps.
 			stats.setIPv6ConnectObserved(readIPv6ConnectObservedCount(&defendObjs))
 			stats.setIPv6SendmsgObserved(readIPv6SendmsgObservedCount(&defendObjs))
+			// Gap 1+2 (sendfile/splice): snapshot the sendpage_observed
+			// counter populated by lsm/socket_sendpage. Safe when the map
+			// is absent (returns 0).
+			stats.setSendpageObserved(readSendpageObservedCount(&defendObjs))
 			_ = defendObjs.Close()
 		}()
 
@@ -201,6 +205,26 @@ func Run(ctx context.Context, cfg config.Config) error {
 					lsmDenyRd.R = rd
 					defer lnk1.Close()
 					defer lnk2.Close()
+
+					// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
+					// so the sock_sendpage() path is gated against the same IPv4
+					// allowlist. Optional — tolerate missing program (older stubs)
+					// and attach failures (very old kernels that lack the
+					// sendpage LSM hook). On kernel 6.8+ this hook is never
+					// invoked because sendfile/splice go through sendmsg with
+					// MSG_SPLICE_PAGES; attaching anyway is harmless.
+					// TODO: regenerate defend objects after build on Linux so
+					// defendObjs.LsmSocketSendpage is always populated.
+					if defendObjs.LsmSocketSendpage != nil {
+						sendpageLnk, attachErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendpage})
+						if attachErr != nil {
+							slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
+						} else {
+							defer sendpageLnk.Close()
+						}
+					} else {
+						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
+					}
 				}
 			}
 		}
