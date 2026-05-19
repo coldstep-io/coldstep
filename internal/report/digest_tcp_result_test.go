@@ -1,6 +1,46 @@
 package report
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestBuildDetectMarkdown_TCPConnectionsKPI(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with_breakdown", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			ExecTotal: 1,
+			TCPTotal:  22,
+			TCPResultCounts: map[string]int{
+				"established": 18, "refused": 3, "timeout": 1,
+			},
+			MaxRowsPerSection: 50,
+		})
+		want := "| **TCP connections** | 18 established · 3 refused · 1 timeout |"
+		if !strings.Contains(md, want) {
+			t.Fatalf("expected TCP connections KPI row %q in:\n%s", want, md)
+		}
+		if !strings.Contains(md, "**TCP semantics:** rows reflect `connect(2)` attempts at syscall enter; the **TCP connections** KPI splits them") {
+			t.Fatalf("expected updated TCP semantics footnote when breakdown is present; got:\n%s", md)
+		}
+	})
+
+	t.Run("kretprobe_attach_failed", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			ExecTotal:         1,
+			TCPTotal:          5,
+			TCPResultCounts:   nil,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "| **TCP connections** |") {
+			t.Fatalf("did not expect TCP connections KPI row when counts are empty; got:\n%s", md)
+		}
+		if !strings.Contains(md, "kretprobe on `tcp_v4_connect` failed to attach") {
+			t.Fatalf("expected fallback TCP semantics footnote referencing kretprobe attach; got:\n%s", md)
+		}
+	})
+}
 
 func TestFormatTCPResultBreakdown(t *testing.T) {
 	t.Parallel()
