@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/proctree"
@@ -175,5 +176,14 @@ func buildDigestInput(
 	if seqLast == 0 {
 		in.SeqFirst = 0
 	}
+
+	compileTime, _, unresolved, wildcardRisk := stats.allowlistSnapshot()
+	in.UnresolvedAllowlistDomains = unresolved
+	in.WildcardRiskDomains = wildcardRisk
+	if !compileTime.IsZero() {
+		in.AllowlistAgeMinutes = time.Since(compileTime).Minutes()
+	}
+	in.DomainContactCounts = stats.snapshotDomainCounts()
+
 	return in
 }

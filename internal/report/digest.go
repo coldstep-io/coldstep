@@ -845,10 +845,78 @@ func writeFooter(b *strings.Builder, in DigestInput) {
 	fmt.Fprintf(b, "> Full event log: `%s`\n", sanitizeCell(path))
 }
 
+// writeAllowlistTrust emits P1-1 (DNS Allowlist Trust Model hardening)
+// surface: unresolved allowlist domains (defend-mode warning), high-risk
+// wildcard entries, and a TTL-age info note when the compile is >5 minutes
+// old. The section is skipped when there is nothing to show.
+func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
+	hasUnresolved := isBlockingDigestMode(in.DefendMode) && len(in.UnresolvedAllowlistDomains) > 0
+	hasWildcard := len(in.WildcardRiskDomains) > 0
+	hasAgeNote := in.AllowlistAgeMinutes > 5
+	if !hasUnresolved && !hasWildcard && !hasAgeNote {
+		return
+	}
+
+	b.WriteString("### Allowlist trust model\n\n")
+
+	if hasUnresolved {
+		b.WriteString("> ⚠️ **Unresolved allowlist domains** — legitimate traffic to these domains may be blocked under defend.\n>\n")
+		for _, d := range in.UnresolvedAllowlistDomains {
+			b.WriteString(fmt.Sprintf("> - `%s`\n", sanitizeCell(d)))
+		}
+		b.WriteString("\n")
+	}
+
+	if hasWildcard {
+		b.WriteString("> ⚠️ **High-risk wildcards** — these entries grant reach across a shared multi-tenant surface. Prefer tighter literal hostnames where possible.\n>\n")
+		for _, d := range in.WildcardRiskDomains {
+			b.WriteString(fmt.Sprintf("> - `%s`\n", sanitizeCell(d)))
+		}
+		b.WriteString("\n")
+	}
+
+	if hasAgeNote {
+		b.WriteString(fmt.Sprintf("> ℹ️ Allowlist was compiled %.0f minutes ago — DNS TTLs may have expired. Consider shorter jobs or re-running for long CI pipelines.\n\n",
+			in.AllowlistAgeMinutes))
+	}
+}
+
+// writeDomainContactCounts emits a collapsible section listing observed FQDNs
+// across TCP + UDP egress sorted by count descending. Skipped when no FQDNs
+// were observed.
+func writeDomainContactCounts(b *strings.Builder, in DigestInput) {
+	if len(in.DomainContactCounts) == 0 {
+		return
+	}
+	type kv struct {
+		k string
+		v int
+	}
+	list := make([]kv, 0, len(in.DomainContactCounts))
+	for k, v := range in.DomainContactCounts {
+		list = append(list, kv{k, v})
+	}
+	sort.Slice(list, func(i, j int) bool {
+		if list[i].v != list[j].v {
+			return list[i].v > list[j].v
+		}
+		return list[i].k < list[j].k
+	})
+
+	b.WriteString("<details>\n<summary><strong>Domain contact counts</strong></summary>\n\n")
+	b.WriteString("Observation counts per FQDN across TCP + UDP egress (correlated via DNS cache).\n\n")
+	b.WriteString("| Domain | Count |\n|:--|--:|\n")
+	for _, e := range list {
+		b.WriteString(fmt.Sprintf("| `%s` | %d |\n", sanitizeCell(e.k), e.v))
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
 // BuildDetectMarkdown returns GFM + the GFM HTML subset (<details>, <summary>,
 // <br>, <hr>, <table>) for `.coldstep-detect.md` / GITHUB_STEP_SUMMARY. The
 // visible portion (above the Technical details fold) is intentionally compact:
-// header, one-row KPI, optional Top destinations, Triage, footer.
+// header, one-row KPI, optional Top destinations, Triage, footer. Allowlist
+// trust-model warnings (P1-1) surface above the fold when applicable.
 func BuildDetectMarkdown(in DigestInput) string {
 	max := in.MaxRowsPerSection
 	if max <= 0 {
@@ -861,6 +929,8 @@ func BuildDetectMarkdown(in DigestInput) string {
 	writeCoverage(&b, in)
 	writeTopDestinations(&b, in)
 	writeTriageTable(&b, in)
+	writeAllowlistTrust(&b, in)
+	writeDomainContactCounts(&b, in)
 	writeTechnicalDetails(&b, in, max)
 	writeFooter(&b, in)
 

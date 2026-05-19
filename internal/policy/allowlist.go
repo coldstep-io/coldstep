@@ -82,9 +82,47 @@ func (s IPv4Set) ForEach(fn func(k [4]byte)) {
 
 // CompileResult is the deterministic output from allowlist compilation.
 type CompileResult struct {
-	Domains           []string
-	AllowedIPv4       IPv4Set
-	UnresolvedDomains []string
+	Domains             []string
+	AllowedIPv4         IPv4Set
+	UnresolvedDomains   []string
+	WildcardRiskDomains []string
+}
+
+// highRiskWildcardSuffixes lists shared-infrastructure DNS suffixes where a
+// `*.<suffix>` allowlist entry grants reach to a multi-tenant surface (any
+// GitHub-hosted user bucket, any S3 tenant, any Cloudfront/Pages-hosted
+// domain). Operators usually want a tighter literal hostname; the wildcard is
+// flagged as a "risk" for visibility in the digest, not blocked.
+var highRiskWildcardSuffixes = []string{
+	".githubusercontent.com",
+	".s3.amazonaws.com",
+	".blob.core.windows.net",
+	".azureedge.net",
+	".cloudfront.net",
+	".r2.dev",
+	".pages.dev",
+}
+
+// scoreWildcardRisk returns the subset of domains that are wildcard entries
+// (`*.<suffix>`) whose suffix matches one of the known multi-tenant
+// shared-infrastructure suffixes. Output preserves input order after the
+// caller's normalization. Operators see these in the digest so they can decide
+// whether a tighter literal entry would suffice.
+func scoreWildcardRisk(domains []string) []string {
+	var out []string
+	for _, d := range domains {
+		if !strings.HasPrefix(d, "*.") {
+			continue
+		}
+		suffix := d[1:] // strip the leading '*', keep the '.'
+		for _, risky := range highRiskWildcardSuffixes {
+			if strings.EqualFold(suffix, risky) {
+				out = append(out, d)
+				break
+			}
+		}
+	}
+	return out
 }
 
 // CompileDomainAllowlist normalizes and resolves domain allowlist entries.
@@ -183,6 +221,14 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 	}
 
 	slices.Sort(result.UnresolvedDomains)
+	result.WildcardRiskDomains = scoreWildcardRisk(normalized)
+
+	slog.Info("allowlist compiled",
+		"domains", len(normalized),
+		"resolved_ips", result.AllowedIPv4.Len(),
+		"unresolved_count", len(result.UnresolvedDomains),
+		"wildcard_risk_count", len(result.WildcardRiskDomains),
+	)
 	return result
 }
 
