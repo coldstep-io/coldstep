@@ -116,6 +116,23 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	allowlistCompileTime := time.Now()
+	stats.setAllowlistCompileSnapshot(
+		allowlistCompileTime,
+		defendCompiled.AllowedIPv4.Len(),
+		defendCompiled.UnresolvedDomains,
+		defendCompiled.WildcardRiskDomains,
+	)
+	for _, d := range defendCompiled.UnresolvedDomains {
+		slog.Warn("allowlist domain did not resolve", "domain", d)
+	}
+	if cfg.Mode == config.ModeDefend && len(defendCompiled.UnresolvedDomains) > 0 {
+		slog.Warn("allowlist domains unresolved — legitimate traffic to these domains may be blocked",
+			"count", len(defendCompiled.UnresolvedDomains))
+	}
+	for _, d := range defendCompiled.WildcardRiskDomains {
+		slog.Warn("high-risk wildcard in allowlist", "domain", d)
+	}
 
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
@@ -615,6 +632,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 					meta.Capabilities = make(map[string]bool)
 				}
 				meta.Capabilities["fs_events"] = true
+			}
+			meta.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
+			if len(defendCompiled.WildcardRiskDomains) > 0 {
+				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)

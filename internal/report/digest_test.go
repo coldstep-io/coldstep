@@ -628,6 +628,25 @@ func TestBuildDetectMarkdown_CoverageScopeBlock_PartialWhenSendmmsgFirstOnly(t *
 	}
 }
 
+func TestBuildDetectMarkdown_AllowlistTrust_DefendUnresolved(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:                 "defend",
+		UnresolvedAllowlistDomains: []string{"down.example.com", "ipv6-only.example.com"},
+		MaxRowsPerSection:          50,
+	})
+	for _, needle := range []string{
+		"### Allowlist trust model",
+		"Unresolved allowlist domains",
+		"`down.example.com`",
+		"`ipv6-only.example.com`",
+		"may be blocked",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_RingbufDropKPIRow(t *testing.T) {
 	t.Parallel()
 	md := BuildDetectMarkdown(DigestInput{
@@ -835,5 +854,91 @@ func TestBuildDetectMarkdown_SendpageObserved_ZeroIsClean(t *testing.T) {
 	}
 	if strings.Contains(md, "lsm/socket_sendpage") {
 		t.Fatalf("sendpage KPI row must not appear when counter is zero:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_AllowlistTrust_UnresolvedSuppressedInDetect(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		UnresolvedAllowlistDomains: []string{"down.example.com"},
+		MaxRowsPerSection:          50,
+	})
+	if strings.Contains(md, "Unresolved allowlist domains") {
+		t.Fatalf("detect mode should not surface unresolved warning; got:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_AllowlistTrust_WildcardRisk(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		WildcardRiskDomains: []string{"*.s3.amazonaws.com", "*.cloudfront.net"},
+		MaxRowsPerSection:   50,
+	})
+	for _, needle := range []string{
+		"### Allowlist trust model",
+		"High-risk wildcards",
+		"`*.s3.amazonaws.com`",
+		"`*.cloudfront.net`",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_AllowlistTrust_AgeInfo(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		AllowlistAgeMinutes: 17.4,
+		MaxRowsPerSection:   50,
+	})
+	if !strings.Contains(md, "ℹ️") || !strings.Contains(md, "17 minutes ago") {
+		t.Fatalf("expected age info note; got:\n%s", md)
+	}
+
+	mdFresh := BuildDetectMarkdown(DigestInput{
+		AllowlistAgeMinutes: 2.0,
+		MaxRowsPerSection:   50,
+	})
+	if strings.Contains(mdFresh, "minutes ago") {
+		t.Fatalf("should not surface TTL hint when allowlist is fresh; got:\n%s", mdFresh)
+	}
+}
+
+func TestBuildDetectMarkdown_AllowlistTrust_HiddenWhenEmpty(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{MaxRowsPerSection: 50})
+	if strings.Contains(md, "### Allowlist trust model") {
+		t.Fatalf("section should be suppressed when nothing to show; got:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_DomainContactCounts_SortedDescending(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DomainContactCounts: map[string]int{
+			"api.github.com":                5,
+			"registry.npmjs.org":            12,
+			"sts.amazonaws.com":             2,
+			"objects.githubusercontent.com": 7,
+		},
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(md, "Domain contact counts") {
+		t.Fatalf("missing Domain contact counts section in:\n%s", md)
+	}
+	// Highest count must appear before the lower ones.
+	npmIdx := strings.Index(md, "registry.npmjs.org")
+	githubIdx := strings.Index(md, "objects.githubusercontent.com")
+	apiIdx := strings.Index(md, "api.github.com")
+	stsIdx := strings.Index(md, "sts.amazonaws.com")
+	if npmIdx < 0 || githubIdx < 0 || apiIdx < 0 || stsIdx < 0 {
+		t.Fatalf("missing domain rows in:\n%s", md)
+	}
+	if !(npmIdx < githubIdx && githubIdx < apiIdx && apiIdx < stsIdx) {
+		t.Fatalf("expected descending order by count; npm=%d github=%d api=%d sts=%d",
+			npmIdx, githubIdx, apiIdx, stsIdx)
+	}
+}
+
+func TestBuildDetectMarkdown_DomainContactCounts_HiddenWhenEmpty(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{MaxRowsPerSection: 50})
+	if strings.Contains(md, "Domain contact counts") {
+		t.Fatalf("section should be suppressed when empty; got:\n%s", md)
 	}
 }

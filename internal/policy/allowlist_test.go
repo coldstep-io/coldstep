@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -170,6 +171,60 @@ func TestCompileDomainAllowlist_MaxAttemptsFloor(t *testing.T) {
 	_ = CompileDomainAllowlist(ctx, []string{"a.example.com"}, resolver, 0)
 	if calls != 1 {
 		t.Fatalf("resolver calls: got %d want 1 (ip4 once) when maxAttempts <= 0", calls)
+	}
+}
+
+func TestScoreWildcardRisk(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{name: "empty", in: nil, want: nil},
+		{name: "no wildcards", in: []string{"github.com", "api.github.com"}, want: nil},
+		{name: "non-risky wildcard", in: []string{"*.example.org"}, want: nil},
+		{name: "githubusercontent", in: []string{"*.githubusercontent.com"}, want: []string{"*.githubusercontent.com"}},
+		{name: "s3 amazonaws", in: []string{"*.s3.amazonaws.com"}, want: []string{"*.s3.amazonaws.com"}},
+		{
+			name: "azure + cdn",
+			in:   []string{"*.blob.core.windows.net", "*.azureedge.net"},
+			want: []string{"*.blob.core.windows.net", "*.azureedge.net"},
+		},
+		{
+			name: "cloudfront + r2 + pages",
+			in:   []string{"*.cloudfront.net", "*.r2.dev", "*.pages.dev"},
+			want: []string{"*.cloudfront.net", "*.r2.dev", "*.pages.dev"},
+		},
+		{
+			name: "mixed",
+			in:   []string{"api.github.com", "*.cloudfront.net", "*.example.org", "*.s3.amazonaws.com"},
+			want: []string{"*.cloudfront.net", "*.s3.amazonaws.com"},
+		},
+		{name: "case-insensitive suffix match", in: []string{"*.S3.AMAZONAWS.COM"}, want: []string{"*.S3.AMAZONAWS.COM"}},
+		{name: "non-risky wildcard suffix", in: []string{"*.internal.corp"}, want: nil},
+		{name: "literal host on shared suffix is not flagged", in: []string{"foo.s3.amazonaws.com"}, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := scoreWildcardRisk(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("scoreWildcardRisk(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCompileDomainAllowlist_PopulatesWildcardRiskDomains(t *testing.T) {
+	ctx := context.Background()
+	resolver := func(_ context.Context, _, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("9.9.9.9")}, nil
+	}
+	got := CompileDomainAllowlist(ctx,
+		[]string{"api.github.com", "*.s3.amazonaws.com", "*.example.org"},
+		resolver, 1)
+	want := []string{"*.s3.amazonaws.com"}
+	if !slices.Equal(got.WildcardRiskDomains, want) {
+		t.Fatalf("WildcardRiskDomains: got %v want %v", got.WildcardRiskDomains, want)
 	}
 }
 

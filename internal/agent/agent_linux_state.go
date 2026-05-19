@@ -20,6 +20,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/report"
@@ -64,6 +65,17 @@ type runStats struct {
 	bpfHeartbeatFailures            int
 	policyCounts                    map[string]int
 	droppedCounts                   map[string]int
+
+	// Allowlist compile snapshot (P1-1). Set once at startup after
+	// CompileDomainAllowlist; read at shutdown by buildDigestInput.
+	allowlistCompileTime         time.Time
+	allowlistIPCount             int
+	allowlistUnresolvedDomains   []string
+	allowlistWildcardRiskDomains []string
+
+	// dstDomainCounts maps observed FQDN → connection-event count across TCP +
+	// UDP egress (P1-1 6e). Empty FQDNs are ignored.
+	dstDomainCounts map[string]int
 }
 
 func newRunStats() *runStats {
@@ -547,6 +559,56 @@ func (s *runStats) counts() (execN, tcpN, udpN, httpN, tlsN, fsN int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.execN, s.tcpN, s.udpN, s.httpN, s.tlsN, s.fsN
+}
+
+// setAllowlistCompileSnapshot records a one-shot snapshot of the resolved
+// allowlist at agent startup. Inputs are copied so the caller can free the
+// originals. Used by the shutdown digest to surface unresolved domains, the
+// IPv4-count snapshot, the wildcard-risk list, and the age-since-compile note.
+func (s *runStats) setAllowlistCompileSnapshot(t time.Time, ipCount int, unresolved, wildcardRisk []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.allowlistCompileTime = t
+	s.allowlistIPCount = ipCount
+	s.allowlistUnresolvedDomains = slices.Clone(unresolved)
+	s.allowlistWildcardRiskDomains = slices.Clone(wildcardRisk)
+}
+
+// allowlistSnapshot returns a copy of the recorded compile-time snapshot.
+func (s *runStats) allowlistSnapshot() (compileTime time.Time, ipCount int, unresolved []string, wildcardRisk []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.allowlistCompileTime, s.allowlistIPCount,
+		slices.Clone(s.allowlistUnresolvedDomains),
+		slices.Clone(s.allowlistWildcardRiskDomains)
+}
+
+// incDomainCount bumps the per-FQDN observation counter (P1-1 6e). No-op for
+// empty domain.
+func (s *runStats) incDomainCount(domain string) {
+	if domain == "" {
+		return
+	}
+	s.mu.Lock()
+	if s.dstDomainCounts == nil {
+		s.dstDomainCounts = make(map[string]int)
+	}
+	s.dstDomainCounts[domain]++
+	s.mu.Unlock()
+}
+
+// snapshotDomainCounts returns a copy of the per-FQDN observation counters.
+func (s *runStats) snapshotDomainCounts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.dstDomainCounts) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(s.dstDomainCounts))
+	for k, v := range s.dstDomainCounts {
+		out[k] = v
+	}
+	return out
 }
 
 // snapshotPolicyCounts returns a copy of policy classification counters for digests.
