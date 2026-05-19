@@ -122,8 +122,20 @@ func hasPartialCoverageSignals(in DigestInput) bool {
 // coveragePayloadState returns the "Payloads beyond iov[0]" cell text used in
 // the headline Coverage block. Partial when any BG-01 partial-observe counter
 // fired this run.
+//
+// sendpage_observed (lsm/socket_sendpage) closes the kernel-5.15
+// sendfile(2)/splice(2) sock_sendpage gap: when the hook is attached and
+// firing in defend mode, the underlying payload is gated even though the
+// detect path's HTTP/TLS sniff is still skipped. Treat the "Payloads beyond
+// iov[0]" cell as observed when SendpageObserved > 0 *and* no other partial
+// counter fired — operators reading this in defend mode should see that
+// sendfile/splice are not silently unenforced.
 func coveragePayloadState(in DigestInput) string {
-	if in.SendmmsgFirstOnly > 0 || in.SendfileObserved > 0 || in.SpliceObserved > 0 {
+	sendfileGapClosed := in.SendpageObserved > 0
+	if !sendfileGapClosed && (in.SendfileObserved > 0 || in.SpliceObserved > 0) {
+		return "⚠️ partial"
+	}
+	if in.SendmmsgFirstOnly > 0 {
 		return "⚠️ partial"
 	}
 	return "✓ observed"

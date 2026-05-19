@@ -53,6 +53,7 @@ type runStats struct {
 	sendmmsgFirstOnlyN              int
 	ipv6ConnectObservedN            uint32
 	ipv6SendmsgObservedN            uint32
+	sendpageObservedN               uint32
 	ioUringSetupObservedN           int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
@@ -364,6 +365,24 @@ func (s *runStats) ipv6SendmsgObserved() uint32 {
 	return s.ipv6SendmsgObservedN
 }
 
+// setSendpageObserved records the lsm/socket_sendpage observe counter
+// snapshotted from BPF on shutdown. Non-zero means sendfile(2)/splice(2)
+// fired through sock_sendpage on this kernel (5.15 path) — defend gating
+// at the sendpage LSM closes the gap that cgroup/sendmsg4 misses.
+// TODO: wire fully after BPF stubs are regenerated on Linux; today this
+// is a no-op when the map is absent.
+func (s *runStats) setSendpageObserved(n uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sendpageObservedN = n
+}
+
+func (s *runStats) sendpageObserved() uint32 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sendpageObservedN
+}
+
 func (s *runStats) setIoUringSetupObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -508,6 +527,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
 		IPv6ConnectObserved:            s.ipv6ConnectObservedN,
 		IPv6SendmsgObserved:            s.ipv6SendmsgObservedN,
+		SendpageObserved:               s.sendpageObservedN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,

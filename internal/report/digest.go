@@ -230,6 +230,25 @@ func buildTriageRows(in DigestInput) [][2]string {
 		rows = append(rows, [2]string{"**Observability (partial / bypass-class)**", sanitizeCell(interp)})
 	}
 
+	// Gap 1+2 (sendfile/splice): when defend is on and lsm/socket_sendpage
+	// fired, surface the gap-closed state explicitly so operators can see
+	// that sendfile(2)/splice(2) were gated against the same IPv4 allowlist
+	// even though the cgroup/sendmsg4 path missed them. In detect mode the
+	// counter is informational only.
+	if in.SendpageObserved > 0 {
+		if isBlockingDigestMode(in.DefendMode) {
+			rows = append(rows, [2]string{
+				"**Sendfile/splice (sock_sendpage)**",
+				fmt.Sprintf("✅ **%d** events gated by `lsm/socket_sendpage`", in.SendpageObserved),
+			})
+		} else {
+			rows = append(rows, [2]string{
+				"**Sendfile/splice (sock_sendpage)**",
+				fmt.Sprintf("ℹ️ **%d** events observed via `lsm/socket_sendpage`", in.SendpageObserved),
+			})
+		}
+	}
+
 	// P0-1 Phase 1: surface IPv6 egress as a top-level triage row. In
 	// detect mode this is a ⚠️ limitation (IPv4-only visibility); in
 	// defend mode it's 🚨 (the IPv4-only allowlist could not gate the
@@ -327,6 +346,13 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	}
 	if in.SendmmsgFirstOnly > 0 {
 		fmt.Fprintf(b, "| **sendmmsg first-message-only (msgs 2..N not introspected)** | %d |\n", in.SendmmsgFirstOnly)
+	}
+	if in.SendpageObserved > 0 {
+		label := "**lsm/socket_sendpage events (sendfile/splice path)**"
+		if isBlockingDigestMode(in.DefendMode) {
+			label = "**✅ lsm/socket_sendpage events gated (sendfile/splice closed)**"
+		}
+		fmt.Fprintf(b, "| %s | %d |\n", label, in.SendpageObserved)
 	}
 	if in.IoUringSetupObserved > 0 {
 		fmt.Fprintf(b, "| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved)

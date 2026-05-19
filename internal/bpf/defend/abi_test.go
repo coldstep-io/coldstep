@@ -116,3 +116,44 @@ func TestIPv6ObservePrograms(t *testing.T) {
 		}
 	}
 }
+
+// TestSendpageObserveMapIsPerCPUArray asserts the sendpage_observed counter
+// map (kernel-5.15 sendfile/splice gap) has the PERCPU_ARRAY shape userspace
+// expects to sum. Added in bpf/trace_lsm_defend_lsm.inc; the test skips
+// itself until the defend stubs have been regenerated on Linux to include it.
+// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+func TestSendpageObserveMapIsPerCPUArray(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ms, ok := spec.Maps["sendpage_observed"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: map \"sendpage_observed\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ms.Type != ebpf.PerCPUArray {
+		t.Errorf("sendpage_observed type = %v, want ebpf.PerCPUArray", ms.Type)
+	}
+	if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+		t.Errorf("sendpage_observed shape MaxEntries=%d KeySize=%d ValueSize=%d, want MaxEntries=1 KeySize=4 ValueSize=4",
+			ms.MaxEntries, ms.KeySize, ms.ValueSize)
+	}
+}
+
+// TestSendpageHookProgram asserts the lsm/socket_sendpage program is
+// present in the spec with the LSM program type. Skips until stubs are
+// regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestSendpageHookProgram(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ps, ok := spec.Programs["lsm_socket_sendpage"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: program \"lsm_socket_sendpage\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ps.Type != ebpf.LSM {
+		t.Errorf("lsm_socket_sendpage type = %v, want ebpf.LSM", ps.Type)
+	}
+}
