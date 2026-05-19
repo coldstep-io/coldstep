@@ -282,6 +282,9 @@ func writeKPITable(b *strings.Builder, in DigestInput) {
 
 	if tlsKPIVisible(in) {
 		b.WriteString(fmt.Sprintf("| **tls** | %d |\n", in.TLSTotal))
+		if breakdown := tlsConfidenceBreakdown(in); breakdown != "" {
+			b.WriteString(fmt.Sprintf("| **tls SNI confidence** | %s |\n", breakdown))
+		}
 		if in.TLSRingbufReserveFailures > 0 {
 			b.WriteString(fmt.Sprintf("| **tls_events ringbuf reserve failures** | %d |\n", in.TLSRingbufReserveFailures))
 		}
@@ -450,6 +453,11 @@ func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
 	b.WriteString("- **HTTP KPI** counts cleartext HTTP/1 request bytes on `sendto` to destination port 80 only; HTTPS traffic appears as TCP connect events.\n")
 	if tlsKPIVisible(in) {
 		b.WriteString("- **tls KPI** counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).\n")
+		b.WriteString("- **tls SNI confidence** reason codes (next to each row and rolled up in the KPI):\n")
+		b.WriteString("    - `full` — complete ClientHello parsed in a single syscall buffer.\n")
+		b.WriteString("    - `partial` — SNI found but the TLS record was fragmented past the captured buffer; the name may be truncated.\n")
+		b.WriteString("    - `inferred` — SNI inferred from prior DNS / connect correlation, not directly parsed from a ClientHello.\n")
+		b.WriteString("    - `unknown` — TLS framing was detected but no SNI could be extracted.\n")
 	}
 	if procForkKPIVisible(in) {
 		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")
@@ -686,14 +694,19 @@ func BuildDetectMarkdown(in DigestInput) string {
 			return
 		}
 		b.WriteString("<details>\n<summary><strong>TLS ClientHello / SNI (recent)</strong></summary>\n\n")
-		b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy |\n|:--|--:|:-|:-|:-|:-|\n")
+		b.WriteString("| Time (UTC) | PID | Comm | SNI | Remote | Policy | Confidence |\n|:--|--:|:-|:-|:-|:-|:-|\n")
 		if len(in.TLSRows) == 0 {
-			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors))))
+			b.WriteString(fmt.Sprintf("| — | — | — | — | — | %s | — |\n", sanitizeCell(protocolEmptyReason(in.TLSDegradedHook, in.TLSReaderErrors))))
 		} else {
 			for _, r := range in.TLSRows {
-				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | %s | %s |\n",
+				conf := r.Confidence
+				if conf == "" {
+					conf = "unknown"
+				}
+				b.WriteString(fmt.Sprintf("| %s | `%d` | `%s` | `%s` | %s | %s | `%s` |\n",
 					sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
-					sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy)))
+					sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy),
+					sanitizeCell(conf)))
 			}
 		}
 		b.WriteString("\n</details>\n\n")

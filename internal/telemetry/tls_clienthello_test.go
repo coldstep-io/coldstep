@@ -92,6 +92,56 @@ func TestParseClientHelloSNI_TruncatedRecord(t *testing.T) {
 	}
 }
 
+func TestParseClientHelloSNIWithConfidence_FullWhenBufferComplete(t *testing.T) {
+	ch := buildSyntheticClientHelloWithSNI("full.example")
+	if ch == nil {
+		t.Fatal("nil hello")
+	}
+	sni, conf, ok := ParseClientHelloSNIWithConfidence(ch)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if sni != "full.example" {
+		t.Fatalf("sni=%q", sni)
+	}
+	if conf != TLSConfidenceFull {
+		t.Fatalf("confidence=%q want %q", conf, TLSConfidenceFull)
+	}
+}
+
+func TestParseClientHelloSNIWithConfidence_PartialWhenRecordTruncated(t *testing.T) {
+	full := buildSyntheticClientHelloWithSNI("partial.example")
+	if full == nil {
+		t.Fatal("nil hello")
+	}
+	// Stretch the record length so the captured buffer is shorter than the
+	// declared TLS record — the parser should still pick the SNI out of the
+	// prefix but mark confidence as partial because of the truncation.
+	extPad := make([]byte, 200)
+	for i := range extPad {
+		extPad[i] = 0xab
+	}
+	raw := make([]byte, len(full)+len(extPad))
+	copy(raw, full)
+	copy(raw[len(full):], extPad)
+	newRecLen := int(binary.BigEndian.Uint16(raw[3:5])) + len(extPad)
+	binary.BigEndian.PutUint16(raw[3:5], uint16(newRecLen))
+	truncated := raw
+	if len(truncated) > 256 {
+		truncated = raw[:256]
+	}
+	sni, conf, ok := ParseClientHelloSNIWithConfidence(truncated)
+	if !ok {
+		t.Fatalf("expected SNI, got ok=false (len=%d, recLen=%d)", len(truncated), newRecLen)
+	}
+	if sni != "partial.example" {
+		t.Fatalf("sni=%q", sni)
+	}
+	if conf != TLSConfidencePartial {
+		t.Fatalf("confidence=%q want %q", conf, TLSConfidencePartial)
+	}
+}
+
 func TestParseClientHelloSNI_RejectsApplicationDataRecord(t *testing.T) {
 	// TLS application data record (type 0x17), long enough to pass initial length gates
 	// but handshake type is not ClientHello.

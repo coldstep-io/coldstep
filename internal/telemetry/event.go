@@ -125,21 +125,47 @@ type HTTPEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
+// TLSSNIConfidence is the reason code attached to each TLSEvent describing how
+// reliably the SNI value was recovered.
+//
+//   - TLSConfidenceFull     — complete ClientHello parsed inside a single
+//     syscall buffer (no truncation, SNI block fully bounded).
+//   - TLSConfidencePartial  — SNI was extracted but the TLS record extended
+//     past the captured buffer; the returned name may be truncated or come from
+//     a fragmented ClientHello.
+//   - TLSConfidenceInferred — SNI was not parsed directly from a ClientHello
+//     buffer; it was inferred from prior DNS / connect correlation. (Reserved
+//     for future correlation paths; not currently emitted by the agent.)
+//   - TLSConfidenceUnknown  — TLS framing was detected but no SNI could be
+//     extracted. (Reserved; the current agent suppresses these rows.)
+//
+// These four values are stable strings on the JSONL wire and are surfaced in
+// the Markdown digest's TLS KPI breakdown.
+type TLSSNIConfidence = string
+
+const (
+	TLSConfidenceFull     TLSSNIConfidence = "full"
+	TLSConfidencePartial  TLSSNIConfidence = "partial"
+	TLSConfidenceInferred TLSSNIConfidence = "inferred"
+	TLSConfidenceUnknown  TLSSNIConfidence = "unknown"
+)
+
 // TLSEvent is one JSONL record for TLS ClientHello SNI observed on egress (detect).
 type TLSEvent struct {
-	Type     string `json:"type"` // "tls"
-	TS       string `json:"ts"`
-	Seq      uint64 `json:"seq"`
-	PID      uint32 `json:"pid"`
-	TGID     uint32 `json:"tgid"`
-	ThreadID uint32 `json:"thread_id"`
-	Comm     string `json:"comm"`
-	SNI      string `json:"sni"`
-	Dst      string `json:"dst"`
-	Dport    uint16 `json:"dport"`
-	Policy   string `json:"policy"`
-	Note     string `json:"note,omitempty"`
-	Sig      string `json:"sig,omitempty"`
+	Type       string           `json:"type"` // "tls"
+	TS         string           `json:"ts"`
+	Seq        uint64           `json:"seq"`
+	PID        uint32           `json:"pid"`
+	TGID       uint32           `json:"tgid"`
+	ThreadID   uint32           `json:"thread_id"`
+	Comm       string           `json:"comm"`
+	SNI        string           `json:"sni"`
+	Dst        string           `json:"dst"`
+	Dport      uint16           `json:"dport"`
+	Policy     string           `json:"policy"`
+	Confidence TLSSNIConfidence `json:"confidence,omitempty"`
+	Note       string           `json:"note,omitempty"`
+	Sig        string           `json:"sig,omitempty"`
 }
 
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).

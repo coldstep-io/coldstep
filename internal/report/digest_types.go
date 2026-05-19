@@ -65,12 +65,13 @@ type HTTPDigestRow struct {
 
 // TLSDigestRow is one TLS ClientHello / SNI line in the markdown digest.
 type TLSDigestRow struct {
-	TS     string
-	PID    uint32
-	Comm   string
-	SNI    string
-	Remote string
-	Policy string
+	TS         string
+	PID        uint32
+	Comm       string
+	SNI        string
+	Remote     string
+	Policy     string
+	Confidence telemetry.TLSSNIConfidence
 }
 
 // FSDigestRow is one filesystem event line in the markdown digest.
@@ -107,8 +108,15 @@ type DigestInput struct {
 	BPF           []telemetry.BPFStatus
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
-	TLSSNIGate                                         bool
-	PolicyCounts                                       map[string]int
+	// TLSConfidence* counts the per-tier breakdown of TLS SNI rows
+	// emitted in this run. The fields sum to TLSTotal and feed the KPI
+	// row "TLS SNI | N names · X full · Y partial · Z inferred · W unknown".
+	TLSConfidenceFull     int
+	TLSConfidencePartial  int
+	TLSConfidenceInferred int
+	TLSConfidenceUnknown  int
+	TLSSNIGate            bool
+	PolicyCounts          map[string]int
 
 	ExecRows  []ExecDigestRow
 	TCPRows   []TCPDigestRow

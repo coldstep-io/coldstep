@@ -144,6 +144,31 @@ func tlsKPIVisible(in DigestInput) bool {
 	return in.TLSSNIGate
 }
 
+// tlsConfidenceBreakdown renders the per-tier TLS SNI breakdown shown next to
+// the tls KPI total — e.g. `42 names · 38 full · 3 partial · 1 inferred`. It
+// returns an empty string when no rows or tier counters are present so that
+// the KPI table stays terse for runs without TLS visibility.
+func tlsConfidenceBreakdown(in DigestInput) string {
+	total := in.TLSConfidenceFull + in.TLSConfidencePartial + in.TLSConfidenceInferred + in.TLSConfidenceUnknown
+	if total == 0 {
+		return ""
+	}
+	parts := []string{fmt.Sprintf("%d names", total)}
+	if in.TLSConfidenceFull > 0 {
+		parts = append(parts, fmt.Sprintf("%d full", in.TLSConfidenceFull))
+	}
+	if in.TLSConfidencePartial > 0 {
+		parts = append(parts, fmt.Sprintf("%d partial", in.TLSConfidencePartial))
+	}
+	if in.TLSConfidenceInferred > 0 {
+		parts = append(parts, fmt.Sprintf("%d inferred", in.TLSConfidenceInferred))
+	}
+	if in.TLSConfidenceUnknown > 0 {
+		parts = append(parts, fmt.Sprintf("%d unknown", in.TLSConfidenceUnknown))
+	}
+	return strings.Join(parts, " · ")
+}
+
 func fsKPIVisible(in DigestInput) bool {
 	return in.FSGate
 }

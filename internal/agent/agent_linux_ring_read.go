@@ -371,20 +371,21 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			continue
 		}
 		comm := string(bytes.TrimRight(commb[:], "\x00"))
-		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
+		sni, confidence, parsed := telemetry.ParseClientHelloSNIWithConfidence(rawPay)
 		if !parsed {
 			stats.addDropped("tls_sni_parse")
 			continue
 		}
 		cl := pol.Classify(sni, ip)
-		stats.addTLS(cl)
+		stats.addTLS(cl, confidence)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addTLS(report.TLSDigestRow{
 			TS: ts, PID: tgid, Comm: comm,
-			SNI:    sni,
-			Remote: fmt.Sprintf("`%s:%d`", ip.String(), port),
-			Policy: cl.Display(),
+			SNI:        sni,
+			Remote:     fmt.Sprintf("`%s:%d`", ip.String(), port),
+			Policy:     cl.Display(),
+			Confidence: confidence,
 		}, stats)
 
 		if cfg.EventsLogPath != "" {
@@ -395,8 +396,9 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, SNI: sni,
 				Dst: ip.String(), Dport: port,
-				Policy: string(cl),
-				Note:   "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
+				Policy:     string(cl),
+				Confidence: confidence,
+				Note:       "ClientHello SNI from first write/writev/sendto buffer (best-effort); fragmented handshakes may be missed",
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()

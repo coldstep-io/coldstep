@@ -163,15 +163,17 @@ func TestBuildDetectMarkdown_KPIAndSections(t *testing.T) {
 
 func TestBuildDetectMarkdown_TLSKPIAndSection(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		BPF:          []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
-		ExecTotal:    0,
-		TCPTotal:     1,
-		TLSTotal:     1,
-		TLSSNIGate:   true,
-		PolicyCounts: map[string]int{"monitor": 1},
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		ExecTotal:         0,
+		TCPTotal:          1,
+		TLSTotal:          1,
+		TLSConfidenceFull: 1,
+		TLSSNIGate:        true,
+		PolicyCounts:      map[string]int{"monitor": 1},
 		TLSRows: []TLSDigestRow{{
 			TS: "t", PID: 42, Comm: "curl", SNI: "example.com",
 			Remote: "`93.184.216.34:443`", Policy: "monitor",
+			Confidence: telemetry.TLSConfidenceFull,
 		}},
 		JSONLPath:         "/tmp/x.jsonl",
 		SeqFirst:          1,
@@ -188,6 +190,72 @@ func TestBuildDetectMarkdown_TLSKPIAndSection(t *testing.T) {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}
+	}
+}
+
+// TestBuildDetectMarkdown_TLSConfidenceBreakdown exercises the case where a
+// run produces SNI rows across multiple confidence tiers. It must surface:
+//   - the KPI breakdown row (e.g. "5 names · 3 full · 1 partial · 1 inferred"),
+//   - the Confidence column header + per-row reason codes in the recent table,
+//   - the technical-details legend describing each tier.
+func TestBuildDetectMarkdown_TLSConfidenceBreakdown(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                   []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TCPTotal:              1,
+		TLSTotal:              5,
+		TLSConfidenceFull:     3,
+		TLSConfidencePartial:  1,
+		TLSConfidenceInferred: 1,
+		TLSSNIGate:            true,
+		PolicyCounts:          map[string]int{"monitor": 5},
+		TLSRows: []TLSDigestRow{
+			{TS: "t1", PID: 10, Comm: "curl", SNI: "a.example", Remote: "`1.1.1.1:443`", Policy: "monitor", Confidence: telemetry.TLSConfidenceFull},
+			{TS: "t2", PID: 11, Comm: "curl", SNI: "b.example", Remote: "`1.1.1.2:443`", Policy: "monitor", Confidence: telemetry.TLSConfidencePartial},
+			{TS: "t3", PID: 12, Comm: "curl", SNI: "c.example", Remote: "`1.1.1.3:443`", Policy: "monitor", Confidence: telemetry.TLSConfidenceInferred},
+		},
+		JSONLPath:         "/tmp/x.jsonl",
+		SeqFirst:          1,
+		SeqLast:           5,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"| **tls** | 5 |",
+		"| **tls SNI confidence** | 5 names · 3 full · 1 partial · 1 inferred |",
+		"| Time (UTC) | PID | Comm | SNI | Remote | Policy | Confidence |",
+		"`full`",
+		"`partial`",
+		"`inferred`",
+		"complete ClientHello parsed in a single syscall buffer",
+		"SNI found but the TLS record was fragmented",
+		"SNI inferred from prior DNS / connect correlation",
+		"TLS framing was detected but no SNI could be extracted",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+	// Tiers with zero counts should not appear in the breakdown row.
+	if strings.Contains(md, "0 unknown") {
+		t.Fatalf("zero-count tier leaked into KPI breakdown:\n%s", md)
+	}
+}
+
+func TestTLSConfidenceBreakdown_AllTiers(t *testing.T) {
+	got := tlsConfidenceBreakdown(DigestInput{
+		TLSConfidenceFull:     7,
+		TLSConfidencePartial:  2,
+		TLSConfidenceInferred: 1,
+		TLSConfidenceUnknown:  1,
+	})
+	want := "11 names · 7 full · 2 partial · 1 inferred · 1 unknown"
+	if got != want {
+		t.Fatalf("breakdown=%q want %q", got, want)
+	}
+}
+
+func TestTLSConfidenceBreakdown_Empty(t *testing.T) {
+	if got := tlsConfidenceBreakdown(DigestInput{}); got != "" {
+		t.Fatalf("expected empty breakdown, got %q", got)
 	}
 }
 
