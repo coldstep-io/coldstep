@@ -132,21 +132,71 @@ type HTTPEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
+// TLSConfidence indicates how reliably the SNI on a TLSEvent was captured.
+//
+//   - "full":     SNI present in ClientHello, length below the RFC 1035
+//     server-name boundary — best-effort but not truncated.
+//   - "partial":  SNI length hit the BPF/RFC capture boundary (TLSSNIMaxLen);
+//     the captured value may be a prefix of the real server name.
+//   - "inferred": SNI was inferred from rDNS or prior connection state
+//     (reserved for future enrichers; not yet emitted by the BPF path).
+//   - "unknown":  no usable SNI signal was captured.
+//
+// Operators reading the JSONL / digest can use the field to weigh how much to
+// trust an SNI-based allow/deny match.
+type TLSConfidence string
+
+const (
+	TLSConfidenceFull     TLSConfidence = "full"
+	TLSConfidencePartial  TLSConfidence = "partial"
+	TLSConfidenceInferred TLSConfidence = "inferred"
+	TLSConfidenceUnknown  TLSConfidence = "unknown"
+)
+
+// TLSSNIMaxLen is the maximum SNI host_name length the SNI parser accepts
+// (RFC 1035 §2.3.4 — labels add to 255 octets max). When the captured SNI
+// length is exactly TLSSNIMaxLen we cannot tell whether the real server name
+// was longer, so confidence drops to TLSConfidencePartial.
+const TLSSNIMaxLen = 255
+
+// ScoreTLSConfidence classifies the SNI captured for a TLS ClientHello event
+// using only the parsed SNI string. The function is intentionally a pure
+// helper so it is straightforward to unit-test and reuse from non-Linux
+// callers (replay, fuzz tooling).
+//
+// Inputs:
+//
+//   - sni: the host_name parsed out of the ClientHello (lower-cased,
+//     trimmed). Empty when no SNI was usable.
+//
+// The function does not consult rDNS or any prior connection state today;
+// TLSConfidenceInferred is reserved for a future enricher.
+func ScoreTLSConfidence(sni string) TLSConfidence {
+	if sni == "" {
+		return TLSConfidenceUnknown
+	}
+	if len(sni) >= TLSSNIMaxLen {
+		return TLSConfidencePartial
+	}
+	return TLSConfidenceFull
+}
+
 // TLSEvent is one JSONL record for TLS ClientHello SNI observed on egress (detect).
 type TLSEvent struct {
-	Type     string `json:"type"` // "tls"
-	TS       string `json:"ts"`
-	Seq      uint64 `json:"seq"`
-	PID      uint32 `json:"pid"`
-	TGID     uint32 `json:"tgid"`
-	ThreadID uint32 `json:"thread_id"`
-	Comm     string `json:"comm"`
-	SNI      string `json:"sni"`
-	Dst      string `json:"dst"`
-	Dport    uint16 `json:"dport"`
-	Policy   string `json:"policy"`
-	Note     string `json:"note,omitempty"`
-	Sig      string `json:"sig,omitempty"`
+	Type       string        `json:"type"` // "tls"
+	TS         string        `json:"ts"`
+	Seq        uint64        `json:"seq"`
+	PID        uint32        `json:"pid"`
+	TGID       uint32        `json:"tgid"`
+	ThreadID   uint32        `json:"thread_id"`
+	Comm       string        `json:"comm"`
+	SNI        string        `json:"sni"`
+	Confidence TLSConfidence `json:"confidence,omitempty"`
+	Dst        string        `json:"dst"`
+	Dport      uint16        `json:"dport"`
+	Policy     string        `json:"policy"`
+	Note       string        `json:"note,omitempty"`
+	Sig        string        `json:"sig,omitempty"`
 }
 
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).
