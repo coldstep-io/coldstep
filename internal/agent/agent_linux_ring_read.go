@@ -406,9 +406,10 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addTLS(report.TLSDigestRow{
 			TS: ts, PID: tgid, Comm: comm,
-			SNI:    sni,
-			Remote: fmt.Sprintf("`%s:%d`", ip.String(), port),
-			Policy: cl.Display(),
+			SNI:        sni,
+			Remote:     fmt.Sprintf("`%s:%d`", ip.String(), port),
+			Policy:     cl.Display(),
+			Confidence: conf,
 		}, stats)
 
 		if cfg.EventsLogPath != "" {
