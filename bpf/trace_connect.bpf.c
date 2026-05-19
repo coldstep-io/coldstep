@@ -562,12 +562,20 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 				__sync_fetch_and_add(v, 1);
 
 			__u32 vlen32 = (__u32)(vlen_ul & 0xffffff);
+			/*
+			 * No `break` inside the unrolled loop: clang on
+			 * ubuntu-22.04 (clang-14) refuses to unroll a loop with
+			 * a runtime-conditioned break and fails with
+			 * -Wpass-failed=transform-warning under -Werror. Guard
+			 * the body with an `if` instead so all 7 iterations are
+			 * statically present and skipped when i >= vlen32.
+			 */
 #pragma unroll
 			for (int i = 1; i <= SENDMMSG_EXTRA_MAX; i++) {
-				if ((__u32)i >= vlen32)
-					break;
-				handle_udp_obs_sendmsg_extra((__u32)di_ul,
-							      msgvec_ptr + (unsigned long)i * SENDMMSG_STRIDE);
+				if ((__u32)i < vlen32) {
+					handle_udp_obs_sendmsg_extra((__u32)di_ul,
+								      msgvec_ptr + (unsigned long)i * SENDMMSG_STRIDE);
+				}
 			}
 
 			if (vlen32 > SENDMMSG_EXTRA_MAX + 1) {
