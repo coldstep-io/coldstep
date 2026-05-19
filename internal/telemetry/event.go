@@ -26,7 +26,14 @@ type MetaEvent struct {
 	BPF           []BPFStatus     `json:"bpf"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
 	DetectProfile string          `json:"detect_profile,omitempty"` // "standard" | "enhanced" (from COLDSTEP_DETECT_PROFILE)
-	Sig           string          `json:"sig,omitempty"`
+	// AllowlistIPCount snapshots the number of unique IPv4 addresses produced by
+	// compiling the domain allowlist (P1-1 6a). Zero when not in defend mode.
+	AllowlistIPCount int `json:"allowlist_ip_count,omitempty"`
+	// WildcardRiskDomains lists allowlist entries (e.g. `*.s3.amazonaws.com`)
+	// whose wildcard suffix matches a known multi-tenant shared-infrastructure
+	// surface (P1-1 6c). Operators can review and tighten if desired.
+	WildcardRiskDomains []string `json:"wildcard_risk_domains,omitempty"`
+	Sig                 string   `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.

@@ -229,6 +229,24 @@ type DigestInput struct {
 	BPFMapIntegrityFailures        int
 	BPFAuditRingbufReserveFailures int
 	DroppedCounts                  map[string]int
+
+	// P1-1 DNS Allowlist Trust Model hardening surface.
+	//
+	// UnresolvedAllowlistDomains lists allowlist domains that did not yield any
+	// IPv4 A-record at compile time. Empty when all domains resolved or no
+	// allowlist was compiled.
+	UnresolvedAllowlistDomains []string
+	// WildcardRiskDomains lists allowlist entries that match a known multi-tenant
+	// shared-infrastructure wildcard surface (e.g. `*.s3.amazonaws.com`). Empty
+	// when no such entries are present.
+	WildcardRiskDomains []string
+	// AllowlistAgeMinutes is minutes between allowlist compile time and digest
+	// build time. Surfaces a TTL re-validation hint for long jobs; zero when no
+	// allowlist was compiled.
+	AllowlistAgeMinutes float64
+	// DomainContactCounts maps observed FQDN → observation count across TCP +
+	// UDP egress. Sorted descending by count in the digest section.
+	DomainContactCounts map[string]int
 }
 
 // TruncateUTF8ToMaxBytes cuts s so len(result) <= maxBytes without splitting a UTF-8 code point.
