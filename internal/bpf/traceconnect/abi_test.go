@@ -91,6 +91,7 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			"http_ringbuf_reserve_failures",
 			"tls_ringbuf_reserve_failures",
 			"sendmmsg_multi_message_observed",
+			"sendmmsg_unobserved_extra",
 		}
 		for _, name := range names {
 			ms, ok := spec.Maps[name]
