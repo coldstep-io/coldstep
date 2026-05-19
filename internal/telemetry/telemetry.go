@@ -76,26 +76,33 @@ func SumRingbufReserveFailuresDetectPath(
 // Summary is written once at agent shutdown. Non-zero partial-visibility counters
 // (unobserved syscalls, io_uring_setup, ringbuf reserves) need SECURITY.md context to interpret.
 type Summary struct {
-	Version                       int    `json:"version"`
-	SchemaVersion                 int    `json:"schema_version"`
-	Finished                      string `json:"finished"`
-	KernelRelease                 string `json:"kernel_release,omitempty"`
-	ExecEvents                    int    `json:"exec_events"`
-	TCPEvents                     int    `json:"tcp_events"`
-	UDPEvents                     int    `json:"udp_events"`
-	HTTPEvents                    int    `json:"http_events"`
-	TLSEvents                     int    `json:"tls_events,omitempty"`
-	ProcForkEvents                int    `json:"proc_fork_events,omitempty"`
-	Connect4TupleUpdateFailures   int    `json:"connect4_tuple_update_failures,omitempty"`
-	UDPRingbufReserveFailures     int    `json:"udp_ringbuf_reserve_failures,omitempty"`
-	DNSRingbufReserveFailures     int    `json:"dns_ringbuf_reserve_failures,omitempty"`
-	ConnectRingbufReserveFailures int    `json:"connect_ringbuf_reserve_failures,omitempty"`
-	HTTPRingbufReserveFailures    int    `json:"http_ringbuf_reserve_failures,omitempty"`
-	TLSRingbufReserveFailures     int    `json:"tls_ringbuf_reserve_failures,omitempty"`
-	ExecRingbufReserveFailures    int    `json:"exec_ringbuf_reserve_failures,omitempty"`
-	ForkRingbufReserveFailures    int    `json:"fork_ringbuf_reserve_failures,omitempty"`
-	FSRingbufReserveFailures      int    `json:"fs_ringbuf_reserve_failures,omitempty"`
-	UDPSendmsgMultiIovecObserved  int    `json:"udp_sendmsg_multi_iovec_observed,omitempty"`
+	Version       int    `json:"version"`
+	SchemaVersion int    `json:"schema_version"`
+	Finished      string `json:"finished"`
+	KernelRelease string `json:"kernel_release,omitempty"`
+	ExecEvents    int    `json:"exec_events"`
+	TCPEvents     int    `json:"tcp_events"`
+	UDPEvents     int    `json:"udp_events"`
+	HTTPEvents    int    `json:"http_events"`
+	TLSEvents     int    `json:"tls_events,omitempty"`
+	// KTLSOffloadEvents counts setsockopt(fd, SOL_TLS, TLS_TX|TLS_RX, ...) calls
+	// observed during the run. Non-zero means at least one socket handed TLS
+	// encryption to the kernel; the userspace ClientHello SNI sniffer cannot
+	// resolve SNI on KTLS-offloaded sockets (kernel writes ciphertext while the
+	// app writes plaintext). See SECURITY.md (TLS / SNI capture caveats).
+	KTLSOffloadEvents             int `json:"ktls_offload_events,omitempty"`
+	KTLSRingbufReserveFailures    int `json:"ktls_ringbuf_reserve_failures,omitempty"`
+	ProcForkEvents                int `json:"proc_fork_events,omitempty"`
+	Connect4TupleUpdateFailures   int `json:"connect4_tuple_update_failures,omitempty"`
+	UDPRingbufReserveFailures     int `json:"udp_ringbuf_reserve_failures,omitempty"`
+	DNSRingbufReserveFailures     int `json:"dns_ringbuf_reserve_failures,omitempty"`
+	ConnectRingbufReserveFailures int `json:"connect_ringbuf_reserve_failures,omitempty"`
+	HTTPRingbufReserveFailures    int `json:"http_ringbuf_reserve_failures,omitempty"`
+	TLSRingbufReserveFailures     int `json:"tls_ringbuf_reserve_failures,omitempty"`
+	ExecRingbufReserveFailures    int `json:"exec_ringbuf_reserve_failures,omitempty"`
+	ForkRingbufReserveFailures    int `json:"fork_ringbuf_reserve_failures,omitempty"`
+	FSRingbufReserveFailures      int `json:"fs_ringbuf_reserve_failures,omitempty"`
+	UDPSendmsgMultiIovecObserved  int `json:"udp_sendmsg_multi_iovec_observed,omitempty"`
 	// SendmmsgMultiMessage counts NR_SENDMMSG calls with vlen>1 (mmsghdr vector
 	// length, distinct from per-message msg_iovlen). Messages 2..N are not
 	// introspected — non-zero quantifies the multi-message silent gap (BG-03).

@@ -294,6 +294,43 @@ func TestBuildDetectMarkdown_TLSConfidenceRowHiddenWhenNoTLS(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_KTLSKPIRowHiddenWhenZero(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (ktls)", OK: true}},
+		ExecTotal:         0,
+		TCPTotal:          0,
+		KTLSOffloadTotal:  0,
+		PolicyCounts:      map[string]int{},
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "KTLS offload") {
+		t.Fatalf("KTLS row should be hidden when count is zero:\n%s", md)
+	}
+}
+
+func TestBuildDetectMarkdown_KTLSKPIRowShownAndNoteRendered(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (ktls)", OK: true}},
+		ExecTotal:         0,
+		TCPTotal:          3,
+		KTLSOffloadTotal:  2,
+		PolicyCounts:      map[string]int{"monitor": 3},
+		JSONLPath:         "/tmp/x.jsonl",
+		SeqFirst:          1,
+		SeqLast:           5,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"| **KTLS offload** | 2 sockets · SNI extraction not possible |",
+		"setsockopt(SOL_TLS, TLS_TX|TLS_RX)",
+		"cannot resolve SNI",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestTruncateExeForDigest(t *testing.T) {
 	long := strings.Repeat("a", execExeDigestMaxBytes+20)
 	out := TruncateExeForDigest(long)

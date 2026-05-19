@@ -280,6 +280,29 @@ type DenyEvent struct {
 	Sig       string `json:"sig,omitempty"`
 }
 
+// KTLSEvent is one JSONL record for a setsockopt(SOL_TLS, TLS_TX|TLS_RX)
+// call — the moment a process hands TLS encryption off to the kernel. After
+// this point the application writes plaintext while the kernel encrypts on the
+// wire, so the userspace ClientHello SNI sniffer in trace_tls_write.inc only
+// observes raw record fragments and cannot resolve SNI. The event lets the
+// digest call out KTLS-offloaded sockets as deliberately invisible to SNI
+// capture rather than silently producing low-confidence rows.
+type KTLSEvent struct {
+	Type      string `json:"type"` // "ktls_offload"
+	TS        string `json:"ts"`
+	Seq       uint64 `json:"seq"`
+	PID       uint32 `json:"pid"` // tgid (compat field name)
+	TGID      uint32 `json:"tgid"`
+	ThreadID  uint32 `json:"thread_id"`
+	Comm      string `json:"comm"`
+	FD        uint32 `json:"fd"`
+	Direction string `json:"direction"` // "tx" | "rx"
+	Sig       string `json:"sig,omitempty"`
+}
+
+// EventTypeKTLS is the JSONL discriminator for KTLSEvent.
+const EventTypeKTLS = "ktls_offload"
+
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
 type BPFAuditEvent struct {
 	Type     string `json:"type"` // "bpf_audit"

@@ -40,6 +40,8 @@ type runStats struct {
 	tlsConfidenceUnknownN           int
 	procForkN                       int
 	fsN                             int
+	ktlsN                           int
+	ktlsRingbufReserveFailuresN     int
 	connect4TupleUpdateFailuresN    int
 	udpRingbufReserveFailuresN      int
 	dnsRingbufReserveFailuresN      int
@@ -131,6 +133,30 @@ func (s *runStats) addFS() {
 	s.mu.Lock()
 	s.fsN++
 	s.mu.Unlock()
+}
+
+func (s *runStats) addKTLS() {
+	s.mu.Lock()
+	s.ktlsN++
+	s.mu.Unlock()
+}
+
+func (s *runStats) ktlsTotal() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ktlsN
+}
+
+func (s *runStats) setKTLSRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ktlsRingbufReserveFailuresN = n
+}
+
+func (s *runStats) ktlsRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ktlsRingbufReserveFailuresN
 }
 
 func (s *runStats) addPolicyLocked(cl policy.Class) {
@@ -557,6 +583,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		UDPEvents:                      s.udpN,
 		HTTPEvents:                     s.httpN,
 		TLSEvents:                      s.tlsN,
+		KTLSOffloadEvents:              s.ktlsN,
+		KTLSRingbufReserveFailures:     s.ktlsRingbufReserveFailuresN,
 		ProcForkEvents:                 s.procForkN,
 		Connect4TupleUpdateFailures:    s.connect4TupleUpdateFailuresN,
 		UDPRingbufReserveFailures:      s.udpRingbufReserveFailuresN,

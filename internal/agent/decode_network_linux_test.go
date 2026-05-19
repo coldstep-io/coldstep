@@ -41,6 +41,47 @@ func TestDecodeUDPSendEvent_tooShort(t *testing.T) {
 	}
 }
 
+func TestDecodeKTLSEvent(t *testing.T) {
+	raw := make([]byte, ktlsEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 500)
+	binary.LittleEndian.PutUint32(raw[4:8], 501)
+	copy(raw[8:24], []byte("openssl\x00"))
+	binary.LittleEndian.PutUint32(raw[24:28], 7)
+	raw[28] = 1 // tx
+
+	tgid, tid, fd, comm, dir, ok := decodeKTLSEvent(raw)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if tgid != 500 || tid != 501 || fd != 7 || dir != 1 {
+		t.Fatalf("got tgid=%d tid=%d fd=%d dir=%d", tgid, tid, fd, dir)
+	}
+	if commStr := string(bytes.TrimRight(comm[:], "\x00")); commStr != "openssl" {
+		t.Fatalf("comm %q", commStr)
+	}
+	if got := ktlsDirectionLabel(dir); got != "tx" {
+		t.Fatalf("ktlsDirectionLabel(1)=%q want tx", got)
+	}
+
+	raw[28] = 2
+	if _, _, _, _, dir, ok = decodeKTLSEvent(raw); !ok {
+		t.Fatal("expected ok after direction=rx")
+	}
+	if got := ktlsDirectionLabel(dir); got != "rx" {
+		t.Fatalf("ktlsDirectionLabel(2)=%q want rx", got)
+	}
+	if got := ktlsDirectionLabel(99); got != "unknown" {
+		t.Fatalf("ktlsDirectionLabel(99)=%q want unknown", got)
+	}
+}
+
+func TestDecodeKTLSEvent_tooShort(t *testing.T) {
+	_, _, _, _, _, ok := decodeKTLSEvent(make([]byte, ktlsEventWireSize-1))
+	if ok {
+		t.Fatal("expected false")
+	}
+}
+
 func TestDecodeHTTPSniffEvent(t *testing.T) {
 	raw := make([]byte, httpSniffEventWireSize)
 	binary.LittleEndian.PutUint32(raw[0:4], 200)
