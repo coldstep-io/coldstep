@@ -21,7 +21,7 @@ import (
 // Env var names recognized by LoadFromEnv. Centralized here so callers
 // (and docs) reference a single source of truth.
 const (
-	EnvOTXAPIKey        = "COLDSTEP_OTX_API_KEY"
+	EnvOTXAPIKey        = "COLDSTEP_OTX_API_KEY" // #nosec G101 -- env var name, not a credential value
 	EnvVirusTotalAPIKey = "COLDSTEP_VIRUSTOTAL_API_KEY"
 	EnvPassiveDNSServer = "COLDSTEP_PASSIVEDNS_SERVER"
 )
