@@ -61,6 +61,8 @@ bash scripts/agent-linux-verify.sh    # wraps both, writes .coldstep-verify-last
 
 Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`). On Windows: `scripts\agent-linux-verify.cmd` or the `.ps1` / `.py` siblings.
 
+**Kernel coupling:** BTF availability is required (kernel 5.5+, `CONFIG_DEBUG_INFO_BTF=y`). `internal/agent.probeBTF` runs at startup and fails Main with a named error if `/sys/kernel/btf/vmlinux` is missing; the synthetic `btf` row in `.coldstep-telemetry.json` carries the positive signal on the happy path. The `coldstep-kernel-matrix.yml` workflow runs weekly to catch regressions across the 5.15 / 6.1 / 6.6 / 6.8 row set. Known kernel-version sensitivities: `lsm/socket_sendpage` was removed in 6.5 and is handled by the BTF pre-check in `internal/bpf/defend/loader.go` (`LoadDefendObjectsForKernel` strips the LSM section when the hook is absent).
+
 ## Architecture
 
 ### Three Go binaries, one composite action
