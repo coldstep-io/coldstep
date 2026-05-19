@@ -136,6 +136,7 @@ const (
 	denyProtoUDP                = 2
 	denyReasonDstNotAllowlisted = 1
 	linuxAFInet                 = 2
+	linuxAFInet6                = 10
 
 	// BPF↔Go wire-format size contract. Each constant is paired with a
 	// `_Static_assert(sizeof(struct X) == N)` in the matching bpf/*.c file

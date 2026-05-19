@@ -128,6 +128,7 @@ func buildDigestInput(
 		TLSReaderErrors:                sectionState.tlsReadErrors + sectionState.tlsDecodeErrors,
 		DefendMode:                     digestDefendLabel(cfg, defendState),
 		DefendAllowlistSize:            defendState.allowlistSize,
+		DefendIPv6AllowlistSize:        defendState.allowlistIPv6Size,
 		DefendDenyCount:                defendState.denyCount,
 		DefendDenyReserveFailures:      defendState.denyReserveFailures,
 		DefendFirstDeny:                defendState.firstDeny,
