@@ -151,6 +151,7 @@ const (
 	fsEventWireSize        = 284 // 4+4+16+1+path[256]+_pad[3] → 284
 	denyEventWireSize      = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
 	bpfAuditEventWireSize  = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
+	ktlsEventWireSize      = 32  // 4(tgid)+4(tid)+comm[16]+4(fd)+1(direction)+_pad[3] → 32
 	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
 	dnsSniffMaxPayload          = 4096                   // DNS_SNIFF_MAX in trace_dns.bpf.c
 	dnsSniffEventWireSizeLegacy = 4 + dnsSniffMaxPayload // pre-is_tcp layout (__u32 len + data[])

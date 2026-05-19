@@ -15,6 +15,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
+	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 )
 
 var removeMemlockRlimit = rlimit.RemoveMemlock
@@ -97,6 +98,33 @@ func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf
 	}
 
 	return connRd, udpRd, httpRd, tlsRd, objs, lnk, tlsAgentCfgFailed, nil
+}
+
+// startKTLSTrace loads trace_ktls.bpf.c and attaches the setsockopt(SOL_TLS)
+// filter on raw_tp/sys_enter. Returns the ringbuf reader, objects (for the
+// reserve-failure counter), and the attach link. Closes intermediates on error.
+func startKTLSTrace() (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk link.Link, err error) {
+	objs = new(tracektls.TracektlsObjects)
+	if err = tracektls.LoadTracektlsObjects(objs, nil); err != nil {
+		return nil, nil, nil, err
+	}
+
+	lnk, err = link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "sys_enter",
+		Program: objs.HandleRawSysEnterKtls,
+	})
+	if err != nil {
+		_ = objs.Close()
+		return nil, nil, nil, err
+	}
+
+	rd, err = ringbuf.NewReader(objs.KtlsEvents)
+	if err != nil {
+		_ = lnk.Close()
+		_ = objs.Close()
+		return nil, nil, nil, err
+	}
+	return rd, objs, lnk, nil
 }
 
 func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {

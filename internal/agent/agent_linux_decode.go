@@ -130,6 +130,33 @@ func decodeBPFAuditEvent(raw []byte) (tgid, tid uint32, comm [16]byte, cmd uint3
 	return tgid, tid, comm, cmd, true
 }
 
+// decodeKTLSEvent parses struct ktls_event { __u32 tgid; __u32 tid; __u8 comm[16];
+// __u32 fd; __u8 direction; __u8 _pad[3]; } from trace_ktls.bpf.c. Layout:
+//
+//	tgid(0-3) tid(4-7) comm[16](8-23) fd(24-27) direction(28) _pad[3](29-31)
+func decodeKTLSEvent(raw []byte) (tgid, tid, fd uint32, comm [16]byte, direction uint8, ok bool) {
+	if len(raw) < ktlsEventWireSize {
+		return 0, 0, 0, [16]byte{}, 0, false
+	}
+	tgid = binary.LittleEndian.Uint32(raw[0:4])
+	tid = binary.LittleEndian.Uint32(raw[4:8])
+	copy(comm[:], raw[8:24])
+	fd = binary.LittleEndian.Uint32(raw[24:28])
+	direction = raw[28]
+	return tgid, tid, fd, comm, direction, true
+}
+
+func ktlsDirectionLabel(d uint8) string {
+	switch d {
+	case 1:
+		return "tx"
+	case 2:
+		return "rx"
+	default:
+		return "unknown"
+	}
+}
+
 func decodeDenyEvent(raw []byte) (tgid, tid uint32, comm [16]byte, protocol uint8, reason uint8, af uint8,
 	daddr16 [16]byte, dport uint16, ok bool) {
 	if len(raw) < denyEventWireSize {

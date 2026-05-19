@@ -48,6 +48,7 @@ func TestNetworkAndAuditWireSizes(t *testing.T) {
 		{"bpf_audit_event", uintptr(bpfAuditEventWireSize), uintptr(4 + 4 + 4 + 16)},
 		{"dns_sniff_event_legacy", uintptr(dnsSniffEventWireSizeLegacy), uintptr(4 + dnsSniffMaxPayload)},
 		{"dns_sniff_event", uintptr(dnsSniffEventWireSize), uintptr(4 + 1 + 3 + dnsSniffMaxPayload)},
+		{"ktls_event", uintptr(ktlsEventWireSize), uintptr(4 + 4 + 16 + 4 + 1 + 3)},
 	}
 	for _, c := range cases {
 		if c.got != c.expected {
