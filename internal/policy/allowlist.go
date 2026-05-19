@@ -248,3 +248,10 @@ func normalizeAllowlistDomains(domains []string) []string {
 	}
 	return out
 }
+
+// NormalizeDomainsFromRaw splits raw on commas/ASCII whitespace, lowercases,
+// trims, and dedupes — the canonical entry point for COLDSTEP_ALLOWED_DOMAINS
+// and any other comma/space-separated domain list.
+func NormalizeDomainsFromRaw(raw string) []string {
+	return normalizeAllowlistDomains(splitFields(raw))
+}

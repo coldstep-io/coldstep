@@ -20,12 +20,6 @@ import (
 	"github.com/cilium/ebpf"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/coldstep-io/coldstep/internal/bpf/defend"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -150,98 +144,6 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	return n
 }
 
-func readDenyReserveFailureCount(objs *defend.DefendObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.DenyReserveFailures, "readDenyReserveFailureCount")
-}
-
-func readConnect4TupleUpdateFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.Connect4TupleUpdateFailures, "readConnect4TupleUpdateFailureCount")
-}
-
-func readUDPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.UdpRingbufReserveFailures, "readUDPRingbufReserveFailureCount")
-}
-
-func readDNSRingbufReserveFailureCount(objs *tracedns.TracednsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.DnsRingbufReserveFailures, "readDNSRingbufReserveFailureCount")
-}
-
-func readConnectRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.ConnectRingbufReserveFailures, "readConnectRingbufReserveFailureCount")
-}
-
-func readBPFAuditRingbufReserveFailureCount(objs *tracebpfaudit.TracebpfauditObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.BpfAuditReserveFailures, "readBPFAuditRingbufReserveFailureCount")
-}
-
-func readHTTPRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.HttpRingbufReserveFailures, "readHTTPRingbufReserveFailureCount")
-}
-
-func readTLSRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.TlsRingbufReserveFailures, "readTLSRingbufReserveFailureCount")
-}
-
-func readUDPSendmsgMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.UdpSendmsgMultiIovecObserved, "readUDPSendmsgMultiIovecObservedCount")
-}
-
-func readSendmmsgMultiMessageCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.SendmmsgMultiMessageObserved, "readSendmmsgMultiMessageCount")
-}
-
-// readSendmmsgUnobservedExtraCount sums BG-03 Gap 3 per-message extra-message
-// dropped counts across CPUs. Distinct from readSendmmsgMultiMessageCount,
-// which counts CALLS with vlen > 1; this counter sums individual messages
-// beyond index SENDMMSG_EXTRA_MAX (7) that the unrolled loop did not reach.
-//
-// TODO: regenerate BPF stubs after building on Linux — references
-// `objs.SendmmsgUnobservedExtra` defined by `sendmmsg_unobserved_extra` map in
-// bpf/trace_connect.bpf.c, which bpf2go will surface during CI regeneration.
-func readSendmmsgUnobservedExtraCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.SendmmsgUnobservedExtra, "readSendmmsgUnobservedExtraCount")
-}
-
-func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.TlsWritevMultiIovecObserved, "readTLSWritevMultiIovecObservedCount")
-}
-
 // readPartialEgressCounts returns the BG-01 per-syscall partial-observe
 // counters (sendfile, splice, sendmmsg) summed across CPUs. Slots:
 //
@@ -250,13 +152,13 @@ func readTLSWritevMultiIovecObservedCount(objs *traceconnect.TraceconnectObjects
 //	2 = sendmmsg (first-message-only observed)
 //
 // Reads each slot independently because PERCPU_ARRAY Lookup is per-key.
-func readPartialEgressCounts(objs *traceconnect.TraceconnectObjects) (sendfile, splice, sendmmsg int) {
-	if objs == nil || objs.PartialEgressObserved == nil {
+func readPartialEgressCounts(m *ebpf.Map) (sendfile, splice, sendmmsg int) {
+	if m == nil {
 		return 0, 0, 0
 	}
 	read := func(key uint32, label string) int {
 		var vals []uint32
-		if err := objs.PartialEgressObserved.Lookup(&key, &vals); err != nil {
+		if err := m.Lookup(&key, &vals); err != nil {
 			if errors.Is(err, ebpf.ErrKeyNotExist) {
 				return 0
 			}
@@ -273,55 +175,6 @@ func readPartialEgressCounts(objs *traceconnect.TraceconnectObjects) (sendfile, 
 	splice = read(1, "readPartialEgressCounts(splice)")
 	sendmmsg = read(2, "readPartialEgressCounts(sendmmsg)")
 	return
-}
-
-func readIoUringSetupObservedCount(objs *traceconnect.TraceconnectObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.IoUringSetupObserved, "readIoUringSetupObservedCount")
-}
-
-func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.TcpDnsResponsesObserved, "readTCPDNSResponsesObservedCount")
-}
-
-func readTCPDNSSkippedShortReadCount(objs *tracedns.TracednsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32CounterMap(objs.TcpDnsSkippedShortRead, "readTCPDNSSkippedShortReadCount")
-}
-
-func readExecRingbufReserveFailureCount(objs *traceexec.TraceexecObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.ExecRingbufReserveFailures, "readExecRingbufReserveFailureCount")
-}
-
-func readForkRingbufReserveFailureCount(objs *tracefork.TraceforkObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.ForkRingbufReserveFailures, "readForkRingbufReserveFailureCount")
-}
-
-func readFSRingbufReserveFailureCount(objs *tracefs.TracefsObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.FsRingbufReserveFailures, "readFSRingbufReserveFailureCount")
-}
-
-func readLSMDenyReserveFailureCount(objs *defend.DefendObjects) int {
-	if objs == nil {
-		return 0
-	}
-	return readUint32PerCPUArraySum(objs.LsmDenyReserveFailures, "readLSMDenyReserveFailureCount")
 }
 
 // readIPv6ConnectObservedCount returns the per-CPU sum of the
@@ -402,98 +255,87 @@ func buildDefendAllowedPlan(mapName string, compiled policy.CompileResult, pol *
 	return plan, nil
 }
 
+// defendMapSet groups the four BPF maps loadDefendMapsForBackend programs,
+// plus the map-name strings used for diagnostics. cgroup and LSM backends
+// supply different *ebpf.Map field references; the load steps are identical.
+type defendMapSet struct {
+	cfgName, allowedName                        string
+	cfg, ignoredLPM, allowedLPM, allowedDomains *ebpf.Map
+}
+
+// loadDefendMapsForBackend programs BPF allowlist maps from compiled domain
+// resolutions + literal policy entries for a single defend backend.
+//
+// PR-G: allowed_ipv4 is a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP allowlist
+// entries (resolved domain IPs + literal /32s from --allowed-ips) are programmed
+// individually with prefixlen=32. Literal CIDR entries from --allowed-ips (e.g.
+// "10.0.0.0/8") are programmed once as a single LPM key covering the range.
+//
+// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are not
+// reflected. The agent resolves domains once during compileDefendAllowlist and
+// writes the resulting /32 set + literal CIDRs into the LPM trie here. If a
+// domain's A-record set changes after this point (DNS rotation, CDN edge
+// migration), the BPF allowlist still reflects the startup snapshot until the
+// next agent restart. Operators relying on DNS-backed domain rules should treat
+// the agent's lifetime as the freshness window for the allowlist and add literal
+// CIDRs / IPs for any destinations that need to survive DNS rotation. The
+// dns_cache map (populated by trace_dns.bpf.c at runtime) is consulted as a
+// fallback for reverse lookups in defend_policy.inc:dst_is_allowlisted, but the
+// primary LPM map is snapshot-only.
+func loadDefendMapsForBackend(maps defendMapSet, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
+	keyMode := uint32(0)
+	modeDefend := uint32(1)
+	if err := maps.cfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
+		return 0, 0, fmt.Errorf("load %s map: %w", maps.cfgName, err)
+	}
+	ignoredCount := 0
+	if pol != nil {
+		var err error
+		ignoredCount, err = loadIgnoredLPMMap(maps.ignoredLPM, pol.IgnoredIPv4Nets())
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	plan, err := buildDefendAllowedPlan(maps.allowedName, compiled, pol)
+	if err != nil {
+		return 0, 0, err
+	}
+	if err := loadAllowedLPMMap(maps.allowedLPM, plan); err != nil {
+		return 0, 0, err
+	}
+	if err := loadAllowedDomainsMap(maps.allowedDomains, pol); err != nil {
+		return 0, 0, err
+	}
+	slog.Info("allowlist loaded into BPF map", "map", maps.allowedName, "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
+	return plan.totalEntries, ignoredCount, nil
+}
+
 func loadLSMDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
 		return 0, 0, fmt.Errorf("defend objects are required for LSM defend mode")
 	}
-	keyMode := uint32(0)
-	modeDefend := uint32(1)
-	if err := objs.LsmDefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load lsm_defend_cfg map: %w", err)
-	}
-	ignoredCount := 0
-	if pol != nil {
-		var err error
-		ignoredCount, err = loadIgnoredLPMMap(objs.LsmIgnoredIpv4Lpm, pol.IgnoredIPv4Nets())
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-
-	plan, err := buildDefendAllowedPlan("lsm_allowed_ipv4", compiled, pol)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedLPMMap(objs.LsmAllowedIpv4, plan); err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
-		return 0, 0, err
-	}
-
-	// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are
-	// not reflected. The agent resolves domains once during compileDefendAllowlist
-	// and writes the resulting /32 set + literal CIDRs into the LPM trie here.
-	// If a domain's A-record set changes after this point (DNS rotation, CDN
-	// edge migration), the BPF allowlist still reflects the startup snapshot
-	// until the next agent restart. Operators relying on DNS-backed domain
-	// rules should treat the agent's lifetime as the freshness window for the
-	// allowlist and add literal CIDRs / IPs for any destinations that need to
-	// survive DNS rotation. The dns_cache map (populated by trace_dns.bpf.c at
-	// runtime) is consulted as a fallback for reverse lookups in
-	// defend_policy.inc:dst_is_allowlisted, but the primary LPM map is
-	// snapshot-only.
-	slog.Info("allowlist loaded into BPF map", "map", "lsm_allowed_ipv4", "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
-
-	return plan.totalEntries, ignoredCount, nil
+	return loadDefendMapsForBackend(defendMapSet{
+		cfgName:        "lsm_defend_cfg",
+		allowedName:    "lsm_allowed_ipv4",
+		cfg:            objs.LsmDefendCfg,
+		ignoredLPM:     objs.LsmIgnoredIpv4Lpm,
+		allowedLPM:     objs.LsmAllowedIpv4,
+		allowedDomains: objs.AllowedDomains,
+	}, compiled, pol)
 }
 
-// loadDefendMaps programs BPF allowlist maps from compiled domain resolutions + literal policy entries.
-//
-// PR-G: allowed_ipv4 is now a BPF_MAP_TYPE_LPM_TRIE (was HASH). Single-IP
-// allowlist entries (resolved domain IPs + literal /32s from --allowed-ips)
-// are still programmed individually but with prefixlen=32. Literal CIDR
-// entries from --allowed-ips (e.g. "10.0.0.0/8") are programmed once as a
-// single LPM key and cover every address inside the range.
 func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	if objs == nil {
 		return 0, 0, fmt.Errorf("defend objects are required for cgroup defend mode")
 	}
-	keyMode := uint32(0)
-	modeDefend := uint32(1)
-	if err := objs.DefendCfg.Update(&keyMode, &modeDefend, ebpf.UpdateAny); err != nil {
-		return 0, 0, fmt.Errorf("load defend_cfg map: %w", err)
-	}
-	ignoredCount := 0
-	if pol != nil {
-		var err error
-		ignoredCount, err = loadIgnoredLPMMap(objs.IgnoredIpv4Lpm, pol.IgnoredIPv4Nets())
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-
-	plan, err := buildDefendAllowedPlan("allowed_ipv4", compiled, pol)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedLPMMap(objs.AllowedIpv4, plan); err != nil {
-		return 0, 0, err
-	}
-
-	if err := loadAllowedDomainsMap(objs.AllowedDomains, pol); err != nil {
-		return 0, 0, err
-	}
-
-	// AUDIT(5h): allowlist is fixed-point at startup; runtime DNS changes are
-	// not reflected. See loadLSMDefendMaps for the full rationale — both
-	// loaders share the same compile-once / load-into-BPF lifecycle.
-	slog.Info("allowlist loaded into BPF map", "map", "allowed_ipv4", "ipv4_entries", plan.totalEntries, "ignored_cidrs", ignoredCount)
-
-	return plan.totalEntries, ignoredCount, nil
+	return loadDefendMapsForBackend(defendMapSet{
+		cfgName:        "defend_cfg",
+		allowedName:    "allowed_ipv4",
+		cfg:            objs.DefendCfg,
+		ignoredLPM:     objs.IgnoredIpv4Lpm,
+		allowedLPM:     objs.AllowedIpv4,
+		allowedDomains: objs.AllowedDomains,
+	}, compiled, pol)
 }
 
 // loadAllowedLPMMap programs the allowed_ipv4 LPM trie (PR-G).

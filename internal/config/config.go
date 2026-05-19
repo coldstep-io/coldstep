@@ -43,26 +43,6 @@ type Config struct {
 	SigningKey       string
 }
 
-func normalizeDomains(raw string) []string {
-	parts := strings.FieldsFunc(raw, func(r rune) bool {
-		return r == ',' || r == ' ' || r == '\n' || r == '\r' || r == '\t'
-	})
-	out := make([]string, 0, len(parts))
-	seen := make(map[string]struct{}, len(parts))
-	for _, part := range parts {
-		domain := strings.ToLower(strings.TrimSpace(part))
-		if domain == "" {
-			continue
-		}
-		if _, ok := seen[domain]; ok {
-			continue
-		}
-		seen[domain] = struct{}{}
-		out = append(out, domain)
-	}
-	return out
-}
-
 func defaultUnderWorkspace(rel string) string {
 	ws := strings.TrimSpace(os.Getenv("GITHUB_WORKSPACE"))
 	if ws == "" {
@@ -78,9 +58,6 @@ func LoadFromEnv() (Config, error) {
 	if rawLower == "" {
 		rawLower = string(ModeDetect)
 	}
-	if rawLower == "enforce" {
-		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
-	}
 	mode := Mode(rawLower)
 	if mode != ModeDetect && mode != ModeDefend {
 		return Config{}, fmt.Errorf("invalid CI_GUARD_MODE %q (use detect or defend)", raw)
@@ -93,7 +70,7 @@ func LoadFromEnv() (Config, error) {
 	if detectLog == "" {
 		detectLog = defaultUnderWorkspace(".coldstep-detect.md")
 	}
-	allowedDomains := normalizeDomains(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
+	allowedDomains := policy.NormalizeDomainsFromRaw(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
 	if mode == ModeDefend && len(allowedDomains) == 0 {
 		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
 	}
