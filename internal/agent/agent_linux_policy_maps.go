@@ -348,6 +348,22 @@ func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
 	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.Ipv6SendmsgObserved, "readIPv6SendmsgObservedCount"))
 }
 
+// readSendpageObservedCount returns the per-CPU sum of the sendpage_observed
+// counter populated by the lsm/socket_sendpage hook. The hook closes the
+// kernel-5.15 sendfile(2)/splice(2) egress gap (sock_sendpage path skips
+// cgroup/sendmsg4 and lsm/socket_sendmsg); non-zero values mean sendfile or
+// splice fired in defend mode and was gated against the IPv4 allowlist.
+// Returns 0 when the map is absent (stubs predate the regeneration on Linux
+// or LSM was disabled at load time).
+// TODO: remove the missing-map tolerance once defend objects are regenerated
+// on Linux with bpf/trace_lsm_defend_lsm.inc's sendpage_observed map.
+func readSendpageObservedCount(objs *defend.DefendObjects) uint32 {
+	if objs == nil {
+		return 0
+	}
+	return clampPerCPUSumToUint32(readUint32PerCPUArraySum(objs.SendpageObserved, "readSendpageObservedCount"))
+}
+
 // clampPerCPUSumToUint32 narrows the int sum returned by
 // readUint32PerCPUArraySum down to uint32 with explicit saturation. The
 // per-cpu values are uint32 but summed into an int across the CPU set;

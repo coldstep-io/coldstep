@@ -750,3 +750,90 @@ func TestBuildDetectMarkdown_IPv6Observed_ZeroIsClean(t *testing.T) {
 		t.Fatalf("IPv6 triage row must not appear when counters are zero:\n%s", md)
 	}
 }
+
+// TestBuildDetectMarkdown_SendpageObserved_DefendMode covers the
+// kernel-5.15 sendfile/splice gap closure: in defend mode, a non-zero
+// SendpageObserved counter must surface the ✅ gap-closed triage row and
+// the matching KPI cell inside Technical details.
+func TestBuildDetectMarkdown_SendpageObserved_DefendMode(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:        "defend",
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		SendpageObserved:  7,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"**Sendfile/splice (sock_sendpage)**",
+		"✅ **7** events gated by `lsm/socket_sendpage`",
+		"lsm/socket_sendpage events gated (sendfile/splice closed)",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_SendpageObserved_DetectMode confirms detect mode
+// renders the sendpage counter as informational (ℹ️) — the hook still
+// fires for visibility but it does not gate egress when defense is off.
+func TestBuildDetectMarkdown_SendpageObserved_DetectMode(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		SendpageObserved:  4,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"**Sendfile/splice (sock_sendpage)**",
+		"ℹ️ **4** events observed via `lsm/socket_sendpage`",
+		"**lsm/socket_sendpage events (sendfile/splice path)** | 4",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_SendpageObserved_ClosesPayloadGap covers the
+// coverage scope cell: when sendfile/splice partial-observe counters
+// fired but sendpage_observed > 0, the gap is closed and the cell stays
+// "✓ observed". Without sendpage, the cell flips to "⚠️ partial".
+func TestBuildDetectMarkdown_SendpageObserved_ClosesPayloadGap(t *testing.T) {
+	withSendpage := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		SendfileObserved:  2,
+		SpliceObserved:    1,
+		SendpageObserved:  3,
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(withSendpage, "Payloads beyond iov[0]: ✓ observed") {
+		t.Fatalf("sendpage_observed > 0 must mark payload coverage as ✓ observed:\n%s", withSendpage)
+	}
+	withoutSendpage := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		SendfileObserved:  2,
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(withoutSendpage, "Payloads beyond iov[0]: ⚠️ partial") {
+		t.Fatalf("missing partial-coverage cell when sendpage_observed = 0 and sendfile fired:\n%s", withoutSendpage)
+	}
+}
+
+// TestBuildDetectMarkdown_SendpageObserved_ZeroIsClean confirms the
+// sendpage triage and KPI rows only appear when the counter is non-zero.
+func TestBuildDetectMarkdown_SendpageObserved_ZeroIsClean(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "Sendfile/splice (sock_sendpage)") {
+		t.Fatalf("sendpage triage row must not appear when counter is zero:\n%s", md)
+	}
+	if strings.Contains(md, "lsm/socket_sendpage") {
+		t.Fatalf("sendpage KPI row must not appear when counter is zero:\n%s", md)
+	}
+}
