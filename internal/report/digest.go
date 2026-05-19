@@ -40,6 +40,15 @@ func droppedTotal(in DigestInput) int {
 	return t
 }
 
+// ipv6EgressObserved returns the total non-loopback IPv6 egress attempts
+// observed by the P0-1 Phase 1 cgroup/connect6 + cgroup/sendmsg6 hooks.
+// Non-zero means traffic bypassed the IPv4-only defend enforcement; in
+// detect mode that's a visibility gap (⚠️), in defend mode that's an
+// outright bypass (🚨).
+func ipv6EgressObserved(in DigestInput) uint32 {
+	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved
+}
+
 // verdictEmoji returns ✅ / ⚠️ / 🚨 for the headline. Mirrors the prior
 // blockquote badge logic but is now embedded directly in the `##` heading.
 func verdictEmoji(in DigestInput) string {
@@ -50,10 +59,17 @@ func verdictEmoji(in DigestInput) string {
 			break
 		}
 	}
+	// In defend mode, any observed IPv6 egress is a 🚨 — the IPv4-only
+	// cgroup/connect4+sendmsg4 path could not gate it, so traffic
+	// escaped enforcement entirely. In detect mode this is a ⚠️
+	// limitation rather than an alert (handled in the review check
+	// below).
+	defendIPv6Bypass := isBlockingDigestMode(in.DefendMode) && ipv6EgressObserved(in) > 0
 	alert := (!in.CanaryPipelineOK && in.CanaryFailCount > 0) ||
 		in.BPFHeartbeatFailures > 0 ||
 		in.BPFMapIntegrityFailures > 0 ||
-		(len(in.BPF) > 0 && !bpfOK)
+		(len(in.BPF) > 0 && !bpfOK) ||
+		defendIPv6Bypass
 	if alert {
 		return "🚨"
 	}
@@ -65,7 +81,8 @@ func verdictEmoji(in DigestInput) string {
 		in.Connect4TupleUpdateFailures > 0 ||
 		in.DefendDenyReserveFailures > 0 ||
 		droppedTotal(in) > 0 ||
-		in.IoUringSetupObserved > 0
+		in.IoUringSetupObserved > 0 ||
+		ipv6EgressObserved(in) > 0
 	if review {
 		return "⚠️"
 	}
@@ -196,6 +213,24 @@ func buildTriageRows(in DigestInput) [][2]string {
 		rows = append(rows, [2]string{"**Observability (partial / bypass-class)**", sanitizeCell(interp)})
 	}
 
+	// P0-1 Phase 1: surface IPv6 egress as a top-level triage row. In
+	// detect mode this is a ⚠️ limitation (IPv4-only visibility); in
+	// defend mode it's 🚨 (the IPv4-only allowlist could not gate the
+	// connection). Phase 2 will add IPv6 enforcement.
+	if n := ipv6EgressObserved(in); n > 0 {
+		badge := "⚠️"
+		suffix := "IPv6 enforcement not yet supported"
+		if isBlockingDigestMode(in.DefendMode) {
+			badge = "🚨"
+			suffix = "**defend allowlist is IPv4-only — traffic escaped enforcement**"
+		}
+		rows = append(rows, [2]string{
+			"**IPv6 egress detected**",
+			fmt.Sprintf("%s **%d** non-loopback IPv6 destinations (connect=%d sendmsg=%d) — %s",
+				badge, n, in.IPv6ConnectObserved, in.IPv6SendmsgObserved, suffix),
+		})
+	}
+
 	if rb := totalDetectRingbufReserveFailures(in); rb > 0 {
 		rows = append(rows, [2]string{"**Ringbuf reserve pressure (total)**", fmt.Sprintf("**%d** across detect-path channels", rb)})
 	}
@@ -275,6 +310,12 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	}
 	if in.IoUringSetupObserved > 0 {
 		fmt.Fprintf(b, "| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved)
+	}
+	if in.IPv6ConnectObserved > 0 {
+		fmt.Fprintf(b, "| **⚠️ ipv6 connect6 observed (defend is IPv4-only)** | %d |\n", in.IPv6ConnectObserved)
+	}
+	if in.IPv6SendmsgObserved > 0 {
+		fmt.Fprintf(b, "| **⚠️ ipv6 sendmsg6 observed (defend is IPv4-only)** | %d |\n", in.IPv6SendmsgObserved)
 	}
 
 	// --- processes ---
@@ -683,6 +724,13 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
+	}
+	if ipv6EgressObserved(in) > 0 {
+		if isBlockingDigestMode(in.DefendMode) {
+			b.WriteString("- **🚨 IPv6 egress** was observed by the `cgroup/connect6` and `cgroup/sendmsg6` observe-only hooks. coldstep defend currently enforces only IPv4 (`cgroup/connect4` and `cgroup/sendmsg4`), so these connections **escaped the allowlist entirely** — review which destinations were contacted and whether IPv4 fallbacks should be required.\n")
+		} else {
+			b.WriteString("- **⚠️ IPv6 egress** was observed by the `cgroup/connect6` and `cgroup/sendmsg6` observe-only hooks. coldstep is IPv4-only for now — Phase 1 (P0-1) records the attempts so visibility gaps are explicit; Phase 2 will add IPv6 enforcement.\n")
+		}
 	}
 	if in.TCPDNSSkippedShortRead > 0 {
 		b.WriteString("- **TCP DNS short reads** counts TCP `read(2)` returns shorter than 6 bytes on the traced DNS path (cannot validate the RFC 1035 length prefix plus DNS header); segmented large replies may increment this without full stream reassembly.\n")
