@@ -3,6 +3,7 @@ package report
 import (
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -1415,9 +1416,10 @@ func TestBuildDetectMarkdown_AllowlistTrust_WildcardRisk(t *testing.T) {
 	})
 	for _, needle := range []string{
 		"### Allowlist trust model",
-		"High-risk wildcards",
+		"High-risk wildcard domains in allowlist",
 		"`*.s3.amazonaws.com`",
 		"`*.cloudfront.net`",
+		"may match unintended hosts",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
@@ -1425,21 +1427,60 @@ func TestBuildDetectMarkdown_AllowlistTrust_WildcardRisk(t *testing.T) {
 	}
 }
 
-func TestBuildDetectMarkdown_AllowlistTrust_AgeInfo(t *testing.T) {
+func TestBuildDetectMarkdown_AllowlistTrust_StaleWarning(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
-		AllowlistAgeMinutes: 17.4,
-		MaxRowsPerSection:   50,
+		AllowlistCompileTime: time.Now().Add(-6 * time.Minute),
+		MaxRowsPerSection:    50,
 	})
-	if !strings.Contains(md, "ℹ️") || !strings.Contains(md, "17 minutes ago") {
-		t.Fatalf("expected age info note; got:\n%s", md)
+	for _, needle := range []string{
+		"⚠️",
+		"DNS allowlist may be stale",
+		"compiled 6 minutes ago",
+		"DNS TTLs may have expired",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in stale warning; got:\n%s", needle, md)
+		}
 	}
 
 	mdFresh := BuildDetectMarkdown(DigestInput{
-		AllowlistAgeMinutes: 2.0,
+		AllowlistCompileTime: time.Now().Add(-2 * time.Minute),
+		MaxRowsPerSection:    50,
+	})
+	if strings.Contains(mdFresh, "may be stale") {
+		t.Fatalf("should not surface TTL hint when allowlist is fresh; got:\n%s", mdFresh)
+	}
+
+	mdZero := BuildDetectMarkdown(DigestInput{
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(mdZero, "may be stale") {
+		t.Fatalf("should not surface TTL hint when AllowlistCompileTime is zero; got:\n%s", mdZero)
+	}
+}
+
+func TestBuildDetectMarkdown_AllowlistTrust_EntryCountNote(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:          "defend",
+		AllowlistEntryCount: 42,
 		MaxRowsPerSection:   50,
 	})
-	if strings.Contains(mdFresh, "minutes ago") {
-		t.Fatalf("should not surface TTL hint when allowlist is fresh; got:\n%s", mdFresh)
+	for _, needle := range []string{
+		"### Allowlist trust model",
+		"Allowlist: 42 IPv4 entries loaded at startup",
+		"fixed until restart",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in entry-count note; got:\n%s", needle, md)
+		}
+	}
+
+	mdDetect := BuildDetectMarkdown(DigestInput{
+		AllowlistEntryCount: 42,
+		MaxRowsPerSection:   50,
+	})
+	if strings.Contains(mdDetect, "IPv4 entries loaded at startup") {
+		t.Fatalf("entry-count note must be suppressed in detect mode; got:\n%s", mdDetect)
 	}
 }
 
