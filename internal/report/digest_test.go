@@ -1115,6 +1115,44 @@ func TestBuildDetectMarkdown_AllowlistTrust_DefendUnresolved(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_RingbufDropBadge_PerChannel asserts that every
+// detect-path ringbuf reserve failure counter individually flips the headline
+// badge to ⚠️. This is the H2 "silent loss must be visible" guarantee: any
+// channel losing events on its own is enough to override the otherwise-✅
+// verdict, with no other counters required.
+func TestBuildDetectMarkdown_RingbufDropBadge_PerChannel(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   DigestInput
+	}{
+		{"connect", DigestInput{ConnectRingbufReserveFailures: 1}},
+		{"udp", DigestInput{UDPRingbufReserveFailures: 1}},
+		{"dns", DigestInput{DNSRingbufReserveFailures: 1}},
+		{"http", DigestInput{HTTPRingbufReserveFailures: 1}},
+		{"tls", DigestInput{TLSRingbufReserveFailures: 1}},
+		{"exec", DigestInput{ExecRingbufReserveFailures: 1}},
+		{"fork", DigestInput{ForkRingbufReserveFailures: 1}},
+		{"fs", DigestInput{FSRingbufReserveFailures: 1}},
+		{"bpf_audit", DigestInput{BPFAuditRingbufReserveFailures: 1}},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			in := tc.in
+			in.BPF = []telemetry.BPFStatus{{Name: "syscalls", OK: true}}
+			md := BuildDetectMarkdown(in)
+			if !strings.Contains(md, "## ⚠️ coldstep — detect") {
+				t.Fatalf("expected ⚠️ header for %s channel; got:\n%s", tc.name, md)
+			}
+			if !strings.Contains(md, "**⚠️ Dropped events (ringbuf overflow)**") {
+				t.Fatalf("expected dropped-events KPI row for %s channel; got:\n%s", tc.name, md)
+			}
+		})
+	}
+}
+
 func TestBuildDetectMarkdown_RingbufDropKPIRow(t *testing.T) {
 	t.Parallel()
 	md := BuildDetectMarkdown(DigestInput{
@@ -1125,7 +1163,7 @@ func TestBuildDetectMarkdown_RingbufDropKPIRow(t *testing.T) {
 	for _, needle := range []string{
 		"## ⚠️ coldstep — detect",
 		"> ⚠️ Partial coverage — see Coverage block below.",
-		"| **⚠️ Ringbuf drops (detect-path total)** | 5 events dropped |",
+		"| **⚠️ Dropped events (ringbuf overflow)** | 5 |",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in digest:\n%s", needle, md)
@@ -1135,7 +1173,7 @@ func TestBuildDetectMarkdown_RingbufDropKPIRow(t *testing.T) {
 		BPF:       []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
 		ExecTotal: 1,
 	})
-	if strings.Contains(cleanMD, "Ringbuf drops (detect-path total)") {
+	if strings.Contains(cleanMD, "Dropped events (ringbuf overflow)") {
 		t.Fatalf("ringbuf drop row should be hidden when no drops; got:\n%s", cleanMD)
 	}
 }
