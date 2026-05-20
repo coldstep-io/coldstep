@@ -143,6 +143,15 @@ jobs:
 - `report: job-summary` (default): merge the digest into the Job Summary tab. Use `pr-comment`, `both`, or `none` for other surfaces.
 - `fail-on-error: true`: fail the step if agent **operational** readiness cannot be established (BPF/load), not merely on policy noise.
 
+### SNI extraction limits
+
+`tls_sni` parses the **ClientHello SNI** from cleartext bytes on the userspace-syscall write path; TLS is not decrypted. A SNI row may be missing or non-authoritative under these conditions:
+
+- **Fragmented ClientHello** (split across multiple `write(2)` / `writev(2)` calls): **handled** by inter-syscall reassembly plus a bounded `iov[1]` peek on the same `(tgid,fd)` for the supported syscall set. Heavy fragmentation across many small segments, or fragmentation on a syscall not in the supported set, may produce a `partial` SNI confidence row rather than a full match.
+- **KTLS offload** (kernel TLS, `setsockopt(SOL_TLS, …)`): encryption moves into the kernel after the upgrade; affected sockets surface as TCP connect events (destination IP + port) with no SNI. The digest counts these upgrades in a dedicated **KTLS offload** KPI row.
+- **TLS 1.3 Encrypted ClientHello (ECH):** only the **outer** (CDN/proxy) SNI is visible (e.g., `cloudflare-ech.com`); the **real** server name is encrypted and **cannot** be recovered by BPF inspection. Cross-reference DNS HTTPS records or app-level logs for the true destination.
+- **`io_uring` submissions** bypass per-syscall tracepoints. Default **`io-uring-disable: true`** blocks `io_uring_setup(2)` via sysctl and records the attempt; with that hardening off, ClientHello bytes submitted through io_uring will not produce a SNI row.
+
 ---
 
 ## Defend mode (optional)
