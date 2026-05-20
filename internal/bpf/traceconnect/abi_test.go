@@ -87,6 +87,9 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}{
 			{"tls_agent_cfg", 1},
 			{"canary_trigger", 8},
+			// P6 Phase 2: enhanced-profile peek toggle. Userspace writes
+			// the byte; BPF reads it to gate the optional SQE buffer peek.
+			{"io_uring_peek_cfg", 1},
 		}
 		for _, c := range cases {
 			ms, ok := spec.Maps[c.mapName]
@@ -122,6 +125,8 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			"tls_writev_multi_iovec_observed",
 			"io_uring_setup_observed",
 			"tcp_state_ringbuf_reserve_failures",
+			"io_uring_ringbuf_reserve_failures",
+			"io_uring_tls_hello_observed",
 		}
 		for _, name := range names {
 			ms, ok := spec.Maps[name]

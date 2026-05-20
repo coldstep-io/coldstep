@@ -512,7 +512,7 @@ func TestDecodeBPFAuditEvent_tooShort(t *testing.T) {
 }
 
 func TestDecodeIOUringSendEvent_roundTrip(t *testing.T) {
-	// Wire layout: ts(8) pid(4) fd(4) daddr(4) dport(2) op(1) _pad(1) comm(16).
+	// Wire layout: ts(8) pid(4) fd(4) daddr(4) dport(2) op(1) has_tls_hello(1) comm(16).
 	raw := make([]byte, ioUringSendEventWireSize)
 	binary.LittleEndian.PutUint64(raw[0:8], 1715000000000)
 	binary.LittleEndian.PutUint32(raw[8:12], 9001)
@@ -520,15 +520,18 @@ func TestDecodeIOUringSendEvent_roundTrip(t *testing.T) {
 	raw[16], raw[17], raw[18], raw[19] = 1, 2, 3, 4
 	binary.BigEndian.PutUint16(raw[20:22], 443)
 	raw[22] = 26 // IORING_OP_SEND
-	raw[23] = 0  // _pad
+	raw[23] = 0  // has_tls_hello = false
 	copy(raw[24:40], []byte("curl\x00"))
 
-	ts, pid, fd, daddr, dport, op, comm, ok := decodeIOUringSendEvent(raw)
+	ts, pid, fd, daddr, dport, op, hasTLS, comm, ok := decodeIOUringSendEvent(raw)
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
 	if ts != 1715000000000 || pid != 9001 || fd != 7 || dport != 443 || op != 26 {
 		t.Fatalf("got ts=%d pid=%d fd=%d dport=%d op=%d", ts, pid, fd, dport, op)
+	}
+	if hasTLS {
+		t.Fatalf("expected has_tls_hello=false on raw[23]=0, got true")
 	}
 	if daddr != [4]byte{1, 2, 3, 4} {
 		t.Fatalf("daddr %v", daddr)
@@ -541,8 +544,32 @@ func TestDecodeIOUringSendEvent_roundTrip(t *testing.T) {
 	}
 }
 
+func TestDecodeIOUringSendEvent_tlsHelloFlag(t *testing.T) {
+	// Same wire layout, but with the P6 Phase 2 has_tls_hello flag set.
+	raw := make([]byte, ioUringSendEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1715000000001)
+	binary.LittleEndian.PutUint32(raw[8:12], 9002)
+	binary.LittleEndian.PutUint32(raw[12:16], 8)
+	raw[16], raw[17], raw[18], raw[19] = 10, 0, 0, 1
+	binary.BigEndian.PutUint16(raw[20:22], 443)
+	raw[22] = 9 // IORING_OP_SENDMSG
+	raw[23] = 1 // has_tls_hello = true (enhanced peek matched)
+	copy(raw[24:40], []byte("curl\x00"))
+
+	_, _, _, _, _, op, hasTLS, _, ok := decodeIOUringSendEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if !hasTLS {
+		t.Fatalf("expected has_tls_hello=true on raw[23]=1, got false")
+	}
+	if got := ioUringOpName(op); got != "SENDMSG" {
+		t.Fatalf("ioUringOpName(9) = %q, want SENDMSG", got)
+	}
+}
+
 func TestDecodeIOUringSendEvent_tooShort(t *testing.T) {
-	_, _, _, _, _, _, _, ok := decodeIOUringSendEvent(make([]byte, ioUringSendEventWireSize-1))
+	_, _, _, _, _, _, _, _, ok := decodeIOUringSendEvent(make([]byte, ioUringSendEventWireSize-1))
 	if ok {
 		t.Fatal("expected ok=false for short input")
 	}

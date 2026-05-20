@@ -143,7 +143,11 @@ type Summary struct {
 	IoUringSendTotal int `json:"io_uring_send_total,omitempty"`
 	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
 	// io_uring_events channel (telemetry pressure on the io_uring probe).
-	IoUringRingbufReserveFailures  int `json:"io_uring_ringbuf_reserve_failures,omitempty"`
+	IoUringRingbufReserveFailures int `json:"io_uring_ringbuf_reserve_failures,omitempty"`
+	// IoUringTLSHelloObserved counts io_uring SQE submissions whose user
+	// buffer prefix matched the TLS ClientHello record signature (P6 Phase 2,
+	// enhanced profile only). Always 0 outside COLDSTEP_DETECT_PROFILE=enhanced.
+	IoUringTLSHelloObserved        int `json:"io_uring_tls_hello_observed,omitempty"`
 	TCPDNSResponsesObserved        int `json:"tcp_dns_responses_observed,omitempty"`
 	TCPDNSSkippedShortRead         int `json:"tcp_dns_skipped_short_read,omitempty"`
 	BPFAuditEvents                 int `json:"bpf_audit_events,omitempty"`

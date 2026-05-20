@@ -68,6 +68,7 @@ type runStats struct {
 	sendpageObservedN               uint32
 	ioUringSetupObservedN           int
 	ioUringSendN                    int
+	ioUringTLSHelloN                int
 	ioUringRingbufReserveFailuresN  int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
@@ -503,6 +504,18 @@ func (s *runStats) ioUringSendTotal() int {
 	return s.ioUringSendN
 }
 
+func (s *runStats) ioUringTLSHelloObserved() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringTLSHelloN
+}
+
+func (s *runStats) setIoUringTLSHelloObserved(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringTLSHelloN = n
+}
+
 func (s *runStats) setIoUringRingbufReserveFailures(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -708,6 +721,7 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		IoUringSendTotal:               s.ioUringSendN,
 		IoUringRingbufReserveFailures:  s.ioUringRingbufReserveFailuresN,
+		IoUringTLSHelloObserved:        s.ioUringTLSHelloN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
 		BPFAuditEvents:                 s.bpfAuditN,
