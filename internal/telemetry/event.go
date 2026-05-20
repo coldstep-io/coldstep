@@ -71,6 +71,17 @@ type MetaEvent struct {
 	// that environment. Population is the action layer's job; the field is
 	// pre-wired here so consumers can rely on it before that lands.
 	RunnerHasIPv6 bool `json:"runner_has_ipv6,omitempty"`
+	// RunnerEnv classifies the runner environment as observed from
+	// /proc/1/cgroup at agent startup (H13). Possible values:
+	//   - "dind"     : the cgroup path contains a docker marker — the agent
+	//                  is running inside Docker-in-Docker; inner-container
+	//                  traffic is not observable from the outer cgroup.
+	//   - "unknown"  : /proc/1/cgroup could not be read.
+	//   - "" (omitted): standard runner posture (no docker markers).
+	// The field is omitempty so a standard runner produces no key in the
+	// MetaEvent JSON — present-with-value means the heuristic actively
+	// classified the run as DinD or unreadable.
+	RunnerEnv string `json:"runner_env,omitempty"`
 	// DroppedEvents counts ringbuffer reserve failures per event type at shutdown.
 	// Non-zero values indicate silent event loss during the run. Keys are the BPF
 	// counter names minus the `_ringbuf_reserve_failures` suffix (e.g. "connect",

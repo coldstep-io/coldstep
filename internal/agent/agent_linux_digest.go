@@ -152,6 +152,7 @@ func buildDigestInput(
 		DetectProfile:                  cfg.DetectProfile,
 		BPF:                            bpfSt,
 		RunnerHasIPv6:                  cfg.RunnerHasIPv6,
+		RunnerEnv:                      stats.snapshotRunnerEnv(),
 		ExecTotal:                      execN,
 		TCPTotal:                       tcpN,
 		UDPTotal:                       udpN,

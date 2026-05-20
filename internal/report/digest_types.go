@@ -125,6 +125,13 @@ type DigestInput struct {
 	// loaded (today: detect mode), surfacing the partial observation in the
 	// headline rather than hiding it behind an apparently clean run.
 	RunnerHasIPv6 bool
+	// RunnerEnv mirrors telemetry.MetaEvent.RunnerEnv — "dind", "unknown", or
+	// "" (standard / unset). When "dind", the digest renders a ⚠️ box naming
+	// the visibility gap: inner-container traffic from a Docker-in-Docker
+	// sidecar is not observable from the outer runner cgroup namespace.
+	// Detection runs in the agent (H13); the field is informational only and
+	// does not feed the headline verdict.
+	RunnerEnv string
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
 	TLSSNIGate                                         bool

@@ -1111,6 +1111,19 @@ func writeFooter(b *strings.Builder, in DigestInput) {
 	fmt.Fprintf(b, "> Full event log: `%s`\n", sanitizeCell(path))
 }
 
+// writeRunnerEnvWarning renders the H13 ⚠️ Docker-in-Docker box above the
+// fold when the agent's startup probe of /proc/1/cgroup classified the runner
+// as DinD. The box is informational only — coldstep observes the outer
+// runner's cgroup namespace; traffic from inner containers (separate cgroup
+// namespace, separate /proc) is not captured by the BPF hooks attached here.
+// Other RunnerEnv values ("standard", "unknown", "") render nothing.
+func writeRunnerEnvWarning(b *strings.Builder, in DigestInput) {
+	if in.RunnerEnv != "dind" {
+		return
+	}
+	b.WriteString("> ⚠️ **Docker-in-Docker detected** — inner container traffic not observed by coldstep.\n\n")
+}
+
 // writeAllowlistTrust emits P1-1 / H9 (DNS Allowlist Trust Model hardening)
 // surface: unresolved allowlist domains (defend-mode warning), high-risk
 // wildcard CDN entries, a TTL-staleness warning when the compile is more than
@@ -1208,6 +1221,7 @@ func BuildDetectMarkdown(in DigestInput) string {
 
 	var b strings.Builder
 	writeHeader(&b, in)
+	writeRunnerEnvWarning(&b, in)
 	writeCompactKPI(&b, in)
 	writeCoverage(&b, in)
 	writeTopDestinations(&b, in)

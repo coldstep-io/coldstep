@@ -372,6 +372,35 @@ func TestBuildDetectMarkdown_RunnerHasIPv6_DowngradesVerdict(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_RunnerEnv_DinDBox verifies the H13 ⚠️ DinD warning
+// box renders only when RunnerEnv is "dind". "standard", "unknown", and the
+// zero value all suppress the box.
+func TestBuildDetectMarkdown_RunnerEnv_DinDBox(t *testing.T) {
+	t.Parallel()
+
+	const dindLine = "> ⚠️ **Docker-in-Docker detected** — inner container traffic not observed by coldstep."
+
+	dind := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal: 1,
+		RunnerEnv: "dind",
+	})
+	if !strings.Contains(dind, dindLine) {
+		t.Fatalf("RunnerEnv=dind should surface the warning box:\n%s", dind)
+	}
+
+	for _, env := range []string{"", "standard", "unknown"} {
+		out := BuildDetectMarkdown(DigestInput{
+			BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+			ExecTotal: 1,
+			RunnerEnv: env,
+		})
+		if strings.Contains(out, dindLine) {
+			t.Fatalf("RunnerEnv=%q must NOT render the DinD warning box:\n%s", env, out)
+		}
+	}
+}
+
 // TestBuildDetectMarkdown_CoverageScopeTable_IoUringRow covers the io_uring
 // row in the Coverage scope table: probe loaded → "⚠ partial"; probe absent
 // or attach failed → "✗ not loaded". The enhanced profile adds a TLS peek

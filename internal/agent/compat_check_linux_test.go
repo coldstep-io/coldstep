@@ -157,3 +157,56 @@ func hasCompatCode(ws []telemetry.CompatWarning, code string) bool {
 	}
 	return false
 }
+
+// TestDetectRunnerEnv_DockerCgroup verifies that /proc/1/cgroup contents
+// containing a "docker" segment in the cgroup path classify as "dind".
+// Both legacy v1 hierarchies (`12:devices:/docker/<id>`) and unified v2
+// (`0::/docker/<id>/...`) should match.
+func TestDetectRunnerEnv_DockerCgroup(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"v1 devices controller", "12:devices:/docker/abc123def456\n"},
+		{"v2 unified hierarchy", "0::/docker/abc123def456/init.scope\n"},
+		{"mixed v1 + v2", "12:devices:/\n0::/docker/abc/runner.scope\n"},
+		{"docker case insensitive", "0::/Docker/abc\n"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyRunnerEnv(tc.in)
+			if got != RunnerEnvDinD {
+				t.Fatalf("classifyRunnerEnv(%q) = %q, want %q", tc.in, got, RunnerEnvDinD)
+			}
+		})
+	}
+}
+
+// TestDetectRunnerEnv_StandardCgroup verifies that a cgroup file with no
+// docker markers classifies as "standard". Typical hosted Ubuntu runner
+// content (root cgroup, init.scope, system slice non-docker) all match.
+func TestDetectRunnerEnv_StandardCgroup(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		in   string
+	}{
+		{"root only", "0::/\n"},
+		{"init scope", "0::/init.scope\n"},
+		{"system slice non-docker", "0::/system.slice/snapd.service\n"},
+		{"hosted runner shape", "0::/init.scope\n12:devices:/\n"},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := classifyRunnerEnv(tc.in)
+			if got != RunnerEnvStandard {
+				t.Fatalf("classifyRunnerEnv(%q) = %q, want %q", tc.in, got, RunnerEnvStandard)
+			}
+		})
+	}
+}

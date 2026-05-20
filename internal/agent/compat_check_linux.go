@@ -20,6 +20,55 @@ const (
 	CompatCodeContainerCgroupDetection = "container_cgroup_detection_failed"
 )
 
+// RunnerEnv* classify the agent's runner environment for the MetaEvent
+// runner_env field. Kept stable for downstream telemetry consumers.
+const (
+	RunnerEnvStandard = "standard"
+	RunnerEnvDinD     = "dind"
+	RunnerEnvUnknown  = "unknown"
+)
+
+// DetectRunnerEnv classifies the agent's runtime environment by reading
+// /proc/1/cgroup. The heuristic is intentionally conservative:
+//   - any line whose cgroup path segment contains "docker" (case-insensitive)
+//     → RunnerEnvDinD (Docker-in-Docker — inner-container traffic is not
+//     observable from the outer runner cgroup namespace).
+//   - file exists with no docker markers → RunnerEnvStandard.
+//   - file missing / unreadable → RunnerEnvUnknown.
+//
+// A false negative is acceptable (the ⚠️ surfaced in the digest is purely
+// informational); a false positive is also acceptable for the same reason.
+func DetectRunnerEnv() string {
+	content, err := readProc1Cgroup()
+	if err != nil {
+		return RunnerEnvUnknown
+	}
+	return classifyRunnerEnv(content)
+}
+
+// classifyRunnerEnv is the pure function behind DetectRunnerEnv — split out
+// so unit tests can feed synthetic /proc/1/cgroup content without depending
+// on the real file. Matches "docker" inside the cgroup path segment (parts[2]
+// of each `hierarchy_id:controllers:path` line), not the controller list, so
+// e.g. `12:devices:/docker/abc` and `0::/docker/abc/init.scope` both classify
+// as DinD.
+func classifyRunnerEnv(procCgroup string) string {
+	for _, line := range strings.Split(procCgroup, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		parts := strings.SplitN(line, ":", 3)
+		if len(parts) < 3 {
+			continue
+		}
+		if strings.Contains(strings.ToLower(parts[2]), "docker") {
+			return RunnerEnvDinD
+		}
+	}
+	return RunnerEnvStandard
+}
+
 // deepCgroupNestingThreshold is the depth at which /proc/1/cgroup paths
 // are flagged. Hosted Ubuntu runners typically show depth 1-2; sidecars
 // and DinD push the parent path deeper.

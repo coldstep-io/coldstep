@@ -96,6 +96,12 @@ type runStats struct {
 	// dstDomainCounts maps observed FQDN → connection-event count across TCP +
 	// UDP egress (P1-1 6e). Empty FQDNs are ignored.
 	dstDomainCounts map[string]int
+
+	// runnerEnv mirrors the value DetectRunnerEnv() produced at agent startup
+	// (H13). Set once in agent.Run and read at shutdown by buildDigestInput
+	// to surface the ⚠️ DinD warning box in the digest. Empty/standard values
+	// produce no extra surface.
+	runnerEnv string
 }
 
 func newRunStats() *runStats {
@@ -147,6 +153,21 @@ func (s *runStats) addFS() {
 	s.mu.Lock()
 	s.fsN++
 	s.mu.Unlock()
+}
+
+// setRunnerEnv records the H13 runner-env classification at agent startup so
+// the digest can render the ⚠️ DinD warning box later. Called once before any
+// event readers start.
+func (s *runStats) setRunnerEnv(env string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.runnerEnv = env
+}
+
+func (s *runStats) snapshotRunnerEnv() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.runnerEnv
 }
 
 func (s *runStats) addKTLS() {
