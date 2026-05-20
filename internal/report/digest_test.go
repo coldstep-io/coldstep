@@ -1593,6 +1593,50 @@ func TestBuildDetectMarkdown_DomainContactCounts_HiddenWhenEmpty(t *testing.T) {
 	}
 }
 
+// H10 / DNS-6e: every allowlist domain must appear in the cross-reference
+// table under defend mode; entries observed at least once carry their count,
+// entries with zero observations carry the trim-candidate note so operators
+// can shrink the allowlist between runs.
+func TestBuildDetectMarkdown_AllowlistDomainContactSummary(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		DefendMode:       "defend",
+		AllowlistDomains: []string{"api.github.com", "registry.npmjs.org", "unused.example.com"},
+		DomainContactCounts: map[string]int{
+			"api.github.com":     7,
+			"registry.npmjs.org": 3,
+			// unused.example.com has no contacts; treated as a trim candidate.
+		},
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"### Allowlist trust model",
+		"Allowlist domain contact summary",
+		"`api.github.com`",
+		"`registry.npmjs.org`",
+		"`unused.example.com`",
+		"no contacts observed — consider removing from allowlist",
+		"1 unused entry (trim candidates)",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+// H10: in detect mode there is no allowlist to enforce against, so the
+// cross-reference table must remain hidden even when AllowlistDomains is
+// non-empty (defensive — buildDigestInput won't normally populate this list
+// outside defend mode, but the renderer is the last line of defence).
+func TestBuildDetectMarkdown_AllowlistDomainContactSummary_HiddenInDetect(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		AllowlistDomains:  []string{"api.github.com"},
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "Allowlist domain contact summary") {
+		t.Fatalf("cross-ref table must be suppressed outside defend mode; got:\n%s", md)
+	}
+}
+
 // TestBuildDetectMarkdown_KTLSBucket exercises the P4 wiring: a TLSDigestRow
 // whose Confidence was forced to unknown by the readTLSRing KTLS override
 // (ConfidenceReason="ktls") must surface in three places in the digest:

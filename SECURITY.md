@@ -78,6 +78,18 @@ Coldstep’s contract has three layers:
 
 Both are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
 
+### File integrity
+
+Coldstep ships two distinct integrity surfaces for its on-disk artifacts. Pick the right tool for the trust level your pipeline needs:
+
+| Surface | Artifact | Guarantee | Notes |
+| ------- | -------- | --------- | ----- |
+| **JSONL signing** (`signing-key`) | `.coldstep-events.jsonl` | **Strong.** Each JSONL line is HMAC-signed with the supplied key; downstream replay rejects lines whose `sig` field does not verify. | Recommended for any workflow that gates merges, promotions, or releases on coldstep output. The key never appears in the runner image — supply it via secrets. |
+| **Events file SHA-256** (`MetaEvent.events_file_sha256`) | `.coldstep-events.jsonl` | **Tamper-evidence hint.** The agent's shutdown `MetaEvent` line carries the SHA-256 of every preceding line, hex-encoded. A consumer can recompute the digest over the bytes ahead of that line and compare. | Detects post-run modification by anything that does not also rewrite the shutdown meta. Not a substitute for signing — a malicious step that can rewrite the JSONL can also rewrite the meta line. |
+| **Digest hash marker** | `.coldstep-detect.md` | **Tamper-evidence hint.** The `coldstep-action stop` step appends `<!-- coldstep-digest-sha256: <hex> -->` as the final line of the digest after computing SHA-256 over the agent-written content. | Lets consumers downstream of the Job Summary / PR comment verify the digest body has not been edited in transit. Same caveat as above: not cryptographic, hint-only. |
+
+Hash markers are intentionally placed **inside the artifact** so they survive copy-paste into PR comments, issue bodies, and email — wherever the digest travels, the hash travels with it.
+
 ### Residual risk (honest scope)
 
 No userland agent can promise **complete** observation of every kernel path on every kernel revision. Consumers needing **audit-grade non-repudiation** must combine Coldstep with **organizational controls** (locked-down workflows, secrets policies, optional additional LSM / host controls outside this project).

@@ -255,7 +255,8 @@ func buildDigestInput(
 		in.SeqFirst = 0
 	}
 
-	compileTime, _, unresolved, wildcardRisk := stats.allowlistSnapshot()
+	compileTime, _, domains, unresolved, wildcardRisk := stats.allowlistSnapshot()
+	in.AllowlistDomains = domains
 	in.UnresolvedAllowlistDomains = unresolved
 	in.WildcardRiskDomains = wildcardRisk
 	in.AllowlistCompileTime = compileTime

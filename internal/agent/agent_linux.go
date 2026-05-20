@@ -9,9 +9,13 @@ package agent
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
 	"os/signal"
 	"strings"
 	"sync"
@@ -144,6 +148,17 @@ func Run(ctx context.Context, cfg config.Config) error {
 				slog.Warn("build shutdown meta", "err", err)
 			} else {
 				shutdownMeta.DroppedEvents = buildDroppedEventsMap(stats, defendState)
+				// H11: SHA-256 of the JSONL file before this MetaEvent gets
+				// appended so the hash covers every preceding event line.
+				// Tamper-evidence only — JSONL signing remains the strong
+				// guarantee. Best-effort: log a warning on hash failure and
+				// continue writing the meta (the field stays empty rather
+				// than blocking the shutdown record).
+				if sum, herr := sha256File(cfg.EventsLogPath); herr != nil {
+					slog.Warn("events file sha256", "err", herr)
+				} else {
+					shutdownMeta.EventsFileSHA256 = sum
+				}
 				if err := telemetry.AppendJSONL(cfg.EventsLogPath, shutdownMeta, signer); err != nil {
 					slog.Warn("shutdown meta jsonl", "err", err)
 				}
@@ -164,6 +179,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	stats.setAllowlistCompileSnapshot(
 		allowlistCompileTime,
 		defendCompiled.AllowedIPv4.Len(),
+		defendCompiled.Domains,
 		defendCompiled.UnresolvedDomains,
 		defendCompiled.WildcardRiskDomains,
 	)
@@ -1159,4 +1175,19 @@ func loadAllowedDomainsMap(m *ebpf.Map, pol *policy.Policy) error {
 		}
 	}
 	return nil
+}
+
+// sha256File returns the lowercase-hex SHA-256 digest of path's contents.
+// H11 helper used to populate MetaEvent.EventsFileSHA256 on shutdown.
+func sha256File(path string) (string, error) {
+	f, err := os.Open(path) // #nosec G304 — path is the agent's own events log under $GITHUB_WORKSPACE
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }

@@ -24,6 +24,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -138,6 +140,20 @@ func parseStopFlags(args []string) (stopConfig, error) {
 		return cfg, err
 	}
 	return cfg, nil
+}
+
+// digestIntegrityMarker is the H11 tamper-evidence HTML comment appended to
+// `.coldstep-detect.md`. It returns the empty string for an empty / whitespace
+// body so the marker is only emitted when there is a real digest to protect.
+// The leading newline guarantees the comment lands on its own line even when
+// the agent's digest does not end in `\n`; the trailing newline keeps the
+// file POSIX-clean.
+func digestIntegrityMarker(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(body))
+	return fmt.Sprintf("\n<!-- coldstep-digest-sha256: %s -->\n", hex.EncodeToString(sum[:]))
 }
 
 // parseReportFlags maps the unified `report` input to per-surface booleans
@@ -358,6 +374,28 @@ func runStop(cfg stopConfig) error {
 	body := ""
 	if raw, err := os.ReadFile(detectLog); err == nil {
 		body = string(raw)
+	}
+
+	// H11: tamper-evidence hash of the digest file. The SHA-256 covers the
+	// agent-written digest content (everything currently in `body`); we then
+	// append the marker comment to the on-disk file and to `body` so
+	// downstream surfaces (Job Summary, PR comment) carry the same value.
+	// Best-effort: a failure here logs to stderr and continues — the digest
+	// remains readable without the integrity comment. JSONL signing remains
+	// the cryptographically strong guarantee; this is a lightweight surface
+	// for unsigned runs.
+	if marker := digestIntegrityMarker(body); marker != "" {
+		if f, ferr := os.OpenFile(detectLog, os.O_APPEND|os.O_WRONLY, 0o644); ferr != nil {
+			fmt.Fprintf(os.Stderr, "coldstep: open detect log for hash marker: %v\n", ferr)
+		} else {
+			if _, werr := f.WriteString(marker); werr != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: write hash marker: %v\n", werr)
+			}
+			if cerr := f.Close(); cerr != nil {
+				fmt.Fprintf(os.Stderr, "coldstep: close detect log: %v\n", cerr)
+			}
+		}
+		body += marker
 	}
 
 	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)

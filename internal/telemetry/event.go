@@ -83,7 +83,16 @@ type MetaEvent struct {
 	// twin of the digest's "Coverage scope" table; the digest already
 	// renders this information via H1 (PR #193).
 	Coverage *CoverageReport `json:"coverage,omitempty"`
-	Sig      string          `json:"sig,omitempty"`
+	// EventsFileSHA256 is the lowercase hex SHA-256 of the JSONL events file
+	// computed at agent shutdown, embedded in the final MetaEvent record
+	// (H11). It is a tamper-evidence hint — a downstream consumer can re-hash
+	// the bytes that preceded this MetaEvent line and compare against the
+	// value; a mismatch indicates the file was modified after the agent
+	// finished writing. The startup MetaEvent leaves this empty. JSONL
+	// signing (`signing-key`) remains the cryptographically strong guarantee;
+	// this field is the lightweight integrity surface for unsigned runs.
+	EventsFileSHA256 string `json:"events_file_sha256,omitempty"`
+	Sig              string `json:"sig,omitempty"`
 }
 
 // CoverageReport summarizes which traffic classes coldstep observed on this
