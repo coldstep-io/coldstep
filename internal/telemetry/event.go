@@ -66,7 +66,33 @@ type MetaEvent struct {
 	// MetaEvent; the startup MetaEvent leaves this nil (omitted). The map is set
 	// to nil when all counters are zero so omitempty hides it entirely.
 	DroppedEvents map[string]uint64 `json:"dropped_events,omitempty"`
-	Sig           string            `json:"sig,omitempty"`
+	// Coverage is the H5 v0.2.9 telemetry stub — structured per-run summary
+	// of which traffic classes coldstep observed. It is the machine-readable
+	// twin of the digest's "Coverage scope" table; the digest already
+	// renders this information via H1 (PR #193).
+	Coverage *CoverageReport `json:"coverage,omitempty"`
+	Sig      string          `json:"sig,omitempty"`
+}
+
+// CoverageReport summarizes which traffic classes coldstep observed on this
+// run. H5 v0.2.9 telemetry stub: emitted in the MetaEvent so downstream
+// consumers can reason about the observation envelope without re-deriving it
+// from individual probe-attach rows.
+//
+// IPv6 and QUICHTTP3 are wired as `false` for v0.2.9 because the underlying
+// probes are not yet implemented in the agent. They ship as explicit fields
+// (not omitempty) so consumers can rely on the shape being stable as those
+// probes land.
+type CoverageReport struct {
+	IPv4TCP        bool `json:"ipv4_tcp"`
+	IPv4UDPSendmsg bool `json:"ipv4_udp_sendmsg"`
+	IPv6           bool `json:"ipv6"`
+	QUICHTTP3      bool `json:"quic_http3"`
+	// TLSSNI is "full" when the TLS ClientHello sniff probe attached and the
+	// tls_sni feature gate is on, "none" otherwise. "partial" is reserved for
+	// future probe variants that capture some-but-not-all SNI sources.
+	TLSSNI  string `json:"tls_sni_full"`
+	IoUring bool   `json:"io_uring"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.

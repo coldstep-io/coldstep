@@ -800,6 +800,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
 			meta.RunnerHasIPv6 = cfg.RunnerHasIPv6
+			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil)
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
 			}
