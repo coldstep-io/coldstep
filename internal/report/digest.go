@@ -351,6 +351,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if in.TCPStateRingbufReserveFailures > 0 {
 		fmt.Fprintf(b, "| **tcp_state_events ringbuf reserve failures** | %d |\n", in.TCPStateRingbufReserveFailures)
 	}
+	if in.TCPStateReaderErrors > 0 {
+		fmt.Fprintf(b, "| **tcp_state_events reader errors** | %d |\n", in.TCPStateReaderErrors)
+	}
 	if in.Connect4TupleUpdateFailures > 0 {
 		fmt.Fprintf(b, "| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures)
 	}

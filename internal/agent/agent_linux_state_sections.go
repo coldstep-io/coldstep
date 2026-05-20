@@ -110,25 +110,29 @@ func (b *forkEdgeBuffer) snapshot() ([]proctree.Edge, bool) {
 type networkSectionState struct {
 	mu sync.Mutex
 
-	tcpReadErrors    int
-	tcpDecodeErrors  int
-	udpReadErrors    int
-	udpDecodeErrors  int
-	httpReadErrors   int
-	httpDecodeErrors int
-	tlsReadErrors    int
-	tlsDecodeErrors  int
+	tcpReadErrors        int
+	tcpDecodeErrors      int
+	udpReadErrors        int
+	udpDecodeErrors      int
+	httpReadErrors       int
+	httpDecodeErrors     int
+	tlsReadErrors        int
+	tlsDecodeErrors      int
+	tcpStateReadErrors   int
+	tcpStateDecodeErrors int
 }
 
 type networkSectionSnapshot struct {
-	tcpReadErrors    int
-	tcpDecodeErrors  int
-	udpReadErrors    int
-	udpDecodeErrors  int
-	httpReadErrors   int
-	httpDecodeErrors int
-	tlsReadErrors    int
-	tlsDecodeErrors  int
+	tcpReadErrors        int
+	tcpDecodeErrors      int
+	udpReadErrors        int
+	udpDecodeErrors      int
+	httpReadErrors       int
+	httpDecodeErrors     int
+	tlsReadErrors        int
+	tlsDecodeErrors      int
+	tcpStateReadErrors   int
+	tcpStateDecodeErrors int
 }
 
 const (
@@ -344,17 +348,31 @@ func (s *networkSectionState) addTLSDecodeError() {
 	s.tlsDecodeErrors++
 }
 
+func (s *networkSectionState) addTCPStateReaderError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpStateReadErrors++
+}
+
+func (s *networkSectionState) addTCPStateDecodeError() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpStateDecodeErrors++
+}
+
 func (s *networkSectionState) snapshot() networkSectionSnapshot {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return networkSectionSnapshot{
-		tcpReadErrors:    s.tcpReadErrors,
-		tcpDecodeErrors:  s.tcpDecodeErrors,
-		udpReadErrors:    s.udpReadErrors,
-		udpDecodeErrors:  s.udpDecodeErrors,
-		httpReadErrors:   s.httpReadErrors,
-		httpDecodeErrors: s.httpDecodeErrors,
-		tlsReadErrors:    s.tlsReadErrors,
-		tlsDecodeErrors:  s.tlsDecodeErrors,
+		tcpReadErrors:        s.tcpReadErrors,
+		tcpDecodeErrors:      s.tcpDecodeErrors,
+		udpReadErrors:        s.udpReadErrors,
+		udpDecodeErrors:      s.udpDecodeErrors,
+		httpReadErrors:       s.httpReadErrors,
+		httpDecodeErrors:     s.httpDecodeErrors,
+		tlsReadErrors:        s.tlsReadErrors,
+		tlsDecodeErrors:      s.tlsDecodeErrors,
+		tcpStateReadErrors:   s.tcpStateReadErrors,
+		tcpStateDecodeErrors: s.tcpStateDecodeErrors,
 	}
 }

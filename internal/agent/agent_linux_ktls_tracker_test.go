@@ -123,6 +123,52 @@ func TestKTLSTracker_TTLEviction(t *testing.T) {
 	}
 }
 
+// TestKTLSTracker_MultiFDPerPidEarliestMarkWins guards Bug 2 from the second
+// audit: when two fds on the same pid both offload to kTLS, the per-pid
+// wildcard `latest[pid]` must reference the *earliest* Mark, not the latest.
+// A TLS event whose arrival timestamp falls between the two Marks otherwise
+// gates against the wrong reference: the wildcard would compare
+// `tlsTimestampNs >= secondMark` and incorrectly return false, leaving the
+// TLS row at full confidence even though it was already captured on a
+// kTLS-offloaded socket.
+func TestKTLSTracker_MultiFDPerPidEarliestMarkWins(t *testing.T) {
+	tr := newKTLSTracker()
+	const pid uint32 = 7777
+	const fd1 uint32 = 3
+	const fd2 uint32 = 5
+	const firstMarkNs int64 = 1_000_000_000
+	const tlsBetweenNs int64 = 1_500_000_000
+	const secondMarkNs int64 = 2_000_000_000
+
+	tr.Mark(pid, fd1, firstMarkNs)
+	tr.Mark(pid, fd2, secondMarkNs)
+
+	// A TLS event that arrived AFTER the first Mark must be classified as
+	// kTLS via the wildcard path. With the old code, latest[pid] would hold
+	// secondMark (2s) and the gate `tlsBetweenNs (1.5s) >= 2s` would be
+	// false, returning a false-negative.
+	if !tr.IsKTLS(pid, 0, tlsBetweenNs) {
+		t.Fatalf("IsKTLS(%d, 0, %d) wildcard = false; want true "+
+			"(TLS event arrived after the earliest Mark — must be flipped)",
+			pid, tlsBetweenNs)
+	}
+
+	// The exact-fd path is unaffected: it still tracks the per-(pid,fd)
+	// Mark precisely.
+	if !tr.IsKTLS(pid, fd1, tlsBetweenNs) {
+		t.Fatalf("IsKTLS(%d, %d, %d) exact-fd = false; want true", pid, fd1, tlsBetweenNs)
+	}
+	// Order-independence: marking the later fd first must give the same
+	// wildcard semantics.
+	tr2 := newKTLSTracker()
+	tr2.Mark(pid, fd2, secondMarkNs)
+	tr2.Mark(pid, fd1, firstMarkNs)
+	if !tr2.IsKTLS(pid, 0, tlsBetweenNs) {
+		t.Fatalf("IsKTLS wildcard after reversed Mark order = false; want true " +
+			"(earliest-mark semantics must hold regardless of insertion order)")
+	}
+}
+
 // TestKTLSTracker_WildcardIsolation guards the per-pid wildcard against
 // cross-pid bleed: marking pid=A must not make IsKTLS(pid=B, 0) return true.
 // Without this property the digest would falsely tag unrelated TLS events as

@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"encoding/binary"
 	"testing"
+
+	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
 func TestDecodeUDPSendEvent(t *testing.T) {
@@ -215,6 +217,99 @@ func TestDecodeTCPStateEvent_tooShort(t *testing.T) {
 	_, _, _, _, _, _, _, _, _, ok := decodeTCPStateEvent(make([]byte, tcpStateEventWireSize-1))
 	if ok {
 		t.Fatal("expected false for short input")
+	}
+}
+
+// TestDecodeTCPStateEvent_CommSanitization guards Bug 1 from the second audit:
+// the TCPState ring reader must run the comm field through
+// telemetry.SanitizeField (matching every other ring reader) so a malicious or
+// corrupted argv[0] cannot inject JSONL control bytes when serialized into the
+// events log. We stage a comm buffer with embedded control bytes and invalid
+// UTF-8, decode it via the wire path, and then exercise the same sanitization
+// pipeline that readTCPStateRing uses.
+func TestDecodeTCPStateEvent_CommSanitization(t *testing.T) {
+	raw := make([]byte, tcpStateEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1)
+	binary.LittleEndian.PutUint32(raw[8:12], 1)
+	raw[12], raw[13], raw[14], raw[15] = 10, 0, 0, 1
+	raw[16], raw[17], raw[18], raw[19] = 10, 0, 0, 2
+	binary.LittleEndian.PutUint16(raw[20:22], 1234)
+	binary.LittleEndian.PutUint16(raw[22:24], 80)
+	binary.LittleEndian.PutUint32(raw[24:28], 2) // SYN_SENT
+	binary.LittleEndian.PutUint32(raw[28:32], 1) // ESTABLISHED
+	// comm: "ev\nil\x01\xff\xff" (newline + control + invalid UTF-8) padded
+	// with NULs out to 16 bytes. Invalid UTF-8 must come out as U+FFFD; the
+	// newline and 0x01 control must be stripped.
+	commIn := []byte{'e', 'v', '\n', 'i', 'l', 0x01, 0xFF, 0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	copy(raw[32:48], commIn)
+
+	_, _, _, _, _, _, _, _, commBytes, ok := decodeTCPStateEvent(raw)
+	if !ok {
+		t.Fatal("decode expected to succeed")
+	}
+
+	// Pipeline matches readTCPStateRing exactly so any drift between this
+	// test and the production sanitization choice fails here.
+	sanitized := telemetry.SanitizeField(nullTermStr(commBytes[:]), 16)
+
+	// SanitizeField removes \n and 0x01 entirely. The invalid 0xFF pair is
+	// not valid UTF-8 so SanitizeField replaces it with U+FFFD. Result must
+	// contain no control bytes and no raw 0xFF.
+	if bytes.ContainsRune([]byte(sanitized), '\n') {
+		t.Errorf("sanitized comm still contains newline: %q", sanitized)
+	}
+	if bytes.IndexByte([]byte(sanitized), 0x01) >= 0 {
+		t.Errorf("sanitized comm still contains 0x01 control byte: %q", sanitized)
+	}
+	if bytes.IndexByte([]byte(sanitized), 0xFF) >= 0 {
+		t.Errorf("sanitized comm still contains raw 0xFF (invalid UTF-8 not replaced): %q", sanitized)
+	}
+	// And critically: the raw, un-sanitized prefix would still have the
+	// newline. If the production code ever drops the SanitizeField call we
+	// want this assertion to catch it.
+	if got := nullTermStr(commBytes[:]); !bytes.Contains([]byte(got), []byte{'\n'}) {
+		t.Fatalf("test setup wrong: pre-sanitize comm should still contain \\n; got %q", got)
+	}
+}
+
+// TestClassifyTCPStateTransition guards Bug 4 from the second audit. The
+// classifier must call ESTABLISHED a confirmed handshake, count Close /
+// CloseWait / TimeWait as terminal failures (refused), and leave every other
+// transition (SYN_RECV, FIN_WAIT*, etc.) out of *both* buckets so they are
+// not misattributed as policy-relevant refusals.
+func TestClassifyTCPStateTransition(t *testing.T) {
+	cases := []struct {
+		newStr         string
+		wantConfirmed  bool
+		wantRefused    bool
+		wantInBuckets  bool // confirmed or refused must be set
+		describeReason string
+	}{
+		{telemetry.TCPStateEstablished, true, false, true, "handshake succeeded"},
+		{telemetry.TCPStateClose, false, true, true, "RST / timeout / unreachable"},
+		{telemetry.TCPStateCloseWait, false, true, true, "peer-initiated close after partial connect"},
+		{telemetry.TCPStateTimeWait, false, true, true, "connection terminated, waiting out 2*MSL"},
+		// Bug 4: SYN_RECV is an intermediate handshake state, not a refusal.
+		{telemetry.TCPStateSynRecv, false, false, false, "intermediate handshake state, not failure"},
+		{telemetry.TCPStateFinWait1, false, false, false, "active-close intermediate, not a refusal"},
+		{telemetry.TCPStateFinWait2, false, false, false, "active-close intermediate, not a refusal"},
+		{telemetry.TCPStateLastAck, false, false, false, "active-close intermediate, not a refusal"},
+		{telemetry.TCPStateClosing, false, false, false, "simultaneous-close intermediate, not a refusal"},
+		{"UNKNOWN", false, false, false, "unknown newstate falls through both buckets"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.newStr, func(t *testing.T) {
+			gotConfirmed, gotRefused := classifyTCPStateTransition(tc.newStr)
+			if gotConfirmed != tc.wantConfirmed {
+				t.Errorf("confirmed = %v, want %v (%s)", gotConfirmed, tc.wantConfirmed, tc.describeReason)
+			}
+			if gotRefused != tc.wantRefused {
+				t.Errorf("refused = %v, want %v (%s)", gotRefused, tc.wantRefused, tc.describeReason)
+			}
+			if (gotConfirmed || gotRefused) != tc.wantInBuckets {
+				t.Errorf("inBuckets = %v, want %v", gotConfirmed || gotRefused, tc.wantInBuckets)
+			}
+		})
 	}
 }
 

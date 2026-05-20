@@ -170,6 +170,7 @@ func buildDigestInput(
 		TCPStateTotal:                  tcpStateTotal,
 		TCPStateConfirmed:              tcpStateConfirmed,
 		TCPStateRefused:                tcpStateRefused,
+		TCPStateReaderErrors:           sectionState.tcpStateReadErrors + sectionState.tcpStateDecodeErrors,
 		TCPStateRingbufReserveFailures: stats.tcpStateRingbufReserveFailures(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,

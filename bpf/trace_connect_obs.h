@@ -243,8 +243,8 @@ struct tcp_state_event {
 	__u32 pid;
 	__u32 saddr; /* network byte order */
 	__u32 daddr; /* network byte order */
-	__u16 sport; /* network byte order */
-	__u16 dport; /* network byte order */
+	__u16 sport; /* host byte order — kernel pre-converts */
+	__u16 dport; /* host byte order — kernel pre-converts */
 	__s32 old_state;
 	__s32 new_state;
 	__u8 comm[16];

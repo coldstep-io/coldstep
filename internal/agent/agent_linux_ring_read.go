@@ -154,6 +154,24 @@ func nullTermStr(b []byte) string {
 	return string(bytes.TrimRight(b, "\x00"))
 }
 
+// classifyTCPStateTransition turns a kernel tcp_state newstate string (the
+// destination of a SYN_SENT→X transition) into the two counters surfaced in
+// the digest: `confirmed` for a completed handshake and `refused` for a
+// terminal failure state. Intermediate or non-failure states (SYN_RECV,
+// FIN_WAIT*, etc.) are intentionally counted in neither bucket — they
+// represent the kernel still working the handshake or peer-initiated close
+// flows that have nothing to do with policy-relevant failure.
+func classifyTCPStateTransition(newStr string) (confirmed, refused bool) {
+	if newStr == telemetry.TCPStateEstablished {
+		return true, false
+	}
+	switch newStr {
+	case telemetry.TCPStateClose, telemetry.TCPStateCloseWait, telemetry.TCPStateTimeWait:
+		return false, true
+	}
+	return false, false
+}
+
 // connectRingRecordKind classifies one connect_events ringbuf record by its
 // 4-byte magic at offset 0. The connect_events ringbuf is multiplexed: the
 // entry-side connect(2) tracepoint, the P3-2 kretprobe on tcp_v4_connect, and
@@ -819,7 +837,7 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 // context; downstream tooling correlates by tuple (saddr:sport→daddr:dport)
 // with the preceding `tcp` connect_event when reliable attribution is needed.
 func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
-	stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
@@ -830,6 +848,9 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
+			if sectionState != nil {
+				sectionState.addTCPStateReaderError()
+			}
 			delay := backoff.sleep()
 			slog.Warn("ringbuf read (tcp_state)", "err", err, "backoff", delay)
 			continue
@@ -838,6 +859,9 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 
 		timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, commb, ok := decodeTCPStateEvent(record.RawSample)
 		if !ok {
+			if sectionState != nil {
+				sectionState.addTCPStateDecodeError()
+			}
 			stats.addDropped("tcp_state_decode")
 			slog.Warn("decode tcp_state", "len", len(record.RawSample))
 			continue
@@ -845,11 +869,7 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 
 		oldStr := telemetry.TCPStateName(oldState)
 		newStr := telemetry.TCPStateName(newState)
-		confirmed := newStr == telemetry.TCPStateEstablished
-		// Anything else after SYN_SENT (CLOSE, CLOSE_WAIT, FIN_WAIT1, etc.) is
-		// a failed or short-circuited handshake from the policy POV; CLOSE is
-		// by far the common case (RST / unreachable / timeout).
-		refused := !confirmed
+		confirmed, refused := classifyTCPStateTransition(newStr)
 		stats.addTCPState(confirmed, refused)
 
 		dstIP := net.IP(daddr[:]).To4()
@@ -857,7 +877,7 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 			continue
 		}
 		srcIP := net.IP(saddr[:]).To4()
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		slog.Debug("tcp_state", "pid", pid, "comm", comm,

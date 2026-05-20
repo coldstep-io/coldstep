@@ -103,6 +103,17 @@ func newKTLSTrackerClock(now func() time.Time) *ktlsTracker {
 // tlsTimestampNs >= markedAtNs will return true; queries from events that
 // arrived before markedAtNs will not. Each call also evicts any expired
 // entries against the wall clock.
+//
+// For the per-(pid, fd) entry the most recent Mark wins — that record is
+// keyed by fd, so the second offload genuinely supersedes the first. The
+// per-pid `latest` map is the wildcard fallback (for TLS events whose wire
+// format does not carry fd) and tracks the *earliest* surviving Mark for
+// the pid: when two fds on the same pid both offload, a pre-offload TLS
+// write captured between the two Marks must still gate against the
+// earlier offload's markedAt, not the later one — otherwise the
+// arrival-order ordering check (`tlsTimestampNs >= markedAt`) would be
+// evaluated against the wrong reference and the TLS event could be
+// misclassified as pre-offload plaintext.
 func (t *ktlsTracker) Mark(pid, fd uint32, markedAtNs int64) {
 	if t == nil {
 		return
@@ -113,7 +124,9 @@ func (t *ktlsTracker) Mark(pid, fd uint32, markedAtNs int64) {
 	t.evictLocked(now)
 	entry := ktlsEntry{at: now, markedAt: markedAtNs}
 	t.by[ktlsKey{PID: pid, FD: fd}] = entry
-	t.latest[pid] = entry
+	if existing, ok := t.latest[pid]; !ok || markedAtNs < existing.markedAt {
+		t.latest[pid] = entry
+	}
 }
 
 // IsKTLS reports whether (pid, fd) has been Marked within ktlsTrackerTTL AND
