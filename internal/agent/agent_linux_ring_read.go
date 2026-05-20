@@ -912,6 +912,76 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 	}
 }
 
+// readIoUringRing drains io_uring_events from the BPF ringbuf into JSONL and
+// runStats (P6 Phase 1). The BPF side already filters to write-class opcodes
+// (SENDMSG=9, SEND=26), so this loop only sanitizes the wire bytes and maps
+// the raw IORING_OP_ byte to its string label.
+func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (io_uring)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		_, pid, fd, daddr, dport, op, commb, ok := decodeIOUringSendEvent(record.RawSample)
+		if !ok {
+			stats.addDropped("io_uring_decode")
+			slog.Warn("decode io_uring send", "len", len(record.RawSample))
+			continue
+		}
+		stats.addIoUringSend()
+
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
+		opName := ioUringOpName(op)
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+		var dstIP string
+		var dstPort uint16
+		if ip := net.IP(daddr[:]).To4(); ip != nil {
+			// daddr=0 means the BPF probe could not resolve the SQE's fd to a
+			// cached connect tuple. Leave dst_ip/dst_port empty in that case
+			// so the JSONL reader can distinguish "unresolved" from "0.0.0.0".
+			if !(daddr == [4]byte{0, 0, 0, 0} && dport == 0) {
+				dstIP = ip.String()
+				dstPort = dport
+			}
+		}
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.IOUringSendEvent{
+				Type:    "io_uring_send",
+				TS:      ts,
+				Seq:     n,
+				PID:     pid,
+				Comm:    comm,
+				FD:      fd,
+				Op:      opName,
+				DstIP:   dstIP,
+				DstPort: dstPort,
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("io_uring_jsonl")
+				slog.Warn("events jsonl (io_uring)", "err", werr)
+			}
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {

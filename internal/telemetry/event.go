@@ -419,6 +419,27 @@ type KTLSEvent struct {
 // EventTypeKTLS is the JSONL discriminator for KTLSEvent.
 const EventTypeKTLS = "ktls_offload"
 
+// IOUringSendEvent is one JSONL record for an io_uring socket-class SQE
+// submission observed via SEC("raw_tp/io_uring_submit_sqe"). Phase 1 emits
+// for IORING_OP_SENDMSG (9) and IORING_OP_SEND (26) only — both
+// unambiguous network sends. WRITE/WRITEV will land in Phase 2 alongside
+// fd→socket resolution. The event surfaces io_uring egress that would
+// otherwise bypass syscall-based hooks; SNI / payload extraction is not
+// possible from the SQE submission point. dst_ip / dst_port are populated
+// when Phase 2's tuple resolution lands; Phase 1 leaves them empty.
+type IOUringSendEvent struct {
+	Type    string `json:"type"` // "io_uring_send"
+	TS      string `json:"ts"`
+	Seq     uint64 `json:"seq"`
+	PID     uint32 `json:"pid"`
+	Comm    string `json:"comm"`
+	FD      uint32 `json:"fd"`
+	Op      string `json:"op"` // "WRITEV" | "SENDMSG" | "WRITE" | "SEND" | "UNKNOWN"
+	DstIP   string `json:"dst_ip,omitempty"`
+	DstPort uint16 `json:"dst_port,omitempty"`
+	Sig     string `json:"sig,omitempty"`
+}
+
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
 type BPFAuditEvent struct {
 	Type     string `json:"type"` // "bpf_audit"

@@ -158,6 +158,8 @@ const (
 	ktlsEventWireSize      = 32  // 4(tgid)+4(tid)+comm[16]+4(fd)+1(direction)+_pad[3] → 32
 	// tcp_state_event (P3-2b): 8(timestamp_ns)+4(pid)+4(saddr)+4(daddr)+2(sport)+2(dport)+4(old_state)+4(new_state)+16(comm) → 48
 	tcpStateEventWireSize = 48
+	// io_uring_send_event: 8(ts)+4(pid)+4(fd)+4(daddr)+2(dport)+1(op)+1(_pad)+16(comm) → 40
+	ioUringSendEventWireSize = 40
 	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
 	dnsSniffMaxPayload          = 4096                   // DNS_SNIFF_MAX in trace_dns.bpf.c
 	dnsSniffEventWireSizeLegacy = 4 + dnsSniffMaxPayload // pre-is_tcp layout (__u32 len + data[])

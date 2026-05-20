@@ -156,13 +156,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
 
-	var connRd, udpRd, httpRd, tlsRd, tcpStateRd ringReader
+	var connRd, udpRd, httpRd, tlsRd, tcpStateRd, ioUringRd ringReader
 	defer connRd.Close()
 	defer udpRd.Close()
 	defer httpRd.Close()
 	defer tlsRd.Close()
 	defer tcpStateRd.Close()
+	defer ioUringRd.Close()
 	var tcpStateLnk link.Link
+	var ioUringLnk link.Link
 
 	var denyRd ringReader
 	defer denyRd.Close()
@@ -470,6 +472,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
 				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
+				stats.setIoUringRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringRingbufReserveFailures, "io_uring_ringbuf_reserve_failures"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
@@ -501,6 +504,30 @@ func Run(ctx context.Context, cfg config.Config) error {
 					}
 				}()
 			}
+		}
+
+		// P6 Phase 1: best-effort attach of raw_tp/io_uring_submit_sqe. On
+		// kernels < 5.14 the tracepoint doesn't exist — degrade to a BPFStatus
+		// row rather than failing the agent. The probe is filtered to two
+		// write-class opcodes (SENDMSG=9, SEND=26) so volume stays bounded
+		// even when many io_uring users are active.
+		if rd, lnk, ioErr := startIoUringTrace(syscallObjs); ioErr != nil {
+			slog.Info("io_uring submit_sqe tracing disabled", "err", ioErr)
+			bpfSt = append(bpfSt, telemetry.BPFStatus{
+				Name:   "raw_tp/io_uring_submit_sqe",
+				OK:     false,
+				Detail: bpfDetail(ioErr),
+			})
+		} else {
+			ioUringLnk = lnk
+			ioUringRd.R = rd
+			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/io_uring_submit_sqe", OK: true})
+			slog.Info("tracing io_uring write-class submissions (raw_tp/io_uring_submit_sqe)")
+			defer func() {
+				if ioUringLnk != nil {
+					_ = ioUringLnk.Close()
+				}
+			}()
 		}
 	}
 
@@ -758,6 +785,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		httpRd.Close()
 		tlsRd.Close()
 		tcpStateRd.Close()
+		ioUringRd.Close()
 		denyRd.Close()
 		lsmDenyRd.Close()
 		dnsRd.Close()
@@ -790,6 +818,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if tcpStateRd.R != nil {
+		readerCount++
+	}
+	if ioUringRd.R != nil {
 		readerCount++
 	}
 	if denyRd.R != nil {
@@ -958,6 +989,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, sectionState, signer))
+		}()
+	}
+	if ioUringRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readIoUringRing(runCtx, cfg, ioUringRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if denyRd.R != nil {

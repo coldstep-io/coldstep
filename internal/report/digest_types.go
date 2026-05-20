@@ -249,6 +249,16 @@ type DigestInput struct {
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.
 	// It is a syscall-hook bypass-class signal, not proof of exfiltration.
 	IoUringSetupObserved int
+	// IoUringSendTotal counts io_uring socket-class SQE submissions
+	// (IORING_OP_SENDMSG, IORING_OP_SEND) seen via raw_tp/io_uring_submit_sqe
+	// (P6 Phase 1). Non-zero means the workload bypassed our syscall arms
+	// for network sends — SNI / payload extraction is not possible from the
+	// SQE submission point. WRITE / WRITEV land in Phase 2 with fd
+	// resolution.
+	IoUringSendTotal int
+	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
+	// io_uring_events channel — non-zero indicates io_uring telemetry pressure.
+	IoUringRingbufReserveFailures int
 	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool

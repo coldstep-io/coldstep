@@ -255,6 +255,24 @@ struct {
 } tcp_state_events SEC(".maps");
 
 /*
+ * P6 Phase 1: io_uring write-class SQE ringbuf. 64 KiB is plenty — events are
+ * already filtered to four write-class opcodes on tracked sockets, so volume
+ * is bounded by the rate of legitimate io_uring network egress. Larger sizes
+ * would only hide downstream pipeline pressure rather than gate it.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 16);
+} io_uring_events SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} io_uring_ringbuf_reserve_failures SEC(".maps");
+
+/*
  * AUDIT(5a): null checked — every `note_*` counter helper below follows the
  * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
  */
@@ -351,6 +369,16 @@ static __always_inline void note_io_uring_setup_observed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&io_uring_setup_observed, &k);
+
+	if (!v)
+		return;
+	(*v)++;
+}
+
+static __always_inline void note_io_uring_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&io_uring_ringbuf_reserve_failures, &k);
 
 	if (!v)
 		return;
@@ -798,6 +826,70 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 	ev->old_state = oldstate;
 	ev->new_state = newstate;
 
+	bpf_ringbuf_submit(ev, 0);
+	return 0;
+}
+
+/*
+ * P6 Phase 1: io_uring write-class submission visibility.
+ *
+ * Raw tracepoint signature (kernel 5.14+):
+ *
+ *	TRACE_EVENT(io_uring_submit_sqe,
+ *		    TP_PROTO(struct io_kiocb *req, bool force_nonblock))
+ *
+ * Filter to socket-class submission opcodes — IORING_OP_SENDMSG (9) and
+ * IORING_OP_SEND (26) — values from include/uapi/linux/io_uring.h
+ * (`enum io_uring_op`, stable since 5.1). Both are unambiguously network
+ * sends so we can emit the event without resolving the SQE's fd back to a
+ * socket. IORING_OP_WRITE (23) and IORING_OP_WRITEV (2) are deliberately
+ * out of scope for Phase 1: their fd may be a regular file, and the
+ * generic `req->fd` / `req->cqe.fd` field that would let us distinguish
+ * socket vs file writes only appears on kernels whose vmlinux BTF carries
+ * `struct io_cqe` (post-5.15). Adding them without fd resolution would
+ * flood the ringbuf on routine file I/O — Phase 2 will pair the WRITE /
+ * WRITEV arms with a robust fd → socket check.
+ *
+ * Destination tuple is best-effort: `req->opcode` is the only field we read
+ * from io_kiocb in Phase 1, so the C source compiles against any vmlinux.h
+ * that already exposes struct io_kiocb (kernel 5.1+). daddr/dport are zero
+ * in the emitted event — Phase 2 will populate them once fd resolution lands.
+ */
+#define COLDSTEP_IORING_OP_SENDMSG 9
+#define COLDSTEP_IORING_OP_SEND    26
+
+SEC("raw_tp/io_uring_submit_sqe")
+int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
+{
+	struct io_kiocb *req = (struct io_kiocb *)ctx->args[0];
+
+	if (!req)
+		return 0;
+
+	__u8 opcode = 0;
+
+	if (bpf_core_read(&opcode, sizeof(opcode), &req->opcode))
+		return 0;
+
+	if (opcode != COLDSTEP_IORING_OP_SENDMSG &&
+	    opcode != COLDSTEP_IORING_OP_SEND)
+		return 0;
+
+	struct io_uring_send_event *ev =
+		bpf_ringbuf_reserve(&io_uring_events, sizeof(*ev), 0);
+
+	if (!ev) {
+		note_io_uring_ringbuf_reserve_failed();
+		return 0;
+	}
+	ev->timestamp_ns = bpf_ktime_get_ns();
+	ev->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+	ev->fd = 0;
+	__builtin_memset(ev->daddr, 0, sizeof(ev->daddr));
+	__builtin_memset(ev->dport, 0, sizeof(ev->dport));
+	ev->op = opcode;
+	ev->_pad = 0;
+	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
 	bpf_ringbuf_submit(ev, 0);
 	return 0;
 }
