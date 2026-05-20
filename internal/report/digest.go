@@ -853,6 +853,9 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	if in.KTLSOffloadTotal > 0 {
 		b.WriteString("- **KTLS offload** counts sockets where the application called `setsockopt(SOL_TLS, TLS_TX|TLS_RX)` to hand TLS encryption to the kernel. After offload the application writes plaintext while the kernel encrypts on the wire, so the userspace ClientHello sniffer on `write`/`writev`/`sendto` paths only observes ciphertext record fragments and **cannot resolve SNI** on those sockets. Affected egress still appears as TCP connect events (destination IP + port) — only the SNI hint is lost.\n")
 	}
+	if in.TLSTotal > 0 {
+		b.WriteString("\n> **TLS 1.3 Encrypted ClientHello (ECH):** When ECH is active, the real server name is encrypted in transit and only the outer (CDN/proxy) SNI is visible to network-layer observers, including this agent. Connections to ECH-enabled endpoints appear with the outer SNI (e.g., `cloudflare-ech.com`) rather than the true destination. This is a deliberate TLS privacy feature and cannot be resolved by BPF-level inspection. Cross-reference DNS HTTPS records or application-level logs for the true destination.\n\n")
+	}
 	if procForkKPIVisible(in) {
 		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")
 	}
