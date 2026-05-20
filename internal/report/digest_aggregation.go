@@ -8,6 +8,43 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+// tcpResultBuckets is the rendering order for the TCP connections KPI
+// breakdown. "other" sweeps up errno classes that don't have a friendly
+// label (e.g. EADDRINUSE on rebind, EAGAIN in non-blocking flows).
+var tcpResultBuckets = []string{"established", "refused", "timeout", "unreachable", "in_progress", "denied", "other"}
+
+// hasTCPResultBreakdown reports whether the kretprobe-derived bucket
+// counts have non-zero entries — used to decide whether to render the
+// new "TCP connections" KPI row and to switch the TCP semantics
+// footnote between the established/timeout/refused wording and the
+// legacy attempt-only caveat.
+func hasTCPResultBreakdown(counts map[string]int) bool {
+	for _, v := range counts {
+		if v > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// formatTCPResultBreakdown renders the kretprobe bucket counts as
+// "18 established · 3 refused · 1 timeout" for the KPI row. Returns the
+// empty string when there is nothing to show (no kretprobe events
+// recorded yet, kretprobe attach failed, or the run captured no TCP
+// connections at all) so callers can suppress the row entirely.
+func formatTCPResultBreakdown(counts map[string]int) string {
+	if !hasTCPResultBreakdown(counts) {
+		return ""
+	}
+	var parts []string
+	for _, bucket := range tcpResultBuckets {
+		if n := counts[bucket]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", n, bucket))
+		}
+	}
+	return strings.Join(parts, " · ")
+}
+
 // hotEgressAgg aggregates digest rows by destination for the triage table.
 type hotEgressAgg struct {
 	key   string

@@ -335,6 +335,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 
 	// --- network ---
 	fmt.Fprintf(b, "| **tcp** | %d |\n", in.TCPTotal)
+	if breakdown := formatTCPResultBreakdown(in.TCPResultCounts); breakdown != "" {
+		fmt.Fprintf(b, "| **TCP connections** | %s |\n", breakdown)
+	}
 	if in.Connect4TupleUpdateFailures > 0 {
 		fmt.Fprintf(b, "| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures)
 	}
@@ -901,7 +904,11 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	} else {
 		fmt.Fprintf(b, "- **Row cap:** up to **%d** rows per section when activity exceeds the cap.\n", max)
 	}
-	b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets.\n")
+	if hasTCPResultBreakdown(in.TCPResultCounts) {
+		b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter; the **TCP connections** KPI splits them by `tcp_v4_connect` return code (paired kprobe/kretprobe), so established / refused / timeout / unreachable are distinguishable.\n")
+	} else {
+		b.WriteString("- **TCP semantics:** rows reflect `connect(2)` attempts at syscall enter, not confirmed established sockets (kretprobe on `tcp_v4_connect` failed to attach — see BPF hook status).\n")
+	}
 	if tlsKPIVisible(in) {
 		b.WriteString("- **TLS / SNI:** rows come from the first ClientHello-shaped buffer on supported `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/connected or explicit-`sockaddr` `sendto` paths after an IPv4 `connect` on the same fd; fragmented ClientHello or `sendmsg`-only stacks may not produce a row.\n")
 	} else {

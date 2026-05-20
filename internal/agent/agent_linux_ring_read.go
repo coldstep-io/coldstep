@@ -270,16 +270,51 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 		}
 		backoff.reset()
 
-		// Canary event detection: if the record starts with CANARY_MAGIC,
-		// it's a telemetry integrity canary — not a connect event.
-		if len(record.RawSample) >= canaryEventWireSize {
+		// Magic-prefix dispatch on the shared connect_events ringbuf:
+		//   CANARY_MAGIC (0xCA1A1210)        → telemetry integrity canary
+		//   CONNECT_RESULT_MAGIC (0xC0EE0001) → P3-2 kretprobe tcp_v4_connect result
+		//   else                              → connect_event (entry-side connect(2))
+		// Real connect_event records begin with __u32 tgid (bounded by
+		// PID_MAX_LIMIT), so neither magic can collide with a real tgid.
+		if len(record.RawSample) >= 4 {
 			magic := binary.LittleEndian.Uint32(record.RawSample[0:4])
-			if magic == canaryMagic {
-				seqNr := binary.LittleEndian.Uint64(record.RawSample[8:16])
-				if canary != nil {
-					canary.noteReceived(seqNr)
+			switch magic {
+			case canaryMagic:
+				if len(record.RawSample) >= canaryEventWireSize {
+					seqNr := binary.LittleEndian.Uint64(record.RawSample[8:16])
+					if canary != nil {
+						canary.noteReceived(seqNr)
+					}
+					slog.Debug("canary received", "seq", seqNr)
 				}
-				slog.Debug("canary received", "seq", seqNr)
+				continue
+			case connectResultMagic:
+				rtgid, rtid, rcommb, rresult, rok := decodeConnectResultEvent(record.RawSample)
+				if !rok {
+					stats.addDropped("tcp_result_decode")
+					slog.Warn("decode tcp_result", "len", len(record.RawSample))
+					continue
+				}
+				rcomm := string(bytes.TrimRight(rcommb[:], "\x00"))
+				bucket := telemetry.ConnectResultString(rresult)
+				stats.addTCPResult(bucket)
+				ts := time.Now().UTC().Format(time.RFC3339Nano)
+				if cfg.EventsLogPath != "" {
+					jsonlMu.Lock()
+					n := seq.Next()
+					ev := telemetry.TCPResultEvent{
+						Type: "tcp_result", TS: ts, Seq: n,
+						PID: rtgid, TGID: rtgid, ThreadID: rtid,
+						Comm: rcomm, Result: rresult, ResultStr: bucket,
+					}
+					werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+					jsonlMu.Unlock()
+					if werr != nil {
+						stats.addDropped("tcp_result_jsonl")
+						slog.Warn("events jsonl (tcp_result)", "err", werr)
+					}
+				}
+				slog.Debug("tcp_result", "tgid", rtgid, "tid", rtid, "comm", rcomm, "result", rresult, "bucket", bucket)
 				continue
 			}
 		}

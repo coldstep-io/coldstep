@@ -32,6 +32,25 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("tcp_v4_connect_inflight is a bounded HASH (P3-2 correlation)", func(t *testing.T) {
+		ms, ok := spec.Maps["tcp_v4_connect_inflight"]
+		if !ok {
+			t.Fatal("map tcp_v4_connect_inflight not found in CollectionSpec")
+		}
+		if ms.Type != ebpf.Hash {
+			t.Errorf("tcp_v4_connect_inflight type = %v, want ebpf.Hash", ms.Type)
+		}
+		if ms.MaxEntries != 4096 {
+			t.Errorf("tcp_v4_connect_inflight MaxEntries = %d, want 4096", ms.MaxEntries)
+		}
+		if ms.KeySize != 8 {
+			t.Errorf("tcp_v4_connect_inflight KeySize = %d, want 8", ms.KeySize)
+		}
+		if ms.ValueSize != 1 {
+			t.Errorf("tcp_v4_connect_inflight ValueSize = %d, want 1", ms.ValueSize)
+		}
+	})
+
 	t.Run("connect4_by_tgid_fd stays bounded LRU hash", func(t *testing.T) {
 		ms, ok := spec.Maps["connect4_by_tgid_fd"]
 		if !ok {
