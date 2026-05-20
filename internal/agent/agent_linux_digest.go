@@ -86,6 +86,30 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 	return gate && !hookDegraded(bpf, hookName)
 }
 
+// buildCoverageReport assembles the H5 v0.2.9 telemetry coverage stub embedded
+// in the meta JSONL record. It is the structured (machine-readable) twin of
+// the digest's "Coverage scope" table (rendered by H1 / writeCoverage). IPv4
+// TCP and IPv4 UDP sendmsg are always wired by the agent's cgroup hooks, so
+// they are reported as `true` independent of probe attach status; the BPF
+// status rows on the same MetaEvent already carry the per-probe outcomes.
+// IPv6 and QUIC/HTTP3 are reported as `false` until the underlying probes
+// land. TLSSNI uses the same gate+hook composition as the `tls_sni`
+// capability flag so a degraded BPF probe demotes coverage to "none".
+func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached bool) *telemetry.CoverageReport {
+	tls := "none"
+	if capabilityEnabled(tlsSNIGate, bpf, "raw_tp/sys_enter (connect, sendto, http sniff, tls)") {
+		tls = "full"
+	}
+	return &telemetry.CoverageReport{
+		IPv4TCP:        true,
+		IPv4UDPSendmsg: true,
+		IPv6:           false,
+		QUICHTTP3:      false,
+		TLSSNI:         tls,
+		IoUring:        ioUringAttached,
+	}
+}
+
 // digestDefendLabel maps internal defend snapshot + config to the digest/JSONL-facing mode name.
 func digestDefendLabel(cfg config.Config, snap defendSnapshot) string {
 	if cfg.Mode != config.ModeDefend {

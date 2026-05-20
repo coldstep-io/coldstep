@@ -266,6 +266,84 @@ func TestTCPStateName(t *testing.T) {
 	}
 }
 
+// TestCoverageReportJSON locks the on-disk shape of the H5 telemetry stub.
+// The field set ships at v0.2.9 even though IPv6 / QUICHTTP3 are wired as
+// false — consumers can rely on the keys being present and stable as those
+// probes land in later releases.
+func TestCoverageReportJSON(t *testing.T) {
+	t.Parallel()
+	cr := CoverageReport{
+		IPv4TCP:        true,
+		IPv4UDPSendmsg: true,
+		IPv6:           false,
+		QUICHTTP3:      false,
+		TLSSNI:         "full",
+		IoUring:        true,
+	}
+	b, err := json.Marshal(cr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{
+		`"ipv4_tcp":true`,
+		`"ipv4_udp_sendmsg":true`,
+		`"ipv6":false`,
+		`"quic_http3":false`,
+		`"tls_sni_full":"full"`,
+		`"io_uring":true`,
+	} {
+		if !bytes.Contains(b, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, string(b))
+		}
+	}
+	var got CoverageReport
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != cr {
+		t.Fatalf("round-trip mismatch: got %+v want %+v", got, cr)
+	}
+}
+
+// TestMetaEventCoverage_OmitEmpty verifies the MetaEvent.Coverage pointer is
+// dropped from JSON when nil (older releases / write paths that don't yet
+// populate it should not emit an empty object).
+func TestMetaEventCoverage_OmitEmpty(t *testing.T) {
+	t.Parallel()
+	m := MetaEvent{
+		Type:          "meta",
+		SchemaVersion: SchemaVersion,
+		TS:            "2026-05-20T00:00:00Z",
+		AgentVersion:  "test",
+		KernelRelease: "6.0.0",
+		GitHub:        MetaGitHub{},
+		BPF:           []BPFStatus{},
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`"coverage"`)) {
+		t.Fatalf("nil Coverage should be omitted, got %s", b)
+	}
+
+	m.Coverage = &CoverageReport{
+		IPv4TCP:        true,
+		IPv4UDPSendmsg: true,
+		TLSSNI:         "none",
+	}
+	b, err = json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"coverage":{`)) {
+		t.Fatalf("populated Coverage should appear in JSON, got %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"tls_sni_full":"none"`)) {
+		t.Fatalf("missing tls_sni_full in %s", b)
+	}
+}
+
 func TestFSEvent_RoundTrip(t *testing.T) {
 	t.Parallel()
 	ev := FSEvent{
