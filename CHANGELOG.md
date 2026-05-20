@@ -7,8 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+---
+
+## [v0.2.7] — 2026-05-19
+
 ### Added
-- **P3-2: TCP connect result events.** Paired kprobe/kretprobe on `tcp_v4_connect` captures the kernel return code (0 on success, negative errno otherwise) and emits a supplementary `tcp_result` JSONL event correlated by `pid_tgid`. The detect digest now renders a **TCP connections** KPI row that splits attempts by outcome — e.g. `18 established · 3 refused · 1 timeout · 2 unreachable` — instead of conflating timed-out / refused connections with established ones. Failure to attach the kretprobe is non-fatal; the entry-side `connect_event` is still recorded and the digest falls back to the legacy "attempt" wording with a footnote pointing at the BPF hook status table.
+- **P3-1 — KTLS offload detection.** New `raw_tp/sys_enter` probe (`bpf/trace_ktls.bpf.c`) filters on the `setsockopt(2)` syscall NR and emits a ringbuf record (`{tgid, tid, comm[16], fd, direction}`) on every `setsockopt(SOL_TLS, TLS_TX|TLS_RX, …)` call. When KTLS is in use the kernel takes over TLS encryption and the existing userspace ClientHello sniffer only ever sees ciphertext fragments — silently producing low-confidence or zero SNI rows — so this probe makes the structural gap visible. New JSONL event type `ktls_offload` (`telemetry.KTLSEvent` / `EventTypeKTLS`) is signed through the existing Signer path; `telemetry.Summary` gains `ktls_offload_events` and `ktls_ringbuf_reserve_failures` counters; the digest surfaces a `KTLS offload | N sockets · SNI extraction not possible` KPI row (hidden at zero) plus a Technical-details note. The setsockopt syscall NR differs per arch (x86_64=54, arm64=208) so the BPF source uses the `bpf_target_x86` / `bpf_target_arm64` macros and the `tracektls` generator goes through `internal/bpf/bpfgen` to set `-D__TARGET_ARCH_<runtime.GOARCH>`. (#174)
+- **P3-2 — TCP connect result events.** Paired kprobe/kretprobe on `tcp_v4_connect` captures the kernel return code (0 on success, negative errno otherwise) and emits a supplementary `tcp_result` JSONL event correlated by `pid_tgid`. The detect digest now renders a **TCP connections** KPI row that splits attempts by outcome — e.g. `18 established · 3 refused · 1 timeout · 2 unreachable` — instead of conflating timed-out / refused connections with established ones. Failure to attach the kretprobe is non-fatal; the entry-side `connect_event` is still recorded and the digest falls back to the legacy "attempt" wording with a footnote pointing at the BPF hook status table. (#175)
+- **P3-3 — Inter-syscall TLS ClientHello reassembly.** Some TLS stacks (Go `crypto/tls`, `rustls`, Node.js `TLSWrap`) split the ClientHello across two write / writev / sendto syscalls — a 5-byte record header in one and the handshake body in the next. The single-buffer SNI parser only saw the header and the event was dropped as `tls_sni_parse`. A new userspace per-`(pid,dst,dport)` accumulator (`internal/agent/agent_linux_tls_reassembler.go`) stitches the prefix onto a fresh syscall buffer, retries the SNI parse, and emits the `TLSEvent` with `tls_confidence=partial` and a new `ReassembledSNI=true` field when recovery required multiple writes. Bounded to **512 bytes per key**, **30-second TTL**, and a **1024-key LRU**; non-handshake first bytes evict immediately so `application_data` records can't pin memory. Option A (BPF-side per-socket state keyed on `(pid,fd)`) is the long-term path but is deferred in favor of this userspace fallback for the common header/body split. (#173)
+- **P3-4 — Per-row TLS SNI confidence column in the digest.** Additive follow-up to P1-4 (#163), which introduced `telemetry.TLSConfidence`, `ScoreTLSConfidence`, and the aggregate `tls SNI confidence` KPI row. This change makes the per-event tier visible **per row** of the TLS section so operators can attribute KPI numbers to specific destinations. `TLSDigestRow` carries a new `Confidence` field; `writeTLSSection` renders a `Confidence` column that defaults to `unknown` when zero-valued; and `writeKPISemantics` Notes block now includes a 4-tier legend (`full` / `partial` / `inferred` / `unknown`) with the `TLSSNIMaxLen=255` boundary that drives the `full → partial` transition. The legend is gated on `TLSTotal > 0` to match the existing KPI-row gate from P1-4. (#178)
 
 ---
 
@@ -101,6 +108,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[v0.2.7]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.7
 [v0.2.6]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.6
 [v0.2.5]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.5
 [v0.2.4]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.4
