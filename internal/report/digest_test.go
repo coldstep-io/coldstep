@@ -8,6 +8,37 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+func TestBuildDetectMarkdown_TCPHandshakesKernelConfirmedRow(t *testing.T) {
+	t.Parallel()
+	// With kernel-confirmed state events present, the Full KPI table includes
+	// a "TCP handshakes (kernel-confirmed)" row breaking the count into
+	// established / refused.
+	mdConfirmed := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		TCPTotal:          5,
+		TCPStateTotal:     5,
+		TCPStateConfirmed: 4,
+		TCPStateRefused:   1,
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(mdConfirmed, "**TCP handshakes** (kernel-confirmed) | 4 established / 1 refused |") {
+		t.Fatalf("missing kernel-confirmed handshakes row in:\n%s", mdConfirmed)
+	}
+
+	// Without state events the row is not emitted.
+	mdPlain := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+		TCPTotal:          3,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(mdPlain, "kernel-confirmed") {
+		t.Fatalf("unexpected kernel-confirmed row when TCPStateTotal=0:\n%s", mdPlain)
+	}
+	if strings.Contains(mdPlain, "TCP handshakes") {
+		t.Fatalf("unexpected TCP handshakes row when TCPStateTotal=0:\n%s", mdPlain)
+	}
+}
+
 func TestBuildDetectMarkdown_DetectProfileKPI(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{DetectProfile: "enhanced", ExecTotal: 1, TCPTotal: 1})
 	if !strings.Contains(md, "**detect profile**") || !strings.Contains(md, "enhanced") {

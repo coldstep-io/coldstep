@@ -156,6 +156,68 @@ func TestDecodeTLSSniffEvent_captureLenTooLarge(t *testing.T) {
 	}
 }
 
+func TestDecodeTCPStateEvent(t *testing.T) {
+	raw := make([]byte, tcpStateEventWireSize)
+	// timestamp_ns
+	binary.LittleEndian.PutUint64(raw[0:8], 0x0102030405060708)
+	// pid
+	binary.LittleEndian.PutUint32(raw[8:12], 42)
+	// saddr (network byte order octets — 10.0.0.1)
+	raw[12], raw[13], raw[14], raw[15] = 10, 0, 0, 1
+	// daddr — 93.184.216.34
+	raw[16], raw[17], raw[18], raw[19] = 93, 184, 216, 34
+	// sport (host order) — 54321
+	binary.LittleEndian.PutUint16(raw[20:22], 54321)
+	// dport (host order) — 443
+	binary.LittleEndian.PutUint16(raw[22:24], 443)
+	// old_state — TCP_SYN_SENT (2)
+	binary.LittleEndian.PutUint32(raw[24:28], 2)
+	// new_state — TCP_ESTABLISHED (1)
+	binary.LittleEndian.PutUint32(raw[28:32], 1)
+	// comm
+	copy(raw[32:48], []byte("curl\x00"))
+
+	ts, pid, saddr, daddr, sport, dport, oldSt, newSt, comm, ok := decodeTCPStateEvent(raw)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if ts != 0x0102030405060708 {
+		t.Errorf("timestamp_ns = %x, want 0x0102030405060708", ts)
+	}
+	if pid != 42 {
+		t.Errorf("pid = %d, want 42", pid)
+	}
+	if saddr != [4]byte{10, 0, 0, 1} {
+		t.Errorf("saddr = %v", saddr)
+	}
+	if daddr != [4]byte{93, 184, 216, 34} {
+		t.Errorf("daddr = %v", daddr)
+	}
+	if sport != 54321 {
+		t.Errorf("sport = %d, want 54321", sport)
+	}
+	if dport != 443 {
+		t.Errorf("dport = %d, want 443", dport)
+	}
+	if oldSt != 2 {
+		t.Errorf("old_state = %d, want 2", oldSt)
+	}
+	if newSt != 1 {
+		t.Errorf("new_state = %d, want 1", newSt)
+	}
+	commStr := string(bytes.TrimRight(comm[:], "\x00"))
+	if commStr != "curl" {
+		t.Errorf("comm = %q, want \"curl\"", commStr)
+	}
+}
+
+func TestDecodeTCPStateEvent_tooShort(t *testing.T) {
+	_, _, _, _, _, _, _, _, _, ok := decodeTCPStateEvent(make([]byte, tcpStateEventWireSize-1))
+	if ok {
+		t.Fatal("expected false for short input")
+	}
+}
+
 func TestDecodeBPFAuditEvent(t *testing.T) {
 	// BPF struct layout: tgid(0-3) tid(4-7) cmd(8-11) comm(12-27)
 	raw := make([]byte, bpfAuditEventWireSize)

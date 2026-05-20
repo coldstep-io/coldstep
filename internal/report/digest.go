@@ -338,6 +338,19 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if breakdown := formatTCPResultBreakdown(in.TCPResultCounts); breakdown != "" {
 		fmt.Fprintf(b, "| **TCP connections** | %s |\n", breakdown)
 	}
+	// P3-2b: state-machine view from tp/sock/inet_sock_set_state, complementary
+	// to the P3-2 kretprobe-derived TCPResultCounts above. The state-machine
+	// signal is the kernel's authoritative SYN_SENT→{ESTABLISHED, CLOSE}
+	// transition; the kretprobe captures `tcp_v4_connect()`'s return value
+	// (which can be 0 even when the SYN times out later). When both fire for
+	// the same socket within a short window, the state-machine count wins.
+	if in.TCPStateTotal > 0 {
+		fmt.Fprintf(b, "| **TCP handshakes** (kernel-confirmed) | %d established / %d refused |\n",
+			in.TCPStateConfirmed, in.TCPStateRefused)
+	}
+	if in.TCPStateRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **tcp_state_events ringbuf reserve failures** | %d |\n", in.TCPStateRingbufReserveFailures)
+	}
 	if in.Connect4TupleUpdateFailures > 0 {
 		fmt.Fprintf(b, "| **connect4 (tgid,fd)→tuple map update failures** | %d |\n", in.Connect4TupleUpdateFailures)
 	}

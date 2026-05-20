@@ -89,6 +89,7 @@ func buildDigestInput(
 ) report.DigestInput {
 	execN, tcpN, udpN, httpN, tlsN, fsN := stats.counts()
 	tlsConfFull, tlsConfPartial, tlsConfInferred, tlsConfUnknown, tlsConfUnknownKTLS := stats.tlsConfidenceCounts()
+	tcpStateTotal, tcpStateConfirmed, tcpStateRefused := stats.tcpStateTotals()
 	rawTPName := "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 	in := report.DigestInput{
 		DetectProfile:                  cfg.DetectProfile,
@@ -166,6 +167,10 @@ func buildDigestInput(
 		KTLSRingbufReserveFailures:     stats.ktlsRingbufReserveFailures(),
 		BPFHeartbeatFailures:           stats.bpfHeartbeatFailureCount(),
 		DroppedCounts:                  stats.snapshotDroppedCounts(),
+		TCPStateTotal:                  tcpStateTotal,
+		TCPStateConfirmed:              tcpStateConfirmed,
+		TCPStateRefused:                tcpStateRefused,
+		TCPStateRingbufReserveFailures: stats.tcpStateRingbufReserveFailures(),
 		FSGate:                         fsGate,
 		FSTotal:                        fsN,
 		FSRows:                         fsRows,

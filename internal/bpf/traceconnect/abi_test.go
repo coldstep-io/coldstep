@@ -17,7 +17,7 @@ func TestTraceconnectMapShapes(t *testing.T) {
 	}
 
 	t.Run("ringbuf maps keep 1<<24 capacity", func(t *testing.T) {
-		ringbufMaps := []string{"connect_events", "udp_events", "http_events", "tls_events"}
+		ringbufMaps := []string{"connect_events", "udp_events", "http_events", "tls_events", "tcp_state_events"}
 		for _, name := range ringbufMaps {
 			ms, ok := spec.Maps[name]
 			if !ok {
@@ -114,6 +114,7 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			"udp_sendmsg_multi_iovec_observed",
 			"tls_writev_multi_iovec_observed",
 			"io_uring_setup_observed",
+			"tcp_state_ringbuf_reserve_failures",
 		}
 		for _, name := range names {
 			ms, ok := spec.Maps[name]
