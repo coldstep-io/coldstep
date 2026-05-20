@@ -784,6 +784,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if len(defendCompiled.WildcardRiskDomains) > 0 {
 				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
+			meta.RunnerHasIPv6 = cfg.RunnerHasIPv6
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
 			}
