@@ -187,6 +187,10 @@ type DigestInput struct {
 	DefendDenyReserveFailures int
 	DefendFirstDeny           *DenyDigestRow
 
+	// AllowlistIPCount is the number of unique IPv4 addresses resolved from the
+	// defend allowlist at policy-compile time (mirrors MetaEvent.AllowlistIPCount).
+	AllowlistIPCount int
+
 	Connect4TupleUpdateFailures   int
 	UDPRingbufReserveFailures     int
 	DNSRingbufReserveFailures     int

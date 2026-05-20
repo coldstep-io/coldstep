@@ -96,6 +96,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		detectDest = cfg.DetectLogPath
 	}
 
+	// defendCompiled holds the resolved allowlist (IPv4 set + unresolved domain
+	// list). It is populated by compileDefendAllowlist below; declared up here
+	// so the shutdown digest defer can surface IP count + unresolved domains.
+	var defendCompiled policy.CompileResult
+
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
 		sum.CompatWarnings = compatWarnings
@@ -124,6 +129,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			}
 			in := buildDigestInput(cfg, stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), defendState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
 			in.PolicyCounts = sum.PolicyCounts
+			in.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
 			if err := report.WriteDetectDigest(detectDest, in); err != nil {
 				slog.Warn("detect digest", "err", err)
 			}
@@ -147,7 +153,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	compileCtx, compileCancel := context.WithTimeout(ctx, 120*time.Second)
 	defer compileCancel()
-	defendCompiled, err := compileDefendAllowlist(compileCtx, cfg, nil, 2)
+	defendCompiled, err = compileDefendAllowlist(compileCtx, cfg, nil, 2)
 	if err != nil {
 		return err
 	}
@@ -799,6 +805,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if len(defendCompiled.WildcardRiskDomains) > 0 {
 				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
+			meta.UnresolvedDomains = defendCompiled.UnresolvedDomains
 			meta.RunnerHasIPv6 = cfg.RunnerHasIPv6
 			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil)
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
