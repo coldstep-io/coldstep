@@ -25,6 +25,17 @@ type ktlsKey struct {
 	FD  uint32
 }
 
+// ktlsEntry records a single Mark: the wall-clock time used for TTL eviction
+// and the monotonic-ish markedAt timestamp (nanoseconds, captured at ringbuf
+// arrival in userspace) used to gate IsKTLS by ordering. The two clocks are
+// separate because the TTL evictor was already wall-clock-driven and tests
+// inject the clock, while the ordering gate is fundamentally about comparing
+// event arrival times within a single agent process.
+type ktlsEntry struct {
+	at       time.Time // wall-clock for TTL eviction
+	markedAt int64     // userspace arrival time of the KTLS event, in ns
+}
+
 // ktlsTracker correlates `ktls_offload` events with subsequent `tls`
 // ClientHello events emitted by trace_tls_write.inc. Both events flow through
 // the agent's ringbuf readers (readKTLSRing -> Mark, readTLSRing -> IsKTLS).
@@ -48,6 +59,18 @@ type ktlsKey struct {
 //     change that adds fd to tls_sniff_event can switch IsKTLS to the exact
 //     lookup without churning the tracker contract.
 //
+//   - The wildcard path is further gated by the TLS event's arrival timestamp:
+//     IsKTLS only returns true when tlsTimestampNs >= markedAt. A TLS event
+//     that landed in userspace before the KTLS Mark cannot have been encrypted
+//     by the offload that hadn't yet been observed, so its original SNI
+//     confidence is preserved. Without this ordering check, a single KTLS
+//     event would clobber every TLS event from the same pid for the entire
+//     TTL window — including pre-offload writes that legitimately carried
+//     plaintext ClientHello bytes. The timestamps are userspace ringbuf
+//     arrival times rather than kernel bpf_ktime_get_ns() because neither
+//     wire event currently ships a kernel timestamp; arrival-order matches
+//     emit-order in all but pathological ringbuf-drain stalls.
+//
 //   - Eviction is amortized into Mark: every insert sweeps entries older than
 //     ktlsTrackerTTL. There is no background goroutine — the tracker lives
 //     as long as a single agent run and the entry count is bounded by the
@@ -55,8 +78,8 @@ type ktlsKey struct {
 type ktlsTracker struct {
 	mu     sync.Mutex
 	now    func() time.Time
-	by     map[ktlsKey]time.Time
-	latest map[uint32]time.Time // pid -> most recent offload time (wildcard path)
+	by     map[ktlsKey]ktlsEntry
+	latest map[uint32]ktlsEntry // pid -> most recent offload (wildcard path)
 }
 
 // newKTLSTracker constructs a tracker with the wall-clock time source. Tests
@@ -69,16 +92,18 @@ func newKTLSTracker() *ktlsTracker {
 func newKTLSTrackerClock(now func() time.Time) *ktlsTracker {
 	return &ktlsTracker{
 		now:    now,
-		by:     make(map[ktlsKey]time.Time),
-		latest: make(map[uint32]time.Time),
+		by:     make(map[ktlsKey]ktlsEntry),
+		latest: make(map[uint32]ktlsEntry),
 	}
 }
 
-// Mark records that (pid, fd) handed TLS encryption to the kernel at the
-// current clock tick. Subsequent IsKTLS queries within ktlsTrackerTTL will
-// return true for either the exact key or the (pid, 0) wildcard form used by
-// the TLS ring reader. Each call also evicts any expired entries.
-func (t *ktlsTracker) Mark(pid, fd uint32) {
+// Mark records that (pid, fd) handed TLS encryption to the kernel at
+// markedAtNs (the TLS-offload event's userspace ringbuf arrival time in
+// nanoseconds). Subsequent IsKTLS queries within ktlsTrackerTTL whose own
+// tlsTimestampNs >= markedAtNs will return true; queries from events that
+// arrived before markedAtNs will not. Each call also evicts any expired
+// entries against the wall clock.
+func (t *ktlsTracker) Mark(pid, fd uint32, markedAtNs int64) {
 	if t == nil {
 		return
 	}
@@ -86,15 +111,20 @@ func (t *ktlsTracker) Mark(pid, fd uint32) {
 	defer t.mu.Unlock()
 	now := t.now()
 	t.evictLocked(now)
-	t.by[ktlsKey{PID: pid, FD: fd}] = now
-	t.latest[pid] = now
+	entry := ktlsEntry{at: now, markedAt: markedAtNs}
+	t.by[ktlsKey{PID: pid, FD: fd}] = entry
+	t.latest[pid] = entry
 }
 
-// IsKTLS reports whether (pid, fd) has been Marked within ktlsTrackerTTL.
-// When fd==0 the lookup falls back to the per-pid latest offload time — the
-// wildcard path used by the TLS ring reader, whose wire event does not carry
-// fd. Callers pass fd==0 deliberately to opt into that fallback.
-func (t *ktlsTracker) IsKTLS(pid, fd uint32) bool {
+// IsKTLS reports whether (pid, fd) has been Marked within ktlsTrackerTTL AND
+// tlsTimestampNs (the TLS event's userspace arrival time in nanoseconds) is at
+// or after the recorded markedAt. When fd==0 the lookup falls back to the
+// per-pid latest offload — the wildcard path used by the TLS ring reader,
+// whose wire event does not carry fd. Callers pass fd==0 deliberately to opt
+// into that fallback. A tlsTimestampNs that precedes the Mark always returns
+// false: the TLS event was observed before the offload and therefore cannot
+// have been clobbered by it.
+func (t *ktlsTracker) IsKTLS(pid, fd uint32, tlsTimestampNs int64) bool {
 	if t == nil {
 		return false
 	}
@@ -103,26 +133,26 @@ func (t *ktlsTracker) IsKTLS(pid, fd uint32) bool {
 	now := t.now()
 	cutoff := now.Add(-ktlsTrackerTTL)
 	if fd != 0 {
-		if ts, ok := t.by[ktlsKey{PID: pid, FD: fd}]; ok && ts.After(cutoff) {
-			return true
+		if e, ok := t.by[ktlsKey{PID: pid, FD: fd}]; ok && e.at.After(cutoff) {
+			return tlsTimestampNs >= e.markedAt
 		}
 		return false
 	}
-	if ts, ok := t.latest[pid]; ok && ts.After(cutoff) {
-		return true
+	if e, ok := t.latest[pid]; ok && e.at.After(cutoff) {
+		return tlsTimestampNs >= e.markedAt
 	}
 	return false
 }
 
 func (t *ktlsTracker) evictLocked(now time.Time) {
 	cutoff := now.Add(-ktlsTrackerTTL)
-	for k, ts := range t.by {
-		if !ts.After(cutoff) {
+	for k, e := range t.by {
+		if !e.at.After(cutoff) {
 			delete(t.by, k)
 		}
 	}
-	for pid, ts := range t.latest {
-		if !ts.After(cutoff) {
+	for pid, e := range t.latest {
+		if !e.at.After(cutoff) {
 			delete(t.latest, pid)
 		}
 	}

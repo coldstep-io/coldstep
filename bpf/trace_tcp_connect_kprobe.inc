@@ -10,13 +10,17 @@
  * connect_events ringbuf, correlated by pid_tgid.
  *
  * tcp_v4_connect runs synchronously in the caller's task context (no
- * scheduling between entry and return on the IPv4 TCP path), so a HASH
- * map keyed by bpf_get_current_pid_tgid() is a sufficient correlation
- * primitive — no cross-CPU concerns. The map bounds the in-flight set at
- * 4096 entries; in practice the kernel rarely has more than a few
- * concurrent tcp_v4_connect invocations per CPU. If userspace blows past
- * the bound we silently drop the result event — the entry connect_event
- * is still recorded, just without a paired result.
+ * scheduling between entry and return on the IPv4 TCP path), so an
+ * LRU_HASH map keyed by bpf_get_current_pid_tgid() is a sufficient
+ * correlation primitive — no cross-CPU concerns. The map bounds the
+ * in-flight set at 4096 entries; in practice the kernel rarely has more
+ * than a few concurrent tcp_v4_connect invocations per CPU. LRU_HASH (vs
+ * plain HASH) is chosen so that orphaned entries from dropped or missed
+ * kretprobes (e.g. when an attach point is bypassed by a fault path) are
+ * automatically evicted by the kernel rather than filling the table and
+ * silently blocking every subsequent BPF_NOEXIST insert. If userspace
+ * blows past the bound we silently drop the result event — the entry
+ * connect_event is still recorded, just without a paired result.
  *
  * Wire compatibility: connect_result_event reuses the connect_events
  * ringbuf (already drained by readConnectRing) but is distinguished from
@@ -41,7 +45,7 @@ _Static_assert(sizeof(struct connect_result_event) == 32,
 	       "connect_result_event wire size must match connectResultEventWireSize=32 in agent_linux.go");
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__uint(max_entries, 4096);
 	__type(key, __u64);
 	__type(value, __u8);
