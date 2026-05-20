@@ -255,6 +255,9 @@ func buildTriageRows(in DigestInput) [][2]string {
 	if in.IoUringSendTotal > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("io_uring writes=%d", in.IoUringSendTotal))
 	}
+	if in.IoUringTLSHelloObserved > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("🚨 io_uring TLS ClientHello=%d", in.IoUringTLSHelloObserved))
+	}
 	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
 	}
@@ -436,6 +439,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	}
 	if in.IoUringSendTotal > 0 {
 		fmt.Fprintf(b, "| **io_uring writes** | %d network sends observed (SNI extraction not possible) |\n", in.IoUringSendTotal)
+	}
+	if in.IoUringTLSHelloObserved > 0 {
+		fmt.Fprintf(b, "| **🚨 io_uring TLS ClientHello prefixes** | %d submissions matched TLS 1.x record signature (enhanced profile peek) |\n", in.IoUringTLSHelloObserved)
 	}
 	if in.IoUringRingbufReserveFailures > 0 {
 		fmt.Fprintf(b, "| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures)
@@ -905,7 +911,10 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
 	}
 	if in.IoUringSendTotal > 0 {
-		b.WriteString("- **io_uring writes** counts socket-class SQE submissions (`IORING_OP_SENDMSG`, `IORING_OP_SEND`) seen via `raw_tp/io_uring_submit_sqe` (P6 Phase 1). SNI / HTTP payloads are not captured from the submission point. `IORING_OP_WRITE` / `IORING_OP_WRITEV` arrive in Phase 2 with fd→socket resolution.\n")
+		b.WriteString("- **io_uring writes** counts socket-class SQE submissions (`IORING_OP_SENDMSG`, `IORING_OP_SEND`) seen via `raw_tp/io_uring_submit_sqe`. SNI / HTTP payloads are not captured from the submission point alone.\n")
+	}
+	if in.IoUringTLSHelloObserved > 0 {
+		b.WriteString("- **🚨 io_uring TLS ClientHello** counts SQE submissions whose user-space buffer prefix matched the TLS record signature (`0x16 0x03 <=0x04 _ _ 0x01`) via a bounded `bpf_probe_read_user` peek (P6 Phase 2, enhanced profile only). The 6-byte signature has effectively zero collision rate against random data — non-zero is strong evidence that the io_uring bypass path is being used to initiate outbound TLS handshakes that escape syscall-based hooks. SNI is still not captured; identifying the destination requires correlating the surrounding `connect`/`tcp_state` rows.\n")
 	}
 	if ipv6EgressObserved(in) > 0 {
 		switch {

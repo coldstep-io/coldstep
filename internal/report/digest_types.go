@@ -250,15 +250,21 @@ type DigestInput struct {
 	// It is a syscall-hook bypass-class signal, not proof of exfiltration.
 	IoUringSetupObserved int
 	// IoUringSendTotal counts io_uring socket-class SQE submissions
-	// (IORING_OP_SENDMSG, IORING_OP_SEND) seen via raw_tp/io_uring_submit_sqe
-	// (P6 Phase 1). Non-zero means the workload bypassed our syscall arms
-	// for network sends — SNI / payload extraction is not possible from the
-	// SQE submission point. WRITE / WRITEV land in Phase 2 with fd
-	// resolution.
+	// (IORING_OP_SENDMSG, IORING_OP_SEND) seen via raw_tp/io_uring_submit_sqe.
+	// Non-zero means the workload bypassed our syscall arms for network
+	// sends — SNI / payload extraction is not possible from the SQE
+	// submission point alone.
 	IoUringSendTotal int
 	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
 	// io_uring_events channel — non-zero indicates io_uring telemetry pressure.
 	IoUringRingbufReserveFailures int
+	// IoUringTLSHelloObserved counts io_uring SQE submissions whose user-buffer
+	// prefix matched the TLS ClientHello record signature (P6 Phase 2, enhanced
+	// profile only). Always zero outside COLDSTEP_DETECT_PROFILE=enhanced; when
+	// non-zero, the digest gains an evidence row showing that the io_uring
+	// bypass path is being used to initiate TLS handshakes (the strongest
+	// signal Phase 2 can produce from the submission point).
+	IoUringTLSHelloObserved int
 	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool

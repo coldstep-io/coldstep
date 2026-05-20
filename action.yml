@@ -157,11 +157,14 @@ inputs:
     description: >-
       Internal. When true (default), disables io_uring via sysctl before the agent starts.
       io_uring operations bypass syscall-based eBPF hooks; disabling it closes the single
-      largest evasion vector for CI workloads that do not need io_uring. P6 Phase 1 also
+      largest evasion vector for CI workloads that do not need io_uring. The agent also
       adds best-effort detection via raw_tp/io_uring_submit_sqe (kernel 5.14+) that
       surfaces socket-class io_uring SQEs (SEND, SENDMSG) in the JSONL stream and digest
-      when the sysctl gate is bypassed or set to false; the sysctl disable remains the
-      primary defense.
+      when the sysctl gate is bypassed or set to false. When detect-profile=enhanced,
+      the probe additionally attempts a bounded bpf_probe_read_user peek on the SQE user
+      buffer and flags submissions whose prefix matches the TLS ClientHello signature,
+      surfacing outbound TLS over io_uring under "🚨 io_uring TLS ClientHello prefixes".
+      The sysctl disable remains the primary defense.
     required: false
     default: 'true'
 

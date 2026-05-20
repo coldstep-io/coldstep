@@ -274,13 +274,19 @@ _Static_assert(sizeof(struct tcp_state_event) == 48,
 	       "tcp_state_event wire size must match tcpStateEventWireSize=48 in agent_linux.go");
 
 /*
- * P6 Phase 1: io_uring write-class submission visibility.
+ * P6 io_uring write-class submission visibility.
  *
  * Emitted by SEC("raw_tp/io_uring_submit_sqe") in trace_connect.bpf.c when
  * the SQE opcode is IORING_OP_SENDMSG (9) or IORING_OP_SEND (26) — both
  * unambiguously socket sends, so the event can be emitted without resolving
- * the SQE's fd back to a tracked socket. Phase 1 leaves `fd`, `daddr`, and
- * `dport` zero; Phase 2 will add WRITE/WRITEV with fd→socket resolution.
+ * the SQE's fd back to a tracked socket.
+ *
+ * P6 Phase 1 left `fd`, `daddr`, and `dport` zero; Phase 2 (this revision)
+ * keeps that for now but reuses the trailing pad byte as `has_tls_hello`,
+ * a 1-bit flag set when the optional user-buffer peek (gated by
+ * COLDSTEP_DETECT_PROFILE=enhanced) found a TLS ClientHello prefix in the
+ * SQE's user-space buffer. Wire size is unchanged at 40 bytes so the ABI
+ * guard test does not regress.
  *
  * Layout: 8 + 4 + 4 + 4 + 2 + 1 + 1 + 16 = 40 bytes, alignment-of-8 → no
  * trailing pad. Locked by the _Static_assert below.
@@ -292,7 +298,7 @@ struct io_uring_send_event {
 	__u8 daddr[4];
 	__u8 dport[2];
 	__u8 op;
-	__u8 _pad;
+	__u8 has_tls_hello;
 	__u8 comm[16];
 };
 _Static_assert(sizeof(struct io_uring_send_event) == 40,

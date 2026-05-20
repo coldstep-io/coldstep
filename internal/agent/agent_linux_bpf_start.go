@@ -157,28 +157,40 @@ func startKTLSTrace() (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk
 // already-loaded traceconnect collection and opens the io_uring_events
 // ringbuf reader. The raw tracepoint exists on kernels 5.14+; on older
 // kernels link.AttachRawTracepoint returns ENOENT — callers translate that
-// into a degraded BPFStatus row but keep the agent running (P6 Phase 1
-// detection is best-effort).
-func startIoUringTrace(objs *traceconnect.TraceconnectObjects) (*ringbuf.Reader, link.Link, error) {
+// into a degraded BPFStatus row but keep the agent running (best-effort).
+//
+// When enhancedPeek is true (set when COLDSTEP_DETECT_PROFILE=enhanced),
+// also flips the io_uring_peek_cfg map's key-0 byte to 1 so the BPF probe
+// performs the optional bpf_probe_read_user TLS ClientHello peek on each
+// SEND/SENDMSG submission. peekCfgFailed signals when that map update
+// failed — agent still attaches the program but the peek stays disabled in
+// BPF and the digest can flag the degraded capability.
+func startIoUringTrace(objs *traceconnect.TraceconnectObjects, enhancedPeek bool) (rd *ringbuf.Reader, lnk link.Link, peekCfgFailed bool, err error) {
 	if objs == nil {
-		return nil, nil, fmt.Errorf("io_uring trace: traceconnect objects not loaded")
+		return nil, nil, false, fmt.Errorf("io_uring trace: traceconnect objects not loaded")
 	}
 	if objs.TraceIoUringSubmitSqe == nil {
-		return nil, nil, fmt.Errorf("io_uring trace: program absent from collection")
+		return nil, nil, false, fmt.Errorf("io_uring trace: program absent from collection")
 	}
-	lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+	lnk, err = link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "io_uring_submit_sqe",
 		Program: objs.TraceIoUringSubmitSqe,
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	rd, err := ringbuf.NewReader(objs.IoUringEvents)
+	rd, err = ringbuf.NewReader(objs.IoUringEvents)
 	if err != nil {
 		_ = lnk.Close()
-		return nil, nil, err
+		return nil, nil, false, err
 	}
-	return rd, lnk, nil
+	if enhancedPeek {
+		if uerr := objs.IoUringPeekCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); uerr != nil {
+			peekCfgFailed = true
+			slog.Warn("io_uring_peek_cfg bpf cfg", "err", uerr)
+		}
+	}
+	return rd, lnk, peekCfgFailed, nil
 }
 
 func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {

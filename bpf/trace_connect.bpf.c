@@ -273,6 +273,33 @@ struct {
 } io_uring_ringbuf_reserve_failures SEC(".maps");
 
 /*
+ * P6 Phase 2: enhanced-profile peek toggle. Userspace writes 1 to key 0 when
+ * COLDSTEP_DETECT_PROFILE=enhanced; the io_uring submit handler reads this
+ * flag and only attempts bpf_probe_read_user on the SQE buffer pointer when
+ * set. Keeps the standard-profile fast path (single CO-RE read of opcode)
+ * undisturbed.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8);
+} io_uring_peek_cfg SEC(".maps");
+
+/*
+ * P6 Phase 2: counter for io_uring submissions whose user-buffer prefix
+ * matched the TLS ClientHello signature. Surfaced in the digest under
+ * "io_uring TLS ClientHello detections" so operators can tell whether the
+ * sysctl-bypass path is being used for outbound TLS handshakes.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} io_uring_tls_hello_observed SEC(".maps");
+
+/*
  * AUDIT(5a): null checked — every `note_*` counter helper below follows the
  * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
  */
@@ -379,6 +406,16 @@ static __always_inline void note_io_uring_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&io_uring_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	(*v)++;
+}
+
+static __always_inline void note_io_uring_tls_hello_observed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&io_uring_tls_hello_observed, &k);
 
 	if (!v)
 		return;
@@ -854,7 +891,7 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 }
 
 /*
- * P6 Phase 1: io_uring write-class submission visibility.
+ * P6 io_uring write-class submission visibility.
  *
  * Raw tracepoint signature (kernel 5.14+):
  *
@@ -866,20 +903,37 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
  * (`enum io_uring_op`, stable since 5.1). Both are unambiguously network
  * sends so we can emit the event without resolving the SQE's fd back to a
  * socket. IORING_OP_WRITE (23) and IORING_OP_WRITEV (2) are deliberately
- * out of scope for Phase 1: their fd may be a regular file, and the
- * generic `req->fd` / `req->cqe.fd` field that would let us distinguish
- * socket vs file writes only appears on kernels whose vmlinux BTF carries
+ * out of scope: their fd may be a regular file, and the generic
+ * `req->fd` / `req->cqe.fd` field that would let us distinguish socket
+ * vs file writes only appears on kernels whose vmlinux BTF carries
  * `struct io_cqe` (post-5.15). Adding them without fd resolution would
- * flood the ringbuf on routine file I/O — Phase 2 will pair the WRITE /
- * WRITEV arms with a robust fd → socket check.
+ * flood the ringbuf on routine file I/O.
  *
- * Destination tuple is best-effort: `req->opcode` is the only field we read
- * from io_kiocb in Phase 1, so the C source compiles against any vmlinux.h
- * that already exposes struct io_kiocb (kernel 5.1+). daddr/dport are zero
- * in the emitted event — Phase 2 will populate them once fd resolution lands.
+ * Phase 2 (this revision): when COLDSTEP_DETECT_PROFILE=enhanced, do an
+ * additional best-effort bounded read of the SQE's user-space buffer to
+ * detect TLS ClientHello prefixes. The opcode-specific SQE payload is
+ * stored inside io_kiocb starting at offset 8 (immediately after the
+ * `file*` / `cmd.file` shared union member) on kernels 5.14+ where
+ * io_kiocb has a `cmd` union — for io_sr_msg (the SEND/SENDMSG case) the
+ * first u64 of that region is the user buffer pointer. Older kernels with
+ * a different layout will read unrelated bytes; the strict 4-byte TLS
+ * record signature (0x16, 0x03, <=0x04, *, *, 0x01) keeps the false-
+ * positive rate near zero. The peek is gated by the io_uring_peek_cfg
+ * map so the standard-profile fast path (CO-RE read of opcode only) is
+ * unchanged.
  */
 #define COLDSTEP_IORING_OP_SENDMSG 9
 #define COLDSTEP_IORING_OP_SEND    26
+
+/*
+ * Offset of cmd.data[0] inside io_kiocb. file* (or cmd.file) occupies the
+ * first 8 bytes of the union; the opcode-specific payload follows. This is
+ * stable for kernels 5.14+ where the cmd union exists. Hard-coded rather
+ * than CO-RE-relocated so the C source still compiles when vmlinux.h does
+ * not carry `struct io_cmd_data` (older 5.14 BTF dumps).
+ */
+#define COLDSTEP_IO_KIOCB_CMD_DATA_OFFSET 8u
+#define COLDSTEP_IO_URING_TLS_PEEK_LEN 6u
 
 SEC("raw_tp/io_uring_submit_sqe")
 int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
@@ -898,6 +952,40 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 	    opcode != COLDSTEP_IORING_OP_SEND)
 		return 0;
 
+	__u8 has_tls_hello = 0;
+	{
+		__u32 key0 = 0;
+		/* AUDIT(5a): null checked — `!en` short-circuits before `*en`. */
+		__u8 *en = bpf_map_lookup_elem(&io_uring_peek_cfg, &key0);
+
+		if (en && *en) {
+			unsigned long buf_ptr = 0;
+			void *sqe_data = (void *)((unsigned long)req +
+						  COLDSTEP_IO_KIOCB_CMD_DATA_OFFSET);
+
+			/* AUDIT(5f): return checked — non-zero leaves buf_ptr=0
+			 * and the peek is skipped. */
+			if (bpf_probe_read_kernel(&buf_ptr, sizeof(buf_ptr),
+						  sqe_data) == 0 && buf_ptr) {
+				unsigned char peek[COLDSTEP_IO_URING_TLS_PEEK_LEN];
+
+				/* AUDIT(5f): return checked — non-zero leaves
+				 * has_tls_hello=0. Constant peek length keeps
+				 * the verifier happy. */
+				if (bpf_probe_read_user(peek, sizeof(peek),
+							(void *)buf_ptr) == 0) {
+					if (peek[0] == 0x16 &&   /* ContentType: Handshake */
+					    peek[1] == 0x03 &&   /* LegacyRecordVersion major */
+					    peek[2] <= 0x04 &&   /* minor: SSLv3..TLS1.3 legacy */
+					    peek[5] == 0x01) {   /* HandshakeType: ClientHello */
+						has_tls_hello = 1;
+						note_io_uring_tls_hello_observed();
+					}
+				}
+			}
+		}
+	}
+
 	struct io_uring_send_event *ev =
 		bpf_ringbuf_reserve(&io_uring_events, sizeof(*ev), 0);
 
@@ -911,7 +999,7 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 	__builtin_memset(ev->daddr, 0, sizeof(ev->daddr));
 	__builtin_memset(ev->dport, 0, sizeof(ev->dport));
 	ev->op = opcode;
-	ev->_pad = 0;
+	ev->has_tls_hello = has_tls_hello;
 	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
 	bpf_ringbuf_submit(ev, 0);
 	return 0;

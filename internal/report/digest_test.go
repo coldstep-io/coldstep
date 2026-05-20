@@ -134,6 +134,40 @@ func TestBuildDetectMarkdown_IoUringSendRow(t *testing.T) {
 	})
 }
 
+func TestBuildDetectMarkdown_IoUringTLSHelloRow(t *testing.T) {
+	t.Run("hidden when zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			IoUringSendTotal:  2,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "io_uring TLS ClientHello") {
+			t.Fatalf("TLS ClientHello row should be hidden when count is zero; got:\n%s", md)
+		}
+	})
+	t.Run("visible when non-zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                     []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:               1,
+			TCPTotal:                1,
+			IoUringSendTotal:        4,
+			IoUringTLSHelloObserved: 2,
+			MaxRowsPerSection:       50,
+		})
+		for _, needle := range []string{
+			"| **🚨 io_uring TLS ClientHello prefixes** | 2 submissions matched TLS 1.x record signature (enhanced profile peek) |",
+			"🚨 io_uring TLS ClientHello=2",
+			"**🚨 io_uring TLS ClientHello** counts SQE submissions whose user-space buffer prefix matched",
+		} {
+			if !strings.Contains(md, needle) {
+				t.Fatalf("missing %q in:\n%s", needle, md)
+			}
+		}
+	})
+}
+
 func TestBuildDetectMarkdown_TopDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{

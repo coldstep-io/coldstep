@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -473,6 +474,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
 				stats.setIoUringRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringRingbufReserveFailures, "io_uring_ringbuf_reserve_failures"))
+				stats.setIoUringTLSHelloObserved(readUint32PerCPUArraySum(syscallObjs.IoUringTlsHelloObserved, "io_uring_tls_hello_observed"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
@@ -506,12 +508,17 @@ func Run(ctx context.Context, cfg config.Config) error {
 			}
 		}
 
-		// P6 Phase 1: best-effort attach of raw_tp/io_uring_submit_sqe. On
+		// P6 Phase 1+2: best-effort attach of raw_tp/io_uring_submit_sqe. On
 		// kernels < 5.14 the tracepoint doesn't exist — degrade to a BPFStatus
 		// row rather than failing the agent. The probe is filtered to two
 		// write-class opcodes (SENDMSG=9, SEND=26) so volume stays bounded
-		// even when many io_uring users are active.
-		if rd, lnk, ioErr := startIoUringTrace(syscallObjs); ioErr != nil {
+		// even when many io_uring users are active. When the detect profile
+		// is "enhanced", flip the io_uring_peek_cfg map's key-0 byte so BPF
+		// also attempts a bounded bpf_probe_read_user TLS ClientHello peek
+		// on each submission (Phase 2). Standard profile leaves the map at
+		// zero so the peek path stays cold.
+		enhancedIoUringPeek := strings.EqualFold(strings.TrimSpace(cfg.DetectProfile), "enhanced")
+		if rd, lnk, peekFailed, ioErr := startIoUringTrace(syscallObjs, enhancedIoUringPeek); ioErr != nil {
 			slog.Info("io_uring submit_sqe tracing disabled", "err", ioErr)
 			bpfSt = append(bpfSt, telemetry.BPFStatus{
 				Name:   "raw_tp/io_uring_submit_sqe",
@@ -521,8 +528,17 @@ func Run(ctx context.Context, cfg config.Config) error {
 		} else {
 			ioUringLnk = lnk
 			ioUringRd.R = rd
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/io_uring_submit_sqe", OK: true})
-			slog.Info("tracing io_uring write-class submissions (raw_tp/io_uring_submit_sqe)")
+			ioStatus := telemetry.BPFStatus{Name: "raw_tp/io_uring_submit_sqe", OK: true}
+			if peekFailed {
+				ioStatus.OK = false
+				ioStatus.Detail = "io_uring_peek_cfg map update failed (TLS ClientHello peek disabled in BPF)"
+			}
+			bpfSt = append(bpfSt, ioStatus)
+			if enhancedIoUringPeek && !peekFailed {
+				slog.Info("tracing io_uring write-class submissions + enhanced TLS peek (raw_tp/io_uring_submit_sqe)")
+			} else {
+				slog.Info("tracing io_uring write-class submissions (raw_tp/io_uring_submit_sqe)")
+			}
 			defer func() {
 				if ioUringLnk != nil {
 					_ = ioUringLnk.Close()
