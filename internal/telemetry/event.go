@@ -58,8 +58,15 @@ type MetaEvent struct {
 	// has IPv6 but no IPv6 hooks are loaded — observation is incomplete on
 	// that environment. Population is the action layer's job; the field is
 	// pre-wired here so consumers can rely on it before that lands.
-	RunnerHasIPv6 bool   `json:"runner_has_ipv6,omitempty"`
-	Sig           string `json:"sig,omitempty"`
+	RunnerHasIPv6 bool `json:"runner_has_ipv6,omitempty"`
+	// DroppedEvents counts ringbuffer reserve failures per event type at shutdown.
+	// Non-zero values indicate silent event loss during the run. Keys are the BPF
+	// counter names minus the `_ringbuf_reserve_failures` suffix (e.g. "connect",
+	// "udp", "http", "tls", "deny", "io_uring"). Only emitted on the shutdown
+	// MetaEvent; the startup MetaEvent leaves this nil (omitted). The map is set
+	// to nil when all counters are zero so omitempty hides it entirely.
+	DroppedEvents map[string]uint64 `json:"dropped_events,omitempty"`
+	Sig           string            `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.

@@ -1307,3 +1307,58 @@ func TestReadUint32PerCPUArraySum_NilMapReturnsZero(t *testing.T) {
 		t.Fatalf("expected no log output on nil map, got: %q", buf.String())
 	}
 }
+
+// TestBuildDroppedEventsMap_OmitsZerosAndNilWhenClean asserts the H2 shutdown
+// meta surface: when no ringbuf reserve failed, the map is nil so MetaEvent's
+// omitempty hides the field. When some channels failed, the map contains only
+// the non-zero entries keyed by BPF-counter-name-minus-suffix.
+func TestBuildDroppedEventsMap_OmitsZerosAndNilWhenClean(t *testing.T) {
+	stats := newRunStats()
+	defst := newDefendState()
+	if got := buildDroppedEventsMap(stats, defst); got != nil {
+		t.Fatalf("expected nil map when all counters zero, got %#v", got)
+	}
+
+	stats.setConnectRingbufReserveFailures(3)
+	stats.setUDPRingbufReserveFailures(0)
+	stats.setHTTPRingbufReserveFailures(1)
+	stats.setTLSRingbufReserveFailures(0)
+	stats.setIoUringRingbufReserveFailures(2)
+	defst.setDenyReserveFailures(5)
+
+	got := buildDroppedEventsMap(stats, defst)
+	want := map[string]uint64{
+		"connect":  3,
+		"http":     1,
+		"io_uring": 2,
+		"deny":     5,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Fatalf("key %q: got %d, want %d (full map: %v)", k, got[k], v, got)
+		}
+	}
+	if _, ok := got["udp"]; ok {
+		t.Fatalf("zero-valued udp key should be omitted, got %v", got)
+	}
+	if _, ok := got["tls"]; ok {
+		t.Fatalf("zero-valued tls key should be omitted, got %v", got)
+	}
+}
+
+// TestBuildDroppedEventsMap_NilDefendState guards the defend-disabled path
+// (detect-only runs construct no defendState — historically a nil pointer).
+func TestBuildDroppedEventsMap_NilDefendState(t *testing.T) {
+	stats := newRunStats()
+	stats.setUDPRingbufReserveFailures(7)
+	got := buildDroppedEventsMap(stats, nil)
+	if got["udp"] != 7 {
+		t.Fatalf("expected udp=7, got %v", got)
+	}
+	if _, ok := got["deny"]; ok {
+		t.Fatalf("deny key should be absent when defendState is nil, got %v", got)
+	}
+}

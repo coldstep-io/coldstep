@@ -598,7 +598,7 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 		fmt.Fprintf(b, "| **dropped events (decode/jsonl)** | %d |\n", dt)
 	}
 	if rb := totalDetectRingbufReserveFailures(in); rb > 0 {
-		fmt.Fprintf(b, "| **⚠️ Ringbuf drops (detect-path total)** | %d events dropped |\n", rb)
+		fmt.Fprintf(b, "| **⚠️ Dropped events (ringbuf overflow)** | %d |\n", rb)
 	}
 
 	// --- health (last) ---
