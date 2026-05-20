@@ -52,6 +52,7 @@ func TestNetworkAndAuditWireSizes(t *testing.T) {
 		{"deny_event", uintptr(denyEventWireSize), uintptr(4 + 4 + 16 + 1 + 1 + 1 + 1 + 16 + 2)},
 		{"bpf_audit_event", uintptr(bpfAuditEventWireSize), uintptr(4 + 4 + 4 + 16)},
 		{"tcp_state_event", uintptr(tcpStateEventWireSize), uintptr(8 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 16)},
+		{"io_uring_send_event", uintptr(ioUringSendEventWireSize), uintptr(8 + 4 + 4 + 4 + 2 + 1 + 1 + 16)},
 		{"dns_sniff_event_legacy", uintptr(dnsSniffEventWireSizeLegacy), uintptr(4 + dnsSniffMaxPayload)},
 		{"dns_sniff_event", uintptr(dnsSniffEventWireSize), uintptr(4 + 1 + 3 + dnsSniffMaxPayload)},
 		{"ktls_event", uintptr(ktlsEventWireSize), uintptr(4 + 4 + 16 + 4 + 1 + 3)},

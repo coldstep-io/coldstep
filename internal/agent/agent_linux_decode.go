@@ -212,6 +212,42 @@ func decodeTCPStateEvent(raw []byte) (timestampNS uint64, pid uint32, saddr, dad
 	return timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, comm, true
 }
 
+// decodeIOUringSendEvent parses io_uring_send_event (40 bytes, see
+// bpf/trace_connect_obs.h). Layout: ts(8) pid(4) fd(4) daddr(4) dport(2)
+// op(1) _pad(1) comm(16). dport is stored in network byte order (mirrors
+// the connect4_tuple cache), daddr is raw 4-byte big-endian.
+func decodeIOUringSendEvent(raw []byte) (ts uint64, pid uint32, fd uint32, daddr [4]byte, dport uint16, op uint8, comm [16]byte, ok bool) {
+	if len(raw) < ioUringSendEventWireSize {
+		return 0, 0, 0, [4]byte{}, 0, 0, [16]byte{}, false
+	}
+	ts = binary.LittleEndian.Uint64(raw[0:8])
+	pid = binary.LittleEndian.Uint32(raw[8:12])
+	fd = binary.LittleEndian.Uint32(raw[12:16])
+	copy(daddr[:], raw[16:20])
+	dport = binary.BigEndian.Uint16(raw[20:22])
+	op = raw[22]
+	// raw[23] is _pad
+	copy(comm[:], raw[24:40])
+	return ts, pid, fd, daddr, dport, op, comm, true
+}
+
+// ioUringOpName maps the raw IORING_OP_ byte to the JSONL op string. Values
+// from include/uapi/linux/io_uring.h (`enum io_uring_op`, stable since 5.1).
+func ioUringOpName(op uint8) string {
+	switch op {
+	case 2:
+		return "WRITEV"
+	case 9:
+		return "SENDMSG"
+	case 23:
+		return "WRITE"
+	case 26:
+		return "SEND"
+	default:
+		return "UNKNOWN"
+	}
+}
+
 func decodeDenyEvent(raw []byte) (tgid, tid uint32, comm [16]byte, protocol uint8, reason uint8, af uint8,
 	daddr16 [16]byte, dport uint16, ok bool) {
 	if len(raw) < denyEventWireSize {

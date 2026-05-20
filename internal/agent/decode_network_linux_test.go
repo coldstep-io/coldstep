@@ -510,3 +510,59 @@ func TestDecodeBPFAuditEvent_tooShort(t *testing.T) {
 		t.Fatal("expected ok=false for short input")
 	}
 }
+
+func TestDecodeIOUringSendEvent_roundTrip(t *testing.T) {
+	// Wire layout: ts(8) pid(4) fd(4) daddr(4) dport(2) op(1) _pad(1) comm(16).
+	raw := make([]byte, ioUringSendEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1715000000000)
+	binary.LittleEndian.PutUint32(raw[8:12], 9001)
+	binary.LittleEndian.PutUint32(raw[12:16], 7)
+	raw[16], raw[17], raw[18], raw[19] = 1, 2, 3, 4
+	binary.BigEndian.PutUint16(raw[20:22], 443)
+	raw[22] = 26 // IORING_OP_SEND
+	raw[23] = 0  // _pad
+	copy(raw[24:40], []byte("curl\x00"))
+
+	ts, pid, fd, daddr, dport, op, comm, ok := decodeIOUringSendEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if ts != 1715000000000 || pid != 9001 || fd != 7 || dport != 443 || op != 26 {
+		t.Fatalf("got ts=%d pid=%d fd=%d dport=%d op=%d", ts, pid, fd, dport, op)
+	}
+	if daddr != [4]byte{1, 2, 3, 4} {
+		t.Fatalf("daddr %v", daddr)
+	}
+	if got := string(bytes.TrimRight(comm[:], "\x00")); got != "curl" {
+		t.Fatalf("comm %q", got)
+	}
+	if got := ioUringOpName(op); got != "SEND" {
+		t.Fatalf("ioUringOpName(26) = %q, want SEND", got)
+	}
+}
+
+func TestDecodeIOUringSendEvent_tooShort(t *testing.T) {
+	_, _, _, _, _, _, _, ok := decodeIOUringSendEvent(make([]byte, ioUringSendEventWireSize-1))
+	if ok {
+		t.Fatal("expected ok=false for short input")
+	}
+}
+
+func TestIOUringOpName_allMappedAndUnknown(t *testing.T) {
+	cases := []struct {
+		op   uint8
+		want string
+	}{
+		{2, "WRITEV"},
+		{9, "SENDMSG"},
+		{23, "WRITE"},
+		{26, "SEND"},
+		{0, "UNKNOWN"},
+		{255, "UNKNOWN"},
+	}
+	for _, c := range cases {
+		if got := ioUringOpName(c.op); got != c.want {
+			t.Errorf("ioUringOpName(%d) = %q, want %q", c.op, got, c.want)
+		}
+	}
+}

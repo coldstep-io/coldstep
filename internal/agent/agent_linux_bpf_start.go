@@ -153,6 +153,34 @@ func startKTLSTrace() (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk
 	return rd, objs, lnk, nil
 }
 
+// startIoUringTrace attaches SEC("raw_tp/io_uring_submit_sqe") from the
+// already-loaded traceconnect collection and opens the io_uring_events
+// ringbuf reader. The raw tracepoint exists on kernels 5.14+; on older
+// kernels link.AttachRawTracepoint returns ENOENT — callers translate that
+// into a degraded BPFStatus row but keep the agent running (P6 Phase 1
+// detection is best-effort).
+func startIoUringTrace(objs *traceconnect.TraceconnectObjects) (*ringbuf.Reader, link.Link, error) {
+	if objs == nil {
+		return nil, nil, fmt.Errorf("io_uring trace: traceconnect objects not loaded")
+	}
+	if objs.TraceIoUringSubmitSqe == nil {
+		return nil, nil, fmt.Errorf("io_uring trace: program absent from collection")
+	}
+	lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+		Name:    "io_uring_submit_sqe",
+		Program: objs.TraceIoUringSubmitSqe,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	rd, err := ringbuf.NewReader(objs.IoUringEvents)
+	if err != nil {
+		_ = lnk.Close()
+		return nil, nil, err
+	}
+	return rd, lnk, nil
+}
+
 func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {
 	objs = new(tracebpfaudit.TracebpfauditObjects)
 	if err = tracebpfaudit.LoadTracebpfauditObjects(objs, nil); err != nil {
