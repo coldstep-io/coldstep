@@ -218,6 +218,117 @@ func TestDecodeTCPStateEvent_tooShort(t *testing.T) {
 	}
 }
 
+// TestDecodeConnectResultEvent guards the wire→Go decode for the P3-2
+// connect_result_event emitted by the kretprobe on tcp_v4_connect. ETIMEDOUT
+// (-110) is the most common non-success result on hosted runners and exercises
+// the negative-errno round-trip through the (__u32 → int32) reinterpret-cast.
+// Callers are expected to have already matched connectResultMagic at offset 0
+// before invoking the decoder, so the test stages the magic too even though
+// the decoder itself does not re-validate it.
+func TestDecodeConnectResultEvent(t *testing.T) {
+	raw := make([]byte, connectResultEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], connectResultMagic)
+	// result = -110 (-ETIMEDOUT) round-tripped through unsigned-bits. The
+	// runtime variable defeats Go's constant-overflow check, which rejects a
+	// direct uint32(int32(-110)) conversion even though the same byte pattern
+	// is exactly what the kernel writes to the wire.
+	var wantResult int32 = -110
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(wantResult)) // #nosec G115 -- intentional reinterpret-cast for the wire round-trip //nolint:gosec
+	binary.LittleEndian.PutUint32(raw[8:12], 1234)              // tgid
+	binary.LittleEndian.PutUint32(raw[12:16], 1235)             // tid
+	copy(raw[16:32], []byte("curl\x00"))                        // comm
+
+	tgid, tid, comm, result, ok := decodeConnectResultEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if tgid != 1234 {
+		t.Errorf("tgid = %d, want 1234", tgid)
+	}
+	if tid != 1235 {
+		t.Errorf("tid = %d, want 1235", tid)
+	}
+	if result != wantResult {
+		t.Errorf("result = %d, want -110 (-ETIMEDOUT)", result)
+	}
+	if got := string(bytes.TrimRight(comm[:], "\x00")); got != "curl" {
+		t.Errorf("comm = %q, want \"curl\"", got)
+	}
+}
+
+func TestDecodeConnectResultEvent_tooShort(t *testing.T) {
+	_, _, _, _, ok := decodeConnectResultEvent(make([]byte, connectResultEventWireSize-1))
+	if ok {
+		t.Fatal("expected ok=false for short input")
+	}
+}
+
+// TestClassifyConnectRingRecord covers the magic-prefix dispatcher used by
+// readConnectRing. The connect_events ringbuf is multiplexed across three
+// record families (entry connect_event, canary, kretprobe connect_result) so
+// drift in either magic value, in the little-endian read order, or in the
+// short-record guard would silently mis-route every event. Table-driven
+// rather than three separate tests so adding a future magic only edits the
+// table.
+func TestClassifyConnectRingRecord(t *testing.T) {
+	mk := func(magic uint32, extra int) []byte {
+		b := make([]byte, 4+extra)
+		binary.LittleEndian.PutUint32(b[0:4], magic)
+		return b
+	}
+	cases := []struct {
+		name string
+		raw  []byte
+		want connectRingRecordKind
+	}{
+		{
+			name: "canary magic routes to canary",
+			raw:  mk(canaryMagic, canaryEventWireSize-4),
+			want: connectRingKindCanary,
+		},
+		{
+			name: "connect_result magic routes to connect_result",
+			raw:  mk(connectResultMagic, connectResultEventWireSize-4),
+			want: connectRingKindConnectResult,
+		},
+		{
+			// Real tgid leading bytes — must NOT collide with either magic.
+			// PID_MAX_LIMIT = 4194304 (0x00400000) so any plausible tgid
+			// fits in a small uint32 well below both 0xCA1A1210 and
+			// 0xC0EE0001 — verifying that the default branch fires.
+			name: "plausible tgid prefix routes to connect_event",
+			raw:  mk(12345, connectEventWireSize-4),
+			want: connectRingKindConnectEvent,
+		},
+		{
+			name: "zero prefix routes to connect_event",
+			raw:  mk(0, connectEventWireSize-4),
+			want: connectRingKindConnectEvent,
+		},
+		{
+			// Records shorter than the magic itself short-circuit to the
+			// default branch; the downstream connect_event decoder then
+			// fails the too-short check and the dropped counter advances.
+			name: "too-short record routes to connect_event",
+			raw:  []byte{0xCA, 0x1A},
+			want: connectRingKindConnectEvent,
+		},
+		{
+			name: "empty record routes to connect_event",
+			raw:  nil,
+			want: connectRingKindConnectEvent,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := classifyConnectRingRecord(tc.raw)
+			if got != tc.want {
+				t.Errorf("classifyConnectRingRecord = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestDecodeBPFAuditEvent(t *testing.T) {
 	// BPF struct layout: tgid(0-3) tid(4-7) cmd(8-11) comm(12-27)
 	raw := make([]byte, bpfAuditEventWireSize)

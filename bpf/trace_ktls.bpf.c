@@ -45,7 +45,16 @@ _Static_assert(sizeof(struct ktls_event) == 32,
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 1 << 12); /* 4 KiB — KTLS calls are rare per run */
+	/*
+	 * 64 KiB. Earlier sizing (4 KiB) assumed KTLS setsockopt is rare per
+	 * run, but a single Go binary using crypto/tls + KTLS handshakes
+	 * during dependency fetch can burst dozens of offload events in the
+	 * first second — the ringbuf reserve-failure counter then climbed
+	 * before the userspace reader drained it. 64 KiB gives the reader
+	 * room to absorb that burst without dropping events on the floor
+	 * (P3-bug-audit Bug 4).
+	 */
+	__uint(max_entries, 1 << 16);
 } ktls_events SEC(".maps");
 
 struct {

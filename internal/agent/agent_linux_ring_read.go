@@ -154,6 +154,41 @@ func nullTermStr(b []byte) string {
 	return string(bytes.TrimRight(b, "\x00"))
 }
 
+// connectRingRecordKind classifies one connect_events ringbuf record by its
+// 4-byte magic at offset 0. The connect_events ringbuf is multiplexed: the
+// entry-side connect(2) tracepoint, the P3-2 kretprobe on tcp_v4_connect, and
+// the telemetry-integrity canary all share it. Real connect_event records
+// begin with __u32 tgid which is bounded by PID_MAX_LIMIT (4194304), so the
+// 0xCA1A1210 and 0xC0EE0001 magics cannot collide with a real tgid.
+type connectRingRecordKind int
+
+const (
+	// connectRingKindConnectEvent is the default — an entry-side connect(2)
+	// event (struct connect_event). Records shorter than 4 bytes also route
+	// here so the downstream decoder can reject them as too-short.
+	connectRingKindConnectEvent connectRingRecordKind = iota
+	connectRingKindCanary
+	connectRingKindConnectResult
+)
+
+// classifyConnectRingRecord is the pure-Go magic-prefix dispatcher used by
+// readConnectRing. It exists as a free function so the routing logic is
+// table-testable independent of *ringbuf.Reader (which requires a live BPF
+// program to feed records).
+func classifyConnectRingRecord(raw []byte) connectRingRecordKind {
+	if len(raw) < 4 {
+		return connectRingKindConnectEvent
+	}
+	switch binary.LittleEndian.Uint32(raw[0:4]) {
+	case canaryMagic:
+		return connectRingKindCanary
+	case connectResultMagic:
+		return connectRingKindConnectResult
+	default:
+		return connectRingKindConnectEvent
+	}
+}
+
 // fsOpName maps BPF op byte to JSONL op string.
 func fsOpName(op uint8) string {
 	switch op {
@@ -276,47 +311,44 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 		//   else                              → connect_event (entry-side connect(2))
 		// Real connect_event records begin with __u32 tgid (bounded by
 		// PID_MAX_LIMIT), so neither magic can collide with a real tgid.
-		if len(record.RawSample) >= 4 {
-			magic := binary.LittleEndian.Uint32(record.RawSample[0:4])
-			switch magic {
-			case canaryMagic:
-				if len(record.RawSample) >= canaryEventWireSize {
-					seqNr := binary.LittleEndian.Uint64(record.RawSample[8:16])
-					if canary != nil {
-						canary.noteReceived(seqNr)
-					}
-					slog.Debug("canary received", "seq", seqNr)
+		switch classifyConnectRingRecord(record.RawSample) {
+		case connectRingKindCanary:
+			if len(record.RawSample) >= canaryEventWireSize {
+				seqNr := binary.LittleEndian.Uint64(record.RawSample[8:16])
+				if canary != nil {
+					canary.noteReceived(seqNr)
 				}
-				continue
-			case connectResultMagic:
-				rtgid, rtid, rcommb, rresult, rok := decodeConnectResultEvent(record.RawSample)
-				if !rok {
-					stats.addDropped("tcp_result_decode")
-					slog.Warn("decode tcp_result", "len", len(record.RawSample))
-					continue
-				}
-				rcomm := string(bytes.TrimRight(rcommb[:], "\x00"))
-				bucket := telemetry.ConnectResultString(rresult)
-				stats.addTCPResult(bucket)
-				ts := time.Now().UTC().Format(time.RFC3339Nano)
-				if cfg.EventsLogPath != "" {
-					jsonlMu.Lock()
-					n := seq.Next()
-					ev := telemetry.TCPResultEvent{
-						Type: "tcp_result", TS: ts, Seq: n,
-						PID: rtgid, TGID: rtgid, ThreadID: rtid,
-						Comm: rcomm, Result: rresult, ResultStr: bucket,
-					}
-					werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
-					jsonlMu.Unlock()
-					if werr != nil {
-						stats.addDropped("tcp_result_jsonl")
-						slog.Warn("events jsonl (tcp_result)", "err", werr)
-					}
-				}
-				slog.Debug("tcp_result", "tgid", rtgid, "tid", rtid, "comm", rcomm, "result", rresult, "bucket", bucket)
+				slog.Debug("canary received", "seq", seqNr)
+			}
+			continue
+		case connectRingKindConnectResult:
+			rtgid, rtid, rcommb, rresult, rok := decodeConnectResultEvent(record.RawSample)
+			if !rok {
+				stats.addDropped("tcp_result_decode")
+				slog.Warn("decode tcp_result", "len", len(record.RawSample))
 				continue
 			}
+			rcomm := telemetry.SanitizeField(nullTermStr(rcommb[:]), 16)
+			bucket := telemetry.ConnectResultString(rresult)
+			stats.addTCPResult(bucket)
+			ts := time.Now().UTC().Format(time.RFC3339Nano)
+			if cfg.EventsLogPath != "" {
+				jsonlMu.Lock()
+				n := seq.Next()
+				ev := telemetry.TCPResultEvent{
+					Type: "tcp_result", TS: ts, Seq: n,
+					PID: rtgid, TGID: rtgid, ThreadID: rtid,
+					Comm: rcomm, Result: rresult, ResultStr: bucket,
+				}
+				werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+				jsonlMu.Unlock()
+				if werr != nil {
+					stats.addDropped("tcp_result_jsonl")
+					slog.Warn("events jsonl (tcp_result)", "err", werr)
+				}
+			}
+			slog.Debug("tcp_result", "tgid", rtgid, "tid", rtid, "comm", rcomm, "result", rresult, "bucket", bucket)
+			continue
 		}
 
 		tgid, tid, commb, daddr, port, decOK := decodeConnectEvent(record.RawSample)
@@ -402,6 +434,13 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		}
 		backoff.reset()
 
+		// Capture the userspace ringbuf arrival time as close to rd.Read() as
+		// possible. Threaded into ktlsTr.IsKTLS so that a KTLS Mark observed
+		// later does not retroactively clobber THIS TLS event's confidence —
+		// only TLS events whose arrival time is >= the Mark's markedAt are
+		// flipped to unknown/ktls (Bug-1 fix).
+		tlsRecvAtNs := time.Now().UnixNano()
+
 		tgid, tid, commb, daddr, port, rawPay, ok := decodeTLSSniffEvent(record.RawSample)
 		if !ok {
 			if sectionState != nil {
@@ -437,14 +476,16 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		cl := pol.Classify(sni, ip)
 		conf := telemetry.ScoreTLSConfidence(sni)
 		// P4: if trace_ktls observed setsockopt(SOL_TLS) for this pid within the
-		// tracker TTL, the SNI we just parsed (if any) is a pre-offload artifact —
+		// tracker TTL AND that Mark landed BEFORE this TLS event arrived in
+		// userspace, the SNI we just parsed (if any) is a pre-offload artifact —
 		// kernel-TLS will encrypt every subsequent write on the socket and any
 		// "full"/"partial" verdict is misleading. Force unknown with reason="ktls"
 		// before the row lands in the digest or the JSONL. tls_sniff_event has no
-		// fd field today, so we query the tracker with the wildcard form (fd=0)
-		// — see internal/agent/agent_linux_ktls_tracker.go for the contract.
+		// fd field today, so we query the tracker with the wildcard form (fd=0).
+		// The tlsRecvAtNs argument gates the override on event ordering — see
+		// internal/agent/agent_linux_ktls_tracker.go for the contract.
 		confReason := ""
-		if ktlsTr != nil && ktlsTr.IsKTLS(tgid, 0) {
+		if ktlsTr != nil && ktlsTr.IsKTLS(tgid, 0, tlsRecvAtNs) {
 			slog.Debug("ktls override applied", "pid", tgid, "sni", sni)
 			conf = telemetry.TLSConfidenceUnknown
 			confReason = "ktls"
@@ -722,6 +763,13 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		}
 		backoff.reset()
 
+		// Capture the userspace ringbuf arrival time as close to rd.Read() as
+		// possible. The ktlsTracker uses this as `markedAt` so a later
+		// IsKTLS query from readTLSRing only flips confidence when the TLS
+		// event arrived AFTER this Mark — pre-offload TLS events with an
+		// earlier tlsTimestampNs are preserved (Bug-1 fix).
+		recvAtNs := time.Now().UnixNano()
+
 		tgid, tid, fd, commb, dirByte, ok := decodeKTLSEvent(record.RawSample)
 		if !ok {
 			stats.addDropped("ktls_decode")
@@ -729,15 +777,17 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			continue
 		}
 		stats.addKTLS()
-		// P4: record (pid, fd) so any TLS event for the same pid that flows
-		// through readTLSRing within ktlsTrackerTTL gets reclassified to
-		// Confidence=unknown / ConfidenceReason="ktls". Forward-only: a TLS
-		// event that already shipped before this Mark keeps its original
-		// confidence (plan p4-ktls-sni-confidence-integration.md, Non-goals).
+		// P4: record (pid, fd, markedAt) so any TLS event for the same pid
+		// that flows through readTLSRing within ktlsTrackerTTL AND arrives at
+		// or after markedAt gets reclassified to Confidence=unknown /
+		// ConfidenceReason="ktls". The arrival-time gate replaces the prior
+		// blanket wildcard which clobbered every same-pid TLS event for 60s,
+		// including ones whose payload was captured before the offload was
+		// observed (plan p4-ktls-sni-confidence-integration.md).
 		if ktlsTr != nil {
-			ktlsTr.Mark(tgid, fd)
+			ktlsTr.Mark(tgid, fd, recvAtNs)
 		}
-		comm := string(bytes.TrimRight(commb[:], "\x00"))
+		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		direction := ktlsDirectionLabel(dirByte)
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 

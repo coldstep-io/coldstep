@@ -817,17 +817,31 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var wg sync.WaitGroup
 	errCh := make(chan error, readerCount)
 
+	// sendReaderErr cancels runCtx whenever a reader returns a fatal error
+	// (anything other than context.Canceled). Without this, an isolated
+	// reader failure left the canary and heartbeat goroutines blocked on
+	// runCtx.Done forever — wg.Wait() then hung the whole agent (P3-bug-audit
+	// Bug 5). The cancel propagates to every peer goroutine and lets the
+	// outer wg.Wait return promptly so the deferred digest/telemetry writers
+	// can run.
+	sendReaderErr := func(err error) {
+		if err != nil && !errors.Is(err, context.Canceled) {
+			runCancel()
+		}
+		errCh <- err
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		errCh <- readExecRing(runCtx, cfg, execRd.R, stats, rows, &seq, &jsonlMu, signer)
+		sendReaderErr(readExecRing(runCtx, cfg, execRd.R, stats, rows, &seq, &jsonlMu, signer))
 	}()
 
 	if forkRd.R != nil && forkBuf != nil && forkState != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readForkRing(runCtx, cfg, forkRd.R, stats, forkBuf, forkState, &seq, &jsonlMu, signer)
+			sendReaderErr(readForkRing(runCtx, cfg, forkRd.R, stats, forkBuf, forkState, &seq, &jsonlMu, signer))
 		}()
 	}
 
@@ -835,7 +849,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readFSRing(runCtx, cfg, fsRd.R, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer)
+			sendReaderErr(readFSRing(runCtx, cfg, fsRd.R, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer))
 		}()
 	}
 
@@ -843,7 +857,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer)
+			sendReaderErr(readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer))
 		}()
 	}
 
@@ -922,63 +936,63 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			sendReaderErr(readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer))
 		}()
 	}
 	if httpRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			sendReaderErr(readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer))
 		}()
 	}
 	if tlsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer, ktlsTr)
+			sendReaderErr(readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer, ktlsTr))
 		}()
 	}
 	if tcpStateRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer)
+			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if denyRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache)
+			sendReaderErr(readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache))
 		}()
 	}
 	if lsmDenyRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDenyRing(runCtx, cfg, lsmDenyRd.R, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache)
+			sendReaderErr(readDenyRing(runCtx, cfg, lsmDenyRd.R, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache))
 		}()
 	}
 	if dnsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readDNSRing(runCtx, dnsRd.R, dnsCache, stats)
+			sendReaderErr(readDNSRing(runCtx, dnsRd.R, dnsCache, stats))
 		}()
 	}
 	if bpfAuditRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer)
+			sendReaderErr(readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if ktlsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer, ktlsTr)
+			sendReaderErr(readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer, ktlsTr))
 		}()
 	}
 
@@ -986,14 +1000,14 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, defendObjs.DefendCfg, defendObjs.AllowedIpv4, defendObjs.IgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
+			sendReaderErr(watchMapIntegrity(runCtx, cfg, defendObjs.DefendCfg, defendObjs.AllowedIpv4, defendObjs.IgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer))
 		}()
 	}
 	if hasLSM {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- watchMapIntegrity(runCtx, cfg, defendObjs.LsmDefendCfg, defendObjs.LsmAllowedIpv4, defendObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer)
+			sendReaderErr(watchMapIntegrity(runCtx, cfg, defendObjs.LsmDefendCfg, defendObjs.LsmAllowedIpv4, defendObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer))
 		}()
 	}
 
