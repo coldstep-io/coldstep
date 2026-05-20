@@ -957,7 +957,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer))
+			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, sectionState, signer))
 		}()
 	}
 	if denyRd.R != nil {

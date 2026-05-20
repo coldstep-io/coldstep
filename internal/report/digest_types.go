@@ -276,13 +276,17 @@ type DigestInput struct {
 	// oldstate == SYN_SENT so it represents resolved outgoing connects.
 	// TCPStateConfirmed counts the subset that transitioned to ESTABLISHED
 	// (handshake succeeded); TCPStateRefused counts the subset that
-	// transitioned to CLOSE (RST / timeout / unreach). Non-zero
-	// TCPStateTotal adds a "TCP handshakes (kernel-confirmed)" row to the
-	// Full KPI table — complementary to the P3-2-derived TCPResultCounts,
-	// which is the kretprobe-captured `tcp_v4_connect()` return value.
+	// transitioned to a terminal failure state (CLOSE / CLOSE_WAIT /
+	// TIME_WAIT — RST, timeout, unreachable, or peer-initiated close).
+	// Other intermediate transitions (e.g. SYN_RECV) are not counted in
+	// either bucket. Non-zero TCPStateTotal adds a "TCP handshakes
+	// (kernel-confirmed)" row to the Full KPI table — complementary to
+	// the P3-2-derived TCPResultCounts, which is the kretprobe-captured
+	// `tcp_v4_connect()` return value.
 	TCPStateTotal                  int
 	TCPStateConfirmed              int
 	TCPStateRefused                int
+	TCPStateReaderErrors           int
 	TCPStateRingbufReserveFailures int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow
