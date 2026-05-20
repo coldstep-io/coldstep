@@ -52,7 +52,14 @@ type MetaEvent struct {
 	// whose wildcard suffix matches a known multi-tenant shared-infrastructure
 	// surface (P1-1 6c). Operators can review and tighten if desired.
 	WildcardRiskDomains []string `json:"wildcard_risk_domains,omitempty"`
-	Sig                 string   `json:"sig,omitempty"`
+	// RunnerHasIPv6 is true when the runner had at least one non-loopback,
+	// non-link-local IPv6 address at agent startup (H1: digest honesty).
+	// Used by the digest to downgrade the ✅ verdict to ⚠️ when the runner
+	// has IPv6 but no IPv6 hooks are loaded — observation is incomplete on
+	// that environment. Population is the action layer's job; the field is
+	// pre-wired here so consumers can rely on it before that lands.
+	RunnerHasIPv6 bool   `json:"runner_has_ipv6,omitempty"`
+	Sig           string `json:"sig,omitempty"`
 }
 
 // MetaGitHub holds non-secret GitHub Actions context.

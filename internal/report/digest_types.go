@@ -117,6 +117,13 @@ type BPFAuditDigestRow struct {
 type DigestInput struct {
 	DetectProfile string // standard | enhanced (from COLDSTEP_DETECT_PROFILE)
 	BPF           []telemetry.BPFStatus
+	// RunnerHasIPv6 mirrors telemetry.MetaEvent.RunnerHasIPv6 — true when the
+	// runner had at least one non-loopback / non-link-local IPv6 address at
+	// agent startup (H1: digest honesty). Used by verdictEmoji to downgrade
+	// ✅ to ⚠️ on runners with IPv6 connectivity when no IPv6 hooks are
+	// loaded (today: detect mode), surfacing the partial observation in the
+	// headline rather than hiding it behind an apparently clean run.
+	RunnerHasIPv6 bool
 
 	ExecTotal, TCPTotal, UDPTotal, HTTPTotal, TLSTotal int
 	TLSSNIGate                                         bool

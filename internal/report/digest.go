@@ -61,6 +61,16 @@ func ipv6DefendActive(in DigestInput) bool {
 	return isBlockingDigestMode(in.DefendMode) && in.DefendIPv6AllowlistSize > 0
 }
 
+// ipv6HooksLoaded reports whether the IPv6 enforcement hooks
+// (cgroup/connect6, cgroup/sendmsg6) are loaded for this run. Today the
+// IPv6 hooks are only attached in defend mode — detect mode never attaches
+// them, so detect mode is treated as "no IPv6 hooks". When the runner has
+// IPv6 connectivity (MetaEvent.RunnerHasIPv6) and no IPv6 hooks are loaded,
+// the verdict is downgraded so the headline reflects the partial coverage.
+func ipv6HooksLoaded(in DigestInput) bool {
+	return isBlockingDigestMode(in.DefendMode)
+}
+
 // verdictEmoji returns ✅ / ⚠️ / 🚨 for the headline. Mirrors the prior
 // blockquote badge logic but is now embedded directly in the `##` heading.
 func verdictEmoji(in DigestInput) string {
@@ -95,6 +105,11 @@ func verdictEmoji(in DigestInput) string {
 	// allowed_ipv6 trie the traffic was actually checked, so it's no
 	// longer a review trigger on its own.
 	ipv6Review := ipv6EgressObserved(in) > 0 && !ipv6DefendActive(in) && !isBlockingDigestMode(in.DefendMode)
+	// H1: a runner that advertises IPv6 connectivity with no IPv6 hooks
+	// loaded is a coverage gap on its own, even without observed events.
+	// The agent could simply have missed unobserved IPv6 traffic; downgrade
+	// ✅ to ⚠️ so the headline matches what was actually in scope.
+	runnerIPv6Gap := in.RunnerHasIPv6 && !ipv6HooksLoaded(in)
 	review := totalDetectRingbufReserveFailures(in) > 0 ||
 		in.UDPSendmsgMultiIovecObserved > 0 ||
 		in.TLSWritevMultiIovecObserved > 0 ||
@@ -105,46 +120,134 @@ func verdictEmoji(in DigestInput) string {
 		in.DefendDenyReserveFailures > 0 ||
 		droppedTotal(in) > 0 ||
 		in.IoUringSetupObserved > 0 ||
-		ipv6Review
+		ipv6Review ||
+		runnerIPv6Gap
 	if review {
 		return "⚠️"
 	}
 	return "✅"
 }
 
-// writeHeader renders the single-line `## <emoji> coldstep — <mode>` heading.
+// verdictBadgeText returns the descriptive label rendered next to the
+// emoji in the headline. H1 (digest honesty): the badge no longer reads
+// "Clean run / Review / Alert" — each label calls out exactly what the
+// verdict means so operators do not mistake ✅ for "every byte of egress
+// observed".
+func verdictBadgeText(emoji string) string {
+	switch emoji {
+	case "🚨":
+		return "BPF failure or canary pipeline issue"
+	case "⚠️":
+		return "Partial observation or coverage gaps — review required"
+	default:
+		return "No anomalies detected (IPv4 TCP/UDP in scope)"
+	}
+}
+
+// writeHeader renders the `## <emoji> coldstep — <mode>` heading and a
+// descriptive verdict blockquote naming the scope of the verdict (H1).
 // When partial-coverage signals fired (ringbuf drops or partial-observe
-// counters), a blockquote note steers the reader to the Coverage block — the ✅
-// badge alone would otherwise imply complete observation.
+// counters), a secondary blockquote steers the reader to the Coverage
+// block — the ✅ badge alone would otherwise imply complete observation.
 func writeHeader(b *strings.Builder, in DigestInput) {
 	mode := "detect"
 	if isBlockingDigestMode(in.DefendMode) {
 		mode = "defend"
 	}
-	fmt.Fprintf(b, "## %s coldstep — %s\n\n", verdictEmoji(in), mode)
+	emoji := verdictEmoji(in)
+	fmt.Fprintf(b, "## %s coldstep — %s\n\n", emoji, mode)
+	fmt.Fprintf(b, "> %s **%s**\n\n", emoji, verdictBadgeText(emoji))
 	if hasPartialCoverageSignals(in) {
 		b.WriteString("> ⚠️ Partial coverage — see Coverage block below.\n\n")
 	}
 }
 
-// writeCoverage emits a one-line scope statement so users do not misread ✅ as
-// "every byte of egress observed". IPv6 coverage flips state per run:
-//   - detect or defend without allowed_ipv6: "observed" (cgroup/connect6 +
-//     sendmsg6 always counts; defend with empty trie still gates by denying).
-//   - defend with allowed_ipv6 entries: "gated" (Phase 2 active).
-//
-// QUIC/HTTP3 remains statically out of scope (no BPF coverage). The
-// "Payloads beyond iov[0]" cell flips to ⚠️ partial when BG-01
-// partial-observe counters fired this run.
-func writeCoverage(b *strings.Builder, in DigestInput) {
-	ipv6State := "observed (detect — no enforcement)"
-	if ipv6DefendActive(in) {
-		ipv6State = "gated (defend allowed_ipv6 active)"
-	} else if isBlockingDigestMode(in.DefendMode) {
-		ipv6State = "denied (defend block-all — empty allowed_ipv6)"
+// ipv6CoverageCell returns the IPv6 row text in the Coverage scope table.
+// IPv6 state is per-run: defend with a populated allowed_ipv6 trie is "✓
+// gated"; defend without is "✓ gated (block-all)"; detect mode is "✗ not
+// observed" by default but flips to "⚠ observed (no enforcement)" when
+// the cgroup/connect6+sendmsg6 hooks reported egress.
+func ipv6CoverageCell(in DigestInput) string {
+	switch {
+	case ipv6DefendActive(in):
+		return "✓ gated (defend allowed_ipv6 active)"
+	case isBlockingDigestMode(in.DefendMode):
+		return "✓ gated (defend block-all — empty allowed_ipv6)"
+	case ipv6EgressObserved(in) > 0:
+		return "⚠ observed (detect — no enforcement)"
+	case in.RunnerHasIPv6:
+		return "✗ not observed (runner has IPv6 — coverage gap)"
+	default:
+		return "✗ not observed"
 	}
-	fmt.Fprintf(b, "**Coverage this run:** IPv4 TCP/UDP ✓ observed | IPv6 %s | QUIC/HTTP3 ✗ not observed | Payloads beyond iov[0]: %s\n\n",
-		ipv6State, coveragePayloadState(in))
+}
+
+// quicCoverageCell returns the QUIC/HTTP3 row text. QUIC payloads are
+// always encrypted at the transport layer so the row is structurally "✗
+// not observed"; when port-443 UDP candidates were seen the cell flips to
+// "⚠" so operators know flows fell into this gap on this run.
+func quicCoverageCell(in DigestInput) string {
+	if in.QUICCandidateCount > 0 {
+		return "⚠ candidates observed (payload encrypted, not inspected)"
+	}
+	return "✗ not observed"
+}
+
+// ioUringCoverageCell returns the io_uring row text. The cell is "⚠
+// partial" when the raw_tp/io_uring_submit_sqe probe loaded — coldstep
+// observes the submission point but cannot extract HTTP/TLS payloads from
+// the SQE alone. When the probe is absent or attach failed the cell reads
+// "✗ not loaded".
+func ioUringCoverageCell(in DigestInput) string {
+	for _, row := range in.BPF {
+		if row.Name == "raw_tp/io_uring_submit_sqe" {
+			if !row.OK {
+				return "✗ not loaded"
+			}
+			if strings.EqualFold(strings.TrimSpace(in.DetectProfile), "enhanced") {
+				return "⚠ partial (SQE submission + TLS ClientHello peek)"
+			}
+			return "⚠ partial (SQE submission only)"
+		}
+	}
+	return "✗ not loaded"
+}
+
+// ipv4TCPCoverageCell returns the IPv4 TCP row text. Cgroup connect4 is
+// always loaded in detect+defend; if the shared raw_tp/sys_enter hook is
+// degraded the row degrades with it because TCP attempts route through
+// that path for syscall-side telemetry.
+func ipv4TCPCoverageCell(in DigestInput) string {
+	if in.TCPDegradedHook {
+		return "✗ probe degraded"
+	}
+	return "✓ observed"
+}
+
+// ipv4UDPCoverageCell returns the IPv4 UDP row text — same shared
+// raw_tp/sys_enter degradation rule as IPv4 TCP.
+func ipv4UDPCoverageCell(in DigestInput) string {
+	if in.UDPDegradedHook {
+		return "✗ probe degraded"
+	}
+	return "✓ observed"
+}
+
+// writeCoverage emits the H1 Coverage scope table so operators see the
+// observation envelope at a glance — what was in-scope, what was outside
+// it. The table is rendered for every digest (detect + defend) so the
+// verdict can be cross-referenced against the actually-observed traffic
+// classes.
+func writeCoverage(b *strings.Builder, in DigestInput) {
+	b.WriteString("**Coverage scope**\n\n")
+	b.WriteString("| Traffic class | Status |\n|:---|:---|\n")
+	fmt.Fprintf(b, "| IPv4 TCP | %s |\n", ipv4TCPCoverageCell(in))
+	fmt.Fprintf(b, "| IPv4 UDP (sendmsg) | %s |\n", ipv4UDPCoverageCell(in))
+	fmt.Fprintf(b, "| IPv6 | %s |\n", ipv6CoverageCell(in))
+	fmt.Fprintf(b, "| QUIC / HTTP3 | %s |\n", quicCoverageCell(in))
+	fmt.Fprintf(b, "| io_uring (enhanced profile only) | %s |\n", ioUringCoverageCell(in))
+	b.WriteString("| Unix sockets | ✗ not observed |\n")
+	fmt.Fprintf(b, "| Payloads beyond iov[0] | %s |\n\n", coveragePayloadState(in))
 }
 
 // writeCompactKPI emits a single-row 5-column KPI table. The full per-channel

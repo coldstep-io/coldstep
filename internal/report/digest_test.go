@@ -298,6 +298,167 @@ func TestBuildDetectMarkdown_HeaderEmojiVerdicts(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_HeadlineBadgeText pins the H1 verdict labels — the
+// digest now spells out what each emoji means so operators do not mistake ✅
+// for "every byte of egress observed". Each emoji must surface with its
+// descriptive blockquote line right under the heading.
+func TestBuildDetectMarkdown_HeadlineBadgeText(t *testing.T) {
+	t.Parallel()
+
+	clean := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(clean, "> ✅ **No anomalies detected (IPv4 TCP/UDP in scope)**") {
+		t.Fatalf("clean-run badge text missing:\n%s", clean)
+	}
+
+	review := BuildDetectMarkdown(DigestInput{
+		BPF:                       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		UDPRingbufReserveFailures: 1,
+	})
+	if !strings.Contains(review, "> ⚠️ **Partial observation or coverage gaps — review required**") {
+		t.Fatalf("review-state badge text missing:\n%s", review)
+	}
+
+	alert := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{{Name: "exec", OK: false}},
+	})
+	if !strings.Contains(alert, "> 🚨 **BPF failure or canary pipeline issue**") {
+		t.Fatalf("alert-state badge text missing:\n%s", alert)
+	}
+}
+
+// TestBuildDetectMarkdown_RunnerHasIPv6_DowngradesVerdict covers the H1 IPv6
+// gating: a runner with IPv6 connectivity but no IPv6 hooks loaded (today:
+// detect mode) downgrades a ✅ run to ⚠️ so the headline reflects the
+// partial observation envelope.
+func TestBuildDetectMarkdown_RunnerHasIPv6_DowngradesVerdict(t *testing.T) {
+	t.Parallel()
+
+	// Detect mode with RunnerHasIPv6 must downgrade to ⚠️.
+	withIPv6 := BuildDetectMarkdown(DigestInput{
+		BPF:           []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal:     1,
+		RunnerHasIPv6: true,
+	})
+	if !strings.Contains(withIPv6, "## ⚠️ coldstep — detect") {
+		t.Fatalf("RunnerHasIPv6 + detect should downgrade to ⚠️:\n%s", withIPv6)
+	}
+	if !strings.Contains(withIPv6, "| IPv6 | ✗ not observed (runner has IPv6 — coverage gap) |") {
+		t.Fatalf("IPv6 coverage row should call out the runner-has-IPv6 gap:\n%s", withIPv6)
+	}
+
+	// Without RunnerHasIPv6 the same input remains ✅.
+	withoutIPv6 := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(withoutIPv6, "## ✅ coldstep — detect") {
+		t.Fatalf("baseline detect run should stay ✅:\n%s", withoutIPv6)
+	}
+
+	// Defend mode with RunnerHasIPv6 does NOT downgrade — the IPv6 hooks
+	// are loaded under defend regardless of allowed_ipv6 size.
+	defend := BuildDetectMarkdown(DigestInput{
+		BPF:                 []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		DefendMode:          "defend",
+		DefendAllowlistSize: 1,
+		RunnerHasIPv6:       true,
+	})
+	if !strings.Contains(defend, "## ✅ coldstep — defend") {
+		t.Fatalf("defend mode with IPv6 hooks attached should stay ✅:\n%s", defend)
+	}
+}
+
+// TestBuildDetectMarkdown_CoverageScopeTable_IoUringRow covers the io_uring
+// row in the Coverage scope table: probe loaded → "⚠ partial"; probe absent
+// or attach failed → "✗ not loaded". The enhanced profile adds a TLS peek
+// note to the partial cell.
+func TestBuildDetectMarkdown_CoverageScopeTable_IoUringRow(t *testing.T) {
+	t.Parallel()
+
+	loadedStandard := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{
+			{Name: "exec", OK: true},
+			{Name: "raw_tp/io_uring_submit_sqe", OK: true},
+		},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(loadedStandard, "| io_uring (enhanced profile only) | ⚠ partial (SQE submission only) |") {
+		t.Fatalf("standard profile + loaded io_uring should be ⚠ partial:\n%s", loadedStandard)
+	}
+
+	loadedEnhanced := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{
+			{Name: "exec", OK: true},
+			{Name: "raw_tp/io_uring_submit_sqe", OK: true},
+		},
+		DetectProfile: "enhanced",
+		ExecTotal:     1,
+	})
+	if !strings.Contains(loadedEnhanced, "| io_uring (enhanced profile only) | ⚠ partial (SQE submission + TLS ClientHello peek) |") {
+		t.Fatalf("enhanced profile + loaded io_uring should call out TLS peek:\n%s", loadedEnhanced)
+	}
+
+	failed := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{
+			{Name: "exec", OK: true},
+			{Name: "raw_tp/io_uring_submit_sqe", OK: false, Detail: "tracepoint not present"},
+		},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(failed, "| io_uring (enhanced profile only) | ✗ not loaded |") {
+		t.Fatalf("failed io_uring probe should show ✗ not loaded:\n%s", failed)
+	}
+
+	absent := BuildDetectMarkdown(DigestInput{
+		BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		ExecTotal: 1,
+	})
+	if !strings.Contains(absent, "| io_uring (enhanced profile only) | ✗ not loaded |") {
+		t.Fatalf("absent io_uring probe should show ✗ not loaded:\n%s", absent)
+	}
+}
+
+// TestBuildDetectMarkdown_CoverageScopeTable_UnixSocketsAlwaysNotObserved
+// pins the Unix sockets row: coldstep has no AF_UNIX probe today, so the
+// row is structurally "✗ not observed" on every digest.
+func TestBuildDetectMarkdown_CoverageScopeTable_UnixSocketsAlwaysNotObserved(t *testing.T) {
+	t.Parallel()
+	for _, in := range []DigestInput{
+		{},
+		{BPF: []telemetry.BPFStatus{{Name: "exec", OK: true}}, ExecTotal: 5},
+		{DefendMode: "defend", DefendAllowlistSize: 2, BPF: []telemetry.BPFStatus{{Name: "exec", OK: true}}},
+	} {
+		md := BuildDetectMarkdown(in)
+		if !strings.Contains(md, "| Unix sockets | ✗ not observed |") {
+			t.Fatalf("missing Unix sockets coverage row in:\n%s", md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_CoverageScopeTable_QUICRowFlipsOnCandidate verifies
+// the QUIC row pivots from "✗ not observed" to a ⚠ cell when port-443 UDP
+// candidates fired this run — the payload is still encrypted, but the row
+// must signal that flows fell into the gap.
+func TestBuildDetectMarkdown_CoverageScopeTable_QUICRowFlipsOnCandidate(t *testing.T) {
+	t.Parallel()
+	withQUIC := BuildDetectMarkdown(DigestInput{
+		BPF:                []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		QUICCandidateCount: 4,
+	})
+	if !strings.Contains(withQUIC, "| QUIC / HTTP3 | ⚠ candidates observed (payload encrypted, not inspected) |") {
+		t.Fatalf("QUIC candidates should flip the coverage cell to ⚠:\n%s", withQUIC)
+	}
+	withoutQUIC := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{{Name: "exec", OK: true}},
+	})
+	if !strings.Contains(withoutQUIC, "| QUIC / HTTP3 | ✗ not observed |") {
+		t.Fatalf("default QUIC cell should be ✗ not observed:\n%s", withoutQUIC)
+	}
+}
+
 func TestBuildDetectMarkdown_NoForbiddenGFMTags(t *testing.T) {
 	// Job Summaries render GFM; <font>, <p align>, <sub>, <center> are not in
 	// the allowlist and would appear as literal text. This guards against
@@ -874,40 +1035,42 @@ func TestBuildDetectMarkdown_DroppedEventCounters(t *testing.T) {
 func TestBuildDetectMarkdown_CoverageScopeBlock_AlwaysPresent(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name       string
-		in         DigestInput
-		ipv6Cell   string
-		extraCells []string
+		name     string
+		in       DigestInput
+		ipv6Cell string
 	}{
 		{"clean detect", DigestInput{
 			BPF:       []telemetry.BPFStatus{{Name: "exec", OK: true}},
 			ExecTotal: 1,
-		}, "IPv6 observed (detect — no enforcement)", nil},
+		}, "| IPv6 | ✗ not observed |"},
 		{"defend gated", DigestInput{
 			DefendMode:              "defend",
 			DefendAllowlistSize:     1,
 			DefendIPv6AllowlistSize: 2,
 			DefendDenyCount:         0,
 			BPF:                     []telemetry.BPFStatus{{Name: "connect", OK: true}},
-		}, "IPv6 gated (defend allowed_ipv6 active)", nil},
+		}, "| IPv6 | ✓ gated (defend allowed_ipv6 active) |"},
 		{"defend block-all", DigestInput{
 			DefendMode:              "defend",
 			DefendAllowlistSize:     1,
 			DefendIPv6AllowlistSize: 0,
 			DefendDenyCount:         0,
 			BPF:                     []telemetry.BPFStatus{{Name: "connect", OK: true}},
-		}, "IPv6 denied (defend block-all — empty allowed_ipv6)", nil},
+		}, "| IPv6 | ✓ gated (defend block-all — empty allowed_ipv6) |"},
 	}
 	for _, c := range cases {
 		md := BuildDetectMarkdown(c.in)
 		needles := []string{
-			"**Coverage this run:**",
-			"IPv4 TCP/UDP ✓ observed",
+			"**Coverage scope**",
+			"| Traffic class | Status |",
+			"| IPv4 TCP | ✓ observed |",
+			"| IPv4 UDP (sendmsg) | ✓ observed |",
 			c.ipv6Cell,
-			"QUIC/HTTP3 ✗ not observed",
-			"Payloads beyond iov[0]: ✓ observed",
+			"| QUIC / HTTP3 | ✗ not observed |",
+			"| io_uring (enhanced profile only) | ✗ not loaded |",
+			"| Unix sockets | ✗ not observed |",
+			"| Payloads beyond iov[0] | ✓ observed |",
 		}
-		needles = append(needles, c.extraCells...)
 		for _, needle := range needles {
 			if !strings.Contains(md, needle) {
 				t.Fatalf("[%s] missing %q in digest:\n%s", c.name, needle, md)
@@ -925,7 +1088,7 @@ func TestBuildDetectMarkdown_CoverageScopeBlock_PartialWhenSendmmsgFirstOnly(t *
 	for _, needle := range []string{
 		"## ⚠️ coldstep — detect",
 		"> ⚠️ Partial coverage — see Coverage block below.",
-		"Payloads beyond iov[0]: ⚠️ partial",
+		"| Payloads beyond iov[0] | ⚠️ partial |",
 	} {
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in digest:\n%s", needle, md)
@@ -991,6 +1154,8 @@ func TestBuildDetectMarkdown_VisibleLineBudget(t *testing.T) {
 	// A typical detect run should produce a compact visible section (above the
 	// Technical details fold). Count visible lines until the first <details> at
 	// column 0 — that's our budget for what an operator sees by default.
+	// Budget intentionally accommodates the H1 Coverage scope table (≈10 lines)
+	// that makes the observation envelope explicit on every digest.
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:       []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
 		ExecTotal: 12, TCPTotal: 4, UDPTotal: 3, HTTPTotal: 0,
@@ -1005,8 +1170,8 @@ func TestBuildDetectMarkdown_VisibleLineBudget(t *testing.T) {
 	}
 	visible := md[:idx]
 	lines := strings.Count(visible, "\n")
-	if lines > 30 {
-		t.Fatalf("visible portion is %d lines, budget is 30:\n%s", lines, visible)
+	if lines > 40 {
+		t.Fatalf("visible portion is %d lines, budget is 40:\n%s", lines, visible)
 	}
 }
 
@@ -1165,7 +1330,7 @@ func TestBuildDetectMarkdown_SendpageObserved_ClosesPayloadGap(t *testing.T) {
 		SendpageObserved:  3,
 		MaxRowsPerSection: 50,
 	})
-	if !strings.Contains(withSendpage, "Payloads beyond iov[0]: ✓ observed") {
+	if !strings.Contains(withSendpage, "| Payloads beyond iov[0] | ✓ observed |") {
 		t.Fatalf("sendpage_observed > 0 must mark payload coverage as ✓ observed:\n%s", withSendpage)
 	}
 	withoutSendpage := BuildDetectMarkdown(DigestInput{
@@ -1174,7 +1339,7 @@ func TestBuildDetectMarkdown_SendpageObserved_ClosesPayloadGap(t *testing.T) {
 		SendfileObserved:  2,
 		MaxRowsPerSection: 50,
 	})
-	if !strings.Contains(withoutSendpage, "Payloads beyond iov[0]: ⚠️ partial") {
+	if !strings.Contains(withoutSendpage, "| Payloads beyond iov[0] | ⚠️ partial |") {
 		t.Fatalf("missing partial-coverage cell when sendpage_observed = 0 and sendfile fired:\n%s", withoutSendpage)
 	}
 }
