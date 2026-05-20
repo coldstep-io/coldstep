@@ -539,6 +539,74 @@ func TestBuildDetectMarkdown_TLSConfidenceKPIRow(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_TLSConfidencePartialDowngradesVerdict pins the H8
+// behaviour: any partial- or unknown-tier TLS event must downgrade the
+// otherwise-✅ headline to ⚠️ so operators see the trust gap in the verdict
+// rather than buried in the KPI table. Gated on TLSTotal > 0; a TLS-free run
+// stays ✅ even if the counters are non-zero (cannot happen in practice, but
+// the gate keeps the rule self-consistent with TLSConfidenceRowHiddenWhenNoTLS).
+func TestBuildDetectMarkdown_TLSConfidencePartialDowngradesVerdict(t *testing.T) {
+	t.Parallel()
+
+	// Partial > 0 triggers the downgrade. KPI row must also be present so the
+	// ⚠️ headline points to a visible source of doubt in the same digest.
+	withPartial := BuildDetectMarkdown(DigestInput{
+		BPF:                  []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (tls)", OK: true}},
+		TCPTotal:             1,
+		TLSTotal:             2,
+		TLSConfidenceFull:    1,
+		TLSConfidencePartial: 1,
+		TLSSNIGate:           true,
+		PolicyCounts:         map[string]int{"monitor": 2},
+		MaxRowsPerSection:    50,
+	})
+	if !strings.Contains(withPartial, "## ⚠️ coldstep — detect") {
+		t.Fatalf("TLSConfidencePartial > 0 should downgrade verdict to ⚠️; got:\n%s", withPartial)
+	}
+	for _, needle := range []string{
+		"| **tls SNI confidence** |",
+		"full=1",
+		"partial=1",
+	} {
+		if !strings.Contains(withPartial, needle) {
+			t.Fatalf("missing KPI needle %q in:\n%s", needle, withPartial)
+		}
+	}
+
+	// Unknown > 0 (no partials) likewise downgrades — both tiers in the
+	// numerator are intentional, since unknown means we shipped a TLS row
+	// with no usable SNI and an allow/deny decision relied on the lack of
+	// signal.
+	withUnknown := BuildDetectMarkdown(DigestInput{
+		BPF:                  []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (tls)", OK: true}},
+		TCPTotal:             1,
+		TLSTotal:             1,
+		TLSConfidenceUnknown: 1,
+		TLSSNIGate:           true,
+		PolicyCounts:         map[string]int{"monitor": 1},
+		MaxRowsPerSection:    50,
+	})
+	if !strings.Contains(withUnknown, "## ⚠️ coldstep — detect") {
+		t.Fatalf("TLSConfidenceUnknown > 0 should downgrade verdict to ⚠️; got:\n%s", withUnknown)
+	}
+
+	// Baseline: full-only counters keep the verdict at ✅. Cross-checks that
+	// the downgrade is gated on partial+unknown, not on the mere presence of
+	// any TLS event.
+	fullOnly := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (tls)", OK: true}},
+		TCPTotal:          1,
+		TLSTotal:          1,
+		TLSConfidenceFull: 1,
+		TLSSNIGate:        true,
+		PolicyCounts:      map[string]int{"monitor": 1},
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(fullOnly, "## ✅ coldstep — detect") {
+		t.Fatalf("full-only TLS confidence should keep ✅ verdict; got:\n%s", fullOnly)
+	}
+}
+
 func TestBuildDetectMarkdown_TLSConfidenceRowHiddenWhenNoTLS(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},

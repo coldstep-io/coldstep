@@ -101,6 +101,48 @@ func TestWriteSummaryIncludesRingbufReserveFields(t *testing.T) {
 	}
 }
 
+// TestWriteSummaryIncludesTLSConfidenceCounters pins the H8 contract: the
+// per-tier TLS SNI confidence counters round-trip through the public
+// `.coldstep-telemetry.json` so downstream consumers (report tooling,
+// dashboards) can read the confidence breakdown without reparsing JSONL. The
+// `omitempty` zero-default keeps the existing telemetry footprint unchanged
+// on runs that produced no TLS events.
+func TestWriteSummaryIncludesTLSConfidenceCounters(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "telemetry.json")
+	s := Summary{
+		Version: 2, SchemaVersion: SchemaVersion,
+		ExecEvents:            1,
+		TLSEvents:             4,
+		TLSConfidenceFull:     2,
+		TLSConfidencePartial:  1,
+		TLSConfidenceInferred: 0,
+		TLSConfidenceUnknown:  1,
+		PolicyCounts:          map[string]int{"monitor": 4},
+	}
+	if err := WriteSummary(p, s, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range [][]byte{
+		[]byte(`"tls_confidence_full": 2`),
+		[]byte(`"tls_confidence_partial": 1`),
+		[]byte(`"tls_confidence_unknown": 1`),
+	} {
+		if !bytes.Contains(b, needle) {
+			t.Fatalf("missing %q in summary:\n%s", needle, b)
+		}
+	}
+	// Inferred is zero — omitempty must hide it so a normal SNI-only run does
+	// not emit a noise field for a tier the agent does not produce today.
+	if bytes.Contains(b, []byte(`"tls_confidence_inferred"`)) {
+		t.Fatalf("zero-value tls_confidence_inferred should be omitted, got:\n%s", b)
+	}
+}
+
 func TestSumRingbufReserveFailuresDetectPath(t *testing.T) {
 	t.Parallel()
 	const (

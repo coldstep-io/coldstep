@@ -110,6 +110,13 @@ func verdictEmoji(in DigestInput) string {
 	// The agent could simply have missed unobserved IPv6 traffic; downgrade
 	// ✅ to ⚠️ so the headline matches what was actually in scope.
 	runnerIPv6Gap := in.RunnerHasIPv6 && !ipv6HooksLoaded(in)
+	// H8: any TLS row that produced a partial or unknown SNI confidence tier
+	// means at least one allow/deny decision on this run was driven by a
+	// best-effort or absent SNI signal. Downgrade ✅ → ⚠️ so operators see
+	// the gap in the headline rather than having to dig into the KPI row.
+	// Gated on TLSTotal > 0 so a TLS-free run does not warn.
+	tlsConfidenceGap := tlsKPIVisible(in) && in.TLSTotal > 0 &&
+		(in.TLSConfidencePartial+in.TLSConfidenceUnknown) > 0
 	review := totalDetectRingbufReserveFailures(in) > 0 ||
 		in.UDPSendmsgMultiIovecObserved > 0 ||
 		in.TLSWritevMultiIovecObserved > 0 ||
@@ -121,7 +128,8 @@ func verdictEmoji(in DigestInput) string {
 		droppedTotal(in) > 0 ||
 		in.IoUringSetupObserved > 0 ||
 		ipv6Review ||
-		runnerIPv6Gap
+		runnerIPv6Gap ||
+		tlsConfidenceGap
 	if review {
 		return "⚠️"
 	}
