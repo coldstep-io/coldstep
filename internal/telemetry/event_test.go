@@ -198,6 +198,74 @@ func TestKTLSEvent_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestTCPStateEvent_RoundTrip(t *testing.T) {
+	t.Parallel()
+	ev := TCPStateEvent{
+		Type:        EventTypeTCPState,
+		TS:          "2026-05-19T00:00:00Z",
+		Seq:         42,
+		TimestampNS: 1_700_000_000_000_000,
+		PID:         12345,
+		Comm:        "curl",
+		SrcIP:       "10.0.0.1",
+		SrcPort:     54321,
+		DstIP:       "93.184.216.34",
+		DstPort:     443,
+		OldState:    TCPStateSynSent,
+		NewState:    TCPStateEstablished,
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if et := EventType(b); et != "tcp_state" {
+		t.Fatalf("EventType=%q want tcp_state", et)
+	}
+	for _, needle := range []string{
+		`"type":"tcp_state"`,
+		`"seq":42`,
+		`"pid":12345`,
+		`"comm":"curl"`,
+		`"src_ip":"10.0.0.1"`,
+		`"src_port":54321`,
+		`"dst_ip":"93.184.216.34"`,
+		`"dst_port":443`,
+		`"old_state":"SYN_SENT"`,
+		`"new_state":"ESTABLISHED"`,
+	} {
+		if !bytes.Contains(b, []byte(needle)) {
+			t.Fatalf("missing %s in %s", needle, string(b))
+		}
+	}
+	var got TCPStateEvent
+	if err := json.Unmarshal(b, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got != ev {
+		t.Fatalf("round-trip mismatch: got %+v want %+v", got, ev)
+	}
+}
+
+func TestTCPStateName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		in   int32
+		want string
+	}{
+		{1, TCPStateEstablished},
+		{2, TCPStateSynSent},
+		{7, TCPStateClose},
+		{12, TCPStateNewSynRecv},
+		{0, "UNKNOWN"},
+		{99, "UNKNOWN"},
+	}
+	for _, c := range cases {
+		if got := TCPStateName(c.in); got != c.want {
+			t.Errorf("TCPStateName(%d)=%q want %q", c.in, got, c.want)
+		}
+	}
+}
+
 func TestFSEvent_RoundTrip(t *testing.T) {
 	t.Parallel()
 	ev := FSEvent{

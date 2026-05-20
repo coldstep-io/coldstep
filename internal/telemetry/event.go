@@ -96,6 +96,92 @@ type ProcForkEvent struct {
 	Sig           string `json:"sig,omitempty"`
 }
 
+// EventTypeTCPState is the JSONL `type` discriminator for kernel-confirmed
+// TCP handshake state transitions emitted by the inet_sock_set_state
+// tracepoint (P3-2b). It is separate from `tcp`, which records the
+// best-effort syscall-enter connect attempt before the handshake resolves.
+const EventTypeTCPState = "tcp_state"
+
+// TCP state strings used in TCPStateEvent.OldState / NewState. These mirror
+// the kernel `enum sk_state` values (include/net/tcp_states.h) — we only emit
+// a small subset because the BPF filter restricts events to oldstate ==
+// SYN_SENT, so newstate is realistically ESTABLISHED, CLOSE, or one of the
+// fast-failure transitions.
+const (
+	TCPStateSynSent     = "SYN_SENT"
+	TCPStateEstablished = "ESTABLISHED"
+	TCPStateClose       = "CLOSE"
+	TCPStateCloseWait   = "CLOSE_WAIT"
+	TCPStateFinWait1    = "FIN_WAIT1"
+	TCPStateFinWait2    = "FIN_WAIT2"
+	TCPStateTimeWait    = "TIME_WAIT"
+	TCPStateLastAck     = "LAST_ACK"
+	TCPStateListen      = "LISTEN"
+	TCPStateClosing     = "CLOSING"
+	TCPStateSynRecv     = "SYN_RECV"
+	TCPStateNewSynRecv  = "NEW_SYN_RECV"
+)
+
+// TCPStateName returns the canonical state string for a kernel TCP state
+// integer (1..12, matching enum sk_state). Returns "UNKNOWN" for values
+// outside that range.
+func TCPStateName(s int32) string {
+	switch s {
+	case 1:
+		return TCPStateEstablished
+	case 2:
+		return TCPStateSynSent
+	case 3:
+		return TCPStateSynRecv
+	case 4:
+		return TCPStateFinWait1
+	case 5:
+		return TCPStateFinWait2
+	case 6:
+		return TCPStateTimeWait
+	case 7:
+		return TCPStateClose
+	case 8:
+		return TCPStateCloseWait
+	case 9:
+		return TCPStateLastAck
+	case 10:
+		return TCPStateListen
+	case 11:
+		return TCPStateClosing
+	case 12:
+		return TCPStateNewSynRecv
+	default:
+		return "UNKNOWN"
+	}
+}
+
+// TCPStateEvent is one JSONL record for a kernel-confirmed TCP handshake
+// state transition observed via `tp/sock/inet_sock_set_state`. The BPF
+// program filters to outgoing IPv4 TCP connects (oldstate == SYN_SENT), so
+// NewState tells you whether the handshake succeeded (ESTABLISHED) or
+// failed (CLOSE — RST / unreachable / timeout).
+//
+// PID and Comm are best-effort: the tracepoint fires in softirq context
+// when the SYN-ACK arrives, so the running task may be a softirq, not the
+// original connecting process. Tuple correlation with a preceding `tcp`
+// event (same dst_ip:dst_port within a short window) is more reliable.
+type TCPStateEvent struct {
+	Type        string `json:"type"` // "tcp_state"
+	TS          string `json:"ts"`
+	Seq         uint64 `json:"seq"`
+	TimestampNS uint64 `json:"timestamp_ns,omitempty"`
+	PID         uint32 `json:"pid"`
+	Comm        string `json:"comm,omitempty"`
+	SrcIP       string `json:"src_ip,omitempty"`
+	SrcPort     uint16 `json:"src_port,omitempty"`
+	DstIP       string `json:"dst_ip"`
+	DstPort     uint16 `json:"dst_port"`
+	OldState    string `json:"old_state"`
+	NewState    string `json:"new_state"`
+	Sig         string `json:"sig,omitempty"`
+}
+
 // TCPEvent is one JSONL record for an observed IPv4 connect attempt.
 type TCPEvent struct {
 	Type           string `json:"type"` // "tcp"

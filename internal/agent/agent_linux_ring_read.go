@@ -761,6 +761,87 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 	}
 }
 
+// readTCPStateRing drains the tcp_state_events ringbuf (P3-2b). The BPF
+// program filters to outgoing IPv4 TCP connects (oldstate == SYN_SENT), so
+// every event seen here is one resolved 3-way handshake — newstate ==
+// ESTABLISHED means success, newstate == CLOSE means RST/timeout/unreach.
+// PID and Comm are best-effort because the tracepoint fires in softirq
+// context; downstream tooling correlates by tuple (saddr:sport→daddr:dport)
+// with the preceding `tcp` connect_event when reliable attribution is needed.
+func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
+	stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (tcp_state)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, commb, ok := decodeTCPStateEvent(record.RawSample)
+		if !ok {
+			stats.addDropped("tcp_state_decode")
+			slog.Warn("decode tcp_state", "len", len(record.RawSample))
+			continue
+		}
+
+		oldStr := telemetry.TCPStateName(oldState)
+		newStr := telemetry.TCPStateName(newState)
+		confirmed := newStr == telemetry.TCPStateEstablished
+		// Anything else after SYN_SENT (CLOSE, CLOSE_WAIT, FIN_WAIT1, etc.) is
+		// a failed or short-circuited handshake from the policy POV; CLOSE is
+		// by far the common case (RST / unreachable / timeout).
+		refused := !confirmed
+		stats.addTCPState(confirmed, refused)
+
+		dstIP := net.IP(daddr[:]).To4()
+		if dstIP == nil {
+			continue
+		}
+		srcIP := net.IP(saddr[:]).To4()
+		comm := string(bytes.TrimRight(commb[:], "\x00"))
+
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		slog.Debug("tcp_state", "pid", pid, "comm", comm,
+			"src", srcIP.String(), "sport", sport,
+			"dst", dstIP.String(), "dport", dport,
+			"old", oldStr, "new", newStr)
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.TCPStateEvent{
+				Type:        telemetry.EventTypeTCPState,
+				TS:          ts,
+				Seq:         n,
+				TimestampNS: timestampNS,
+				PID:         pid,
+				Comm:        comm,
+				SrcIP:       srcIP.String(),
+				SrcPort:     sport,
+				DstIP:       dstIP.String(),
+				DstPort:     dport,
+				OldState:    oldStr,
+				NewState:    newStr,
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("tcp_state_jsonl")
+				slog.Warn("events jsonl (tcp_state)", "err", werr)
+			}
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {

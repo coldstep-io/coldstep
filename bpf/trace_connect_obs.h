@@ -226,6 +226,36 @@ struct http_sniff_event {
 _Static_assert(sizeof(struct http_sniff_event) == 228,
 	       "http_sniff_event wire size must match httpSniffEventWireSize=228 in agent_linux.go");
 
+/*
+ * P3-2b: kernel-confirmed TCP handshake outcome via tp/sock/inet_sock_set_state.
+ * Emitted only for IPPROTO_TCP and only when oldstate == TCP_SYN_SENT — i.e.
+ * the moment an outgoing connect() transitions to ESTABLISHED (success) or
+ * CLOSE (RST / timeout). Unlike the syscall-enter `connect_event`, this is
+ * the kernel's authoritative result, observed in softirq context (PID/comm
+ * are best-effort).
+ *
+ * Field order is chosen so the 4-byte members (timestamp split / pid / dport
+ * ordering doesn't apply here — timestamp_ns is __u64 aligned at offset 0,
+ * pid+comm pack to keep natural alignment, addresses/ports stay together).
+ */
+struct tcp_state_event {
+	__u64 timestamp_ns;
+	__u32 pid;
+	__u32 saddr; /* network byte order */
+	__u32 daddr; /* network byte order */
+	__u16 sport; /* network byte order */
+	__u16 dport; /* network byte order */
+	__s32 old_state;
+	__s32 new_state;
+	__u8 comm[16];
+};
+/*
+ * Layout: 8 + 4 + 4 + 4 + 2 + 2 + 4 + 4 + 16 = 48. All members are
+ * naturally aligned; clang emits no implicit padding.
+ */
+_Static_assert(sizeof(struct tcp_state_event) == 48,
+	       "tcp_state_event wire size must match tcpStateEventWireSize=48 in agent_linux.go");
+
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {

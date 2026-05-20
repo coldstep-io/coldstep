@@ -242,6 +242,19 @@ struct {
 } tls_events SEC(".maps");
 
 /*
+ * P3-2b: kernel-confirmed TCP handshake outcomes. The tp/sock/inet_sock_set_state
+ * tracepoint fires for every TCP state transition; the BPF program filters to
+ * IPPROTO_TCP with oldstate == TCP_SYN_SENT and emits the resolved tuple plus
+ * old/new state to userspace. Separate ringbuf so syscall-enter connect_events
+ * (best-effort attribution) and state-machine confirmation can be reconciled
+ * downstream without re-decoding.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 24);
+} tcp_state_events SEC(".maps");
+
+/*
  * AUDIT(5a): null checked — every `note_*` counter helper below follows the
  * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
  */
@@ -290,6 +303,23 @@ static __always_inline void note_tls_ringbuf_reserve_failed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&tls_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	(*v)++;
+}
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} tcp_state_ringbuf_reserve_failures SEC(".maps");
+
+static __always_inline void note_tcp_state_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&tcp_state_ringbuf_reserve_failures, &k);
 
 	if (!v)
 		return;
@@ -679,5 +709,95 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 	}
 
+	return 0;
+}
+
+/*
+ * P3-2b: kernel-confirmed TCP handshake outcome via tp/sock/inet_sock_set_state.
+ *
+ * The sys_enter `connect_event` records the syscall attempt before the
+ * 3-way handshake completes — a deny by RST, route failure, or timeout still
+ * shows up as a "connect attempt" in detect. This tracepoint fires on the
+ * kernel-internal TCP state transition and lets us distinguish:
+ *   - oldstate=SYN_SENT, newstate=ESTABLISHED → handshake succeeded
+ *   - oldstate=SYN_SENT, newstate=CLOSE       → RST / unreachable / timeout
+ *
+ * Filters: IPv4 (family == AF_INET), TCP (protocol == IPPROTO_TCP), and
+ * oldstate == SYN_SENT (outgoing connect). Other transitions (LISTEN→…,
+ * ESTABLISHED→FIN_WAIT*, …) are out of scope here.
+ *
+ * Runs in softirq context — `bpf_get_current_pid_tgid()` / `bpf_get_current_comm()`
+ * return the currently-scheduled task, which may be the network-RX softirq, not
+ * the original connecting task. Userspace must treat pid/comm as best-effort.
+ */
+#ifndef IPPROTO_TCP
+#define IPPROTO_TCP 6
+#endif
+#ifndef TCP_SYN_SENT
+#define TCP_SYN_SENT 2
+#endif
+
+SEC("tp/sock/inet_sock_set_state")
+int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
+{
+	__u16 family;
+	__u16 protocol;
+	int oldstate;
+	int newstate;
+	struct tcp_state_event *ev;
+	__u64 pt;
+
+	if (bpf_core_read(&family, sizeof(family), &ctx->family))
+		return 0;
+	if (family != AF_INET)
+		return 0;
+	if (bpf_core_read(&protocol, sizeof(protocol), &ctx->protocol))
+		return 0;
+	if (protocol != IPPROTO_TCP)
+		return 0;
+	if (bpf_core_read(&oldstate, sizeof(oldstate), &ctx->oldstate))
+		return 0;
+	if (oldstate != TCP_SYN_SENT)
+		return 0;
+	if (bpf_core_read(&newstate, sizeof(newstate), &ctx->newstate))
+		return 0;
+
+	ev = bpf_ringbuf_reserve(&tcp_state_events, sizeof(*ev), 0);
+	if (!ev) {
+		note_tcp_state_ringbuf_reserve_failed();
+		return 0;
+	}
+
+	ev->timestamp_ns = bpf_ktime_get_ns();
+	pt = bpf_get_current_pid_tgid();
+	ev->pid = (__u32)(pt >> 32);
+	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+
+	/*
+	 * saddr/daddr in the tracepoint payload are __u8[4] in network byte
+	 * order (matches inet_sk(sk)->inet_saddr/inet_daddr raw bytes). We
+	 * copy the 4 raw bytes into our __u32 slot; the Go decoder reads them
+	 * as a [4]byte and wraps with net.IP — same convention used by
+	 * connect_event.daddr.
+	 */
+	__builtin_memset(&ev->saddr, 0, sizeof(ev->saddr));
+	__builtin_memset(&ev->daddr, 0, sizeof(ev->daddr));
+	bpf_core_read(&ev->saddr, 4, &ctx->saddr);
+	bpf_core_read(&ev->daddr, 4, &ctx->daddr);
+
+	/*
+	 * sport/dport are __u16 in HOST order in the tracepoint (kernel does
+	 * `ntohs(inet_sk(sk)->inet_sport)` when building the trace record).
+	 * Store as-is; the Go decoder reads them as binary.LittleEndian.Uint16
+	 * (host order on x86_64 / aarch64 BPF targets).
+	 */
+	if (bpf_core_read(&ev->sport, sizeof(ev->sport), &ctx->sport))
+		ev->sport = 0;
+	if (bpf_core_read(&ev->dport, sizeof(ev->dport), &ctx->dport))
+		ev->dport = 0;
+	ev->old_state = oldstate;
+	ev->new_state = newstate;
+
+	bpf_ringbuf_submit(ev, 0);
 	return 0;
 }
