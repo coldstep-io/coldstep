@@ -459,7 +459,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		// flipped to unknown/ktls (Bug-1 fix).
 		tlsRecvAtNs := time.Now().UnixNano()
 
-		tgid, tid, commb, daddr, port, rawPay, ok := decodeTLSSniffEvent(record.RawSample)
+		tgid, tid, commb, daddr, port, rawPay, daddr6, isIPv6, ok := decodeTLSSniffEvent(record.RawSample)
 		if !ok {
 			if sectionState != nil {
 				sectionState.addTLSDecodeError()
@@ -468,9 +468,20 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			slog.Warn("decode tls sniff", "len", len(record.RawSample))
 			continue
 		}
-		ip := net.IP(daddr[:]).To4()
-		if ip == nil {
-			continue
+		var ip net.IP
+		var remote string
+		if isIPv6 {
+			ip = net.IP(daddr6[:])
+			if len(ip) != net.IPv6len {
+				continue
+			}
+			remote = fmt.Sprintf("`[%s]:%d`", ip.String(), port)
+		} else {
+			ip = net.IP(daddr[:]).To4()
+			if ip == nil {
+				continue
+			}
+			remote = fmt.Sprintf("`%s:%d`", ip.String(), port)
 		}
 		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
 		sni, parsed := telemetry.ParseClientHelloSNI(rawPay)
@@ -481,6 +492,16 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			// and retry. This recovers the Go crypto/tls and rustls header/body
 			// split where the 5-byte record header lands in one write() and the
 			// handshake body lands in the next.
+			//
+			// P5: skip reassembly for IPv6 — tlsReassemblyKey keys on the v4
+			// daddr ([4]byte), which would collapse to {0,0,0,0} for every
+			// IPv6 stream and cause cross-connection collisions. Extending
+			// the key shape is out of scope for the SNI-only P5 increment;
+			// fragmented v6 handshakes fall through to tls_sni_parse drop.
+			if isIPv6 {
+				stats.addDropped("tls_sni_parse")
+				continue
+			}
 			res := reasm.appendAndParse(tlsReassemblyKey{PID: tgid, Dst: daddr, Dport: port}, rawPay)
 			if !res.parsed {
 				stats.addDropped("tls_sni_parse")
@@ -514,7 +535,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		rows.addTLS(report.TLSDigestRow{
 			TS: ts, PID: tgid, Comm: comm,
 			SNI:              sni,
-			Remote:           fmt.Sprintf("`%s:%d`", ip.String(), port),
+			Remote:           remote,
 			Policy:           cl.Display(),
 			Confidence:       conf,
 			ConfidenceReason: confReason,
@@ -535,6 +556,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				ConfidenceReason: confReason,
 				ReassembledSNI:   reassembled,
 				Dst:              ip.String(), Dport: port,
+				IsIPv6: isIPv6,
 				Policy: string(cl),
 				Note:   note,
 			}

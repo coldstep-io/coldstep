@@ -122,7 +122,7 @@ have_dest:
 				if (tls_len > TLS_PAYLOAD_MAX)
 					tls_len = TLS_PAYLOAD_MAX;
 				st.in_use = 1;
-				st._pad = 0;
+				st.is_ipv6 = 0;
 				__builtin_memcpy(st.daddr, &sin_addr, sizeof(st.daddr));
 				__builtin_memcpy(st.dport, &sin_port, sizeof(st.dport));
 				try_emit_tls_clienthello_from_tuple(&st, iov1.iov_base,

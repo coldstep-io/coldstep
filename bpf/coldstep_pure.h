@@ -20,6 +20,10 @@ typedef uint32_t __be32;
 #define AF_INET 2
 #endif
 
+#ifndef AF_INET6
+#define AF_INET6 10
+#endif
+
 #ifndef __always_inline
 #define __always_inline inline __attribute__((__always_inline__))
 #endif
@@ -84,6 +88,28 @@ static __always_inline int coldstep_parse_ipv4_sockaddr16(const __u8 scratch[16]
 	}
 	__builtin_memcpy(port, scratch + 2, sizeof(*port));
 	__builtin_memcpy(addr, scratch + 4, sizeof(*addr));
+	return 0;
+}
+
+/*
+ * Parse the first 24 bytes of a Linux struct sockaddr_in6 image (AF_INET6 only).
+ * Layout: sin6_family(2) sin6_port(2) sin6_flowinfo(4) sin6_addr(16) [sin6_scope_id(4) skipped].
+ * Used by read_ipv6_sockaddr after bpf_probe_read_user(scratch, 24, ...).
+ */
+static __always_inline int coldstep_parse_ipv6_sockaddr24(const __u8 scratch[24], __be16 *port,
+							  __u8 addr[16])
+{
+	if (!scratch || !port || !addr)
+		return -1;
+	{
+		__u16 family;
+
+		__builtin_memcpy(&family, scratch, sizeof(family));
+		if (family != (__u16)AF_INET6)
+			return -1;
+	}
+	__builtin_memcpy(port, scratch + 2, sizeof(*port));
+	__builtin_memcpy(addr, scratch + 8, 16);
 	return 0;
 }
 

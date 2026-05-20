@@ -437,7 +437,18 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			return 0;
 		if (ns_read_syscall_arg(regs, 1, &si_ul))
 			return 0;
-		return handle_tcp_obs_connect((__u32)di_ul, si_ul);
+		/*
+		 * Call IPv4 and IPv6 handlers unconditionally — each parser
+		 * validates sa_family up front and returns -1 on mismatch, so
+		 * only one of the two actually emits/updates per call. The
+		 * IPv6 path doesn't write a connect_events ringbuf record
+		 * (`connect_event` has an IPv4-only wire shape), but it
+		 * populates the (tgid,fd) tuple map so a subsequent TLS
+		 * ClientHello write can attribute its destination.
+		 */
+		handle_tcp_obs_connect((__u32)di_ul, si_ul);
+		handle_tcp_obs_connect6((__u32)di_ul, si_ul);
+		return 0;
 	}
 
 	if (id == (long)COLDSTEP_NR_SENDTO) {
@@ -473,6 +484,18 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		if (len > 0x00100000)
 			len = 0x00100000;
 
+		/*
+		 * P5: when the connected-sendto path resolves an IPv6 tuple,
+		 * skip UDP/HTTP emit (both records have IPv4-only wire shapes
+		 * and would otherwise carry daddr=0.0.0.0). TLS sniff below
+		 * still runs against the IPv6 tuple via the v6-aware emit
+		 * helper.
+		 */
+		if (!addr_ul && ct.is_ipv6) {
+			try_emit_tls_clienthello_from_tuple(&ct, buf_ptr, len, tuple_pt);
+			return 0;
+		}
+
 		if (!addr_ul)
 			handle_udp_obs_emit_pt(tuple_pt, sin_port, sin_addr, len);
 		else
@@ -498,7 +521,7 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 			struct connect4_tuple st = {};
 
 			st.in_use = 1;
-			st._pad = 0;
+			st.is_ipv6 = 0;
 			__builtin_memcpy(st.daddr, &sin_addr, sizeof(st.daddr));
 			__builtin_memcpy(st.dport, &sin_port, sizeof(st.dport));
 			try_emit_tls_clienthello_from_tuple(&st, buf_ptr, len,

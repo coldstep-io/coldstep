@@ -5,6 +5,8 @@ package agent
 import (
 	"bytes"
 	"encoding/binary"
+	"fmt"
+	"net"
 	"testing"
 
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -140,19 +142,25 @@ func TestDecodeTLSSniffEvent_captureLenAtMax(t *testing.T) {
 		raw[tlsSniffEventHeaderSize+i] = byte(i)
 	}
 
-	_, _, _, _, _, pay, ok := decodeTLSSniffEvent(raw)
+	_, _, _, daddr, _, pay, _, isIPv6, ok := decodeTLSSniffEvent(raw)
 	if !ok {
 		t.Fatal("expected ok when capture_len == tlsPayloadMax")
 	}
 	if len(pay) != tlsPayloadMax {
 		t.Fatalf("payload len %d", len(pay))
 	}
+	if isIPv6 {
+		t.Fatal("isIPv6 should be false for zeroed trailer")
+	}
+	if daddr != [4]byte{9, 9, 9, 9} {
+		t.Fatalf("daddr %v", daddr)
+	}
 }
 
 func TestDecodeTLSSniffEvent_captureLenTooLarge(t *testing.T) {
 	raw := make([]byte, tlsSniffEventWireSize)
 	binary.LittleEndian.PutUint16(raw[32:34], tlsPayloadMax+1)
-	_, _, _, _, _, _, ok := decodeTLSSniffEvent(raw)
+	_, _, _, _, _, _, _, _, ok := decodeTLSSniffEvent(raw)
 	if ok {
 		t.Fatal("expected false for capLen > tlsPayloadMax")
 	}
@@ -421,6 +429,51 @@ func TestClassifyConnectRingRecord(t *testing.T) {
 				t.Errorf("classifyConnectRingRecord = %d, want %d", got, tc.want)
 			}
 		})
+	}
+}
+
+// TestDecodeTLSSniffEvent_IPv6 exercises the P5 IPv6 trailer: a hand-crafted
+// wire event with is_ipv6=1 + a v6 address in daddr6 must decode with
+// isIPv6==true and daddr6 populated.
+func TestDecodeTLSSniffEvent_IPv6(t *testing.T) {
+	raw := make([]byte, tlsSniffEventWireSize)
+	binary.LittleEndian.PutUint32(raw[0:4], 400)
+	binary.LittleEndian.PutUint32(raw[4:8], 401)
+	copy(raw[8:24], []byte("curl6\x00"))
+	// IPv6 path: BPF zeroes daddr; v6 address lives in the trailer.
+	binary.BigEndian.PutUint16(raw[28:30], 443)
+	binary.LittleEndian.PutUint16(raw[32:34], 0)
+	// 2001:db8::1
+	v6 := [16]byte{0x20, 0x01, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x01}
+	copy(raw[tlsSniffEventIPv6Offset:tlsSniffEventIPv6Offset+16], v6[:])
+	raw[tlsSniffEventIPv6Offset+16] = 1 // is_ipv6
+
+	_, _, _, daddr, dport, _, daddr6, isIPv6, ok := decodeTLSSniffEvent(raw)
+	if !ok {
+		t.Fatal("expected ok")
+	}
+	if !isIPv6 {
+		t.Fatal("expected isIPv6=true")
+	}
+	if daddr != [4]byte{} {
+		t.Fatalf("expected zeroed daddr on IPv6 path, got %v", daddr)
+	}
+	if daddr6 != v6 {
+		t.Fatalf("daddr6 %v != %v", daddr6, v6)
+	}
+	if dport != 443 {
+		t.Fatalf("dport %d", dport)
+	}
+
+	// readTLSRing formats the rendered remote string using bracket notation
+	// for IPv6 — exercise the same path so digest rendering is locked in.
+	ip := net.IP(daddr6[:])
+	if ip.To4() != nil {
+		t.Fatalf("v6 address must not coerce to To4: %s", ip)
+	}
+	remote := fmt.Sprintf("`[%s]:%d`", ip.String(), dport)
+	if remote != "`[2001:db8::1]:443`" {
+		t.Fatalf("bracketed remote = %q, want `[2001:db8::1]:443`", remote)
 	}
 }
 

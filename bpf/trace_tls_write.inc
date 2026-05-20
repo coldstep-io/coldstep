@@ -75,6 +75,22 @@ static __always_inline void try_emit_tls_clienthello_from_tuple(struct connect4_
 		__builtin_memcpy(ev->dport, tup->dport, sizeof(ev->dport));
 		ev->_pad[0] = 0;
 		ev->_pad[1] = 0;
+		/*
+		 * IPv6 trailer (P5). ringbuf_reserve memory is uninitialized,
+		 * so zero unconditionally then overwrite on the IPv6 path.
+		 * IPv4 callers leave daddr6 zeroed and is_ipv6=0, preserving
+		 * the legacy IPv4 wire content; IPv6 carries the v6 address
+		 * in the trailer.
+		 */
+		__builtin_memset(ev->daddr6, 0, sizeof(ev->daddr6));
+		ev->is_ipv6 = 0;
+		ev->_pad_v6[0] = 0;
+		ev->_pad_v6[1] = 0;
+		ev->_pad_v6[2] = 0;
+		if (tup->is_ipv6) {
+			__builtin_memcpy(ev->daddr6, tup->daddr6, sizeof(ev->daddr6));
+			ev->is_ipv6 = 1;
+		}
 		{
 			/*
 			 * Constant read size for strict verifiers (same pattern as HTTP sniff —
@@ -106,6 +122,13 @@ static __always_inline void try_emit_buffer_sniff_from_tuple(struct connect4_tup
 	try_emit_tls_clienthello_from_tuple(tup, buf_ptr, len, pt);
 
 	if (!tup || !tup->in_use)
+		return;
+	/*
+	 * P5: HTTP sniff (http_events / http_sniff_event) only carries an IPv4
+	 * daddr; bail on IPv6 tuples to avoid emitting `0.0.0.0:80` records
+	 * with the wrong destination.
+	 */
+	if (tup->is_ipv6)
 		return;
 
 	{
