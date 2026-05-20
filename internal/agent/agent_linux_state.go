@@ -28,16 +28,21 @@ import (
 )
 
 type runStats struct {
-	mu                              sync.Mutex
-	execN                           int
-	tcpN                            int
-	udpN                            int
-	httpN                           int
-	tlsN                            int
-	tlsConfidenceFullN              int
-	tlsConfidencePartialN           int
-	tlsConfidenceInferredN          int
-	tlsConfidenceUnknownN           int
+	mu                     sync.Mutex
+	execN                  int
+	tcpN                   int
+	udpN                   int
+	httpN                  int
+	tlsN                   int
+	tlsConfidenceFullN     int
+	tlsConfidencePartialN  int
+	tlsConfidenceInferredN int
+	tlsConfidenceUnknownN  int
+	// tlsConfidenceUnknownKTLSN is the subset of tlsConfidenceUnknownN whose
+	// Confidence was forced from full/partial/unknown to unknown by the P4
+	// KTLS override in readTLSRing. Surfaced in the digest as the
+	// `(N ktls-offloaded)` annotation on the TLS SNI KPI cell.
+	tlsConfidenceUnknownKTLSN       int
 	procForkN                       int
 	fsN                             int
 	ktlsN                           int
@@ -209,7 +214,7 @@ func (s *runStats) addHTTP(cl policy.Class) {
 	s.addPolicyLocked(cl)
 }
 
-func (s *runStats) addTLS(cl policy.Class, conf telemetry.TLSConfidence) {
+func (s *runStats) addTLS(cl policy.Class, conf telemetry.TLSConfidence, ktlsOverride bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tlsN++
@@ -222,16 +227,21 @@ func (s *runStats) addTLS(cl policy.Class, conf telemetry.TLSConfidence) {
 		s.tlsConfidenceInferredN++
 	default:
 		s.tlsConfidenceUnknownN++
+		if ktlsOverride {
+			s.tlsConfidenceUnknownKTLSN++
+		}
 	}
 	s.addPolicyLocked(cl)
 }
 
 // tlsConfidenceCounts returns per-tier TLS confidence counters (full,
-// partial, inferred, unknown) for digest reporting.
-func (s *runStats) tlsConfidenceCounts() (full, partial, inferred, unknown int) {
+// partial, inferred, unknown) for digest reporting. unknownKTLS is the subset
+// of unknown attributed to the P4 KTLS override; the digest renders it as a
+// sub-bucket inside the unknown count.
+func (s *runStats) tlsConfidenceCounts() (full, partial, inferred, unknown, unknownKTLS int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.tlsConfidenceFullN, s.tlsConfidencePartialN, s.tlsConfidenceInferredN, s.tlsConfidenceUnknownN
+	return s.tlsConfidenceFullN, s.tlsConfidencePartialN, s.tlsConfidenceInferredN, s.tlsConfidenceUnknownN, s.tlsConfidenceUnknownKTLSN
 }
 
 func (s *runStats) setConnect4TupleUpdateFailures(n int) {
