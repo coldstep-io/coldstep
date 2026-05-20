@@ -1151,3 +1151,82 @@ func TestBuildDetectMarkdown_DomainContactCounts_HiddenWhenEmpty(t *testing.T) {
 		t.Fatalf("section should be suppressed when empty; got:\n%s", md)
 	}
 }
+
+// TestBuildDetectMarkdown_KTLSBucket exercises the P4 wiring: a TLSDigestRow
+// whose Confidence was forced to unknown by the readTLSRing KTLS override
+// (ConfidenceReason="ktls") must surface in three places in the digest:
+//  1. The TLS SNI KPI cell gets a `(N ktls-offloaded)` annotation inside the
+//     unknown bucket so the headline count splits structural vs parse-failure.
+//  2. The per-row Confidence column reads `unknown ⚠ ktls` instead of plain
+//     `unknown` so operators can attribute the row to kernel-TLS offload.
+//  3. The technical-details fold gains a "KTLS-offloaded sockets" paragraph
+//     that points operators at the `ktls_offload` JSONL events for cross-ref.
+//
+// Gated on TLSConfidenceUnknownKTLS > 0 throughout — the regression that this
+// test catches is silently rolling the override into the plain unknown bucket
+// and losing the structural-vs-parse-failure signal.
+func TestBuildDetectMarkdown_KTLSBucket(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                      []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TCPTotal:                 1,
+		TLSTotal:                 1,
+		TLSConfidenceFull:        0,
+		TLSConfidencePartial:     0,
+		TLSConfidenceUnknown:     1,
+		TLSConfidenceUnknownKTLS: 1,
+		TLSSNIGate:               true,
+		PolicyCounts:             map[string]int{"monitor": 1},
+		TLSRows: []TLSDigestRow{
+			{
+				TS: "t1", PID: 4242, Comm: "nginx",
+				SNI:              "",
+				Remote:           "`10.0.0.1:443`",
+				Policy:           "monitor",
+				Confidence:       telemetry.TLSConfidenceUnknown,
+				ConfidenceReason: "ktls",
+			},
+		},
+		JSONLPath:         "/tmp/x.jsonl",
+		SeqFirst:          1,
+		SeqLast:           1,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		// KPI cell — unknown bucket carries the ktls sub-count.
+		"unknown=1 (1 ktls-offloaded)",
+		// Per-row column — confidence annotated with the ktls reason.
+		"`unknown ⚠ ktls`",
+		// Technical-details paragraph — explains the structural blind spot.
+		"**KTLS-offloaded sockets** (1 detected)",
+		"SNI extraction is structurally impossible",
+		"`ktls_offload` events in the JSONL",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in digest:\n%s", needle, md)
+		}
+	}
+}
+
+// TestBuildDetectMarkdown_KTLSBucketHiddenWhenZero guards against the digest
+// surfacing the KTLS annotation/paragraph on runs where no TLS event was
+// overridden — the headline KPI cell must read plain `unknown=K` without the
+// trailing `(N ktls-offloaded)` parenthetical and the tech-details paragraph
+// must stay folded out of the markdown.
+func TestBuildDetectMarkdown_KTLSBucketHiddenWhenZero(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:                      []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true}},
+		TLSTotal:                 1,
+		TLSConfidenceFull:        1,
+		TLSConfidenceUnknown:     0,
+		TLSConfidenceUnknownKTLS: 0,
+		TLSSNIGate:               true,
+		PolicyCounts:             map[string]int{"monitor": 1},
+		MaxRowsPerSection:        50,
+	})
+	if strings.Contains(md, "ktls-offloaded)") {
+		t.Fatalf("KPI ktls-offloaded annotation should be hidden when count is zero:\n%s", md)
+	}
+	if strings.Contains(md, "**KTLS-offloaded sockets**") {
+		t.Fatalf("tech-details KTLS paragraph should be hidden when count is zero:\n%s", md)
+	}
+}

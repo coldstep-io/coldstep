@@ -711,6 +711,13 @@ func writeTLSSection(b *strings.Builder, in DigestInput) {
 			if conf == "" {
 				conf = string(telemetry.TLSConfidenceUnknown)
 			}
+			if r.ConfidenceReason == "ktls" {
+				// P4: keep the machine-readable confidence in backticks but tack on a
+				// human "⚠ ktls" suffix so the per-row cell signals "unknown because
+				// kernel-TLS structurally hides the SNI" rather than "unknown because
+				// parse failed".
+				conf = conf + " ⚠ ktls"
+			}
 			fmt.Fprintf(b, "| %s | `%d` | `%s` | `%s` | %s | %s | `%s` |\n",
 				sanitizeCell(r.TS), r.PID, sanitizeCell(r.Comm),
 				sanitizeCell(r.SNI), sanitizeCell(r.Remote), sanitizeCell(r.Policy),
@@ -809,6 +816,13 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 			b.WriteString("    - `partial` — SNI length hit the capture/RFC boundary (`TLSSNIMaxLen=255`); the captured name may be a prefix of the real server name (fragmented or truncated ClientHello).\n")
 			b.WriteString("    - `inferred` — SNI inferred from prior DNS / connect correlation rather than parsed directly. Reserved for a future enricher and not currently emitted by the BPF path.\n")
 			b.WriteString("    - `unknown` — TLS framing detected but no usable SNI signal was captured.\n")
+			if in.TLSConfidenceUnknownKTLS > 0 {
+				// P4: kernel-TLS offload is a structural reason the SNI sniffer cannot
+				// resolve a server name. Surface it inside the technical-details fold
+				// so operators reading the digest know why the `unknown` bucket grew
+				// and where to cross-reference the affected sockets in the JSONL.
+				fmt.Fprintf(b, "- **KTLS-offloaded sockets** (%d detected): kernel TLS offload was active on these sockets. After `setsockopt(SOL_TLS, TLS_TX/RX)`, write syscalls carry ciphertext; SNI extraction is structurally impossible. These connections appear in the `unknown` confidence bucket. The `ktls_offload` events in the JSONL record the exact socket `(pid, fd)` for cross-reference.\n", in.TLSConfidenceUnknownKTLS)
+			}
 		}
 	}
 	if in.KTLSOffloadTotal > 0 {

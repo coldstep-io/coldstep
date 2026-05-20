@@ -231,6 +231,16 @@ type TLSEvent struct {
 	Comm       string        `json:"comm"`
 	SNI        string        `json:"sni"`
 	Confidence TLSConfidence `json:"confidence,omitempty"`
+	// ConfidenceReason is an open-string tag explaining a non-default
+	// Confidence verdict. Current values:
+	//   - "ktls" — Confidence forced to "unknown" because trace_ktls observed
+	//     setsockopt(SOL_TLS) on this socket; the captured SNI (if any) is a
+	//     pre-offload artifact and the in-kernel TLS encryption blinds the
+	//     userspace ClientHello sniffer for the rest of the connection (P4).
+	//   - "" — Confidence speaks for itself; no extra qualifier required.
+	// Kept as a free-form string (not an enum) so future enrichers can
+	// add their own reasons without churning the event schema.
+	ConfidenceReason string `json:"confidence_reason,omitempty"`
 	// ReassembledSNI is true when the SNI was recovered by stitching multiple
 	// write/writev/sendto syscall buffers together (P3-3 inter-syscall
 	// reassembly) rather than parsed from a single capture. It is independent
