@@ -90,8 +90,27 @@ type Summary struct {
 	// encryption to the kernel; the userspace ClientHello SNI sniffer cannot
 	// resolve SNI on KTLS-offloaded sockets (kernel writes ciphertext while the
 	// app writes plaintext). See SECURITY.md (TLS / SNI capture caveats).
-	KTLSOffloadEvents             int `json:"ktls_offload_events,omitempty"`
-	KTLSRingbufReserveFailures    int `json:"ktls_ringbuf_reserve_failures,omitempty"`
+	KTLSOffloadEvents          int `json:"ktls_offload_events,omitempty"`
+	KTLSRingbufReserveFailures int `json:"ktls_ringbuf_reserve_failures,omitempty"`
+	// TLSConfidenceFull / Partial / Inferred / Unknown count TLS events by the
+	// reliability of the captured SNI (H8). They are the public twin of the
+	// runStats.tlsConfidence*N counters that already feed the digest KPI row;
+	// surfacing them in .coldstep-telemetry.json lets downstream consumers
+	// (the report tooling, dashboards) read a confidence breakdown without
+	// re-parsing the JSONL stream.
+	//
+	// Tier semantics (mirrors telemetry.TLSConfidence):
+	//   - full:     ClientHello parsed, SNI extracted below the RFC boundary.
+	//   - partial:  SNI parsed but at the capture/RFC boundary (truncated).
+	//   - inferred: SNI carried over from prior connect/DNS correlation
+	//     (reserved; not emitted today).
+	//   - unknown:  no usable SNI signal — includes the P4 KTLS override
+	//     (see TLSConfidenceUnknownKTLS in the digest input for the subset
+	//     attributed specifically to kernel-TLS offload).
+	TLSConfidenceFull             int `json:"tls_confidence_full,omitempty"`
+	TLSConfidencePartial          int `json:"tls_confidence_partial,omitempty"`
+	TLSConfidenceInferred         int `json:"tls_confidence_inferred,omitempty"`
+	TLSConfidenceUnknown          int `json:"tls_confidence_unknown,omitempty"`
 	ProcForkEvents                int `json:"proc_fork_events,omitempty"`
 	Connect4TupleUpdateFailures   int `json:"connect4_tuple_update_failures,omitempty"`
 	UDPRingbufReserveFailures     int `json:"udp_ringbuf_reserve_failures,omitempty"`
