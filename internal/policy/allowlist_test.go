@@ -13,6 +13,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func bumpCallCount(cm *sync.Map, key string) {
@@ -227,6 +228,49 @@ func TestCompileDomainAllowlist_PopulatesWildcardRiskDomains(t *testing.T) {
 	want := []string{"*.s3.amazonaws.com"}
 	if !slices.Equal(got.WildcardRiskDomains, want) {
 		t.Fatalf("WildcardRiskDomains: got %v want %v", got.WildcardRiskDomains, want)
+	}
+}
+
+func TestCompileDomainAllowlist_FlagsAllH9CDNWildcards(t *testing.T) {
+	ctx := context.Background()
+	resolver := func(_ context.Context, _, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("9.9.9.9")}, nil
+	}
+	in := []string{
+		"*.githubusercontent.com",
+		"*.s3.amazonaws.com",
+		"*.blob.core.windows.net",
+		"*.azureedge.net",
+		"*.cloudfront.net",
+		"github.com",
+		"*.example.org",
+	}
+	got := CompileDomainAllowlist(ctx, in, resolver, 1)
+	want := []string{
+		"*.githubusercontent.com",
+		"*.s3.amazonaws.com",
+		"*.blob.core.windows.net",
+		"*.azureedge.net",
+		"*.cloudfront.net",
+	}
+	if !slices.Equal(got.WildcardRiskDomains, want) {
+		t.Fatalf("WildcardRiskDomains: got %v want %v", got.WildcardRiskDomains, want)
+	}
+}
+
+func TestCompileDomainAllowlist_RecordsCompileTimestamp(t *testing.T) {
+	ctx := context.Background()
+	resolver := func(_ context.Context, _, _ string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("9.9.9.9")}, nil
+	}
+	before := time.Now()
+	got := CompileDomainAllowlist(ctx, []string{"api.example.com"}, resolver, 1)
+	after := time.Now()
+	if got.CompileTimestamp.IsZero() {
+		t.Fatalf("CompileTimestamp is zero; want a recent time")
+	}
+	if got.CompileTimestamp.Before(before) || got.CompileTimestamp.After(after) {
+		t.Fatalf("CompileTimestamp %v outside [%v, %v]", got.CompileTimestamp, before, after)
 	}
 }
 

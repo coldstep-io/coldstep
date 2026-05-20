@@ -22,10 +22,16 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
+
+// allowlistStaleThreshold is the digest's TTL-staleness boundary (H9 DNS-6b).
+// Above this age the digest emits a ⚠️ box reminding operators that DNS TTLs
+// may have expired since the BPF map snapshot was programmed.
+const allowlistStaleThreshold = 5 * time.Minute
 
 // partialEgressTotal sums the BG-01 per-syscall partial-observe counters so the
 // headline-verdict "Review" threshold flips on any non-zero partial-observe.
@@ -1105,15 +1111,23 @@ func writeFooter(b *strings.Builder, in DigestInput) {
 	fmt.Fprintf(b, "> Full event log: `%s`\n", sanitizeCell(path))
 }
 
-// writeAllowlistTrust emits P1-1 (DNS Allowlist Trust Model hardening)
+// writeAllowlistTrust emits P1-1 / H9 (DNS Allowlist Trust Model hardening)
 // surface: unresolved allowlist domains (defend-mode warning), high-risk
-// wildcard entries, and a TTL-age info note when the compile is >5 minutes
-// old. The section is skipped when there is nothing to show.
+// wildcard CDN entries, a TTL-staleness warning when the compile is more than
+// allowlistStaleThreshold old, and a fixed-at-startup entry-count note (H12).
+// The section is skipped when there is nothing to show.
 func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 	hasUnresolved := isBlockingDigestMode(in.DefendMode) && len(in.UnresolvedAllowlistDomains) > 0
 	hasWildcard := len(in.WildcardRiskDomains) > 0
-	hasAgeNote := in.AllowlistAgeMinutes > 5
-	if !hasUnresolved && !hasWildcard && !hasAgeNote {
+	staleAge := time.Duration(0)
+	if !in.AllowlistCompileTime.IsZero() {
+		if age := time.Since(in.AllowlistCompileTime); age > allowlistStaleThreshold {
+			staleAge = age
+		}
+	}
+	hasStale := staleAge > 0
+	hasEntryCount := in.AllowlistEntryCount > 0 && isBlockingDigestMode(in.DefendMode)
+	if !hasUnresolved && !hasWildcard && !hasStale && !hasEntryCount {
 		return
 	}
 
@@ -1128,16 +1142,25 @@ func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 	}
 
 	if hasWildcard {
-		b.WriteString("> ⚠️ **High-risk wildcards** — these entries grant reach across a shared multi-tenant surface. Prefer tighter literal hostnames where possible.\n>\n")
+		quoted := make([]string, 0, len(in.WildcardRiskDomains))
 		for _, d := range in.WildcardRiskDomains {
-			b.WriteString(fmt.Sprintf("> - `%s`\n", sanitizeCell(d)))
+			quoted = append(quoted, fmt.Sprintf("`%s`", sanitizeCell(d)))
 		}
-		b.WriteString("\n")
+		b.WriteString(fmt.Sprintf(
+			"> ⚠️ **High-risk wildcard domains in allowlist** — %s — may match unintended hosts.\n\n",
+			strings.Join(quoted, ", ")))
 	}
 
-	if hasAgeNote {
-		b.WriteString(fmt.Sprintf("> ℹ️ Allowlist was compiled %.0f minutes ago — DNS TTLs may have expired. Consider shorter jobs or re-running for long CI pipelines.\n\n",
-			in.AllowlistAgeMinutes))
+	if hasStale {
+		b.WriteString(fmt.Sprintf(
+			"> ⚠️ **DNS allowlist may be stale** — compiled %.0f minutes ago. DNS TTLs may have expired.\n\n",
+			staleAge.Minutes()))
+	}
+
+	if hasEntryCount {
+		b.WriteString(fmt.Sprintf(
+			"> ℹ️ Allowlist: %d IPv4 entries loaded at startup (fixed until restart).\n\n",
+			in.AllowlistEntryCount))
 	}
 }
 

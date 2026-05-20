@@ -157,7 +157,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
-	allowlistCompileTime := time.Now()
+	allowlistCompileTime := defendCompiled.CompileTimestamp
+	if allowlistCompileTime.IsZero() {
+		allowlistCompileTime = time.Now()
+	}
 	stats.setAllowlistCompileSnapshot(
 		allowlistCompileTime,
 		defendCompiled.AllowedIPv4.Len(),
@@ -170,9 +173,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if cfg.Mode == config.ModeDefend && len(defendCompiled.UnresolvedDomains) > 0 {
 		slog.Warn("allowlist domains unresolved — legitimate traffic to these domains may be blocked",
 			"count", len(defendCompiled.UnresolvedDomains))
-	}
-	for _, d := range defendCompiled.WildcardRiskDomains {
-		slog.Warn("high-risk wildcard in allowlist", "domain", d)
 	}
 
 	dnsCache := NewDNSCache()
@@ -802,6 +802,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				meta.Capabilities["fs_events"] = true
 			}
 			meta.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
+			meta.AllowlistEntryCount = defendState.snapshot().allowlistSize
 			if len(defendCompiled.WildcardRiskDomains) > 0 {
 				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
 			}
