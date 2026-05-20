@@ -104,6 +104,7 @@ func buildDigestInput(
 		TLSConfidenceUnknown:           tlsConfUnknown,
 		TLSSNIGate:                     tlsSNIGate,
 		PolicyCounts:                   stats.snapshotPolicyCounts(),
+		TCPResultCounts:                stats.snapshotTCPResultCounts(),
 		ExecRows:                       execRows,
 		TCPRows:                        tcpRows,
 		UDPRows:                        udpRows,

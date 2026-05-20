@@ -7,6 +7,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **P3-2: TCP connect result events.** Paired kprobe/kretprobe on `tcp_v4_connect` captures the kernel return code (0 on success, negative errno otherwise) and emits a supplementary `tcp_result` JSONL event correlated by `pid_tgid`. The detect digest now renders a **TCP connections** KPI row that splits attempts by outcome — e.g. `18 established · 3 refused · 1 timeout · 2 unreachable` — instead of conflating timed-out / refused connections with established ones. Failure to attach the kretprobe is non-fatal; the entry-side `connect_event` is still recorded and the digest falls back to the legacy "attempt" wording with a footnote pointing at the BPF hook status table.
+
 ---
 
 ## [v0.2.6] — 2026-05-19

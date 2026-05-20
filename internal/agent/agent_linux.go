@@ -77,9 +77,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		{Name: "dns recvfrom sniff", OK: false, Detail: "not loaded"},
 		// Reaching Run means probeBTF() in Main has already succeeded; record
 		// that explicitly so .coldstep-telemetry.json carries a positive btf
-		// availability signal alongside per-program attach status. Kept last
-		// in the initial slice so bpfSt[0..2] index-sets below remain stable.
+		// availability signal alongside per-program attach status. Kept at
+		// index 3 so bpfSt[0..2] index-sets below remain stable.
 		{Name: "btf", OK: true, BTFAvailable: true},
+		// P3-2: paired kprobe/kretprobe on tcp_v4_connect for connect_result
+		// events. Filled in by attachTCPConnectKprobes below; kept at index 4
+		// so existing bpfSt[0..3] index-sets stay stable.
+		{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: "not loaded"},
 	}
 
 	detectDest := cfg.StepSummaryPath
@@ -421,6 +425,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
 		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
+
+		// P3-2: paired kprobe/kretprobe on tcp_v4_connect. Captures the
+		// kernel return code so the digest can distinguish established
+		// from refused / timeout / unreachable connections. Failure here
+		// is non-fatal — the entry-side connect_event still records the
+		// attempt, just without a paired result.
+		if kpLnk, krLnk, kerr := attachTCPConnectKprobes(syscallObjs); kerr != nil {
+			slog.Info("tcp_v4_connect kprobe pair attach failed; connect_result events disabled", "err", kerr)
+			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: bpfDetail(kerr)}
+		} else {
+			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: true}
+			slog.Info("tcp_v4_connect kprobe/kretprobe attached (connect_result events enabled)")
+			defer kpLnk.Close()
+			defer krLnk.Close()
+		}
+
 		// Defend mode readiness is written after the deny reader goroutine launches
 		// (further below); writing it here would race the action's probe steps, which
 		// run as soon as readiness is set, against the reader being alive.

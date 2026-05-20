@@ -343,6 +343,7 @@ static __always_inline void note_partial_egress(int slot)
 }
 
 #include "trace_tcp_obs.inc"
+#include "trace_tcp_connect_kprobe.inc"
 #include "trace_udp_obs.inc"
 #include "trace_http_obs.inc"
 #include "trace_tls_write.inc"

@@ -72,6 +72,7 @@ type runStats struct {
 	bpfHeartbeatFailures            int
 	policyCounts                    map[string]int
 	droppedCounts                   map[string]int
+	tcpResultCounts                 map[string]int // P3-2: established/refused/timeout/...
 
 	// Allowlist compile snapshot (P1-1). Set once at startup after
 	// CompileDomainAllowlist; read at shutdown by buildDigestInput.
@@ -87,8 +88,9 @@ type runStats struct {
 
 func newRunStats() *runStats {
 	return &runStats{
-		policyCounts:  make(map[string]int),
-		droppedCounts: make(map[string]int),
+		policyCounts:    make(map[string]int),
+		droppedCounts:   make(map[string]int),
+		tcpResultCounts: make(map[string]int),
 	}
 }
 
@@ -168,6 +170,29 @@ func (s *runStats) addTCP(cl policy.Class) {
 	defer s.mu.Unlock()
 	s.tcpN++
 	s.addPolicyLocked(cl)
+}
+
+// addTCPResult records a tcp_v4_connect outcome bucket emitted by the
+// kretprobe-side connect_result_event (P3-2). Buckets are coarse strings
+// from telemetry.ConnectResultString — established / refused / timeout /
+// unreachable / in_progress / denied / other.
+func (s *runStats) addTCPResult(bucket string) {
+	if strings.TrimSpace(bucket) == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpResultCounts[bucket]++
+}
+
+func (s *runStats) snapshotTCPResultCounts() map[string]int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int, len(s.tcpResultCounts))
+	for k, v := range s.tcpResultCounts {
+		out[k] = v
+	}
+	return out
 }
 
 func (s *runStats) addUDP(cl policy.Class) {
