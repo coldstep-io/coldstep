@@ -157,6 +157,7 @@ func buildDigestInput(
 		IoUringSetupObserved:           stats.ioUringSetupObserved(),
 		IoUringSendTotal:               stats.ioUringSendTotal(),
 		IoUringRingbufReserveFailures:  stats.ioUringRingbufReserveFailures(),
+		IoUringTLSHelloObserved:        stats.ioUringTLSHelloObserved(),
 		CanaryPipelineOK:               canarySnap.pipelineOK,
 		CanaryFailCount:                canarySnap.failCount,
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),

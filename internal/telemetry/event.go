@@ -424,24 +424,31 @@ type KTLSEvent struct {
 const EventTypeKTLS = "ktls_offload"
 
 // IOUringSendEvent is one JSONL record for an io_uring socket-class SQE
-// submission observed via SEC("raw_tp/io_uring_submit_sqe"). Phase 1 emits
-// for IORING_OP_SENDMSG (9) and IORING_OP_SEND (26) only — both
-// unambiguous network sends. WRITE/WRITEV will land in Phase 2 alongside
-// fd→socket resolution. The event surfaces io_uring egress that would
+// submission observed via SEC("raw_tp/io_uring_submit_sqe"). The probe
+// emits for IORING_OP_SENDMSG (9) and IORING_OP_SEND (26) only — both
+// unambiguous network sends. The event surfaces io_uring egress that would
 // otherwise bypass syscall-based hooks; SNI / payload extraction is not
-// possible from the SQE submission point. dst_ip / dst_port are populated
-// when Phase 2's tuple resolution lands; Phase 1 leaves them empty.
+// possible from the SQE submission point alone. dst_ip / dst_port are
+// reserved for a future fd→socket resolution arm; current revisions leave
+// them empty.
+//
+// HasTLSHello is the Phase 2 enhanced-profile signal: when
+// COLDSTEP_DETECT_PROFILE=enhanced, the BPF program performs a best-effort
+// bpf_probe_read_user on the SQE's user-buffer pointer and matches the
+// first 6 bytes against the TLS ClientHello record signature. The flag is
+// always false outside the enhanced profile.
 type IOUringSendEvent struct {
-	Type    string `json:"type"` // "io_uring_send"
-	TS      string `json:"ts"`
-	Seq     uint64 `json:"seq"`
-	PID     uint32 `json:"pid"`
-	Comm    string `json:"comm"`
-	FD      uint32 `json:"fd"`
-	Op      string `json:"op"` // "WRITEV" | "SENDMSG" | "WRITE" | "SEND" | "UNKNOWN"
-	DstIP   string `json:"dst_ip,omitempty"`
-	DstPort uint16 `json:"dst_port,omitempty"`
-	Sig     string `json:"sig,omitempty"`
+	Type        string `json:"type"` // "io_uring_send"
+	TS          string `json:"ts"`
+	Seq         uint64 `json:"seq"`
+	PID         uint32 `json:"pid"`
+	Comm        string `json:"comm"`
+	FD          uint32 `json:"fd"`
+	Op          string `json:"op"` // "WRITEV" | "SENDMSG" | "WRITE" | "SEND" | "UNKNOWN"
+	DstIP       string `json:"dst_ip,omitempty"`
+	DstPort     uint16 `json:"dst_port,omitempty"`
+	HasTLSHello bool   `json:"has_tls_hello,omitempty"`
+	Sig         string `json:"sig,omitempty"`
 }
 
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.

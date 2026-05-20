@@ -935,9 +935,11 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 }
 
 // readIoUringRing drains io_uring_events from the BPF ringbuf into JSONL and
-// runStats (P6 Phase 1). The BPF side already filters to write-class opcodes
-// (SENDMSG=9, SEND=26), so this loop only sanitizes the wire bytes and maps
-// the raw IORING_OP_ byte to its string label.
+// runStats. The BPF side already filters to write-class opcodes (SENDMSG=9,
+// SEND=26), so this loop only sanitizes the wire bytes and maps the raw
+// IORING_OP_ byte to its string label. The Phase 2 has_tls_hello flag rides
+// alongside each event when COLDSTEP_DETECT_PROFILE=enhanced and the
+// best-effort SQE buffer peek matched a TLS ClientHello prefix.
 func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
@@ -956,7 +958,7 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 		}
 		backoff.reset()
 
-		_, pid, fd, daddr, dport, op, commb, ok := decodeIOUringSendEvent(record.RawSample)
+		_, pid, fd, daddr, dport, op, hasTLSHello, commb, ok := decodeIOUringSendEvent(record.RawSample)
 		if !ok {
 			stats.addDropped("io_uring_decode")
 			slog.Warn("decode io_uring send", "len", len(record.RawSample))
@@ -984,15 +986,16 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 			jsonlMu.Lock()
 			n := seq.Next()
 			ev := telemetry.IOUringSendEvent{
-				Type:    "io_uring_send",
-				TS:      ts,
-				Seq:     n,
-				PID:     pid,
-				Comm:    comm,
-				FD:      fd,
-				Op:      opName,
-				DstIP:   dstIP,
-				DstPort: dstPort,
+				Type:        "io_uring_send",
+				TS:          ts,
+				Seq:         n,
+				PID:         pid,
+				Comm:        comm,
+				FD:          fd,
+				Op:          opName,
+				DstIP:       dstIP,
+				DstPort:     dstPort,
+				HasTLSHello: hasTLSHello,
 			}
 			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()

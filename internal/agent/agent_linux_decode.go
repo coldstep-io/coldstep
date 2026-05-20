@@ -214,11 +214,13 @@ func decodeTCPStateEvent(raw []byte) (timestampNS uint64, pid uint32, saddr, dad
 
 // decodeIOUringSendEvent parses io_uring_send_event (40 bytes, see
 // bpf/trace_connect_obs.h). Layout: ts(8) pid(4) fd(4) daddr(4) dport(2)
-// op(1) _pad(1) comm(16). dport is stored in network byte order (mirrors
-// the connect4_tuple cache), daddr is raw 4-byte big-endian.
-func decodeIOUringSendEvent(raw []byte) (ts uint64, pid uint32, fd uint32, daddr [4]byte, dport uint16, op uint8, comm [16]byte, ok bool) {
+// op(1) has_tls_hello(1) comm(16). dport is stored in network byte order
+// (mirrors the connect4_tuple cache), daddr is raw 4-byte big-endian.
+// has_tls_hello is the Phase 2 enhanced-profile flag; 0 on standard profile
+// kernels regardless of payload.
+func decodeIOUringSendEvent(raw []byte) (ts uint64, pid uint32, fd uint32, daddr [4]byte, dport uint16, op uint8, hasTLSHello bool, comm [16]byte, ok bool) {
 	if len(raw) < ioUringSendEventWireSize {
-		return 0, 0, 0, [4]byte{}, 0, 0, [16]byte{}, false
+		return 0, 0, 0, [4]byte{}, 0, 0, false, [16]byte{}, false
 	}
 	ts = binary.LittleEndian.Uint64(raw[0:8])
 	pid = binary.LittleEndian.Uint32(raw[8:12])
@@ -226,9 +228,9 @@ func decodeIOUringSendEvent(raw []byte) (ts uint64, pid uint32, fd uint32, daddr
 	copy(daddr[:], raw[16:20])
 	dport = binary.BigEndian.Uint16(raw[20:22])
 	op = raw[22]
-	// raw[23] is _pad
+	hasTLSHello = raw[23] != 0
 	copy(comm[:], raw[24:40])
-	return ts, pid, fd, daddr, dport, op, comm, true
+	return ts, pid, fd, daddr, dport, op, hasTLSHello, comm, true
 }
 
 // ioUringOpName maps the raw IORING_OP_ byte to the JSONL op string. Values
