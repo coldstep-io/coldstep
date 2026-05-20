@@ -49,6 +49,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 		slog.Warn("runner_compat_warning", "code", w.Code, "detail", w.Detail)
 	}
 	stats := newRunStats()
+	// P4: shared between readKTLSRing (Mark) and readTLSRing (IsKTLS) so a
+	// pre-offload ClientHello sniff is reclassified as Confidence=unknown
+	// with confidence_reason="ktls" before it lands in JSONL.
+	ktlsTr := newKTLSTracker()
 	maxRows := report.DefaultMaxRowsPerSection
 	rows := newRowBuffer(maxRows)
 	sectionState := newNetworkSectionState()
@@ -896,7 +900,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer)
+			errCh <- readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer, ktlsTr)
 		}()
 	}
 	if denyRd.R != nil {
@@ -931,7 +935,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errCh <- readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer)
+			errCh <- readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer, ktlsTr)
 		}()
 	}
 

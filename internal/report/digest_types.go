@@ -77,6 +77,12 @@ type TLSDigestRow struct {
 	Remote     string
 	Policy     string
 	Confidence telemetry.TLSConfidence
+	// ConfidenceReason qualifies a non-default Confidence verdict. The only
+	// value emitted today is "ktls" (P4): forced to TLSConfidenceUnknown
+	// because trace_ktls observed setsockopt(SOL_TLS) on the socket and
+	// userspace can no longer parse the ClientHello. Mirrors the JSONL field
+	// of the same name on telemetry.TLSEvent.
+	ConfidenceReason string
 }
 
 // FSDigestRow is one filesystem event line in the markdown digest.
@@ -123,7 +129,13 @@ type DigestInput struct {
 	TLSConfidencePartial  int
 	TLSConfidenceInferred int
 	TLSConfidenceUnknown  int
-	PolicyCounts          map[string]int
+	// TLSConfidenceUnknownKTLS is the subset of TLSConfidenceUnknown attributed
+	// to the P4 KTLS override (ConfidenceReason=="ktls"). Surfaced in the KPI
+	// cell as `(N ktls-offloaded)` and in the technical-details paragraph so
+	// operators can separate "unknown because we could not parse it" from
+	// "unknown because kernel-TLS structurally hides the SNI".
+	TLSConfidenceUnknownKTLS int
+	PolicyCounts             map[string]int
 
 	ExecRows  []ExecDigestRow
 	TCPRows   []TCPDigestRow

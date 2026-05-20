@@ -381,7 +381,7 @@ func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 }
 
 func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol *policy.Policy,
-	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer) error {
+	stats *runStats, rows *rowBuffer, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, sectionState *networkSectionState, signer *telemetry.Signer, ktlsTr *ktlsTracker) error {
 	backoff := newRingReadRetryBackoff()
 	reasm := newTLSReassembler()
 	for {
@@ -436,15 +436,29 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 		sni = telemetry.SanitizeField(sni, 253)
 		cl := pol.Classify(sni, ip)
 		conf := telemetry.ScoreTLSConfidence(sni)
-		stats.addTLS(cl, conf)
+		// P4: if trace_ktls observed setsockopt(SOL_TLS) for this pid within the
+		// tracker TTL, the SNI we just parsed (if any) is a pre-offload artifact —
+		// kernel-TLS will encrypt every subsequent write on the socket and any
+		// "full"/"partial" verdict is misleading. Force unknown with reason="ktls"
+		// before the row lands in the digest or the JSONL. tls_sniff_event has no
+		// fd field today, so we query the tracker with the wildcard form (fd=0)
+		// — see internal/agent/agent_linux_ktls_tracker.go for the contract.
+		confReason := ""
+		if ktlsTr != nil && ktlsTr.IsKTLS(tgid, 0) {
+			slog.Debug("ktls override applied", "pid", tgid, "sni", sni)
+			conf = telemetry.TLSConfidenceUnknown
+			confReason = "ktls"
+		}
+		stats.addTLS(cl, conf, confReason == "ktls")
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addTLS(report.TLSDigestRow{
 			TS: ts, PID: tgid, Comm: comm,
-			SNI:        sni,
-			Remote:     fmt.Sprintf("`%s:%d`", ip.String(), port),
-			Policy:     cl.Display(),
-			Confidence: conf,
+			SNI:              sni,
+			Remote:           fmt.Sprintf("`%s:%d`", ip.String(), port),
+			Policy:           cl.Display(),
+			Confidence:       conf,
+			ConfidenceReason: confReason,
 		}, stats)
 
 		if cfg.EventsLogPath != "" {
@@ -458,9 +472,10 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 				Type: "tls", TS: ts, Seq: n,
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, SNI: sni,
-				Confidence:     conf,
-				ReassembledSNI: reassembled,
-				Dst:            ip.String(), Dport: port,
+				Confidence:       conf,
+				ConfidenceReason: confReason,
+				ReassembledSNI:   reassembled,
+				Dst:              ip.String(), Dport: port,
 				Policy: string(cl),
 				Note:   note,
 			}
@@ -690,7 +705,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 // observe ciphertext on that fd and cannot resolve SNI. Counted in runStats
 // for the digest KPI; appended to JSONL when EventsLogPath is set.
 func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
-	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer, ktlsTr *ktlsTracker) error {
 	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
@@ -714,6 +729,14 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 			continue
 		}
 		stats.addKTLS()
+		// P4: record (pid, fd) so any TLS event for the same pid that flows
+		// through readTLSRing within ktlsTrackerTTL gets reclassified to
+		// Confidence=unknown / ConfidenceReason="ktls". Forward-only: a TLS
+		// event that already shipped before this Mark keeps its original
+		// confidence (plan p4-ktls-sni-confidence-integration.md, Non-goals).
+		if ktlsTr != nil {
+			ktlsTr.Mark(tgid, fd)
+		}
 		comm := string(bytes.TrimRight(commb[:], "\x00"))
 		direction := ktlsDirectionLabel(dirByte)
 		ts := time.Now().UTC().Format(time.RFC3339Nano)

@@ -234,7 +234,14 @@ func formatTLSConfidenceCell(in DigestInput) string {
 	if in.TLSConfidenceInferred > 0 {
 		parts = append(parts, fmt.Sprintf("inferred=%d", in.TLSConfidenceInferred))
 	}
-	parts = append(parts, fmt.Sprintf("unknown=%d", in.TLSConfidenceUnknown))
+	unknown := fmt.Sprintf("unknown=%d", in.TLSConfidenceUnknown)
+	if in.TLSConfidenceUnknownKTLS > 0 {
+		// P4: split the unknown bucket so operators see how much of it is
+		// structurally unobservable (kernel-TLS offload) vs failed parse/
+		// reassembly. Renders inline so the KPI cell stays one row.
+		unknown += fmt.Sprintf(" (%d ktls-offloaded)", in.TLSConfidenceUnknownKTLS)
+	}
+	parts = append(parts, unknown)
 	return strings.Join(parts, " · ")
 }
 
