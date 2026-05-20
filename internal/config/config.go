@@ -41,6 +41,13 @@ type Config struct {
 	// CgroupAttachPath is the unified cgroup2 path for link.AttachCgroup (from COLDSTEP_CGROUP_PATH or /proc/self/cgroup).
 	CgroupAttachPath string
 	SigningKey       string
+	// RunnerHasIPv6 reflects COLDSTEP_RUNNER_HAS_IPV6 (set by the action layer
+	// from /proc/net/if_inet6 at start). When true, the runner advertises at
+	// least one non-loopback / non-link-local IPv6 address — the digest uses
+	// this to downgrade ✅ to ⚠️ when no IPv6 hooks are loaded (H1 honesty).
+	// The detection itself lives in the action layer; the agent just forwards
+	// the flag to the digest.
+	RunnerHasIPv6 bool
 }
 
 func defaultUnderWorkspace(rel string) string {
@@ -135,6 +142,7 @@ func LoadFromEnv() (Config, error) {
 		DetectProfile:        profile,
 		CgroupAttachPath:     cgPath,
 		SigningKey:           os.Getenv("COLDSTEP_SIGNING_KEY"),
+		RunnerHasIPv6:        envBoolTrue("COLDSTEP_RUNNER_HAS_IPV6"),
 	}, nil
 }
 
