@@ -307,6 +307,9 @@ func ScoreTLSConfidence(sni string) TLSConfidence {
 }
 
 // TLSEvent is one JSONL record for TLS ClientHello SNI observed on egress (detect).
+// Dst holds either a dotted-quad IPv4 (e.g. "1.2.3.4") or a plain IPv6 string
+// (e.g. "2001:db8::1") with no brackets — IsIPv6 distinguishes the two. The
+// markdown digest applies "[…]:port" bracket notation when rendering IPv6.
 type TLSEvent struct {
 	Type       string        `json:"type"` // "tls"
 	TS         string        `json:"ts"`
@@ -336,6 +339,7 @@ type TLSEvent struct {
 	ReassembledSNI bool   `json:"reassembled_sni,omitempty"`
 	Dst            string `json:"dst"`
 	Dport          uint16 `json:"dport"`
+	IsIPv6         bool   `json:"ipv6,omitempty"`
 	Policy         string `json:"policy"`
 	Note           string `json:"note,omitempty"`
 	Sig            string `json:"sig,omitempty"`

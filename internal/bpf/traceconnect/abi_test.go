@@ -69,8 +69,11 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		if ms.KeySize != 8 {
 			t.Errorf("connect4_by_tgid_fd KeySize = %d, want 8", ms.KeySize)
 		}
-		if ms.ValueSize != 8 {
-			t.Errorf("connect4_by_tgid_fd ValueSize = %d, want 8", ms.ValueSize)
+		// P5: connect4_tuple grew from 8 → 24 bytes
+		// (daddr[4] + dport[2] + in_use + is_ipv6 + daddr6[16]) so the LRU
+		// map value carries the v6 address for IPv6 TLS attribution.
+		if ms.ValueSize != 24 {
+			t.Errorf("connect4_by_tgid_fd ValueSize = %d, want 24", ms.ValueSize)
 		}
 	})
 

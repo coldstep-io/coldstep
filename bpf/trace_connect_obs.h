@@ -147,12 +147,18 @@ struct coldstep_iovec {
 	unsigned long iov_len;
 };
 
-/* Last IPv4 connect tuple observed for (tgid, fd); used to attribute TLS ClientHello writes. */
+/*
+ * Last IPv4/IPv6 connect tuple observed for (tgid, fd); used to attribute TLS ClientHello writes.
+ * IPv4 path zeroes daddr6 and sets is_ipv6=0; IPv6 path zeroes daddr and sets is_ipv6=1.
+ * Name kept (`connect4_tuple`, `connect4_by_tgid_fd`) for wire-compat with the existing
+ * userspace counter map names (`Connect4TupleUpdateFailures`).
+ */
 struct connect4_tuple {
 	__u8 daddr[4];
 	__u8 dport[2];
 	__u8 in_use;
-	__u8 _pad;
+	__u8 is_ipv6;
+	__u8 daddr6[16];
 };
 
 struct tls_sniff_event {
@@ -164,13 +170,24 @@ struct tls_sniff_event {
 	__u8 _pad[2];
 	__u16 capture_len;
 	__u8 payload[TLS_PAYLOAD_MAX];
+	/*
+	 * IPv6 trailer (P5). Appended at the end so the IPv4 wire layout
+	 * (offsets 0..289) is byte-for-byte unchanged: any IPv4-only consumer
+	 * reading the legacy header + payload stays correct.
+	 */
+	__u8 daddr6[16];
+	__u8 is_ipv6;
+	__u8 _pad_v6[3];
 };
 /*
- * Layout: header(34) + payload[256]; alignment-of-4 trailing pad → sizeof = 292.
- * Go decoder caps capture_len at 256 and never touches the trailing pad.
+ * Layout: header(34) + payload[256] + ipv6-trailer(20) → sizeof = 312.
+ * IPv6 trailer breakdown: daddr6[16] + is_ipv6(1) + _pad_v6[3]. The trailing
+ * 3-byte pad keeps the next struct on a 4-byte boundary (alignment-of-4 for
+ * the leading __u32 fields), so there is no implicit tail pad.
+ * Go decoder caps capture_len at 256 and never touches the trailing pad bytes.
  */
-_Static_assert(sizeof(struct tls_sniff_event) == 292,
-	       "tls_sniff_event wire size must match tlsSniffEventWireSize=292 in agent_linux.go");
+_Static_assert(sizeof(struct tls_sniff_event) == 312,
+	       "tls_sniff_event wire size must match tlsSniffEventWireSize=312 in agent_linux.go");
 
 struct connect_event {
 	__u32 tgid;
@@ -272,6 +289,24 @@ static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16
 	if (bpf_probe_read_user(scratch, sizeof(scratch), (void *)sockaddr_ptr))
 		return -1;
 	return coldstep_parse_ipv4_sockaddr16(scratch, port, addr);
+}
+
+/*
+ * One bounded userspace read (Linux struct sockaddr_in6 first 24 bytes:
+ * family/port/flowinfo/addr; sin6_scope_id is skipped). Same single-probe
+ * style as read_ipv4_sockaddr — chained probes are rejected on strict 6.x
+ * verifiers.
+ */
+static __always_inline int read_ipv6_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
+					      __u8 addr[16])
+{
+	__u8 scratch[24];
+
+	if (!sockaddr_ptr || !port || !addr)
+		return -1;
+	if (bpf_probe_read_user(scratch, sizeof(scratch), (void *)sockaddr_ptr))
+		return -1;
+	return coldstep_parse_ipv6_sockaddr24(scratch, port, addr);
 }
 
 static __always_inline int http_prefix_looks_like_request(unsigned long buf_ptr, __u32 cap)
