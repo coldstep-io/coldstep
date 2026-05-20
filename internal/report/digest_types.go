@@ -1,6 +1,7 @@
 package report
 
 import (
+	"time"
 	"unicode/utf8"
 
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -341,10 +342,18 @@ type DigestInput struct {
 	// shared-infrastructure wildcard surface (e.g. `*.s3.amazonaws.com`). Empty
 	// when no such entries are present.
 	WildcardRiskDomains []string
-	// AllowlistAgeMinutes is minutes between allowlist compile time and digest
-	// build time. Surfaces a TTL re-validation hint for long jobs; zero when no
-	// allowlist was compiled.
-	AllowlistAgeMinutes float64
+	// AllowlistCompileTime is the wall-clock time CompileDomainAllowlist
+	// finished resolving the defend allowlist (H9 DNS-6b). The digest renders a
+	// staleness warning when time.Since(AllowlistCompileTime) exceeds 5 minutes
+	// so operators of long-running jobs see that DNS TTLs may have expired
+	// since the snapshot was programmed into the BPF map. Zero value means no
+	// allowlist was compiled and the warning is suppressed.
+	AllowlistCompileTime time.Time
+	// AllowlistEntryCount is the total number of /32 + CIDR entries programmed
+	// into the BPF allowed_ipv4 LPM trie at startup (H12). Mirrors
+	// MetaEvent.AllowlistEntryCount; rendered as a fixed-point reminder in the
+	// digest's allowlist trust section.
+	AllowlistEntryCount int
 	// DomainContactCounts maps observed FQDN → observation count across TCP +
 	// UDP egress. Sorted descending by count in the digest section.
 	DomainContactCounts map[string]int

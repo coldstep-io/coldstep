@@ -144,12 +144,17 @@ func (s IPv6Set) ForEach(fn func(k [16]byte)) {
 // into the BPF allowed_ipv6 LPM trie in defend mode. IPv6 loopback (::1)
 // and link-local (fe80::/10) are NOT included here — those bypass
 // enforcement directly inside the BPF program.
+//
+// CompileTimestamp records when CompileDomainAllowlist finished resolving the
+// allowlist (H9 DNS-6b). Downstream consumers (digest renderer) compare it to
+// time.Now() to surface a TTL-staleness warning on long-running CI jobs.
 type CompileResult struct {
 	Domains             []string
 	AllowedIPv4         IPv4Set
 	AllowedIPv6         IPv6Set
 	UnresolvedDomains   []string
 	WildcardRiskDomains []string
+	CompileTimestamp    time.Time
 }
 
 // highRiskWildcardSuffixes lists shared-infrastructure DNS suffixes where a
@@ -333,6 +338,10 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 
 	slices.Sort(result.UnresolvedDomains)
 	result.WildcardRiskDomains = scoreWildcardRisk(normalized)
+	for _, d := range result.WildcardRiskDomains {
+		slog.Warn("allowlist: wildcard CDN domain may match unintended hosts", "domain", d)
+	}
+	result.CompileTimestamp = time.Now()
 
 	slog.Info("allowlist compiled",
 		"domains", len(normalized),

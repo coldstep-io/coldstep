@@ -48,6 +48,14 @@ type MetaEvent struct {
 	// AllowlistIPCount snapshots the number of unique IPv4 addresses produced by
 	// compiling the domain allowlist (P1-1 6a). Zero when not in defend mode.
 	AllowlistIPCount int `json:"allowlist_ip_count,omitempty"`
+	// AllowlistEntryCount snapshots the total number of /32 + CIDR entries
+	// programmed into the BPF allowed_ipv4 LPM trie at startup (H12). Distinct
+	// from AllowlistIPCount, which counts domain-resolved IPv4 addresses only;
+	// AllowlistEntryCount also includes literal `allowed-ips` entries (single
+	// IPs and CIDR ranges) merged into the trie. Surfaced in the digest as a
+	// reminder that the allowlist is fixed at startup until the next agent
+	// restart.
+	AllowlistEntryCount int `json:"allowlist_entry_count,omitempty"`
 	// WildcardRiskDomains lists allowlist entries (e.g. `*.s3.amazonaws.com`)
 	// whose wildcard suffix matches a known multi-tenant shared-infrastructure
 	// surface (P1-1 6c). Operators can review and tighten if desired.
