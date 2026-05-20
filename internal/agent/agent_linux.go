@@ -128,6 +128,21 @@ func Run(ctx context.Context, cfg config.Config) error {
 				slog.Warn("detect digest", "err", err)
 			}
 		}
+		// H2: emit a shutdown MetaEvent line carrying per-channel ringbuf
+		// reserve-failure counts under `dropped_events`. The startup meta is
+		// already in JSONL; this second meta lands at the very end of the run
+		// so consumers can see silent event loss without parsing the digest.
+		// Map is nil (and omitted) when every counter is zero.
+		if cfg.EventsLogPath != "" {
+			if shutdownMeta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile); err != nil {
+				slog.Warn("build shutdown meta", "err", err)
+			} else {
+				shutdownMeta.DroppedEvents = buildDroppedEventsMap(stats, defendState)
+				if err := telemetry.AppendJSONL(cfg.EventsLogPath, shutdownMeta, signer); err != nil {
+					slog.Warn("shutdown meta jsonl", "err", err)
+				}
+			}
+		}
 	}()
 
 	compileCtx, compileCancel := context.WithTimeout(ctx, 120*time.Second)

@@ -14,6 +14,40 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
+// buildDroppedEventsMap returns a map of ringbuf reserve failures keyed by
+// event-type slug (BPF counter name minus the `_ringbuf_reserve_failures`
+// suffix). Returns nil when every counter is zero so MetaEvent.DroppedEvents
+// omitempty hides the field entirely. The map is the H2 "silent event loss
+// must be visible" surface — operators reading the JSONL shutdown meta can see
+// at a glance which channels lost events without parsing the digest.
+func buildDroppedEventsMap(stats *runStats, defendState *defendState) map[string]uint64 {
+	m := make(map[string]uint64, 13)
+	add := func(k string, v int) {
+		if v > 0 {
+			m[k] = uint64(v)
+		}
+	}
+	add("connect", stats.connectRingbufReserveFailures())
+	add("udp", stats.udpRingbufReserveFailures())
+	add("dns", stats.dnsRingbufReserveFailures())
+	add("http", stats.httpRingbufReserveFailures())
+	add("tls", stats.tlsRingbufReserveFailures())
+	add("exec", stats.execRingbufReserveFailures())
+	add("fork", stats.forkRingbufReserveFailures())
+	add("fs", stats.fsRingbufReserveFailures())
+	add("ktls", stats.ktlsRingbufReserveFailures())
+	add("bpf_audit", stats.bpfAuditRingbufReserveFailures())
+	add("tcp_state", stats.tcpStateRingbufReserveFailures())
+	add("io_uring", stats.ioUringRingbufReserveFailures())
+	if defendState != nil {
+		add("deny", defendState.snapshot().denyReserveFailures)
+	}
+	if len(m) == 0 {
+		return nil
+	}
+	return m
+}
+
 func preferRunError(current error, candidate error) error {
 	if candidate == nil || errors.Is(candidate, context.Canceled) {
 		return current
