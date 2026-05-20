@@ -191,6 +191,39 @@ func TestBuildDetectMarkdown_TLSKPIAndSection(t *testing.T) {
 	}
 }
 
+func TestBuildDetectMarkdown_ECHNote_PresentWhenTLSObserved(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "raw_tp/sys_enter (connect, tls)", OK: true}},
+		TCPTotal:          1,
+		TLSTotal:          1,
+		TLSSNIGate:        true,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"**TLS 1.3 Encrypted ClientHello (ECH):**",
+		"outer (CDN/proxy) SNI",
+		"cloudflare-ech.com",
+		"DNS HTTPS records",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
+func TestBuildDetectMarkdown_ECHNote_AbsentWhenNoTLS(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
+		ExecTotal:         1,
+		TCPTotal:          1,
+		TLSTotal:          0,
+		MaxRowsPerSection: 50,
+	})
+	if strings.Contains(md, "Encrypted ClientHello") {
+		t.Fatalf("ECH paragraph should be absent when TLSTotal == 0:\n%s", md)
+	}
+}
+
 func TestTruncateExeForDigest(t *testing.T) {
 	long := strings.Repeat("a", execExeDigestMaxBytes+20)
 	out := TruncateExeForDigest(long)

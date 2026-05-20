@@ -451,6 +451,9 @@ func writeTechnicalDetails(b *strings.Builder, in DigestInput, max int) {
 	if tlsKPIVisible(in) {
 		b.WriteString("- **tls KPI** counts ClientHello **SNI** parsed from the first cleartext handshake buffer on `write`/`writev`/`pwrite`/`pwritev`/`pwritev2`/`sendto` paths after an IPv4 `connect` when `COLDSTEP_FEATURE_GATES=tls_sni=1` (not decrypted TLS).\n")
 	}
+	if in.TLSTotal > 0 {
+		b.WriteString("\n> **TLS 1.3 Encrypted ClientHello (ECH):** When ECH is active, the real server name is encrypted in transit and only the outer (CDN/proxy) SNI is visible to network-layer observers, including this agent. Connections to ECH-enabled endpoints appear with the outer SNI (e.g., `cloudflare-ech.com`) rather than the true destination. This is a deliberate TLS privacy feature and cannot be resolved by BPF-level inspection. Cross-reference DNS HTTPS records or application-level logs for the true destination.\n\n")
+	}
 	if procForkKPIVisible(in) {
 		b.WriteString("- **proc_fork** counts `sched_process_fork` events (best-effort parent/child lineage).\n")
 	}

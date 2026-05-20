@@ -150,6 +150,15 @@ Enrichment walks indicators present in the report model when **`OTX_API_KEY`** i
 - Prefer **JSONL** over the Summary for forensics; the Summary is **capped** (GitHub limit ~1 MiB per step).
 - **Agent env (advanced):** the Go agent enables **verbose BPF verifier logging** for the large `traceconnect` program only when **`COLDSTEP_BPF_VERBOSE_VERIFY`** is set in the job environment. Leave it unset on GitHub-hosted runners (default) so `LoadTraceconnectObjects` stays fast; set it when debugging verifier rejections locally or in a dedicated job.
 
+### SNI extraction limits
+
+The optional **`tls_sni`** feature parses the **ClientHello SNI** from cleartext bytes on the userspace-syscall write path; it does **not** decrypt TLS. Several real-world conditions can produce a missing or non-authoritative SNI row even when the connection is healthy:
+
+- **Fragmented ClientHello** (TLS record split across multiple `write(2)` / `writev(2)` calls) — **handled** by a bounded `iov[1]` peek on the same `(tgid,fd)` for the supported syscall set (see `bpf/trace_tls_write.inc`). Pathological fragmentation across more than two segments, or fragmentation on a syscall not in the supported set, may still produce no row.
+- **KTLS offload** (kernel TLS, `setsockopt(SOL_TLS, …)`): once a socket is upgraded to KTLS, encryption happens inside the kernel **before** the userspace `write` path the SNI probe observes. The ClientHello itself is still cleartext (it precedes the upgrade), but if the application library hands the kernel a single buffer containing the ClientHello + later records, or skips the traced syscall set, the SNI may not surface.
+- **TLS 1.3 Encrypted ClientHello (ECH):** when ECH is active the **real** server name is encrypted and only the **outer** (CDN/proxy) SNI is visible on the wire — for example, a connection to a private origin behind a Cloudflare ECH endpoint will surface as `cloudflare-ech.com`. This is a deliberate TLS privacy feature and **cannot** be resolved by BPF-level inspection; cross-reference DNS HTTPS resource records or application-level logs for the true destination.
+- **`io_uring` submissions** bypass the per-syscall tracepoints the SNI hook attaches to. With the default **`io-uring-disable: true`**, `io_uring_setup(2)` is blocked by sysctl on the runner and the attempt is recorded in the digest; with that hardening off, ClientHello bytes submitted through io_uring will not produce a SNI row.
+
 ---
 
 ## Supply chain (optional)
