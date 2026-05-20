@@ -17,6 +17,30 @@ Include: affected component (composite shell / Go agent vs BPF), reproduction or
 
 Security fixes are applied to the **default development branch** (`main`) first. Released tags are cut from that line; use a **pinned tag** in workflows (see **README** / **QUICK_START**) rather than **`@main`** for production-style consumption.
 
+## Coverage Boundaries
+
+coldstep observes and enforces a **deliberately scoped** subset of egress. Trust decisions — promoting detect output to a defend allowlist, treating a clean digest as proof of no exfiltration, gating a release on a passing defend run — must account for the boundaries below. **Absence of evidence is not evidence of absence.**
+
+| Traffic class | Detect (observe) | Defend (block) | Notes |
+|:---|:---:|:---:|:---|
+| IPv4 TCP | ✓ | ✓ | Via `connect4` tracepoint + cgroup hook |
+| IPv4 UDP (`sendmsg`) | ✓ | ✓ | Via `sendmsg4` tracepoint + cgroup hook |
+| IPv4 UDP (`write` on connected socket) | partial | ✓ | `write(2)` on a connected UDP socket may not emit a per-message event; cgroup `sendmsg4` still enforces |
+| IPv6 (all) | ✗ | ✗ | No IPv6 hooks; silent bypass in all modes |
+| QUIC / HTTP3 (UDP/443) | UDP event only | ✓ (port/IP) | Inner QUIC framing not inspected; SNI not extracted |
+| TLS via io_uring | partial (enhanced) | ✗ | io_uring detection gated behind `detect-profile: enhanced` (raw_tp/io_uring_submit_sqe); the sysctl `io-uring-disable` remains the primary defense |
+| Unix domain sockets | ✗ | ✗ | AF_UNIX not tracked |
+| Docker-in-Docker inner containers | ✗ | ✗ | Separate cgroup/network namespace |
+| GitHub Actions service containers | ✗ | ✗ | Docker networking, separate namespace |
+
+**Why IPv4-only.** Defend hooks attach to the kernel-side BPF program types `cgroup/connect4` and `cgroup/sendmsg4`. These hook types are address-family-specific by ABI — the analogous `connect6` / `sendmsg6` slots would have to be implemented, attached, and verified separately, and require parallel IPv6 LPM map machinery on the userspace side. Until those land, IPv6 egress is not observed by coldstep tracepoints and is not gated by coldstep cgroup hooks. Treat any IPv6-capable destination as an uncovered path.
+
+**Operational implications.**
+
+- **Detect-mode allowlist promotion** (`suggested-allow` output) reflects IPv4 destinations only. A workload that exfiltrates over IPv6, QUIC inner payload, or AF_UNIX → host-proxy will appear clean in detect and will not contribute to the suggested allowlist.
+- **Defend-mode enforcement** does not bar IPv6 destinations even when an IPv4 entry of the "same" host exists; if the runner resolves AAAA and prefers IPv6, the connection is unenforced.
+- **Service containers and DinD** run in separate network namespaces from the job's primary cgroup. Egress originating inside those namespaces is outside coldstep's hook scope; route them through the job container or rely on organizational network controls.
+
 ## GitHub Actions: threat model and mitigations
 
 Coldstep is commonly used in **GitHub-hosted Ubuntu** jobs. This section summarizes **what the composite action can and cannot guarantee** for consumers hardening CI egress visibility or **defend** (blocking) mode.

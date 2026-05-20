@@ -12,11 +12,10 @@ inputs:
   mode:
     description: >-
       Runtime mode: detect (default) or defend (blocking, requires allowlist).
-      defend resolves A and AAAA records for every domain in the allowlist and
-      programs both the BPF allowed_ipv4 and allowed_ipv6 LPM tries. cgroup
-      hooks block non-allowlisted egress on both IPv4 (connect4/sendmsg4) and
-      IPv6 (connect6/sendmsg6); ::1 and fe80::/10 always bypass. The enforce
-      spelling is not supported; use defend.
+      defend blocks IPv4 TCP/UDP egress not on the allowlist (cgroup
+      connect4/sendmsg4 + BPF LSM where available). IPv6, QUIC/HTTP3, Unix
+      sockets, and io_uring connect are not blocked. See SECURITY.md for full
+      coverage boundaries. The enforce spelling is not supported; use defend.
     required: false
     default: detect
 
