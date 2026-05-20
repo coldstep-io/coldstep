@@ -7,6 +7,13 @@
  *
  * cgroup egress defend for mode: defend — IPv4 only (`cgroup/connect4`, `cgroup/sendmsg4`).
  * IPv6 is not supported. Loaded as a separate BPF collection from syscall observability programs.
+ *
+ * AUDIT(H18): this file is NOT compiled into any shipped Go package — see
+ * `internal/bpf/defend/gen.go` which generates only from trace_defend_all.bpf.c.
+ * The audited safety annotations (5a/5b) live in bpf/trace_defend_cgroup.inc
+ * and bpf/defend_policy.inc — the include chain pulled in by the active
+ * translation unit. Intentionally not duplicated here; this file is dead
+ * code awaiting deletion.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>

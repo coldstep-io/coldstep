@@ -7,6 +7,15 @@
  *
  * BPF LSM defend for mode: defend — IPv4 only (socket_connect, socket_sendmsg).
  * Provides robust defense by hooking into the Linux Security Module (LSM) framework.
+ *
+ * AUDIT(H18): this file is NOT compiled into any shipped Go package — see
+ * `internal/bpf/defend/gen.go` which generates only from trace_defend_all.bpf.c.
+ * The safety annotations (5a/5b/5f) and explicit zero-init defense-in-depth
+ * for `bpf_probe_read_kernel` destinations live in bpf/trace_lsm_defend_lsm.inc;
+ * intentionally not duplicated here because this translation unit is dead
+ * code awaiting deletion per the comment above. A future revert that
+ * re-enables this file MUST first port the zero-init fixes from the active
+ * `_lsm.inc` source.
  */
 #include "vmlinux.h"
 #include <bpf/bpf_helpers.h>

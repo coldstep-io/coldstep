@@ -178,6 +178,8 @@ int handle_raw_sys_enter_dns(struct bpf_raw_tracepoint_args *ctx)
 		val.max_len = (__u32)max_len_u;
 
 	__u64 pid_tgid = bpf_get_current_pid_tgid();
+	/* AUDIT(5a): update failure surfaced via percpu counter; LRU map evicts
+	 * stale entries automatically, so a non-zero return here is non-fatal. */
 	if (bpf_map_update_elem(&recvfrom_buf, &pid_tgid, &val, BPF_ANY))
 		note_dns_recvfrom_buf_update_failed();
 	return 0;

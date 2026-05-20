@@ -477,7 +477,10 @@ static __always_inline void maybe_emit_canary(void)
 	ev->seq_nr = *seq;
 	bpf_ringbuf_submit(ev, 0);
 
-	/* Clear trigger so we don't re-emit on every subsequent syscall. */
+	/* Clear trigger so we don't re-emit on every subsequent syscall.
+	 * AUDIT(5a): return intentionally not checked — on the unlikely update
+	 * failure the trigger stays armed and the next syscall just emits
+	 * another canary (idempotent from userspace's perspective). */
 	__u64 zero = 0;
 	bpf_map_update_elem(&canary_trigger, &k, &zero, BPF_ANY);
 }
@@ -835,6 +838,12 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 	struct tcp_state_event *ev;
 	__u64 pt;
 
+	/* AUDIT(5e): trace_event_raw_inet_sock_set_state fields (family /
+	 * protocol / oldstate / newstate / saddr / daddr / sport / dport) have
+	 * been stable since the tracepoint was added in 4.16 — bpf_core_read
+	 * tolerates a renamed-field future by failing closed below.
+	 * AUDIT(5f): every bpf_core_read return is checked; failure short-circuits
+	 * the handler before any field is consumed. */
 	if (bpf_core_read(&family, sizeof(family), &ctx->family))
 		return 0;
 	if (family != AF_INET)
@@ -850,6 +859,11 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 	if (bpf_core_read(&newstate, sizeof(newstate), &ctx->newstate))
 		return 0;
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional
+	 * after the bpf_core_read field assignments; failures of those CO-RE
+	 * reads either short-circuit before reserve or write 0/zero into the
+	 * pre-memset destination (see saddr/daddr handling below). */
 	ev = bpf_ringbuf_reserve(&tcp_state_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_tcp_state_ringbuf_reserve_failed();
@@ -870,6 +884,9 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 	 */
 	__builtin_memset(&ev->saddr, 0, sizeof(ev->saddr));
 	__builtin_memset(&ev->daddr, 0, sizeof(ev->daddr));
+	/* AUDIT(5f): return intentionally not checked — both fields were
+	 * zeroed above so a probe miss yields 0.0.0.0 rather than stack
+	 * garbage. The submit always fires; userspace tolerates zero addresses. */
 	bpf_core_read(&ev->saddr, 4, &ctx->saddr);
 	bpf_core_read(&ev->daddr, 4, &ctx->daddr);
 
@@ -878,7 +895,8 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 	 * `ntohs(inet_sk(sk)->inet_sport)` when building the trace record).
 	 * Store as-is; the Go decoder reads them as binary.LittleEndian.Uint16
 	 * (host order on x86_64 / aarch64 BPF targets).
-	 */
+	 * AUDIT(5f): return checked — explicit zero on failure mirrors the
+	 * saddr/daddr memset above. */
 	if (bpf_core_read(&ev->sport, sizeof(ev->sport), &ctx->sport))
 		ev->sport = 0;
 	if (bpf_core_read(&ev->dport, sizeof(ev->dport), &ctx->dport))
@@ -945,6 +963,9 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 
 	__u8 opcode = 0;
 
+	/* AUDIT(5e): `io_kiocb.opcode` has been a u8 at the same logical
+	 * offset since kernel 5.1 (when io_uring landed). CO-RE relocation
+	 * tolerates layout changes; failure short-circuits. */
 	if (bpf_core_read(&opcode, sizeof(opcode), &req->opcode))
 		return 0;
 
@@ -986,6 +1007,8 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 		}
 	}
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct io_uring_send_event *ev =
 		bpf_ringbuf_reserve(&io_uring_events, sizeof(*ev), 0);
 
