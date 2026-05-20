@@ -88,6 +88,37 @@ int main(void)
 			       "sockaddr reject non inet");
 	}
 
+	/* coldstep_parse_ipv6_sockaddr24 (P5) */
+	{
+		__u8 scratch[24];
+		__be16 port = 0;
+		__u8 addr[16];
+
+		memset(scratch, 0, sizeof(scratch));
+		memset(addr, 0, sizeof(addr));
+		scratch[0] = (unsigned char)(AF_INET6 & 0xff);
+		scratch[1] = (unsigned char)((AF_INET6 >> 8) & 0xff);
+		scratch[2] = 0x01;
+		scratch[3] = 0xbb; /* port 443, network byte order */
+		/* sin6_flowinfo @4..8 stays zero */
+		/* sin6_addr @8..24: 2001:db8::1 */
+		scratch[8] = 0x20;
+		scratch[9] = 0x01;
+		scratch[10] = 0x0d;
+		scratch[11] = 0xb8;
+		scratch[23] = 0x01;
+		EXPECT_ZERO(coldstep_parse_ipv6_sockaddr24(scratch, &port, addr), "sockaddr6 ok");
+		EXPECT_EQ((unsigned long)port, 0xbb01UL, "port6 LE");
+		EXPECT_EQ((unsigned long)addr[0], 0x20UL, "addr6 byte0");
+		EXPECT_EQ((unsigned long)addr[3], 0xb8UL, "addr6 byte3");
+		EXPECT_EQ((unsigned long)addr[15], 0x01UL, "addr6 byte15");
+
+		scratch[0] = (unsigned char)(AF_INET & 0xff);
+		scratch[1] = 0;
+		EXPECT_NE_ZERO(coldstep_parse_ipv6_sockaddr24(scratch, &port, addr),
+			       "sockaddr6 reject non inet6");
+	}
+
 	/* coldstep_http_prefix_is_request */
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("GET "), "GET ");
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("POST"), "POST");

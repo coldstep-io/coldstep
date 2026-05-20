@@ -66,6 +66,8 @@ static __always_inline int coldstep_connect_tuple_fetch(__u32 fd32, struct conne
 
 /*
  * Resolve IPv4 dst from tuple map — sendfile/splice and sendmsg fallback paths.
+ * P5: callers expect an IPv4 sin_addr; refuse IPv6 tuples so they don't emit
+ * udp_events / http_events records with daddr=0.0.0.0.
  */
 static __always_inline int coldstep_tuple_dst_for_fd(__u32 fd32, __be16 *sin_port,
 						     __be32 *sin_addr, __u64 *pt_out)
@@ -73,6 +75,8 @@ static __always_inline int coldstep_tuple_dst_for_fd(__u32 fd32, __be16 *sin_por
 	struct connect4_tuple t;
 
 	if (coldstep_connect_tuple_fetch(fd32, &t, pt_out))
+		return -1;
+	if (t.is_ipv6)
 		return -1;
 	__builtin_memcpy(sin_port, t.dport, sizeof(*sin_port));
 	__builtin_memcpy(sin_addr, t.daddr, sizeof(*sin_addr));

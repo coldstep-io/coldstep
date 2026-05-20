@@ -42,7 +42,11 @@ func TestNetworkAndAuditWireSizes(t *testing.T) {
 		{"connect_result_event", uintptr(connectResultEventWireSize), uintptr(4 + 4 + 4 + 4 + 16)},
 		{"udp_send_event", uintptr(udpSendEventWireSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 4)},
 		{"http_sniff_event", uintptr(httpSniffEventWireSize), uintptr(httpSniffEventHeaderSize + httpPayloadMax + 2)},
-		{"tls_sniff_event", uintptr(tlsSniffEventWireSize), uintptr(tlsSniffEventHeaderSize + tlsPayloadMax + 2)},
+		// tls_sniff_event = header(34) + payload[256] + IPv6 trailer
+		// (daddr6[16] + is_ipv6(1) + _pad_v6[3]) + 2-byte struct align tail → 312.
+		// The IPv6 trailer was added by P5; pre-P5 size was 292
+		// (header+payload+2-byte tail pad).
+		{"tls_sniff_event", uintptr(tlsSniffEventWireSize), uintptr(tlsSniffEventHeaderSize + tlsPayloadMax + 16 + 1 + 3 + 2)},
 		{"http_sniff_event_header", uintptr(httpSniffEventHeaderSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 2)},
 		{"tls_sniff_event_header", uintptr(tlsSniffEventHeaderSize), uintptr(4 + 4 + 16 + 4 + 2 + 2 + 2)},
 		{"deny_event", uintptr(denyEventWireSize), uintptr(4 + 4 + 16 + 1 + 1 + 1 + 1 + 16 + 2)},

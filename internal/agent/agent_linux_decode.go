@@ -89,10 +89,13 @@ func decodeHTTPSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4
 
 const tlsPayloadMax = 256
 
-// decodeTLSSniffEvent parses tls_sniff_event (same wire layout as http_sniff_event with TLS_PAYLOAD_MAX).
-func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]byte, dport uint16, payload []byte, ok bool) {
+// decodeTLSSniffEvent parses tls_sniff_event (header + payload[256] + IPv6 trailer).
+// IPv4 path: isIPv6=false, daddr6 zeroed. IPv6 path: isIPv6=true, daddr zeroed
+// in BPF and the v6 address is carried in daddr6. The wire layout preserves
+// pre-P5 IPv4 byte positions; the IPv6 trailer is appended after payload.
+func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]byte, dport uint16, payload []byte, daddr6 [16]byte, isIPv6 bool, ok bool) {
 	if len(raw) < tlsSniffEventWireSize {
-		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
+		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, [16]byte{}, false, false
 	}
 	tgid = binary.LittleEndian.Uint32(raw[0:4])
 	tid = binary.LittleEndian.Uint32(raw[4:8])
@@ -103,11 +106,13 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	// capLen is derived from Uint16 and cast to int on a 64-bit system;
 	// it is always in [0, 65535]. Only the upper bound needs checking.
 	if capLen > tlsPayloadMax {
-		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, false
+		return 0, 0, [16]byte{}, [4]byte{}, 0, nil, [16]byte{}, false, false
 	}
 	payload = make([]byte, capLen)
 	copy(payload, raw[tlsSniffEventHeaderSize:tlsSniffEventHeaderSize+capLen])
-	return tgid, tid, comm, daddr, dport, payload, true
+	copy(daddr6[:], raw[tlsSniffEventIPv6Offset:tlsSniffEventIPv6Offset+16])
+	isIPv6 = raw[tlsSniffEventIPv6Offset+16] != 0
+	return tgid, tid, comm, daddr, dport, payload, daddr6, isIPv6, true
 }
 
 // decodeDNSSniffSample parses dns_sniff_event (trace_dns.bpf.c): len, is_tcp, pad, payload.

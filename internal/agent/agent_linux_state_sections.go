@@ -149,13 +149,16 @@ const (
 	connectEventWireSize   = 32  // 4+4+16+4+2 fields, aligned to 4 → 32
 	udpSendEventWireSize   = 36  // 4+4+16+4+2+_pad[2]+4 datagram_len → 36
 	httpSniffEventWireSize = 228 // 4+4+16+4+2+_pad[2]+2+payload[192] → 228
-	tlsSniffEventWireSize  = 292 // 4+4+16+4+2+_pad[2]+2+payload[256] → 292
-	execEventWireSize      = 280 // 4+4+16+exe_path[256] → 280
-	forkEventWireSize      = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
-	fsEventWireSize        = 284 // 4+4+16+1+path[256]+_pad[3] → 284
-	denyEventWireSize      = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
-	bpfAuditEventWireSize  = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
-	ktlsEventWireSize      = 32  // 4(tgid)+4(tid)+comm[16]+4(fd)+1(direction)+_pad[3] → 32
+	// tlsSniffEventWireSize: legacy v4 header(34) + payload[256] + ipv6 trailer(20) → 312.
+	// IPv6 trailer = daddr6[16] + is_ipv6(1) + _pad_v6[3]. Layout chosen so the
+	// IPv4 bytes (offsets 0..289) stay byte-identical to the pre-P5 wire format.
+	tlsSniffEventWireSize = 312
+	execEventWireSize     = 280 // 4+4+16+exe_path[256] → 280
+	forkEventWireSize     = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
+	fsEventWireSize       = 284 // 4+4+16+1+path[256]+_pad[3] → 284
+	denyEventWireSize     = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46
+	bpfAuditEventWireSize = 28  // 4(tgid)+4(tid)+4(cmd)+comm[16] → 28
+	ktlsEventWireSize     = 32  // 4(tgid)+4(tid)+comm[16]+4(fd)+1(direction)+_pad[3] → 32
 	// tcp_state_event (P3-2b): 8(timestamp_ns)+4(pid)+4(saddr)+4(daddr)+2(sport)+2(dport)+4(old_state)+4(new_state)+16(comm) → 48
 	tcpStateEventWireSize = 48
 	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
@@ -167,6 +170,9 @@ const (
 	// out the payload window. Pair these with the respective WireSize above.
 	httpSniffEventHeaderSize = 34 // 4+4+16+4+2+_pad[2]+2 capture_len
 	tlsSniffEventHeaderSize  = 34 // same layout
+	// Offset of the IPv6 trailer (daddr6[16] + is_ipv6 + _pad_v6[3]) inside a
+	// tls_sniff_event. Equals tlsSniffEventHeaderSize + tlsPayloadMax.
+	tlsSniffEventIPv6Offset = tlsSniffEventHeaderSize + tlsPayloadMax
 
 	// After the first defend deny, read additional deny ringbuf records briefly so JSONL/digest
 	// capture a burst (e.g. TCP + UDP) before fail-fast shutdown.
