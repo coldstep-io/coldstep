@@ -120,6 +120,7 @@ func stableRingDropKinds() []string {
 		"fs_decode", "fs_jsonl", "fs_cap",
 		"tcp_decode", "tcp_jsonl",
 		"tcp_result_decode", "tcp_result_jsonl",
+		"tcp_state_decode", "tcp_state_jsonl",
 		"tls_decode", "tls_jsonl",
 		"tls_sni_parse",
 		"udp_decode", "udp_jsonl",

@@ -75,6 +75,10 @@ type runStats struct {
 	bpfDNSCacheUpdateFailuresN      int
 	bpfAuditRingbufReserveFailuresN int
 	bpfHeartbeatFailures            int
+	tcpStateN                       int
+	tcpStateConfirmed               int // newstate == ESTABLISHED
+	tcpStateRefused                 int // newstate == CLOSE (RST / timeout / unreach)
+	tcpStateRingbufReserveFailuresN int
 	policyCounts                    map[string]int
 	droppedCounts                   map[string]int
 	tcpResultCounts                 map[string]int // P3-2: established/refused/timeout/...
@@ -546,6 +550,40 @@ func (s *runStats) addBPFAudit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bpfAuditN++
+}
+
+// addTCPState records a kernel-confirmed TCP state transition (P3-2b).
+// confirmed=true when newstate is ESTABLISHED; refused=true when newstate
+// is CLOSE (RST / unreachable / timeout). The two are mutually exclusive
+// because the BPF program filters to oldstate == SYN_SENT.
+func (s *runStats) addTCPState(confirmed, refused bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpStateN++
+	if confirmed {
+		s.tcpStateConfirmed++
+	}
+	if refused {
+		s.tcpStateRefused++
+	}
+}
+
+func (s *runStats) tcpStateTotals() (total, confirmed, refused int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tcpStateN, s.tcpStateConfirmed, s.tcpStateRefused
+}
+
+func (s *runStats) setTCPStateRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tcpStateRingbufReserveFailuresN = n
+}
+
+func (s *runStats) tcpStateRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tcpStateRingbufReserveFailuresN
 }
 
 func (s *runStats) setBPFAuditRingbufReserveFailures(n int) {

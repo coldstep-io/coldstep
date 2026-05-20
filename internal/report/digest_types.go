@@ -269,8 +269,21 @@ type DigestInput struct {
 	// in_progress / denied / other). When the kretprobe attach failed,
 	// the map is empty and the digest falls back to the legacy
 	// "TCP connect attempts" wording.
-	TCPResultCounts                map[string]int
-	BPFHeartbeatFailures           int
+	TCPResultCounts      map[string]int
+	BPFHeartbeatFailures int
+	// TCPStateTotal counts kernel-confirmed TCP handshake state events from
+	// the inet_sock_set_state tracepoint (P3-2b). It is filtered to
+	// oldstate == SYN_SENT so it represents resolved outgoing connects.
+	// TCPStateConfirmed counts the subset that transitioned to ESTABLISHED
+	// (handshake succeeded); TCPStateRefused counts the subset that
+	// transitioned to CLOSE (RST / timeout / unreach). Non-zero
+	// TCPStateTotal adds a "TCP handshakes (kernel-confirmed)" row to the
+	// Full KPI table — complementary to the P3-2-derived TCPResultCounts,
+	// which is the kretprobe-captured `tcp_v4_connect()` return value.
+	TCPStateTotal                  int
+	TCPStateConfirmed              int
+	TCPStateRefused                int
+	TCPStateRingbufReserveFailures int
 	BPFAuditTotal                  int
 	BPFAuditRows                   []BPFAuditDigestRow
 	TruncatedBPFAudit              bool

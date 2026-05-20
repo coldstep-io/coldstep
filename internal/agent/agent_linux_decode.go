@@ -176,6 +176,37 @@ func ktlsDirectionLabel(d uint8) string {
 	}
 }
 
+// decodeTCPStateEvent parses tcp_state_event (P3-2b). Layout:
+//
+//	offset 0:  __u64 timestamp_ns
+//	offset 8:  __u32 pid
+//	offset 12: __u32 saddr (network byte order)
+//	offset 16: __u32 daddr (network byte order)
+//	offset 20: __u16 sport (host order)
+//	offset 22: __u16 dport (host order)
+//	offset 24: __s32 old_state
+//	offset 28: __s32 new_state
+//	offset 32: __u8  comm[16]
+//
+// Total: 48 bytes. saddr/daddr are returned as [4]byte slices in network
+// byte order (same convention as connectEvent.daddr).
+func decodeTCPStateEvent(raw []byte) (timestampNS uint64, pid uint32, saddr, daddr [4]byte,
+	sport, dport uint16, oldState, newState int32, comm [16]byte, ok bool) {
+	if len(raw) < tcpStateEventWireSize {
+		return 0, 0, [4]byte{}, [4]byte{}, 0, 0, 0, 0, [16]byte{}, false
+	}
+	timestampNS = binary.LittleEndian.Uint64(raw[0:8])
+	pid = binary.LittleEndian.Uint32(raw[8:12])
+	copy(saddr[:], raw[12:16])
+	copy(daddr[:], raw[16:20])
+	sport = binary.LittleEndian.Uint16(raw[20:22])
+	dport = binary.LittleEndian.Uint16(raw[22:24])
+	oldState = int32(binary.LittleEndian.Uint32(raw[24:28])) // #nosec G115 -- intentional reinterpret-cast of BPF wire bits to int32 (kernel sk_state enum is C `int`).
+	newState = int32(binary.LittleEndian.Uint32(raw[28:32])) // #nosec G115 -- intentional reinterpret-cast of BPF wire bits to int32 (kernel sk_state enum is C `int`).
+	copy(comm[:], raw[32:48])
+	return timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, comm, true
+}
+
 func decodeDenyEvent(raw []byte) (tgid, tid uint32, comm [16]byte, protocol uint8, reason uint8, af uint8,
 	daddr16 [16]byte, dport uint16, ok bool) {
 	if len(raw) < denyEventWireSize {

@@ -156,11 +156,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
 
-	var connRd, udpRd, httpRd, tlsRd ringReader
+	var connRd, udpRd, httpRd, tlsRd, tcpStateRd ringReader
 	defer connRd.Close()
 	defer udpRd.Close()
 	defer httpRd.Close()
 	defer tlsRd.Close()
+	defer tcpStateRd.Close()
+	var tcpStateLnk link.Link
 
 	var denyRd ringReader
 	defer denyRd.Close()
@@ -467,9 +469,39 @@ func Run(ctx context.Context, cfg config.Config) error {
 				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs.PartialEgressObserved)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
 				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
+				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
 			}
 		}()
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
+
+		// P3-2b: attach sock/inet_sock_set_state tracepoint for kernel-confirmed
+		// TCP handshake outcomes. Best-effort — degrade gracefully if the
+		// tracepoint is unavailable (older kernel missing the tracepoint, or
+		// kernel without CONFIG_DEBUG_INFO_BTF needed for CO-RE field access).
+		// The connect/UDP/HTTP/TLS readers do not depend on this; failure here
+		// only loses the "(confirmed)" KPI annotation.
+		if lnk, lerr := link.Tracepoint("sock", "inet_sock_set_state", syscallObjs.HandleInetSockSetState, nil); lerr != nil {
+			slog.Info("inet_sock_set_state tracepoint disabled", "err", lerr)
+			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: false, Detail: bpfDetail(lerr)})
+		} else {
+			tcpStateLnk = lnk
+			rd, rerr := ringbuf.NewReader(syscallObjs.TcpStateEvents)
+			if rerr != nil {
+				slog.Info("tcp_state_events ringbuf reader failed", "err", rerr)
+				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: false, Detail: bpfDetail(rerr)})
+				_ = tcpStateLnk.Close()
+				tcpStateLnk = nil
+			} else {
+				tcpStateRd.R = rd
+				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: true})
+				slog.Info("tracing TCP handshake outcomes (tp/sock/inet_sock_set_state)")
+				defer func() {
+					if tcpStateLnk != nil {
+						_ = tcpStateLnk.Close()
+					}
+				}()
+			}
+		}
 	}
 
 	// Detect mode: ready after syscall trace initialized. Defend mode defers readiness
@@ -725,6 +757,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		udpRd.Close()
 		httpRd.Close()
 		tlsRd.Close()
+		tcpStateRd.Close()
 		denyRd.Close()
 		lsmDenyRd.Close()
 		dnsRd.Close()
@@ -754,6 +787,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if tlsRd.R != nil {
+		readerCount++
+	}
+	if tcpStateRd.R != nil {
 		readerCount++
 	}
 	if denyRd.R != nil {
@@ -901,6 +937,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			errCh <- readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer, ktlsTr)
+		}()
+	}
+	if tcpStateRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer)
 		}()
 	}
 	if denyRd.R != nil {
