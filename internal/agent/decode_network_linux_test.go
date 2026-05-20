@@ -228,11 +228,15 @@ func TestDecodeTCPStateEvent_tooShort(t *testing.T) {
 func TestDecodeConnectResultEvent(t *testing.T) {
 	raw := make([]byte, connectResultEventWireSize)
 	binary.LittleEndian.PutUint32(raw[0:4], connectResultMagic)
-	// result = -110 (-ETIMEDOUT) round-tripped through unsigned-bits.
-	binary.LittleEndian.PutUint32(raw[4:8], uint32(int32(-110))) // #nosec G115 -- intentional reinterpret-cast for the wire round-trip //nolint:gosec
-	binary.LittleEndian.PutUint32(raw[8:12], 1234)               // tgid
-	binary.LittleEndian.PutUint32(raw[12:16], 1235)              // tid
-	copy(raw[16:32], []byte("curl\x00"))                         // comm
+	// result = -110 (-ETIMEDOUT) round-tripped through unsigned-bits. The
+	// runtime variable defeats Go's constant-overflow check, which rejects a
+	// direct uint32(int32(-110)) conversion even though the same byte pattern
+	// is exactly what the kernel writes to the wire.
+	var wantResult int32 = -110
+	binary.LittleEndian.PutUint32(raw[4:8], uint32(wantResult)) // #nosec G115 -- intentional reinterpret-cast for the wire round-trip //nolint:gosec
+	binary.LittleEndian.PutUint32(raw[8:12], 1234)              // tgid
+	binary.LittleEndian.PutUint32(raw[12:16], 1235)             // tid
+	copy(raw[16:32], []byte("curl\x00"))                        // comm
 
 	tgid, tid, comm, result, ok := decodeConnectResultEvent(raw)
 	if !ok {
@@ -244,7 +248,7 @@ func TestDecodeConnectResultEvent(t *testing.T) {
 	if tid != 1235 {
 		t.Errorf("tid = %d, want 1235", tid)
 	}
-	if result != -110 {
+	if result != wantResult {
 		t.Errorf("result = %d, want -110 (-ETIMEDOUT)", result)
 	}
 	if got := string(bytes.TrimRight(comm[:], "\x00")); got != "curl" {
