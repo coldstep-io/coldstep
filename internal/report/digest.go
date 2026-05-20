@@ -52,6 +52,7 @@ func droppedTotal(in DigestInput) int {
 // not loaded in defend mode (defend's own IPv6 hooks attach to the same
 // cgroup, and cgroup hook attach is single-program).
 func ipv6EgressObserved(in DigestInput) uint32 {
+	// #nosec G115 -- IPv6EventCount is a monotonic ringbuf-event counter bounded by per-job throughput; uint32 conversion is safe in practice. //nolint:gosec
 	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved + uint32(in.IPv6EventCount)
 }
 

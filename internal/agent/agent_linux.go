@@ -877,6 +877,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		forkRd.Close()
 		fsRd.Close()
 		ktlsRd.Close()
+		ipv6ObsRd.Close()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
@@ -920,6 +921,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if ktlsRd.R != nil {
+		readerCount++
+	}
+	if ipv6ObsRd.R != nil {
 		readerCount++
 	}
 	if hasDefend {
