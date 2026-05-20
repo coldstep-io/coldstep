@@ -273,6 +273,31 @@ struct tcp_state_event {
 _Static_assert(sizeof(struct tcp_state_event) == 48,
 	       "tcp_state_event wire size must match tcpStateEventWireSize=48 in agent_linux.go");
 
+/*
+ * P6 Phase 1: io_uring write-class submission visibility.
+ *
+ * Emitted by SEC("raw_tp/io_uring_submit_sqe") in trace_connect.bpf.c when
+ * the SQE opcode is IORING_OP_SENDMSG (9) or IORING_OP_SEND (26) — both
+ * unambiguously socket sends, so the event can be emitted without resolving
+ * the SQE's fd back to a tracked socket. Phase 1 leaves `fd`, `daddr`, and
+ * `dport` zero; Phase 2 will add WRITE/WRITEV with fd→socket resolution.
+ *
+ * Layout: 8 + 4 + 4 + 4 + 2 + 1 + 1 + 16 = 40 bytes, alignment-of-8 → no
+ * trailing pad. Locked by the _Static_assert below.
+ */
+struct io_uring_send_event {
+	__u64 timestamp_ns;
+	__u32 pid;
+	__u32 fd;
+	__u8 daddr[4];
+	__u8 dport[2];
+	__u8 op;
+	__u8 _pad;
+	__u8 comm[16];
+};
+_Static_assert(sizeof(struct io_uring_send_event) == 40,
+	       "io_uring_send_event wire size must match ioUringSendEventWireSize=40 in agent_linux.go");
+
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {

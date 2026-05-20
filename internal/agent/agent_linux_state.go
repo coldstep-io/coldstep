@@ -67,6 +67,8 @@ type runStats struct {
 	ipv6SendmsgObservedN            uint32
 	sendpageObservedN               uint32
 	ioUringSetupObservedN           int
+	ioUringSendN                    int
+	ioUringRingbufReserveFailuresN  int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
 	quicCandidateN                  int
@@ -489,6 +491,30 @@ func (s *runStats) setIoUringSetupObserved(n int) {
 	s.ioUringSetupObservedN = n
 }
 
+func (s *runStats) addIoUringSend() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringSendN++
+}
+
+func (s *runStats) ioUringSendTotal() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringSendN
+}
+
+func (s *runStats) setIoUringRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringRingbufReserveFailuresN = n
+}
+
+func (s *runStats) ioUringRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringRingbufReserveFailuresN
+}
+
 func (s *runStats) ioUringSetupObserved() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -680,6 +706,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		IPv6SendmsgObserved:            s.ipv6SendmsgObservedN,
 		SendpageObserved:               s.sendpageObservedN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
+		IoUringSendTotal:               s.ioUringSendN,
+		IoUringRingbufReserveFailures:  s.ioUringRingbufReserveFailuresN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
 		BPFAuditEvents:                 s.bpfAuditN,

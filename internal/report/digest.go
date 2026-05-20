@@ -252,6 +252,9 @@ func buildTriageRows(in DigestInput) [][2]string {
 	if in.IoUringSetupObserved > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("⚠️ io_uring_setup (syscall-hook bypass class)=%d", in.IoUringSetupObserved))
 	}
+	if in.IoUringSendTotal > 0 {
+		gapParts = append(gapParts, fmt.Sprintf("io_uring writes=%d", in.IoUringSendTotal))
+	}
 	if !in.CanaryPipelineOK && in.CanaryFailCount > 0 {
 		gapParts = append(gapParts, fmt.Sprintf("🚨 telemetry canary FAILED (failures=%d)", in.CanaryFailCount))
 	}
@@ -430,6 +433,12 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	}
 	if in.IoUringSetupObserved > 0 {
 		fmt.Fprintf(b, "| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved)
+	}
+	if in.IoUringSendTotal > 0 {
+		fmt.Fprintf(b, "| **io_uring writes** | %d network sends observed (SNI extraction not possible) |\n", in.IoUringSendTotal)
+	}
+	if in.IoUringRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures)
 	}
 	if in.IPv6ConnectObserved > 0 {
 		label := "**⚠️ ipv6 connect6 observed (detect — no enforcement)**"
@@ -891,6 +900,9 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	}
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString("- **⚠️ io_uring_setup** was called on this runner — io_uring can bypass typical syscall tracepoints used for detect mode. If `io-uring-disable` is true (default), the setup call was blocked by sysctl; this counter still records the attempt. See SECURITY.md (Guarantees vs best-effort).\n")
+	}
+	if in.IoUringSendTotal > 0 {
+		b.WriteString("- **io_uring writes** counts socket-class SQE submissions (`IORING_OP_SENDMSG`, `IORING_OP_SEND`) seen via `raw_tp/io_uring_submit_sqe` (P6 Phase 1). SNI / HTTP payloads are not captured from the submission point. `IORING_OP_WRITE` / `IORING_OP_WRITEV` arrive in Phase 2 with fd→socket resolution.\n")
 	}
 	if ipv6EgressObserved(in) > 0 {
 		switch {

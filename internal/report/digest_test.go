@@ -103,6 +103,37 @@ func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.
 	}
 }
 
+func TestBuildDetectMarkdown_IoUringSendRow(t *testing.T) {
+	t.Run("hidden when zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "io_uring writes") {
+			t.Fatalf("io_uring writes row should be hidden when total is zero; got:\n%s", md)
+		}
+	})
+	t.Run("visible when non-zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			IoUringSendTotal:  4,
+			MaxRowsPerSection: 50,
+		})
+		for _, needle := range []string{
+			"| **io_uring writes** | 4 network sends observed (SNI extraction not possible) |",
+			"io_uring writes=4",
+		} {
+			if !strings.Contains(md, needle) {
+				t.Fatalf("missing %q in:\n%s", needle, md)
+			}
+		}
+	})
+}
+
 func TestBuildDetectMarkdown_TopDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{

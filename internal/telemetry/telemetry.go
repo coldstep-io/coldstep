@@ -136,15 +136,21 @@ type Summary struct {
 	// cgroup/sendmsg4 and lsm/socket_sendmsg cannot gate (kernel ≤ 6.7).
 	// In defend mode the hook also enforces; in detect mode it's
 	// visibility-only.
-	SendpageObserved               uint32 `json:"sendpage_observed,omitempty"`
-	IoUringSetupObserved           int    `json:"io_uring_setup_observed,omitempty"`
-	TCPDNSResponsesObserved        int    `json:"tcp_dns_responses_observed,omitempty"`
-	TCPDNSSkippedShortRead         int    `json:"tcp_dns_skipped_short_read,omitempty"`
-	BPFAuditEvents                 int    `json:"bpf_audit_events,omitempty"`
-	BPFHeartbeatFailures           int    `json:"bpf_heartbeat_failures,omitempty"`
-	BPFMapIntegrityFailures        int    `json:"bpf_map_integrity_failures,omitempty"`
-	BPFDNSCacheUpdateFailures      int    `json:"bpf_dns_cache_update_failures,omitempty"`
-	BPFAuditRingbufReserveFailures int    `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
+	SendpageObserved     uint32 `json:"sendpage_observed,omitempty"`
+	IoUringSetupObserved int    `json:"io_uring_setup_observed,omitempty"`
+	// IoUringSendTotal counts io_uring write-class SQE submissions observed
+	// via SEC("raw_tp/io_uring_submit_sqe") on tracked sockets (P6 Phase 1).
+	IoUringSendTotal int `json:"io_uring_send_total,omitempty"`
+	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
+	// io_uring_events channel (telemetry pressure on the io_uring probe).
+	IoUringRingbufReserveFailures  int `json:"io_uring_ringbuf_reserve_failures,omitempty"`
+	TCPDNSResponsesObserved        int `json:"tcp_dns_responses_observed,omitempty"`
+	TCPDNSSkippedShortRead         int `json:"tcp_dns_skipped_short_read,omitempty"`
+	BPFAuditEvents                 int `json:"bpf_audit_events,omitempty"`
+	BPFHeartbeatFailures           int `json:"bpf_heartbeat_failures,omitempty"`
+	BPFMapIntegrityFailures        int `json:"bpf_map_integrity_failures,omitempty"`
+	BPFDNSCacheUpdateFailures      int `json:"bpf_dns_cache_update_failures,omitempty"`
+	BPFAuditRingbufReserveFailures int `json:"bpf_audit_ringbuf_reserve_failures,omitempty"`
 	// RingbufReserveFailuresTotal is the sum of per-channel ringbuf reserve failure
 	// counters (detect-path telemetry only; excludes defend deny-event reserves).
 	RingbufReserveFailuresTotal int            `json:"ringbuf_reserve_failures_total,omitempty"`
