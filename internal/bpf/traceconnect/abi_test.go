@@ -32,13 +32,17 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
-	t.Run("tcp_v4_connect_inflight is a bounded HASH (P3-2 correlation)", func(t *testing.T) {
+	t.Run("tcp_v4_connect_inflight is a bounded LRU_HASH (P3-2 correlation)", func(t *testing.T) {
+		// LRU_HASH (not plain HASH) ensures that orphaned entries from
+		// dropped kretprobes are evicted by the kernel rather than filling
+		// the table and silently blocking every subsequent BPF_NOEXIST
+		// insert (P3-bug-audit Bug 3).
 		ms, ok := spec.Maps["tcp_v4_connect_inflight"]
 		if !ok {
 			t.Fatal("map tcp_v4_connect_inflight not found in CollectionSpec")
 		}
-		if ms.Type != ebpf.Hash {
-			t.Errorf("tcp_v4_connect_inflight type = %v, want ebpf.Hash", ms.Type)
+		if ms.Type != ebpf.LRUHash {
+			t.Errorf("tcp_v4_connect_inflight type = %v, want ebpf.LRUHash", ms.Type)
 		}
 		if ms.MaxEntries != 4096 {
 			t.Errorf("tcp_v4_connect_inflight MaxEntries = %d, want 4096", ms.MaxEntries)
