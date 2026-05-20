@@ -15,6 +15,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
 	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
+	"github.com/coldstep-io/coldstep/internal/bpf/traceipv6"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 )
 
@@ -191,6 +192,53 @@ func startIoUringTrace(objs *traceconnect.TraceconnectObjects, enhancedPeek bool
 		}
 	}
 	return rd, lnk, peekCfgFailed, nil
+}
+
+// startIPv6ObsTrace loads bpf/trace_ipv6_obs.bpf.c (the H7 standalone
+// observe-only IPv6 cgroup hooks) and attaches both cgroup/connect6 and
+// cgroup/sendmsg6 against cgPath. Returns the ringbuf reader, objects (for
+// the reserve-failure counter), and the two attach links. Closes
+// intermediates on error.
+//
+// This entry point is detect-mode-only — the defend BPF object already
+// attaches its own cgroup/connect6 + cgroup/sendmsg6 programs, and cgroup
+// hook attach is single-program by default, so trying to load both would
+// fail with EBUSY. Callers must skip this in defend mode.
+func startIPv6ObsTrace(cgPath string) (rd *ringbuf.Reader, objs *traceipv6.Traceipv6Objects, connectLnk, sendmsgLnk link.Link, err error) {
+	objs = new(traceipv6.Traceipv6Objects)
+	if err = traceipv6.LoadTraceipv6Objects(objs, nil); err != nil {
+		return nil, nil, nil, nil, err
+	}
+
+	connectLnk, err = link.AttachCgroup(link.CgroupOptions{
+		Path:    cgPath,
+		Attach:  ebpf.AttachCGroupInet6Connect,
+		Program: objs.Ipv6ObsConnect6,
+	})
+	if err != nil {
+		_ = objs.Close()
+		return nil, nil, nil, nil, fmt.Errorf("attach cgroup/connect6 (ipv6_obs): %w", err)
+	}
+
+	sendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
+		Path:    cgPath,
+		Attach:  ebpf.AttachCGroupUDP6Sendmsg,
+		Program: objs.Ipv6ObsSendmsg6,
+	})
+	if err != nil {
+		_ = connectLnk.Close()
+		_ = objs.Close()
+		return nil, nil, nil, nil, fmt.Errorf("attach cgroup/sendmsg6 (ipv6_obs): %w", err)
+	}
+
+	rd, err = ringbuf.NewReader(objs.Ipv6ObsEvents)
+	if err != nil {
+		_ = sendmsgLnk.Close()
+		_ = connectLnk.Close()
+		_ = objs.Close()
+		return nil, nil, nil, nil, err
+	}
+	return rd, objs, connectLnk, sendmsgLnk, nil
 }
 
 func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {

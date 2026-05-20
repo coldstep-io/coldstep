@@ -65,6 +65,8 @@ type runStats struct {
 	sendmmsgFirstOnlyN              int
 	ipv6ConnectObservedN            uint32
 	ipv6SendmsgObservedN            uint32
+	ipv6EventCountN                 int
+	ipv6RingbufReserveFailuresN     int
 	sendpageObservedN               uint32
 	ioUringSetupObservedN           int
 	ioUringSendN                    int
@@ -468,6 +470,36 @@ func (s *runStats) ipv6SendmsgObserved() uint32 {
 	return s.ipv6SendmsgObservedN
 }
 
+// addIPv6Event bumps the per-event counter populated by readIPv6ObsRing
+// (H7). One increment per ringbuf record decoded — i.e. per non-loopback,
+// non-link-local IPv6 connect / sendmsg observed in detect mode. Defend
+// mode does not load the traceipv6 object, so this counter is always 0
+// there; defend-mode IPv6 visibility flows through ipv6ConnectObservedN /
+// ipv6SendmsgObservedN instead.
+func (s *runStats) addIPv6Event() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ipv6EventCountN++
+}
+
+func (s *runStats) ipv6EventCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ipv6EventCountN
+}
+
+func (s *runStats) setIPv6RingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ipv6RingbufReserveFailuresN = n
+}
+
+func (s *runStats) ipv6RingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ipv6RingbufReserveFailuresN
+}
+
 // setSendpageObserved records the lsm/socket_sendpage observe counter
 // snapshotted from BPF on shutdown. Non-zero means sendfile(2)/splice(2)
 // fired through sock_sendpage on this kernel (5.15 path) — defend gating
@@ -717,6 +749,8 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
 		IPv6ConnectObserved:            s.ipv6ConnectObservedN,
 		IPv6SendmsgObserved:            s.ipv6SendmsgObservedN,
+		IPv6Events:                     s.ipv6EventCountN,
+		IPv6RingbufReserveFailures:     s.ipv6RingbufReserveFailuresN,
 		SendpageObserved:               s.sendpageObservedN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
 		IoUringSendTotal:               s.ioUringSendN,

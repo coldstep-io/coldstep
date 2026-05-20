@@ -1311,6 +1311,65 @@ func TestBuildDetectMarkdown_IPv6Observed_ZeroIsClean(t *testing.T) {
 	}
 }
 
+// TestBuildDetectMarkdown_IPv6EventCount_DetectMode covers the H7 path:
+// detect mode with the standalone traceipv6 hook fires per-event ringbuf
+// records into IPv6EventCount. The headline must downgrade to ⚠️, a
+// dedicated `> ⚠️ **IPv6 egress detected (not enforced)** — N connection(s)
+// observed` blockquote must render under the verdict, and the triage row +
+// KPI table must surface the ringbuf event count (defend-only
+// connect/sendmsg counters are zero in this mode).
+func TestBuildDetectMarkdown_IPv6EventCount_DetectMode(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{
+			{Name: "sched_process_exec", OK: true},
+			{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: true},
+		},
+		ExecTotal:         1,
+		IPv6EventCount:    7,
+		MaxRowsPerSection: 50,
+	})
+	for _, needle := range []string{
+		"## ⚠️ coldstep — detect",
+		"> ⚠️ **IPv6 egress detected (not enforced)** — 7 connection(s) observed",
+		"**IPv6 egress detected**",
+		"⚠️ **7** non-loopback IPv6 destinations",
+		"7 ringbuf event(s)",
+		"detect mode — IPv6 visibility only",
+		"ipv6 egress events (detect — observe-only, IPv4-only enforcement)",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+	if strings.Contains(md, "🚨 coldstep") {
+		t.Fatalf("detect mode H7 observation must not escalate to 🚨:\n%s", md)
+	}
+}
+
+// TestBuildDetectMarkdown_IPv6EventCount_RunnerHasIPv6_NoGapDowngrade covers
+// the H1 interaction: a runner that advertises IPv6 connectivity used to
+// downgrade detect-mode verdicts to ⚠️ on the grounds that no IPv6 hooks
+// were loaded. With the H7 `cgroup/connect6+sendmsg6 (ipv6_obs)` BPF status
+// row present and OK, that specific gap closes — only an actual observed
+// event or other partial-coverage signal should downgrade.
+func TestBuildDetectMarkdown_IPv6EventCount_RunnerHasIPv6_NoGapDowngrade(t *testing.T) {
+	md := BuildDetectMarkdown(DigestInput{
+		BPF: []telemetry.BPFStatus{
+			{Name: "sched_process_exec", OK: true},
+			{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: true},
+		},
+		ExecTotal:         1,
+		RunnerHasIPv6:     true,
+		MaxRowsPerSection: 50,
+	})
+	if !strings.Contains(md, "## ✅ coldstep — detect") {
+		t.Fatalf("H7 hook attached should keep ✅ even when runner has IPv6:\n%s", md)
+	}
+	if !strings.Contains(md, "| IPv6 | ✓ observed (detect — H7 observe-only hook, no events) |") {
+		t.Fatalf("Coverage row should report H7 hook attached when no events fired:\n%s", md)
+	}
+}
+
 // TestBuildDetectMarkdown_SendpageObserved_DefendMode covers the
 // kernel-5.15 sendfile/splice gap closure: in defend mode, a non-zero
 // SendpageObserved counter must surface the ✅ gap-closed triage row and
