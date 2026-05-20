@@ -52,6 +52,10 @@ type MetaEvent struct {
 	// whose wildcard suffix matches a known multi-tenant shared-infrastructure
 	// surface (P1-1 6c). Operators can review and tighten if desired.
 	WildcardRiskDomains []string `json:"wildcard_risk_domains,omitempty"`
+	// UnresolvedDomains lists allowlist domain entries that produced no IPv4
+	// A-records at startup. Empty in detect mode. Surfaced in the digest as a
+	// warning so operators can see fail-open risk at run start.
+	UnresolvedDomains []string `json:"unresolved_domains,omitempty"`
 	// RunnerHasIPv6 is true when the runner had at least one non-loopback,
 	// non-link-local IPv6 address at agent startup (H1: digest honesty).
 	// Used by the digest to downgrade the ✅ verdict to ⚠️ when the runner

@@ -339,6 +339,7 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 		"resolved_ipv4", result.AllowedIPv4.Len(),
 		"resolved_ipv6", result.AllowedIPv6.Len(),
 		"unresolved_count", len(result.UnresolvedDomains),
+		"unresolved", result.UnresolvedDomains,
 		"wildcard_risk_count", len(result.WildcardRiskDomains),
 	)
 	return result
