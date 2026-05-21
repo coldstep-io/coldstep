@@ -211,6 +211,8 @@ func buildDigestInput(
 		SendmmsgFirstOnly:              stats.sendmmsgFirstOnly(),
 		IPv6ConnectObserved:            stats.ipv6ConnectObserved(),
 		IPv6SendmsgObserved:            stats.ipv6SendmsgObserved(),
+		IPv6EventCount:                 stats.ipv6EventCount(),
+		IPv6RingbufReserveFailures:     stats.ipv6RingbufReserveFailures(),
 		SendpageObserved:               stats.sendpageObserved(),
 		IoUringSetupObserved:           stats.ioUringSetupObserved(),
 		IoUringSendTotal:               stats.ioUringSendTotal(),

@@ -149,6 +149,14 @@ type Summary struct {
 	// the IPv4-only defend allowlist. The digest surfaces this gap.
 	IPv6ConnectObserved uint32 `json:"ipv6_connect_observed,omitempty"`
 	IPv6SendmsgObserved uint32 `json:"ipv6_sendmsg_observed,omitempty"`
+	// IPv6Events counts observe-only IPv6 egress events captured by the H7
+	// traceipv6 BPF object (cgroup/connect6 + cgroup/sendmsg6) in detect
+	// mode. Defend mode loads its own IPv6 cgroup hooks from the defend
+	// object and reports via the IPv6Connect/SendmsgObserved counters
+	// instead, so this counter is always 0 in defend mode. The digest
+	// renders a "(not enforced)" warning when this is non-zero.
+	IPv6Events                 int `json:"ipv6_events,omitempty"`
+	IPv6RingbufReserveFailures int `json:"ipv6_ringbuf_reserve_failures,omitempty"`
 	// SendpageObserved counts security_socket_sendpage() invocations recorded
 	// by the lsm/socket_sendpage hook. Non-zero values mean sendfile(2) or
 	// splice(2) reached a socket via the sock_sendpage path that

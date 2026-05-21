@@ -416,6 +416,47 @@ type QUICCandidateEvent struct {
 	Sig     string `json:"sig,omitempty"`
 }
 
+// EventTypeIPv6TCP and EventTypeIPv6UDP are JSONL `type` discriminators for
+// observe-only IPv6 egress events emitted by the H7 traceipv6 BPF object.
+// The cgroup/connect6 hook produces "tcp6" records; cgroup/sendmsg6 produces
+// "udp6". These are detect-mode-only — defend mode loads its own IPv6
+// cgroup hooks from the defend object instead.
+const (
+	EventTypeIPv6TCP = "tcp6"
+	EventTypeIPv6UDP = "udp6"
+)
+
+// IPv6NotEnforcedNote is the canonical value of IPv6Event.Note. The defend
+// allowlist surface is IPv4-only when the H7 hook fires (detect mode), so
+// the event is purely informational — surfaced in the digest as a warning
+// that switching to defend would still allow IPv6 unless the P2-1 Phase 2
+// IPv6 LPM trie was populated.
+const IPv6NotEnforcedNote = "ipv6-not-enforced"
+
+// IPv6Event is one JSONL record for an observe-only IPv6 egress attempt
+// captured by the H7 traceipv6 BPF object (cgroup/connect6 +
+// cgroup/sendmsg6). Loopback (::1) and link-local (fe80::/10) destinations
+// are filtered out in BPF so they never reach userspace; everything that
+// does reach this struct is a non-trivial IPv6 destination the IPv4-only
+// defend allowlist would not gate.
+//
+// Type is "tcp6" when emitted from cgroup/connect6 and "udp6" from
+// cgroup/sendmsg6. Dst is the plain IPv6 string (no brackets, no zone id);
+// the digest applies "[…]:port" notation when rendering. Note is always
+// IPv6NotEnforcedNote so downstream filters can locate these events
+// without parsing the type discriminator.
+type IPv6Event struct {
+	Type  string `json:"type"` // "tcp6" | "udp6"
+	TS    string `json:"ts"`
+	Seq   uint64 `json:"seq"`
+	PID   uint32 `json:"pid"`
+	Comm  string `json:"comm"`
+	Dst   string `json:"dst"`
+	Dport uint16 `json:"dport"`
+	Note  string `json:"note,omitempty"`
+	Sig   string `json:"sig,omitempty"`
+}
+
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).
 type FSEvent struct {
 	Type     string `json:"type"` // "fs_event"
