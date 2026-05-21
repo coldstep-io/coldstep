@@ -2,6 +2,9 @@ package main
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -178,6 +181,34 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	}
 	if cfg.ReadyTimeoutSeconds != 120 {
 		t.Errorf("expected 120, got %d", cfg.ReadyTimeoutSeconds)
+	}
+}
+
+// H11: digestIntegrityMarker must produce the canonical hash marker for any
+// non-empty body, and yield the empty string for empty / whitespace input so
+// runStop does not write a marker against a missing digest file.
+func TestDigestIntegrityMarker_RoundTrip(t *testing.T) {
+	body := "## Coldstep digest\n\n- exec rows: 4\n"
+	got := digestIntegrityMarker(body)
+	sum := sha256.Sum256([]byte(body))
+	want := fmt.Sprintf("\n<!-- coldstep-digest-sha256: %s -->\n", hex.EncodeToString(sum[:]))
+	if got != want {
+		t.Fatalf("marker mismatch:\n got %q\nwant %q", got, want)
+	}
+	if !strings.HasPrefix(got, "\n<!-- coldstep-digest-sha256: ") {
+		t.Errorf("marker missing canonical prefix: %q", got)
+	}
+	if !strings.HasSuffix(got, " -->\n") {
+		t.Errorf("marker missing canonical suffix: %q", got)
+	}
+}
+
+func TestDigestIntegrityMarker_EmptyBodyYieldsNothing(t *testing.T) {
+	if got := digestIntegrityMarker(""); got != "" {
+		t.Fatalf("expected empty marker for empty body, got %q", got)
+	}
+	if got := digestIntegrityMarker("   \n\t  "); got != "" {
+		t.Fatalf("expected empty marker for whitespace body, got %q", got)
 	}
 }
 

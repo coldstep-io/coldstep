@@ -530,6 +530,7 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			confReason = "ktls"
 		}
 		stats.addTLS(cl, conf, confReason == "ktls")
+		stats.incDomainCount(sni)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		rows.addTLS(report.TLSDigestRow{
@@ -713,6 +714,7 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 		path = telemetry.SanitizeField(path, 4096)
 		cl := pol.Classify(host, ip)
 		stats.addHTTP(cl)
+		stats.incDomainCount(host)
 
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 		sumPath := telemetry.RedactPathForSummary(path)

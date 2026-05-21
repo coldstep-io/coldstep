@@ -92,6 +92,7 @@ type runStats struct {
 	// CompileDomainAllowlist; read at shutdown by buildDigestInput.
 	allowlistCompileTime         time.Time
 	allowlistIPCount             int
+	allowlistDomains             []string
 	allowlistUnresolvedDomains   []string
 	allowlistWildcardRiskDomains []string
 
@@ -804,21 +805,25 @@ func (s *runStats) counts() (execN, tcpN, udpN, httpN, tlsN, fsN int) {
 // setAllowlistCompileSnapshot records a one-shot snapshot of the resolved
 // allowlist at agent startup. Inputs are copied so the caller can free the
 // originals. Used by the shutdown digest to surface unresolved domains, the
-// IPv4-count snapshot, the wildcard-risk list, and the age-since-compile note.
-func (s *runStats) setAllowlistCompileSnapshot(t time.Time, ipCount int, unresolved, wildcardRisk []string) {
+// IPv4-count snapshot, the wildcard-risk list, the age-since-compile note,
+// and (P1-1 6e) the full allowlist domain list for the per-domain contact
+// cross-reference.
+func (s *runStats) setAllowlistCompileSnapshot(t time.Time, ipCount int, domains, unresolved, wildcardRisk []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.allowlistCompileTime = t
 	s.allowlistIPCount = ipCount
+	s.allowlistDomains = slices.Clone(domains)
 	s.allowlistUnresolvedDomains = slices.Clone(unresolved)
 	s.allowlistWildcardRiskDomains = slices.Clone(wildcardRisk)
 }
 
 // allowlistSnapshot returns a copy of the recorded compile-time snapshot.
-func (s *runStats) allowlistSnapshot() (compileTime time.Time, ipCount int, unresolved []string, wildcardRisk []string) {
+func (s *runStats) allowlistSnapshot() (compileTime time.Time, ipCount int, domains, unresolved, wildcardRisk []string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.allowlistCompileTime, s.allowlistIPCount,
+		slices.Clone(s.allowlistDomains),
 		slices.Clone(s.allowlistUnresolvedDomains),
 		slices.Clone(s.allowlistWildcardRiskDomains)
 }

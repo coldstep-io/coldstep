@@ -1190,7 +1190,8 @@ func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 	}
 	hasStale := staleAge > 0
 	hasEntryCount := in.AllowlistEntryCount > 0 && isBlockingDigestMode(in.DefendMode)
-	if !hasUnresolved && !hasWildcard && !hasStale && !hasEntryCount {
+	hasContactSummary := isBlockingDigestMode(in.DefendMode) && len(in.AllowlistDomains) > 0
+	if !hasUnresolved && !hasWildcard && !hasStale && !hasEntryCount && !hasContactSummary {
 		return
 	}
 
@@ -1225,6 +1226,61 @@ func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 			"> ℹ️ Allowlist: %d IPv4 entries loaded at startup (fixed until restart).\n\n",
 			in.AllowlistEntryCount))
 	}
+
+	if hasContactSummary {
+		writeAllowlistDomainContactSummary(b, in)
+	}
+}
+
+// writeAllowlistDomainContactSummary cross-references each defend-allowlist
+// domain against the per-FQDN observation counters (H10 / DNS-6e). Domains
+// observed at least once are listed with their count; entries with zero
+// contacts are flagged as trimming candidates so operators can prune
+// allowlists between runs.
+func writeAllowlistDomainContactSummary(b *strings.Builder, in DigestInput) {
+	type row struct {
+		domain string
+		count  int
+	}
+	rows := make([]row, 0, len(in.AllowlistDomains))
+	zero := 0
+	for _, d := range in.AllowlistDomains {
+		c := in.DomainContactCounts[d]
+		if c == 0 {
+			zero++
+		}
+		rows = append(rows, row{domain: d, count: c})
+	}
+	sort.Slice(rows, func(i, j int) bool {
+		if rows[i].count != rows[j].count {
+			return rows[i].count > rows[j].count
+		}
+		return rows[i].domain < rows[j].domain
+	})
+
+	b.WriteString("<details>\n<summary><strong>Allowlist domain contact summary</strong>")
+	if zero > 0 {
+		fmt.Fprintf(b, " — %d unused entr%s (trim candidates)", zero, plural(zero, "y", "ies"))
+	}
+	b.WriteString("</summary>\n\n")
+	b.WriteString("Per-domain observation counts for entries compiled into the defend allowlist this run.\n\n")
+	b.WriteString("| Domain | Count | Note |\n|:--|--:|:--|\n")
+	for _, r := range rows {
+		note := "—"
+		if r.count == 0 {
+			note = "no contacts observed — consider removing from allowlist"
+		}
+		fmt.Fprintf(b, "| `%s` | %d | %s |\n", sanitizeCell(r.domain), r.count, note)
+	}
+	b.WriteString("\n</details>\n\n")
+}
+
+// plural picks singular vs plural form by count. Tiny helper for digest copy.
+func plural(n int, singular, plural string) string {
+	if n == 1 {
+		return singular
+	}
+	return plural
 }
 
 // writeDomainContactCounts emits a collapsible section listing observed FQDNs
