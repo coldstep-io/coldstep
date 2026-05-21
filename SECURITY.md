@@ -40,6 +40,7 @@ coldstep observes and enforces a **deliberately scoped** subset of egress. Trust
 - **Detect-mode allowlist promotion** (`suggested-allow` output) reflects IPv4 destinations only. A workload that exfiltrates over IPv6, QUIC inner payload, or AF_UNIX → host-proxy will appear clean in detect and will not contribute to the suggested allowlist.
 - **Defend-mode enforcement** does not bar IPv6 destinations even when an IPv4 entry of the "same" host exists; if the runner resolves AAAA and prefers IPv6, the connection is unenforced.
 - **Service containers and DinD** run in separate network namespaces from the job's primary cgroup. Egress originating inside those namespaces is outside coldstep's hook scope; route them through the job container or rely on organizational network controls.
+- **DNS allowlist is compiled once at startup.** A background goroutine re-resolves every 5 minutes and emits `dns_drift` JSONL events (with added/removed IPv4 addresses) when CDN tenants or load-balancer pools shift mid-run, but **does not update the live enforce policy mid-run** to avoid TOCTOU races. The shutdown digest surfaces the drift count under "Allowlist trust model"; long-running jobs that need fresh CDN coverage must restart the agent (or pin literal IPs / CIDRs).
 
 ## GitHub Actions: threat model and mitigations
 

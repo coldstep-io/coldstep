@@ -1042,6 +1042,44 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
+	// H16: DNS allowlist trust hardening — background re-resolution goroutine.
+	// Periodically re-resolves the startup allowlist and emits a `dns_drift`
+	// JSONL event when the IPv4 set changes. WARNING-ONLY: the live BPF enforce
+	// policy is intentionally not updated mid-run (mid-job allowlist expansion
+	// is a TOCTOU risk — a freshly-resolved CDN tenant IP could be added between
+	// the lookup and the egress attempt). Only spins up when an allowlist was
+	// compiled (defend mode with at least one resolvable domain).
+	if len(defendCompiled.Domains) > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			onDrift := func(dr policy.DriftReport) {
+				stats.addDNSDrift()
+				if cfg.EventsLogPath == "" {
+					return
+				}
+				ev := telemetry.DNSDriftEvent{
+					Type:        telemetry.EventTypeDNSDrift,
+					TS:          time.Now().UTC().Format(time.RFC3339Nano),
+					AddedIPs:    dr.AddedIPs,
+					RemovedIPs:  dr.RemovedIPs,
+					DomainCount: len(defendCompiled.Domains),
+					CheckedAt:   dr.CheckedAt,
+				}
+				jsonlMu.Lock()
+				err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+				jsonlMu.Unlock()
+				if err != nil {
+					slog.Warn("dns_drift jsonl append failed", "err", err)
+				}
+			}
+			onClean := func() {
+				slog.Debug("allowlist DNS re-resolution: no drift", "domains", len(defendCompiled.Domains))
+			}
+			runDNSDriftWatch(runCtx, defendCompiled, nil, allowlistReCheckMaxAttempts, allowlistReCheckInterval, onDrift, onClean)
+		}()
+	}
+
 	// Capability 7A: BPF self-protection heartbeat monitor.
 	// Periodically polls the main sys_enter BPF program to ensure it's still attached and valid.
 	if syscallObjs != nil {
