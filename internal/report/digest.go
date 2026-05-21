@@ -229,9 +229,16 @@ func ipv6CoverageCell(in DigestInput) string {
 
 // quicCoverageCell returns the QUIC/HTTP3 row text. QUIC payloads are
 // always encrypted at the transport layer so the row is structurally "✗
-// not observed"; when port-443 UDP candidates were seen the cell flips to
-// "⚠" so operators know flows fell into this gap on this run.
+// not observed"; when port-443 UDP egress was flagged on a UDP event the
+// cell flips to ⚠️ and names the per-run count so operators know how many
+// flows fell into the heuristic. H19: prefer QuicObservedCount (the
+// per-event PossibleQUIC flag total) so the cell tracks the same number
+// surfaced on CoverageReport.QuicObserved; fall back to the older
+// non-loopback-IPv4 QUICCandidateCount when only that is populated.
 func quicCoverageCell(in DigestInput) string {
+	if in.QuicObservedCount > 0 {
+		return fmt.Sprintf("⚠️ QUIC/HTTP3 (UDP 443) — %d events observed (heuristic, not enforced)", in.QuicObservedCount)
+	}
 	if in.QUICCandidateCount > 0 {
 		return "⚠ candidates observed (payload encrypted, not inspected)"
 	}
@@ -1070,6 +1077,9 @@ func writeKPISemantics(b *strings.Builder, in DigestInput, max int) {
 	}
 	if in.QUICCandidateCount > 0 {
 		b.WriteString("- **QUIC (port-443 UDP)** counts UDP egress to non-loopback IPv4 on port 443 — a heuristic for QUIC/HTTP3 flows. Payload content is encrypted at the transport layer and **not inspected** by the BPF probes; the JSONL `quic_candidate` event records pid, comm, and destination only. Use this to gauge how much of the run is invisible to HTTP/TLS sniff paths.\n")
+	}
+	if in.QuicObservedCount > 0 {
+		b.WriteString("- **note: possible-quic** — QUIC/HTTP3 detection is heuristic only — UDP port 443 traffic is flagged as possible QUIC. Full ClientHello parsing would require QUIC crypto decryption and is out of scope. Per-event flag rides on `udp` JSONL records as `possible_quic:true`; the per-run total is on `MetaEvent.coverage.quic_observed` (H19).\n")
 	}
 	if in.SendfileObserved > 0 || in.SpliceObserved > 0 || in.SendmmsgFirstOnly > 0 {
 		b.WriteString("- **sendfile / splice / sendmmsg partial-observe** counters (BG-01) name the IPv4-egress paths that emit destination/length telemetry but no HTTP/TLS payload sniff: `sendfile`/`splice` correlate destination via the cached `(tgid,fd)→tuple` map, and `sendmmsg` introspects only the first `mmsghdr` (messages 2..N are dropped). Per-path counts let operators see which arm drove the gap. Under **defend**, cgroup/LSM hooks may still apply to the underlying socket; under **detect**, this is visibility-only.\n")

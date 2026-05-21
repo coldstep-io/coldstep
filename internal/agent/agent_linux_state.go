@@ -75,6 +75,7 @@ type runStats struct {
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
 	quicCandidateN                  int
+	quicObservedN                   uint64 // H19: count of UDPEvent.PossibleQUIC=true
 	bpfAuditN                       int
 	bpfMapIntegrityFailuresN        int
 	bpfDNSCacheUpdateFailuresN      int
@@ -633,6 +634,23 @@ func (s *runStats) quicCandidateTotal() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.quicCandidateN
+}
+
+// addQUICObserved increments the per-run total of UDPEvent records whose
+// PossibleQUIC flag was set (H19 — UDP destination port 443). This is the
+// counter surfaced as CoverageReport.QuicObserved. It is a heuristic only:
+// QUIC payloads are encrypted and never inspected, so a non-zero value just
+// quantifies the UDP/443 visibility gap, not a confirmed QUIC flow count.
+func (s *runStats) addQUICObserved() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.quicObservedN++
+}
+
+func (s *runStats) quicObservedTotal() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.quicObservedN
 }
 
 func (s *runStats) addBPFHeartbeatFailure() {
