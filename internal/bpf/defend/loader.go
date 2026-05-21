@@ -3,7 +3,6 @@
 package defend
 
 import (
-	"errors"
 	"fmt"
 	"strings"
 
@@ -222,23 +221,16 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	return nil
 }
 
-// HaveIOUringLSM reports whether the running kernel has the
-// `security_uring_cmd` LSM hook (Linux 5.19+) — required by H15's
-// SEC("lsm/io_uring_cmd") program. Returns false on any BTF lookup
-// failure so callers degrade safely to the older LSM hook set.
+// HaveIOUringLSM reports whether the running kernel exposes the
+// `bpf_lsm_io_uring_cmd` BPF LSM dispatch target — required by H15's
+// SEC("lsm/io_uring_cmd") program for both prog_load and attach.
+// Probing `bpf_lsm_<hook>` (rather than `security_uring_cmd` alone)
+// covers kernels that have the C-side LSM hook in BTF but do not
+// expose it to BPF LSM (CONFIG_BPF_LSM off or "bpf" missing from the
+// kernel `lsm=` boot chain). Returns false on any BTF lookup failure
+// so callers degrade safely to the older LSM hook set.
 func HaveIOUringLSM() bool {
-	spec, err := btf.LoadKernelSpec()
-	if err != nil {
-		return false
-	}
-	var fn *btf.Func
-	if err := spec.TypeByName("security_uring_cmd", &fn); err != nil {
-		if errors.Is(err, btf.ErrNotFound) {
-			return false
-		}
-		return false
-	}
-	return fn != nil
+	return kernelHasLSMHook("io_uring_cmd")
 }
 
 func detachProgram(coll *ebpf.Collection, name string, dst **ebpf.Program) error {
