@@ -1,6 +1,9 @@
 package model
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"time"
+)
 
 type Report struct {
 	SchemaVersion    string                `json:"schema_version"`
@@ -36,13 +39,23 @@ type Report struct {
 
 // SuspiciousDomain captures why a destination was flagged during build-model.
 // Reasons is a non-empty, sorted, de-duped set of: "high_entropy",
-// "rare", "port_anomaly".
+// "rare", "port_anomaly". RiskHint is a single headline tag for human
+// reviewers (H17 learning-mode-poisoning protections): "suspicious-dga"
+// when the leftmost DNS label looks DGA-generated (see
+// HasHighEntropyLabel), otherwise "single-observation" when the domain
+// was seen exactly once, otherwise empty. ObservationCount mirrors the
+// connection-event count for the domain and FirstSeenTS marks the
+// earliest event timestamp; both are emitted on every flagged entry so
+// allowlist promotion reviewers can sort by recency / volume.
 type SuspiciousDomain struct {
-	Domain      string   `json:"domain"`
-	Reasons     []string `json:"reasons"`
-	Entropy     float64  `json:"entropy,omitempty"`
-	Occurrences int      `json:"occurrences,omitempty"`
-	Ports       []int    `json:"ports,omitempty"`
+	Domain           string    `json:"domain"`
+	Reasons          []string  `json:"reasons"`
+	Entropy          float64   `json:"entropy,omitempty"`
+	Occurrences      int       `json:"occurrences,omitempty"`
+	ObservationCount int       `json:"observation_count"`
+	FirstSeenTS      time.Time `json:"first_seen_ts"`
+	RiskHint         string    `json:"risk_hint,omitempty"`
+	Ports            []int     `json:"ports,omitempty"`
 }
 
 type RunMeta struct {
