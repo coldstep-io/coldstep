@@ -370,6 +370,14 @@ type DigestInput struct {
 	// since the snapshot was programmed into the BPF map. Zero value means no
 	// allowlist was compiled and the warning is suppressed.
 	AllowlistCompileTime time.Time
+	// DNSDriftCount is the number of times the H16 background re-resolution
+	// goroutine observed IPv4 drift relative to the startup snapshot during
+	// the run. Each non-empty policy.DriftReport bumps the counter by 1.
+	// Non-zero values surface a "DNS drift detected" advisory in the
+	// allowlist trust section — enforcement was intentionally not updated
+	// mid-job, so operators see TOCTOU-safe staleness as a warning rather
+	// than a silent gap.
+	DNSDriftCount int
 	// AllowlistEntryCount is the total number of /32 + CIDR entries programmed
 	// into the BPF allowed_ipv4 LPM trie at startup (H12). Mirrors
 	// MetaEvent.AllowlistEntryCount; rendered as a fixed-point reminder in the
