@@ -38,6 +38,21 @@ Recommended workflow:
 
 `build-model` additionally flags **suspicious domains** in the report model (`suspicious_domains` field): high-entropy subdomains (Shannon entropy > 3.5 bits/char on labels longer than 8 chars), domains observed only once across the entire run, and HTTP/TLS observations on non-standard ports. `render-summary` surfaces a `[!WARNING]` block when any are present so reviewers see them before approving the diff.
 
+### Building a safe allowlist (H17 learning-mode poisoning protections)
+
+Even with the workflow above, **two specific shapes of destination warrant manual review** before they land in `allow:` — and `coldstep-report` now tags them on each flagged entry via `suspicious_domains[].risk_hint`:
+
+| `risk_hint` | What it means | Why to review by hand |
+| :----------- | :------------- | :-------------------- |
+| **`suspicious-dga`** | The leftmost DNS label is ≥ 12 chars of high-entropy text (Shannon ≥ 3.5 bits/char) **or** a 16+-char lowercase hex string (DGA / hash-style). | DGA-shaped labels are characteristic of malware C2 and ephemeral exfil endpoints. Even one observation is enough to want a human to confirm whether the host is a legitimate object-store / CDN URL or attacker infrastructure. |
+| **`single-observation`** | The domain was seen exactly once across the entire JSONL stream (`observation_count == 1`). | Attackers who briefly poisoned a learning run leave exactly this fingerprint. Compare against a longer-window baseline before promoting. |
+
+`assert-integrity` does **not** fail on either hint — it emits a `::warning title=Coldstep learning-mode reviewer hints (H17)::…` annotation listing each flagged entry so reviewers see them in the GitHub Actions UI. The hard gates are still `--min-observation-hours` and `diff --fail-on-new-domain`. Recommended bar before promoting any new domain:
+
+- **≥ 24h observation window** (`coldstep-report build-model --min-observation-hours 24`). Shorter windows are inherently easier to poison.
+- **Baseline diff with `--fail-on-new-domain`** on the PR that edits `allow:` / `allow-file`. This is the only step that catches a domain a single human reviewer might wave through.
+- **Manual review of every `risk_hint` entry.** `suspicious-dga` and `single-observation` rows are reviewer-driven by design — there is no automated way to tell good ephemeral URLs from bad ones.
+
 ---
 
 ## Bare minimum

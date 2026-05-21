@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -181,6 +183,35 @@ func TestDiffSummaryNewDomainsIgnoresBareIPs(t *testing.T) {
 	}
 }
 
+func TestAssertIntegrityEmitsLearningModeReviewerHints(t *testing.T) {
+	tmp := t.TempDir()
+	in := filepath.Join(tmp, "model.json")
+	body := `{
+		"schema_version":"3.0",
+		"capability_eval":{"verdict":"pass","score":95,"reasons":[]},
+		"suspicious_domains":[
+			{"domain":"a3b8c1d9e2f4a1b2.cdn.example.com","reasons":["high_entropy"],"observation_count":4,"risk_hint":"suspicious-dga"},
+			{"domain":"only-once.example.com","reasons":["rare"],"observation_count":1,"risk_hint":"single-observation"}
+		]
+	}`
+	if err := os.WriteFile(in, []byte(body), 0o644); err != nil {
+		t.Fatalf("setup fixture: %v", err)
+	}
+	out, err := captureStdout(t, func() error { return assertIntegrity([]string{"--in=" + in}) })
+	if err != nil {
+		t.Fatalf("assertIntegrity = %v; want nil (verdict=pass, hints are warn-only)", err)
+	}
+	if !strings.Contains(out, "learning-mode reviewer hints (H17)") {
+		t.Fatalf("stdout missing H17 reviewer-hints banner: %s", out)
+	}
+	if !strings.Contains(out, "a3b8c1d9e2f4a1b2.cdn.example.com") {
+		t.Errorf("stdout missing DGA-shaped domain row: %s", out)
+	}
+	if !strings.Contains(out, "only-once.example.com") {
+		t.Errorf("stdout missing single-observation domain row: %s", out)
+	}
+}
+
 func TestRenderSummaryShowsSuspiciousDomainsWarning(t *testing.T) {
 	tmp := t.TempDir()
 	in := writeModelMapFixture(t, tmp, map[string]any{
@@ -224,6 +255,27 @@ func TestRenderSummaryShowsShortWindowWarning(t *testing.T) {
 	if !strings.Contains(string(raw), "Observation window only") {
 		t.Fatalf("summary missing short-window warning: %s", string(raw))
 	}
+}
+
+// captureStdout swaps os.Stdout for a pipe, runs fn, restores stdout, and
+// returns whatever fn wrote. Used to assert reviewer-hint output without
+// shelling out.
+func captureStdout(t *testing.T, fn func() error) (string, error) {
+	t.Helper()
+	orig := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe: %v", err)
+	}
+	os.Stdout = w
+	fnErr := fn()
+	w.Close()
+	os.Stdout = orig
+	var buf bytes.Buffer
+	if _, err := io.Copy(&buf, r); err != nil {
+		t.Fatalf("drain pipe: %v", err)
+	}
+	return buf.String(), fnErr
 }
 
 func readModelOrFail(t *testing.T, path string) map[string]any {

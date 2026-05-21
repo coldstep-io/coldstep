@@ -72,6 +72,12 @@ func buildModel(args []string) error {
 	short := false
 	if *minObs > 0 && observationHours < *minObs {
 		short = true
+		minutes := int(math.Round(observationHours * 60))
+		fmt.Fprintf(
+			os.Stderr,
+			"coldstep-report: observation window is %d minutes; --min-observation-hours requires %g hours (H17)\n",
+			minutes, *minObs,
+		)
 		fmt.Fprintf(
 			os.Stderr,
 			"::warning title=Coldstep short observation window::observation window %.2fh is shorter than --min-observation-hours=%.2f; allowlist promotion is risky (P1-2)\n",
