@@ -91,18 +91,25 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 // TCP and IPv4 UDP sendmsg are always wired by the agent's cgroup hooks, so
 // they are reported as `true` independent of probe attach status; the BPF
 // status rows on the same MetaEvent already carry the per-probe outcomes.
-// IPv6 and QUIC/HTTP3 are reported as `false` until the underlying probes
-// land. TLSSNI uses the same gate+hook composition as the `tls_sni`
-// capability flag so a degraded BPF probe demotes coverage to "none".
-func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached bool) *telemetry.CoverageReport {
+// IPv6 is "enforce" in defend mode with a populated allowed_ipv6 LPM trie
+// (H14 v0.4.0 — P2-1 cgroup/connect6+sendmsg6 hooks attached and AAAA
+// resolutions programmed); "off" otherwise. QUIC/HTTP3 is reported as
+// `false` until the underlying probe lands. TLSSNI uses the same gate+hook
+// composition as the `tls_sni` capability flag so a degraded BPF probe
+// demotes coverage to "none".
+func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached, ipv6Enforced bool) *telemetry.CoverageReport {
 	tls := "none"
 	if capabilityEnabled(tlsSNIGate, bpf, "raw_tp/sys_enter (connect, sendto, http sniff, tls)") {
 		tls = "full"
 	}
+	ipv6 := telemetry.CoverageIPv6Off
+	if ipv6Enforced {
+		ipv6 = telemetry.CoverageIPv6Enforce
+	}
 	return &telemetry.CoverageReport{
 		IPv4TCP:        true,
 		IPv4UDPSendmsg: true,
-		IPv6:           false,
+		IPv6:           ipv6,
 		QUICHTTP3:      false,
 		TLSSNI:         tls,
 		IoUring:        ioUringAttached,

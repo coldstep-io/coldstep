@@ -10,7 +10,8 @@ import (
 
 // TestBuildCoverageReport covers the H5 v0.2.9 telemetry-stub composition:
 // - IPv4 TCP / UDP sendmsg always true (always-wired cgroup hooks)
-// - IPv6 / QUICHTTP3 always false (probes not yet implemented)
+// - QUICHTTP3 always false (probe not yet implemented)
+// - IPv6 (H14): "enforce" when defend mode + cgroup6 hooks loaded, "off" otherwise
 // - TLSSNI flips on gate + non-degraded probe; "none" otherwise
 // - IoUring tracks ioUringRd.R != nil at MetaEvent build time
 func TestBuildCoverageReport(t *testing.T) {
@@ -19,12 +20,14 @@ func TestBuildCoverageReport(t *testing.T) {
 	const tlsSniffHook = "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 
 	cases := []struct {
-		name        string
-		bpf         []telemetry.BPFStatus
-		tlsGate     bool
-		ioUring     bool
-		wantTLSSNI  string
-		wantIoUring bool
+		name         string
+		bpf          []telemetry.BPFStatus
+		tlsGate      bool
+		ioUring      bool
+		ipv6Enforced bool
+		wantTLSSNI   string
+		wantIoUring  bool
+		wantIPv6     string
 	}{
 		{
 			name:        "default detect — gate off",
@@ -33,6 +36,7 @@ func TestBuildCoverageReport(t *testing.T) {
 			ioUring:     false,
 			wantTLSSNI:  "none",
 			wantIoUring: false,
+			wantIPv6:    telemetry.CoverageIPv6Off,
 		},
 		{
 			name:        "gate on + probe ok → full",
@@ -41,6 +45,7 @@ func TestBuildCoverageReport(t *testing.T) {
 			ioUring:     false,
 			wantTLSSNI:  "full",
 			wantIoUring: false,
+			wantIPv6:    telemetry.CoverageIPv6Off,
 		},
 		{
 			name:        "gate on + probe degraded → none",
@@ -49,6 +54,7 @@ func TestBuildCoverageReport(t *testing.T) {
 			ioUring:     false,
 			wantTLSSNI:  "none",
 			wantIoUring: false,
+			wantIPv6:    telemetry.CoverageIPv6Off,
 		},
 		{
 			name:        "gate on + probe missing from bpf list → none",
@@ -57,6 +63,7 @@ func TestBuildCoverageReport(t *testing.T) {
 			ioUring:     false,
 			wantTLSSNI:  "none",
 			wantIoUring: false,
+			wantIPv6:    telemetry.CoverageIPv6Off,
 		},
 		{
 			name:        "io_uring attached → true",
@@ -65,12 +72,23 @@ func TestBuildCoverageReport(t *testing.T) {
 			ioUring:     true,
 			wantTLSSNI:  "full",
 			wantIoUring: true,
+			wantIPv6:    telemetry.CoverageIPv6Off,
+		},
+		{
+			name:         "defend mode IPv6 enforced → enforce",
+			bpf:          []telemetry.BPFStatus{{Name: tlsSniffHook, OK: true}},
+			tlsGate:      true,
+			ioUring:      false,
+			ipv6Enforced: true,
+			wantTLSSNI:   "full",
+			wantIoUring:  false,
+			wantIPv6:     telemetry.CoverageIPv6Enforce,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildCoverageReport(tc.bpf, tc.tlsGate, tc.ioUring)
+			got := buildCoverageReport(tc.bpf, tc.tlsGate, tc.ioUring, tc.ipv6Enforced)
 			if got == nil {
 				t.Fatal("expected non-nil CoverageReport")
 			}
@@ -80,8 +98,8 @@ func TestBuildCoverageReport(t *testing.T) {
 			if !got.IPv4UDPSendmsg {
 				t.Errorf("IPv4UDPSendmsg = false, want true (always-wired cgroup hook)")
 			}
-			if got.IPv6 {
-				t.Errorf("IPv6 = true, want false until probe ships")
+			if got.IPv6 != tc.wantIPv6 {
+				t.Errorf("IPv6 = %q, want %q", got.IPv6, tc.wantIPv6)
 			}
 			if got.QUICHTTP3 {
 				t.Errorf("QUICHTTP3 = true, want false until probe ships")

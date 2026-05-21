@@ -905,7 +905,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 			if runnerEnv != RunnerEnvStandard {
 				meta.RunnerEnv = runnerEnv
 			}
-			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil)
+			// H14 v0.4.0 — IPv6 cgroup6 hooks (defend object) enforce only when
+			// defend mode is active AND at least one AAAA resolved into the
+			// allowed_ipv6 LPM trie. An empty trie in defend mode is the
+			// "block-all IPv6" posture; we still surface that as enforce
+			// because the hook denies every non-loopback IPv6 destination.
+			ipv6Enforced := cfg.Mode == config.ModeDefend && hasDefend
+			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6Enforced)
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
 			}
