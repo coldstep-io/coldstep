@@ -174,9 +174,31 @@ type Summary struct {
 	// IoUringTLSHelloObserved counts io_uring SQE submissions whose user
 	// buffer prefix matched the TLS ClientHello record signature (P6 Phase 2,
 	// enhanced profile only). Always 0 outside COLDSTEP_DETECT_PROFILE=enhanced.
-	IoUringTLSHelloObserved        int `json:"io_uring_tls_hello_observed,omitempty"`
-	TCPDNSResponsesObserved        int `json:"tcp_dns_responses_observed,omitempty"`
-	TCPDNSSkippedShortRead         int `json:"tcp_dns_skipped_short_read,omitempty"`
+	IoUringTLSHelloObserved int `json:"io_uring_tls_hello_observed,omitempty"`
+	TCPDNSResponsesObserved int `json:"tcp_dns_responses_observed,omitempty"`
+	TCPDNSSkippedShortRead  int `json:"tcp_dns_skipped_short_read,omitempty"`
+	// TCPStateTotal / Confirmed / Refused / RingbufReserveFailures mirror
+	// the kernel-confirmed TCP handshake counters (P3-2b) already surfaced in
+	// the shutdown digest. Surfacing them here keeps `.coldstep-telemetry.json`
+	// in sync so downstream consumers don't need to reparse JSONL to see how
+	// many `tcp` syscall-enter attempts actually completed an ESTABLISHED /
+	// CLOSE transition. Zero-defaults remain omitted.
+	TCPStateTotal                  int `json:"tcp_state_total,omitempty"`
+	TCPStateConfirmed              int `json:"tcp_state_confirmed,omitempty"`
+	TCPStateRefused                int `json:"tcp_state_refused,omitempty"`
+	TCPStateRingbufReserveFailures int `json:"tcp_state_ringbuf_reserve_failures,omitempty"`
+	// QuicObserved is the per-run count of UDP egress records with
+	// PossibleQUIC=true (H19 — UDP destination port 443). Mirrors
+	// CoverageReport.QuicObserved (shutdown MetaEvent in JSONL) so
+	// consumers reading only the summary file still see the heuristic
+	// gap quantification. Heuristic only — no QUIC framing inspected.
+	QuicObserved uint64 `json:"quic_observed,omitempty"`
+	// DNSDriftObservations is the per-run count of non-empty drift
+	// reports produced by the H16 DNS re-resolution watchdog. Each
+	// non-empty AddedIPs / RemovedIPs report bumps this by 1; the live
+	// enforce policy is NOT updated mid-run. Zero means DNS was stable
+	// or re-resolution never fired.
+	DNSDriftObservations           int `json:"dns_drift_observations,omitempty"`
 	BPFAuditEvents                 int `json:"bpf_audit_events,omitempty"`
 	BPFHeartbeatFailures           int `json:"bpf_heartbeat_failures,omitempty"`
 	BPFMapIntegrityFailures        int `json:"bpf_map_integrity_failures,omitempty"`
