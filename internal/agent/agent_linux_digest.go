@@ -93,11 +93,12 @@ func capabilityEnabled(gate bool, bpf []telemetry.BPFStatus, hookName string) bo
 // status rows on the same MetaEvent already carry the per-probe outcomes.
 // IPv6 is "enforce" in defend mode with a populated allowed_ipv6 LPM trie
 // (H14 v0.4.0 — P2-1 cgroup/connect6+sendmsg6 hooks attached and AAAA
-// resolutions programmed); "off" otherwise. QUIC/HTTP3 is reported as
-// `false` until the underlying probe lands. TLSSNI uses the same gate+hook
+// resolutions programmed); "off" otherwise. QUIC/HTTP3 enforcement is
+// reported as `false` until the underlying probe lands; QuicObserved
+// carries the H19 UDP/443 heuristic count. TLSSNI uses the same gate+hook
 // composition as the `tls_sni` capability flag so a degraded BPF probe
 // demotes coverage to "none".
-func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached, ipv6Enforced bool) *telemetry.CoverageReport {
+func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached, ipv6Enforced bool, quicObserved uint64) *telemetry.CoverageReport {
 	tls := "none"
 	if capabilityEnabled(tlsSNIGate, bpf, "raw_tp/sys_enter (connect, sendto, http sniff, tls)") {
 		tls = "full"
@@ -111,6 +112,7 @@ func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached,
 		IPv4UDPSendmsg: true,
 		IPv6:           ipv6,
 		QUICHTTP3:      false,
+		QuicObserved:   quicObserved,
 		TLSSNI:         tls,
 		IoUring:        ioUringAttached,
 	}
@@ -231,6 +233,7 @@ func buildDigestInput(
 		TCPDNSResponsesObserved:        stats.tcpDNSResponsesObserved(),
 		TCPDNSSkippedShortRead:         stats.tcpDNSSkippedShortRead(),
 		QUICCandidateCount:             stats.quicCandidateTotal(),
+		QuicObservedCount:              stats.quicObservedTotal(),
 		BPFAuditTotal:                  stats.bpfAuditTotal(),
 		BPFMapIntegrityFailures:        stats.bpfMapIntegrityFailures(),
 		BPFAuditRingbufReserveFailures: stats.bpfAuditRingbufReserveFailures(),
