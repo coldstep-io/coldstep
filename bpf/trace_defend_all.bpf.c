@@ -4,8 +4,11 @@
  * Two SEC families share one bpf2go object so Go-side loaders can attach
  * both paths from a single defend.DefendObjects. The cgroup hooks
  * (`cgroup/connect4`, `cgroup/sendmsg4`) provide the always-on enforcement
- * path. The LSM hooks (`lsm/socket_connect`, `lsm/socket_sendmsg`) attach
- * when CONFIG_BPF_LSM is enabled and "bpf" is in the kernel's lsm= chain.
+ * path. The LSM hooks (`lsm/socket_connect`, `lsm/socket_sendmsg`,
+ * `lsm/io_uring_cmd`) attach when CONFIG_BPF_LSM is enabled and "bpf" is
+ * in the kernel's lsm= chain. The io_uring_cmd hook (H15) closes the
+ * IORING_OP_URING_CMD branch that does not route through
+ * security_socket_sendmsg().
  *
  * Map name layout:
  *   cgroup section — bare names (deny_events, allowed_ipv4, …)
@@ -76,3 +79,4 @@ _Static_assert(sizeof(struct deny_event) == 46,
 
 #include "trace_defend_cgroup.inc"
 #include "trace_lsm_defend_lsm.inc"
+#include "trace_lsm_defend_iouring.inc"
