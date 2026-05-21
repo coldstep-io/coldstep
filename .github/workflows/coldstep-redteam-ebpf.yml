@@ -150,3 +150,42 @@ jobs:
           path: ${{ github.workspace }}/coldstep-redteam-report.html
           retention-days: 7
           overwrite: true
+
+  # H20 — red-team validation integration tests.
+  # Asserts coldstep surfaces the 12 v0.4.0 security-review attack paths as
+  # JSONL events (detect mode) or deny/pass behaviour (defend mode). Run on
+  # ubuntu-latest only: BPF load requires root + hosted-runner kernel features
+  # not assumed on WSL/older releases (see skipIfUnsupportedSyscallBPFKernel).
+  redteam-integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6
+
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Prepare BPF toolchain (clang, libbpf, vmlinux.h)
+        # build-agent-linux.sh installs clang/llvm/libbpf-dev, dumps BTF to
+        # bpf/vmlinux.h if missing, and runs `go generate` for every BPF probe
+        # package — the integration tests import those generated objects, so
+        # we run the full build script (and discard the built binaries).
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+
+      - name: Run red-team integration tests (TestRedTeam_*)
+        # sudo: BPF load + cgroup/LSM attach require CAP_SYS_ADMIN.
+        # -tags=integration: matches //go:build integration && linux && !windows.
+        # -parallel 1: BPF programs attach to per-runner cgroups; serializing
+        # avoids cross-test deny-ring interference.
+        run: |
+          sudo env "PATH=$PATH" "HOME=$HOME" \
+            go test -tags=integration ./internal/agent/... \
+              -run '^TestRedTeam_' \
+              -count=1 \
+              -parallel 1 \
+              -timeout 15m \
+              -v
