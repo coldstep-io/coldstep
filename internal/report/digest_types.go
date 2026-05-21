@@ -190,6 +190,19 @@ type DigestInput struct {
 	// io_uring traffic can bypass typical syscall tracepoints used for detect mode.
 	// It is a syscall-hook bypass-class signal, not proof of exfiltration.
 	IoUringSetupObserved int
+	// IoUringTLSEvents counts io_uring SQE buffer-peek events emitted by the
+	// P6 Phase 2 hook (raw_tp/io_uring_submit_sqe). Each event represents a
+	// best-effort peek of an IORING_OP_SEND / IORING_OP_SENDMSG SQE on an
+	// enhanced-profile run. Includes peek-failed rows.
+	IoUringTLSEvents int
+	// IoUringTLSSNIExtracted is the subset of IoUringTLSEvents where userspace
+	// parsed a ClientHello SNI from the captured payload. The digest renders
+	// "io_uring TLS SNI: N extracted (enhanced profile)" when non-zero.
+	IoUringTLSSNIExtracted int
+	// IoUringRingbufReserveFailures counts BPF io_uring_events ringbuf reserve
+	// failures (back-pressure on the Phase 2 hook). Surfaced alongside the
+	// other ringbuf reserve-failure rows in the technical details table.
+	IoUringRingbufReserveFailures int
 	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool

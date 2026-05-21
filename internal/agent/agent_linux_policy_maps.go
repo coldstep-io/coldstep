@@ -266,6 +266,17 @@ func readIoUringSetupObservedCount(objs *traceconnect.TraceconnectObjects) int {
 	return readUint32CounterMap(objs.IoUringSetupObserved, "readIoUringSetupObservedCount")
 }
 
+// readIoUringRingbufReserveFailureCount sums P6 Phase 2 io_uring_events
+// ringbuf reserve failures across CPUs. Reported via Summary +
+// DigestInput so back-pressure on the SQE peek path is visible alongside
+// the other detect-path reserve-failure rows.
+func readIoUringRingbufReserveFailureCount(objs *traceconnect.TraceconnectObjects) int {
+	if objs == nil {
+		return 0
+	}
+	return readUint32PerCPUArraySum(objs.IoUringRingbufReserveFailures, "readIoUringRingbufReserveFailureCount")
+}
+
 func readTCPDNSResponsesObservedCount(objs *tracedns.TracednsObjects) int {
 	if objs == nil {
 		return 0

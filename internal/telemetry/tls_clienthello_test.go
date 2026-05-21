@@ -45,6 +45,61 @@ func buildSyntheticClientHelloWithSNI(host string) []byte {
 	return out
 }
 
+func TestIsTLSClientHelloMagic(t *testing.T) {
+	tests := []struct {
+		name string
+		in   []byte
+		want bool
+	}{
+		{"empty buffer", []byte{}, false},
+		{"too short — 5 bytes can't include offset 5", []byte{0x16, 0x03, 0x01, 0x00, 0x00}, false},
+		{
+			"valid TLS 1.0 ClientHello prefix",
+			[]byte{0x16, 0x03, 0x01, 0x00, 0xff, 0x01},
+			true,
+		},
+		{
+			"valid TLS 1.3 record-version with ClientHello",
+			[]byte{0x16, 0x03, 0x03, 0x01, 0x00, 0x01},
+			true,
+		},
+		{
+			"wrong ContentType — application data not handshake",
+			[]byte{0x17, 0x03, 0x01, 0x00, 0xff, 0x01},
+			false,
+		},
+		{
+			"wrong record-version major byte (0x02, not 0x03)",
+			[]byte{0x16, 0x02, 0x01, 0x00, 0xff, 0x01},
+			false,
+		},
+		{
+			"handshake but ServerHello not ClientHello",
+			[]byte{0x16, 0x03, 0x01, 0x00, 0xff, 0x02},
+			false,
+		},
+		{
+			"trailing bytes after magic are ignored",
+			append([]byte{0x16, 0x03, 0x03, 0x00, 0xff, 0x01}, make([]byte, 100)...),
+			true,
+		},
+		{
+			"synthetic ClientHello buildSyntheticClientHelloWithSNI parses as magic",
+			buildSyntheticClientHelloWithSNI("example.com"),
+			true,
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := IsTLSClientHelloMagic(tc.in)
+			if got != tc.want {
+				t.Fatalf("IsTLSClientHelloMagic(%v bytes) = %v, want %v", len(tc.in), got, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseClientHelloSNI_Minimal(t *testing.T) {
 	ch := buildSyntheticClientHelloWithSNI("ex.example")
 	if ch == nil {

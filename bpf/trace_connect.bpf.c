@@ -220,6 +220,38 @@ struct {
 	__uint(max_entries, 1 << 24);
 } tls_events SEC(".maps");
 
+/*
+ * P6 Phase 2: io_uring TLS ClientHello sniff ringbuf. 64 KiB is sufficient —
+ * events are filtered to OP_SEND / OP_SENDMSG SQEs on enhanced profile only,
+ * so volume is bounded by the rate of legitimate io_uring network egress.
+ * Larger sizes would hide downstream pipeline pressure rather than gate it.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 16);
+} io_uring_events SEC(".maps");
+
+/*
+ * P6 Phase 2: gate map for the io_uring SQE buffer peek. Userspace writes
+ * io_uring_peek_cfg[0] = 1 only when COLDSTEP_DETECT_PROFILE=enhanced; the
+ * BPF program treats any other value (including the initial zero) as
+ * "standard profile, skip the peek". Mirrors tls_agent_cfg both in shape
+ * and intent so the gate-by-default-off contract is uniform across hooks.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u8);
+} io_uring_peek_cfg SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} io_uring_ringbuf_reserve_failures SEC(".maps");
+
 static __always_inline void note_connect4_tuple_update_failed(void)
 {
 	__u32 k = 0;
@@ -299,6 +331,16 @@ static __always_inline void note_io_uring_setup_observed(void)
 	if (!v)
 		return;
 	__sync_fetch_and_add(v, 1);
+}
+
+static __always_inline void note_io_uring_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	__u32 *v = bpf_map_lookup_elem(&io_uring_ringbuf_reserve_failures, &k);
+
+	if (!v)
+		return;
+	(*v)++;
 }
 
 /*
@@ -600,5 +642,154 @@ int handle_raw_sys_enter(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 	}
 
+	return 0;
+}
+
+/*
+ * P6 Phase 2: io_uring SQE buffer peek for TLS ClientHello sniff.
+ *
+ * Raw tracepoint signature (kernel 5.14+):
+ *
+ *	TRACE_EVENT(io_uring_submit_sqe,
+ *		    TP_PROTO(struct io_kiocb *req, bool force_nonblock))
+ *
+ * Strategy: filter to socket-class submission opcodes (IORING_OP_SEND=26
+ * and IORING_OP_SENDMSG=9 — unambiguously network sends, stable since
+ * kernel 5.1), then peek the user buffer pointer stored in io_kiocb at
+ * offset 8 (the cmd union's first __u64 on kernels 5.14+). The first 128
+ * bytes go onto a stack scratch buffer for the TLS ClientHello signature
+ * check (0x16 / 0x03 / _ / _ / _ / 0x01); on match, capture up to
+ * TLS_PAYLOAD_MAX bytes for userspace SNI parse via the shared
+ * telemetry.ParseClientHelloSNI helper.
+ *
+ * Safety contract:
+ *   - Gate (io_uring_peek_cfg[0] == 1) is required; standard profile skips
+ *     the peek entirely. The gate map is userspace-writable and matches
+ *     the tls_agent_cfg pattern.
+ *   - Every bpf_probe_read_user() return value is checked before any
+ *     subsequent buffer access (// audit(5f): checked).
+ *   - All peek-buffer indices are compile-time constants within the 128-
+ *     byte read (// audit(5c): bounds checked).
+ *   - On read failure peek_failed=1 is set, the event is still emitted so
+ *     userspace observes the SQE happened, but no payload bytes are trusted.
+ *
+ * Phase 2 deliberately does NOT resolve req->fd back to a socket tuple —
+ * struct io_kiocb's fd field offset is unstable across kernel versions
+ * (struct io_cqe lives post-5.15). daddr/dport stay zero; SNI from the
+ * captured payload is the strongest attribution signal this hook produces.
+ */
+#define COLDSTEP_IORING_OP_SENDMSG 9
+#define COLDSTEP_IORING_OP_SEND    26
+
+SEC("raw_tp/io_uring_submit_sqe")
+int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
+{
+	/*
+	 * Gate first so standard-profile runs never touch the user buffer.
+	 * io_uring_peek_cfg defaults to zero on map creation; userspace sets
+	 * it to 1 only when COLDSTEP_DETECT_PROFILE=enhanced.
+	 */
+	{
+		__u32 key0 = 0;
+		__u8 *en = bpf_map_lookup_elem(&io_uring_peek_cfg, &key0);
+
+		if (!en || *en == 0)
+			return 0;
+	}
+
+	struct io_kiocb *req = (struct io_kiocb *)ctx->args[0];
+
+	if (!req)
+		return 0;
+
+	__u8 opcode = 0;
+
+	if (bpf_core_read(&opcode, sizeof(opcode), &req->opcode))
+		return 0;
+
+	if (opcode != COLDSTEP_IORING_OP_SENDMSG &&
+	    opcode != COLDSTEP_IORING_OP_SEND)
+		return 0;
+
+	/*
+	 * Read the user-buffer pointer from io_kiocb's cmd union (offset 8 on
+	 * kernels 5.14+ where the cmd union absorbed the SQE-cached data[0]).
+	 * Older kernel layouts produce unrelated bytes — the strict TLS
+	 * signature check below filters them out, so no kernel-version fence
+	 * is needed here. The read targets KERNEL memory; the dereferenced
+	 * payload reads further down target USER memory.
+	 */
+	unsigned long buf_ptr = 0;
+	void *cmd_addr = (void *)((char *)req + 8);
+
+	if (bpf_probe_read_kernel(&buf_ptr, sizeof(buf_ptr), cmd_addr))
+		return 0;
+	if (!buf_ptr)
+		return 0;
+
+	struct io_uring_tls_event *ev =
+		bpf_ringbuf_reserve(&io_uring_events, sizeof(*ev), 0);
+
+	if (!ev) {
+		note_io_uring_ringbuf_reserve_failed();
+		return 0;
+	}
+
+	/* Zero header + payload before any conditional fill — ringbuf reservation
+	 * memory is uninitialized and the Go decoder reads the full payload window. */
+	__u64 pt = bpf_get_current_pid_tgid();
+
+	ev->tgid = (__u32)(pt >> 32);
+	ev->tid = (__u32)pt;
+	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+	__builtin_memset(ev->daddr, 0, sizeof(ev->daddr));
+	__builtin_memset(ev->dport, 0, sizeof(ev->dport));
+	ev->op = opcode;
+	ev->peek_failed = 0;
+	ev->has_clienthello = 0;
+	ev->_pad = 0;
+	ev->payload_len = 0;
+	__builtin_memset(ev->payload, 0, sizeof(ev->payload));
+
+	{
+		unsigned char peek[128];
+
+		/*
+		 * audit(5f): checked — bpf_probe_read_user return value gates every
+		 * subsequent use of peek[]. On non-zero return we leave peek_failed=1
+		 * and skip the signature check; the event is still emitted so userspace
+		 * sees the SQE happened (downgraded fidelity, not silent drop).
+		 */
+		if (bpf_probe_read_user(peek, sizeof(peek), (void *)buf_ptr)) {
+			ev->peek_failed = 1;
+		} else {
+			/*
+			 * audit(5c): bounds checked — indices 0, 1, and 5 are all
+			 * within the 128-byte constant-size read above.
+			 *
+			 * Signature: ContentType=Handshake (0x16),
+			 *            RecordVersion-major=0x03,
+			 *            HandshakeType=ClientHello (byte 5 = 0x01).
+			 * Mirrors trace_tls_write.inc's try_emit_tls_clienthello_from_tuple.
+			 */
+			if (peek[0] == 0x16 && peek[1] == 0x03 && peek[5] == 0x01) {
+				ev->has_clienthello = 1;
+				/*
+				 * audit(5f): checked — if the second (wider) read fails we
+				 * fall back to the 128 bytes already in peek[]; userspace
+				 * SNI parse may still succeed on short SNIs.
+				 */
+				if (bpf_probe_read_user(ev->payload, sizeof(ev->payload),
+							(void *)buf_ptr)) {
+					__builtin_memcpy(ev->payload, peek, sizeof(peek));
+					ev->payload_len = (__u16)sizeof(peek);
+				} else {
+					ev->payload_len = (__u16)sizeof(ev->payload);
+				}
+			}
+		}
+	}
+
+	bpf_ringbuf_submit(ev, 0);
 	return 0;
 }

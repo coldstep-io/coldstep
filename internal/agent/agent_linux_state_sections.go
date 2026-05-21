@@ -160,6 +160,15 @@ const (
 	httpSniffEventHeaderSize = 34 // 4+4+16+4+2+_pad[2]+2 capture_len
 	tlsSniffEventHeaderSize  = 34 // same layout
 
+	// io_uring_tls_event (P6 Phase 2). Layout: 4+4+16+4+2+1+1+1+1+2+payload[256] → 292.
+	// The header occupies offset 0..36 (through payload_len at 34..36) and is locked
+	// by _Static_assert in bpf/trace_connect_obs.h. Header bytes replace the trailing
+	// 2-byte _pad of tls_sniff_event with op/peek_failed/has_clienthello + 1-byte pad,
+	// so the payload starts 2 bytes later than tls_sniff_event.
+	ioUringTLSEventWireSize   = 292
+	ioUringTLSEventHeaderSize = 36
+	ioUringTLSPayloadMax      = 256
+
 	// After the first defend deny, read additional deny ringbuf records briefly so JSONL/digest
 	// capture a burst (e.g. TCP + UDP) before fail-fast shutdown.
 	defendDenyDrainMaxEvents = 32

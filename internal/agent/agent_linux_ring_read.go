@@ -589,6 +589,84 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 	}
 }
 
+// readIOUringTLSRing consumes the P6 Phase 2 io_uring_events ringbuf. Each
+// record is one io_uring SQE submission for OP_SEND / OP_SENDMSG observed on
+// enhanced-profile runs; userspace decides the JSONL "confidence" tag based
+// on whether SNI could be parsed from the captured payload window.
+func readIOUringTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (io_uring_tls)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		dec, ok := decodeIOUringTLSEvent(record.RawSample)
+		if !ok {
+			stats.addDropped("io_uring_tls_decode")
+			slog.Warn("decode io_uring_tls", "len", len(record.RawSample))
+			continue
+		}
+
+		comm := string(bytes.TrimRight(dec.comm[:], "\x00"))
+		sni := ""
+		confidence := "unknown"
+		if dec.hasClientHello && !dec.peekFailed && len(dec.payload) > 0 {
+			parsed, parseOK := telemetry.ParseClientHelloSNI(dec.payload)
+			if parseOK {
+				sni = parsed
+				confidence = "full"
+			} else {
+				confidence = "partial"
+			}
+		}
+
+		stats.addIoUringTLSEvent()
+		if sni != "" {
+			stats.addIoUringTLSSNIExtracted()
+		}
+
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		dstIP := ""
+		if ip := net.IP(dec.daddr[:]).To4(); ip != nil && !ip.IsUnspecified() {
+			dstIP = ip.String()
+		}
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.IOUringTLSEvent{
+				Type: "io_uring_tls", TS: ts, Seq: n,
+				PID: dec.tgid, TGID: dec.tgid, ThreadID: dec.tid,
+				Comm:       comm,
+				Op:         ioUringOpName(dec.op),
+				SNI:        sni,
+				Confidence: confidence,
+				PeekFailed: dec.peekFailed,
+				DstIP:      dstIP,
+				DstPort:    dec.dport,
+				Note:       "io_uring SQE buffer peek (enhanced profile); fd→socket tuple not resolved in Phase 2",
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("io_uring_tls_jsonl")
+				slog.Warn("events jsonl (io_uring_tls)", "err", werr)
+			}
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {

@@ -91,6 +91,63 @@ func decodeTLSSniffEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]
 	return tgid, tid, comm, daddr, dport, payload, true
 }
 
+// ioUringTLSDecoded carries every field the io_uring_tls ringbuf consumer
+// needs in one return; the field-by-field tuple decoders (decodeConnectEvent,
+// decodeTLSSniffEvent …) work for 3-4 fields but this event has 9 and a
+// payload window, so a struct return keeps the call site readable.
+type ioUringTLSDecoded struct {
+	tgid           uint32
+	tid            uint32
+	comm           [16]byte
+	daddr          [4]byte
+	dport          uint16
+	op             uint8
+	peekFailed     bool
+	hasClientHello bool
+	payload        []byte
+}
+
+// decodeIOUringTLSEvent parses io_uring_tls_event (P6 Phase 2). Layout matches
+// the C struct in bpf/trace_connect_obs.h: 4+4+16+4+2+1+1+1+1+2+payload[256].
+func decodeIOUringTLSEvent(raw []byte) (out ioUringTLSDecoded, ok bool) {
+	if len(raw) < ioUringTLSEventWireSize {
+		return ioUringTLSDecoded{}, false
+	}
+	out.tgid = binary.LittleEndian.Uint32(raw[0:4])
+	out.tid = binary.LittleEndian.Uint32(raw[4:8])
+	copy(out.comm[:], raw[8:24])
+	copy(out.daddr[:], raw[24:28])
+	out.dport = binary.BigEndian.Uint16(raw[28:30])
+	out.op = raw[30]
+	out.peekFailed = raw[31] != 0
+	out.hasClientHello = raw[32] != 0
+	// raw[33] is the explicit _pad byte
+	capLen := int(binary.LittleEndian.Uint16(raw[34:36]))
+	if capLen > ioUringTLSPayloadMax {
+		return ioUringTLSDecoded{}, false
+	}
+	if capLen > 0 {
+		out.payload = make([]byte, capLen)
+		copy(out.payload, raw[ioUringTLSEventHeaderSize:ioUringTLSEventHeaderSize+capLen])
+	}
+	return out, true
+}
+
+// ioUringOpName maps the BPF io_uring opcode byte to a stable JSONL string.
+// IORING_OP_SEND (26) and IORING_OP_SENDMSG (9) are the only opcodes the hook
+// filters in today; the default branch lets future Phase 3 work add OP_WRITE /
+// OP_WRITEV without touching the decoder.
+func ioUringOpName(op uint8) string {
+	switch op {
+	case 9:
+		return "sendmsg"
+	case 26:
+		return "send"
+	default:
+		return "unknown"
+	}
+}
+
 // decodeDNSSniffSample parses dns_sniff_event (trace_dns.bpf.c): len, is_tcp, pad, payload.
 // Legacy ringbuf records are dnsSniffEventWireSizeLegacy (len + data only).
 func decodeDNSSniffSample(raw []byte) (pkt []byte, isTCP bool, ok bool) {

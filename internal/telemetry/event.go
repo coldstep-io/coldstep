@@ -142,6 +142,40 @@ type TLSEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
+// IOUringTLSEvent is one JSONL record for a TLS ClientHello sniffed off an
+// io_uring SQE buffer peek (P6 Phase 2, enhanced-profile only).
+//
+// The BPF hook (raw_tp/io_uring_submit_sqe in trace_connect.bpf.c) filters to
+// IORING_OP_SEND (26) and IORING_OP_SENDMSG (9), peeks up to 128 bytes from
+// the user buffer for a TLS ClientHello signature, and captures up to 256
+// bytes on match for userspace SNI extraction. PeekFailed signals that
+// bpf_probe_read_user returned non-zero — the SQE is still recorded but no
+// SNI is reported.
+//
+// Confidence levels:
+//   - "full"    — SNI successfully parsed from the captured payload.
+//   - "partial" — ClientHello magic matched but SNI parse failed (truncated
+//     or non-host_name extension); the event surfaces that a TLS
+//     io_uring flow happened without naming it.
+//   - "unknown" — peek failed or the buffer did not match the TLS signature.
+type IOUringTLSEvent struct {
+	Type       string `json:"type"` // "io_uring_tls"
+	TS         string `json:"ts"`
+	Seq        uint64 `json:"seq,omitempty"`
+	PID        uint32 `json:"pid"`
+	TGID       uint32 `json:"tgid,omitempty"`
+	ThreadID   uint32 `json:"thread_id,omitempty"`
+	Comm       string `json:"comm"`
+	Op         string `json:"op,omitempty"` // "send" | "sendmsg"
+	SNI        string `json:"sni,omitempty"`
+	Confidence string `json:"confidence"` // "full" | "partial" | "unknown"
+	PeekFailed bool   `json:"peek_failed,omitempty"`
+	DstIP      string `json:"dst_ip,omitempty"`
+	DstPort    uint16 `json:"dst_port,omitempty"`
+	Note       string `json:"note,omitempty"`
+	Sig        string `json:"sig,omitempty"`
+}
+
 // FSEvent is one JSONL record for a high-signal filesystem operation (detect, feature-gated).
 type FSEvent struct {
 	Type     string `json:"type"` // "fs_event"

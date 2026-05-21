@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/signal"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -125,6 +126,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer udpRd.Close()
 	defer httpRd.Close()
 	defer tlsRd.Close()
+
+	// P6 Phase 2: io_uring SQE buffer-peek ringbuf. Only opened when the agent
+	// actually attaches the raw_tp/io_uring_submit_sqe program (best-effort —
+	// the hook degrades gracefully on kernels < 5.14 instead of failing the run).
+	var ioUringRd ringReader
+	defer ioUringRd.Close()
+	var ioUringLnk link.Link
 
 	var denyRd ringReader
 	defer denyRd.Close()
@@ -327,8 +335,57 @@ func Run(ctx context.Context, cfg config.Config) error {
 				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs)
 				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
 				stats.setIoUringSetupObserved(readIoUringSetupObservedCount(syscallObjs))
+				stats.setIoUringRingbufReserveFailures(readIoUringRingbufReserveFailureCount(syscallObjs))
 			}
 		}()
+
+		// P6 Phase 2: best-effort attach of raw_tp/io_uring_submit_sqe. The hook
+		// targets kernel 5.14+ (io_kiocb cmd union layout); on older kernels the
+		// raw tracepoint name is absent and AttachRawTracepoint returns an error,
+		// which we surface as a degraded BPFStatus row instead of failing the
+		// agent. The peek itself is gated by io_uring_peek_cfg[0] — set to 1
+		// only when COLDSTEP_DETECT_PROFILE=enhanced so standard-profile runs
+		// keep the same wire format and zero overhead.
+		ioUringStatus := telemetry.BPFStatus{
+			Name: "raw_tp/io_uring_submit_sqe (P6 Phase 2)",
+			OK:   false, Detail: "enhanced profile required",
+		}
+		enhancedPeek := strings.EqualFold(strings.TrimSpace(cfg.DetectProfile), "enhanced")
+		if enhancedPeek {
+			lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{
+				Name:    "io_uring_submit_sqe",
+				Program: syscallObjs.TraceIoUringSubmitSqe,
+			})
+			if err != nil {
+				ioUringStatus.OK = false
+				ioUringStatus.Detail = bpfDetail(err)
+				slog.Info("io_uring_submit_sqe tracing disabled", "err", err)
+			} else {
+				ioUringLnk = lnk
+				rd, err := ringbuf.NewReader(syscallObjs.IoUringEvents)
+				if err != nil {
+					_ = lnk.Close()
+					ioUringLnk = nil
+					ioUringStatus.OK = false
+					ioUringStatus.Detail = bpfDetail(err)
+					slog.Warn("io_uring_submit_sqe ringbuf reader failed", "err", err)
+				} else {
+					ioUringRd.R = rd
+					// Flip the BPF gate so the hook actually peeks the user buffer.
+					if uerr := syscallObjs.IoUringPeekCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); uerr != nil {
+						ioUringStatus.OK = false
+						ioUringStatus.Detail = "io_uring_peek_cfg map update failed: " + bpfDetail(uerr)
+						slog.Warn("io_uring_peek_cfg", "err", uerr)
+					} else {
+						ioUringStatus.OK = true
+						ioUringStatus.Detail = ""
+						slog.Info("tracing io_uring SQE buffer peek (enhanced profile)")
+					}
+					defer ioUringLnk.Close()
+				}
+			}
+		}
+		bpfSt = append(bpfSt, ioUringStatus)
 		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
 	}
 
@@ -566,6 +623,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		bpfAuditRd.Close()
 		forkRd.Close()
 		fsRd.Close()
+		ioUringRd.Close()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
@@ -600,6 +658,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if bpfAuditRd.R != nil {
+		readerCount++
+	}
+	if ioUringRd.R != nil {
 		readerCount++
 	}
 	if hasDefend {
@@ -760,6 +821,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			errCh <- readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer)
+		}()
+	}
+	if ioUringRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errCh <- readIOUringTLSRing(runCtx, cfg, ioUringRd.R, stats, &seq, &jsonlMu, signer)
 		}()
 	}
 

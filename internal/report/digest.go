@@ -303,6 +303,15 @@ func writeKPITable(b *strings.Builder, in DigestInput) {
 	if in.IoUringSetupObserved > 0 {
 		b.WriteString(fmt.Sprintf("| **⚠️ io_uring_setup (syscall-hook bypass class)** | %d |\n", in.IoUringSetupObserved))
 	}
+	// P6 Phase 2: io_uring SQE buffer-peek visibility. Only emit rows when
+	// the enhanced-profile hook produced events so standard runs stay quiet.
+	if in.IoUringTLSEvents > 0 {
+		b.WriteString(fmt.Sprintf("| **io_uring TLS SNI: %d extracted (enhanced profile)** | %d events |\n",
+			in.IoUringTLSSNIExtracted, in.IoUringTLSEvents))
+	}
+	if in.IoUringRingbufReserveFailures > 0 {
+		b.WriteString(fmt.Sprintf("| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures))
+	}
 
 	// --- processes ---
 	b.WriteString(fmt.Sprintf("| **exec** | %d |\n", in.ExecTotal))

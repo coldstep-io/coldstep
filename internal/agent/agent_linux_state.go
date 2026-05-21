@@ -27,30 +27,37 @@ import (
 )
 
 type runStats struct {
-	mu                              sync.Mutex
-	execN                           int
-	tcpN                            int
-	udpN                            int
-	httpN                           int
-	tlsN                            int
-	procForkN                       int
-	fsN                             int
-	connect4TupleUpdateFailuresN    int
-	udpRingbufReserveFailuresN      int
-	dnsRingbufReserveFailuresN      int
-	connectRingbufReserveFailuresN  int
-	httpRingbufReserveFailuresN     int
-	tlsRingbufReserveFailuresN      int
-	execRingbufReserveFailuresN     int
-	forkRingbufReserveFailuresN     int
-	fsRingbufReserveFailuresN       int
-	udpSendmsgMultiIovecObservedN   int
-	sendmmsgMultiMessageN           int
-	tlsWritevMultiIovecObservedN    int
-	sendfileObservedN               int
-	spliceObservedN                 int
-	sendmmsgFirstOnlyN              int
-	ioUringSetupObservedN           int
+	mu                             sync.Mutex
+	execN                          int
+	tcpN                           int
+	udpN                           int
+	httpN                          int
+	tlsN                           int
+	procForkN                      int
+	fsN                            int
+	connect4TupleUpdateFailuresN   int
+	udpRingbufReserveFailuresN     int
+	dnsRingbufReserveFailuresN     int
+	connectRingbufReserveFailuresN int
+	httpRingbufReserveFailuresN    int
+	tlsRingbufReserveFailuresN     int
+	execRingbufReserveFailuresN    int
+	forkRingbufReserveFailuresN    int
+	fsRingbufReserveFailuresN      int
+	udpSendmsgMultiIovecObservedN  int
+	sendmmsgMultiMessageN          int
+	tlsWritevMultiIovecObservedN   int
+	sendfileObservedN              int
+	spliceObservedN                int
+	sendmmsgFirstOnlyN             int
+	ioUringSetupObservedN          int
+	// P6 Phase 2: io_uring SQE buffer-peek event totals. ioUringTLSEventsN
+	// counts every SQE that reached the JSONL path (peek_failed events
+	// included so the digest can surface unsuccessful peek attempts);
+	// ioUringTLSSNIExtractedN counts the subset where SNI parsed cleanly.
+	ioUringTLSEventsN               int
+	ioUringTLSSNIExtractedN         int
+	ioUringRingbufReserveFailuresN  int
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
 	bpfAuditN                       int
@@ -330,6 +337,42 @@ func (s *runStats) ioUringSetupObserved() int {
 	return s.ioUringSetupObservedN
 }
 
+func (s *runStats) addIoUringTLSEvent() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringTLSEventsN++
+}
+
+func (s *runStats) ioUringTLSEvents() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringTLSEventsN
+}
+
+func (s *runStats) addIoUringTLSSNIExtracted() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringTLSSNIExtractedN++
+}
+
+func (s *runStats) ioUringTLSSNIExtracted() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringTLSSNIExtractedN
+}
+
+func (s *runStats) setIoUringRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringRingbufReserveFailuresN = n
+}
+
+func (s *runStats) ioUringRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringRingbufReserveFailuresN
+}
+
 func (s *runStats) setTCPDNSResponsesObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -460,6 +503,9 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		SpliceObserved:                 s.spliceObservedN,
 		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
 		IoUringSetupObserved:           s.ioUringSetupObservedN,
+		IoUringTLSEvents:               s.ioUringTLSEventsN,
+		IoUringTLSSNIExtracted:         s.ioUringTLSSNIExtractedN,
+		IoUringRingbufReserveFailures:  s.ioUringRingbufReserveFailuresN,
 		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
 		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
 		BPFAuditEvents:                 s.bpfAuditN,

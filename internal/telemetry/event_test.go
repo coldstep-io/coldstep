@@ -41,6 +41,94 @@ func TestExecEventJSON(t *testing.T) {
 	}
 }
 
+func TestIOUringTLSEventJSONLRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	t.Run("full confidence — SNI populated, peek_failed omitted", func(t *testing.T) {
+		ev := IOUringTLSEvent{
+			Type: "io_uring_tls", TS: "2026-05-20T12:00:00Z", Seq: 17,
+			PID: 4242, TGID: 4242, ThreadID: 4242,
+			Comm:       "curl",
+			Op:         "send",
+			SNI:        "example.com",
+			Confidence: "full",
+			Note:       "io_uring SQE buffer peek (enhanced profile)",
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		// Confidence is always present (no omitempty); SNI is present when set.
+		if !bytes.Contains(b, []byte(`"confidence":"full"`)) {
+			t.Errorf("confidence missing: %s", b)
+		}
+		if !bytes.Contains(b, []byte(`"sni":"example.com"`)) {
+			t.Errorf("sni missing: %s", b)
+		}
+		if bytes.Contains(b, []byte(`"peek_failed"`)) {
+			t.Errorf("peek_failed should be omitted when false: %s", b)
+		}
+
+		var got IOUringTLSEvent
+		if err := json.Unmarshal(b, &got); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if got != ev {
+			t.Fatalf("round-trip mismatch:\n got  %#v\n want %#v", got, ev)
+		}
+		if EventType(b) != "io_uring_tls" {
+			t.Fatalf("EventType=%q want io_uring_tls", EventType(b))
+		}
+	})
+
+	t.Run("peek_failed — SNI empty, confidence unknown", func(t *testing.T) {
+		ev := IOUringTLSEvent{
+			Type: "io_uring_tls", TS: "2026-05-20T12:00:01Z", Seq: 18,
+			PID: 4242, Comm: "curl",
+			Op:         "sendmsg",
+			Confidence: "unknown",
+			PeekFailed: true,
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !bytes.Contains(b, []byte(`"peek_failed":true`)) {
+			t.Errorf("peek_failed=true missing: %s", b)
+		}
+		if bytes.Contains(b, []byte(`"sni"`)) {
+			t.Errorf("sni should be omitted when empty: %s", b)
+		}
+		if !bytes.Contains(b, []byte(`"confidence":"unknown"`)) {
+			t.Errorf("confidence missing: %s", b)
+		}
+	})
+
+	t.Run("partial confidence — magic matched but no SNI", func(t *testing.T) {
+		ev := IOUringTLSEvent{
+			Type: "io_uring_tls", TS: "2026-05-20T12:00:02Z", Seq: 19,
+			PID: 4242, Comm: "myproc",
+			Op:         "send",
+			Confidence: "partial",
+			DstIP:      "10.0.0.5",
+			DstPort:    443,
+		}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if !bytes.Contains(b, []byte(`"confidence":"partial"`)) {
+			t.Errorf("confidence missing: %s", b)
+		}
+		if !bytes.Contains(b, []byte(`"dst_ip":"10.0.0.5"`)) {
+			t.Errorf("dst_ip missing: %s", b)
+		}
+		if !bytes.Contains(b, []byte(`"dst_port":443`)) {
+			t.Errorf("dst_port missing: %s", b)
+		}
+	})
+}
+
 func TestProcForkEventJSONLRoundTrip(t *testing.T) {
 	t.Parallel()
 	line := `{"type":"proc_fork","ts":"2026-04-11T00:00:00Z","seq":7,"parent_pid":1,"child_pid":42,"parent_comm":"bash","child_comm":"true","note":"best-effort tgid"}` + "\n"

@@ -72,6 +72,51 @@ func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.
 	}
 }
 
+func TestBuildDetectMarkdown_IoUringTLSExtractedRow(t *testing.T) {
+	t.Run("zero events — row is hidden", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "io_uring TLS SNI") {
+			t.Fatalf("expected io_uring TLS row hidden at zero events; got:\n%s", md)
+		}
+	})
+
+	t.Run("non-zero — extracted count rendered", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                    []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+			ExecTotal:              1,
+			TCPTotal:               1,
+			DetectProfile:          "enhanced",
+			IoUringTLSEvents:       12,
+			IoUringTLSSNIExtracted: 7,
+			MaxRowsPerSection:      50,
+		})
+		if !strings.Contains(md, "io_uring TLS SNI: 7 extracted (enhanced profile)") {
+			t.Fatalf("expected io_uring TLS extracted row; got:\n%s", md)
+		}
+		if !strings.Contains(md, "12 events") {
+			t.Fatalf("expected event count rendered; got:\n%s", md)
+		}
+	})
+
+	t.Run("ringbuf reserve failures surface in technical details", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                           []telemetry.BPFStatus{{Name: "syscalls", OK: true}},
+			ExecTotal:                     1,
+			TCPTotal:                      1,
+			IoUringRingbufReserveFailures: 4,
+			MaxRowsPerSection:             50,
+		})
+		if !strings.Contains(md, "io_uring_events ringbuf reserve failures") {
+			t.Fatalf("expected ringbuf reserve failures row; got:\n%s", md)
+		}
+	})
+}
+
 func TestBuildDetectMarkdown_HotEgressDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{

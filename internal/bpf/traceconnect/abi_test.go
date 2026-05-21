@@ -32,6 +32,49 @@ func TestTraceconnectMapShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("P6 Phase 2: io_uring_events is a 64 KiB ringbuf", func(t *testing.T) {
+		ms, ok := spec.Maps["io_uring_events"]
+		if !ok {
+			t.Fatal("map io_uring_events not found in CollectionSpec")
+		}
+		if ms.Type != ebpf.RingBuf {
+			t.Errorf("io_uring_events type = %v, want ebpf.RingBuf", ms.Type)
+		}
+		if ms.MaxEntries != 1<<16 {
+			t.Errorf("io_uring_events MaxEntries = %d, want 65536 (1<<16)", ms.MaxEntries)
+		}
+	})
+
+	t.Run("P6 Phase 2: io_uring_peek_cfg is a singleton u8 gate map", func(t *testing.T) {
+		ms, ok := spec.Maps["io_uring_peek_cfg"]
+		if !ok {
+			t.Fatal("map io_uring_peek_cfg not found in CollectionSpec")
+		}
+		if ms.Type != ebpf.Array {
+			t.Errorf("io_uring_peek_cfg type = %v, want ebpf.Array", ms.Type)
+		}
+		if ms.MaxEntries != 1 {
+			t.Errorf("io_uring_peek_cfg MaxEntries = %d, want 1", ms.MaxEntries)
+		}
+		if ms.ValueSize != 1 {
+			t.Errorf("io_uring_peek_cfg ValueSize = %d, want 1", ms.ValueSize)
+		}
+	})
+
+	t.Run("P6 Phase 2: io_uring_ringbuf_reserve_failures is a PERCPU_ARRAY u32 counter", func(t *testing.T) {
+		ms, ok := spec.Maps["io_uring_ringbuf_reserve_failures"]
+		if !ok {
+			t.Fatal("map io_uring_ringbuf_reserve_failures not found in CollectionSpec")
+		}
+		if ms.Type != ebpf.PerCPUArray {
+			t.Errorf("io_uring_ringbuf_reserve_failures type = %v, want ebpf.PerCPUArray", ms.Type)
+		}
+		if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+			t.Errorf("io_uring_ringbuf_reserve_failures shape MaxEntries=%d KeySize=%d ValueSize=%d, want 1/4/4",
+				ms.MaxEntries, ms.KeySize, ms.ValueSize)
+		}
+	})
+
 	t.Run("connect4_by_tgid_fd stays bounded LRU hash", func(t *testing.T) {
 		ms, ok := spec.Maps["connect4_by_tgid_fd"]
 		if !ok {

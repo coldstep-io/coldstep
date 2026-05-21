@@ -5,6 +5,23 @@ import (
 	"strings"
 )
 
+// IsTLSClientHelloMagic returns true when b starts with the bytes that mark a
+// TLS handshake record carrying a ClientHello: ContentType=Handshake (0x16),
+// LegacyRecordVersion major byte 0x03, and HandshakeType=ClientHello (0x01)
+// at offset 5. The minor record-version byte (b[2]) and the two-byte record
+// length (b[3:5]) are intentionally not checked here — that matches the BPF
+// signature in trace_connect.bpf.c's io_uring peek path, which uses these
+// three bytes to decide whether to capture the wider payload window.
+//
+// This helper is pure Go so it can be exercised from unit tests on any
+// platform; the BPF side compiles the same three constants inline.
+func IsTLSClientHelloMagic(b []byte) bool {
+	if len(b) < 6 {
+		return false
+	}
+	return b[0] == 0x16 && b[1] == 0x03 && b[5] == 0x01
+}
+
 // ParseClientHelloSNI extracts the first host_name from a TLS ClientHello in one contiguous buffer.
 // The buffer may be truncated (e.g. BPF captures only the first N bytes of a larger record); the
 // function parses as far as it can and returns false only when the SNI extension is unreachable.

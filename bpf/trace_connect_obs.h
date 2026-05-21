@@ -226,6 +226,47 @@ struct http_sniff_event {
 _Static_assert(sizeof(struct http_sniff_event) == 228,
 	       "http_sniff_event wire size must match httpSniffEventWireSize=228 in agent_linux.go");
 
+/*
+ * P6 Phase 2: io_uring write-class SQE buffer peek + TLS ClientHello sniff.
+ *
+ * Emitted by SEC("raw_tp/io_uring_submit_sqe") in trace_connect.bpf.c when
+ * the SQE opcode is IORING_OP_SENDMSG (9) or IORING_OP_SEND (26) AND the
+ * enhanced-profile peek gate (io_uring_peek_cfg[0] == 1) is set. The probe
+ * reads the user buffer pointer from io_kiocb, peeks the first 128 bytes,
+ * checks the TLS ClientHello signature (0x16, 0x03, _, _, _, 0x01) and, on
+ * match, captures up to 256 bytes for userspace SNI extraction.
+ *
+ * peek_failed: 1 when bpf_probe_read_user on the SQE buffer returned non-zero
+ *              (kernel memory unreachable, or buffer freed before submit) —
+ *              event is still emitted so userspace sees the SQE happened.
+ * has_clienthello: 1 when the magic-byte signature matched; userspace runs
+ *                  ParseClientHelloSNI on payload[0..payload_len].
+ * fd/daddr/dport: best-effort; Phase 2 does not resolve the SQE fd back to
+ *                 a socket tuple (kernel struct io_kiocb layout is unstable
+ *                 across versions) so these stay zero. SNI is the strongest
+ *                 attribution signal Phase 2 produces.
+ *
+ * Layout: tgid(4) + tid(4) + comm(16) + daddr(4) + dport(2) + op(1) +
+ *   peek_failed(1) + has_clienthello(1) + _pad(1) + payload_len(2) +
+ *   payload[256] = 292. Alignment-of-4 → no trailing pad. Locked by the
+ *   _Static_assert below.
+ */
+struct io_uring_tls_event {
+	__u32 tgid;
+	__u32 tid;
+	__u8 comm[16];
+	__u8 daddr[4];
+	__u8 dport[2];
+	__u8 op;
+	__u8 peek_failed;
+	__u8 has_clienthello;
+	__u8 _pad;
+	__u16 payload_len;
+	__u8 payload[TLS_PAYLOAD_MAX];
+};
+_Static_assert(sizeof(struct io_uring_tls_event) == 292,
+	       "io_uring_tls_event wire size must match ioUringTLSEventWireSize=292 in agent_linux.go");
+
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {
