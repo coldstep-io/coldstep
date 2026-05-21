@@ -65,7 +65,7 @@ Coldstep’s contract has three layers:
 
 1. **Defend (when programs are loaded and mode is blocking):** **IPv4** egress that hits the attached **cgroup** and/or **BPF LSM** hooks is **denied** unless it matches the **effective allowlist** (IPv4 literals / CIDRs in the LPM map, plus optional **DNS cache–backed** domain rules). This is **hook-scoped** and **IPv4-only**; it is not a promise that every kernel egress mechanism was evaluated.
 2. **Detect:** Syscall and tracepoint visibility is **best-effort**. Counters may show **partial** visibility (e.g. unobserved syscall families, multi-iovec captures, ringbuf reserve failures). **Absence of JSONL lines does not prove absence of traffic.**
-3. **Explicit non-coverage:** **IPv6** is unsupported. **io_uring** and similar paths can **bypass typical syscall tracepoints**; Coldstep may surface `io_uring_setup` as a **signal**, not as payload visibility. Organizational controls remain necessary for audit-grade posture (see **Residual risk** below).
+3. **Explicit non-coverage:** **IPv6** is unsupported. **io_uring** and similar paths can **bypass typical syscall tracepoints**; Coldstep may surface `io_uring_setup` as a **signal**, not as payload visibility. **Defend mode (Linux 5.19+ with `CONFIG_BPF_LSM` + `bpf` in the kernel's `lsm=` boot chain):** `lsm/io_uring_cmd` (H15) denies IPv4 egress via `IORING_OP_URING_CMD` to non-allowlisted destinations, closing the URING_CMD branch that does not flow through `security_socket_sendmsg()`. `IORING_OP_SEND` / `IORING_OP_SENDMSG` are already covered by the existing `lsm/socket_sendmsg` hook because they go through `sock_sendmsg()`. On older kernels (pre-5.19) or kernels without `CONFIG_BPF_LSM`, the `lsm/io_uring_cmd` hook is silently skipped at load time and no status row is emitted — the cgroup IPv4 hooks remain the primary defense path. Organizational controls remain necessary for audit-grade posture (see **Residual risk** below).
 
 **DNS domain allowlists (defend):** Resolution and BPF `dns_cache` updates are **best-effort**. High cardinality answers, shared IPs, and cache timing can make **allow-by-domain** subtle. Prefer **IPv4 literals or CIDRs** when you need crisp policy; treat domain rules as convenient but higher-ambiguity. The agent may **log a warning** when a single allowed domain resolves to more than **10** distinct IPv4 addresses (warn-only — does not change the effective allowlist). Future digest surfacing may add operator-visible notes without changing allow/deny unless explicitly documented.
 
@@ -73,10 +73,11 @@ Coldstep’s contract has three layers:
 
 | Layer | BPF object (repo) | Role |
 | ----- | ----------------- | ---- |
-| **cgroup** | `bpf/trace_defend.bpf.c` | **`cgroup/connect4`**, **`cgroup/sendmsg4`** — primary IPv4 egress defend for TCP and UDP on the job cgroup. |
-| **LSM** | `bpf/trace_lsm_defend.bpf.c` | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available). |
+| **cgroup** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_defend_cgroup.inc`) | **`cgroup/connect4`**, **`cgroup/sendmsg4`** — primary IPv4 egress defend for TCP and UDP on the job cgroup. |
+| **LSM** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_lsm.inc`) | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available). |
+| **LSM (io_uring)** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_iouring.inc`) | **`lsm/io_uring_cmd`** — H15 defense-in-depth on `IORING_OP_URING_CMD` paths that bypass `security_socket_sendmsg()`. Requires Linux **5.19+** (`security_uring_cmd` BTF) plus `CONFIG_BPF_LSM`; silently skipped on older kernels. |
 
-Both are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
+All three are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
 
 ### File integrity
 
