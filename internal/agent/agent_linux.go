@@ -111,6 +111,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// so the shutdown digest defer can surface IP count + unresolved domains.
 	var defendCompiled policy.CompileResult
 
+	// hasDefend / ioUringRd are forward-declared so the shutdown defer can
+	// surface CoverageReport.QuicObserved and ipv6Enforced state (H19 + H14)
+	// without needing to inspect later-populated locals; they are reassigned
+	// below at the load-attach sites.
+	var hasDefend bool
+	var ioUringRd ringReader
+
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
 		sum.CompatWarnings = compatWarnings
@@ -165,6 +172,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 				} else {
 					shutdownMeta.EventsFileSHA256 = sum
 				}
+				// H19: surface CoverageReport.QuicObserved on the shutdown meta
+				// so downstream consumers can read the per-run UDP/443
+				// "possible-quic" total without scanning every udp JSONL line.
+				ipv6EnforcedShutdown := cfg.Mode == config.ModeDefend && hasDefend
+				shutdownMeta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6EnforcedShutdown, stats.quicObservedTotal())
 				if err := telemetry.AppendJSONL(cfg.EventsLogPath, shutdownMeta, signer); err != nil {
 					slog.Warn("shutdown meta jsonl", "err", err)
 				}
@@ -200,7 +212,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	dnsCache := NewDNSCache()
 	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
 
-	var connRd, udpRd, httpRd, tlsRd, tcpStateRd, ioUringRd ringReader
+	var connRd, udpRd, httpRd, tlsRd, tcpStateRd ringReader
 	defer connRd.Close()
 	defer udpRd.Close()
 	defer httpRd.Close()
@@ -217,7 +229,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
 	var defendObjs defend.DefendObjects
-	var hasDefend bool
 	var hasLSM bool
 	var defendConnectLnk link.Link
 	var defendSendmsgLnk link.Link
@@ -911,7 +922,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 			// "block-all IPv6" posture; we still surface that as enforce
 			// because the hook denies every non-loopback IPv6 destination.
 			ipv6Enforced := cfg.Mode == config.ModeDefend && hasDefend
-			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6Enforced)
+			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6Enforced, 0)
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
 			}

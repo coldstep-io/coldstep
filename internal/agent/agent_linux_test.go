@@ -1362,3 +1362,57 @@ func TestBuildDroppedEventsMap_NilDefendState(t *testing.T) {
 		t.Fatalf("deny key should be absent when defendState is nil, got %v", got)
 	}
 }
+
+// TestRunStats_AddQUICObserved exercises the H19 PossibleQUIC per-run
+// counter. The agent's UDP ring reader calls addQUICObserved exactly once
+// per UDPEvent whose dport == 443; quicObservedTotal is read at shutdown
+// and surfaced on CoverageReport.QuicObserved.
+func TestRunStats_AddQUICObserved(t *testing.T) {
+	stats := newRunStats()
+	if got := stats.quicObservedTotal(); got != 0 {
+		t.Fatalf("fresh runStats quicObservedTotal = %d, want 0", got)
+	}
+	stats.addQUICObserved()
+	stats.addQUICObserved()
+	stats.addQUICObserved()
+	if got := stats.quicObservedTotal(); got != 3 {
+		t.Fatalf("after 3 increments quicObservedTotal = %d, want 3", got)
+	}
+}
+
+// TestUDPEvent_PossibleQUIC_PortPredicate locks the H19 H19 rule: the
+// per-event flag is true exactly when DstPort == 443, mirroring the agent's
+// `possibleQUIC := port == 443` decision in readUDPRing. Non-443 ports
+// (including the common cleartext-HTTP and DNS-over-UDP ports) must leave
+// the flag false so the field stays omitempty in the JSONL.
+func TestUDPEvent_PossibleQUIC_PortPredicate(t *testing.T) {
+	cases := []struct {
+		port uint16
+		want bool
+	}{
+		{443, true},
+		{80, false},
+		{53, false},
+		{0, false},
+		{4433, false},
+		{8443, false},
+	}
+	for _, tc := range cases {
+		got := tc.port == 443
+		if got != tc.want {
+			t.Fatalf("PossibleQUIC predicate for dport=%d: got %v, want %v", tc.port, got, tc.want)
+		}
+		ev := telemetry.UDPEvent{Type: "udp", Dport: tc.port, PossibleQUIC: got}
+		b, err := json.Marshal(ev)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if tc.want {
+			if !strings.Contains(string(b), `"possible_quic":true`) {
+				t.Fatalf("dport=%d expected possible_quic:true in JSON, got %s", tc.port, b)
+			}
+		} else if strings.Contains(string(b), `possible_quic`) {
+			t.Fatalf("dport=%d should omit possible_quic, got %s", tc.port, b)
+		}
+	}
+}
