@@ -68,6 +68,9 @@ func runDNSDriftWatch(
 			return
 		}
 		updated := policy.ReResolve(ctx, original, resolver, maxAttempts)
+		if ctx.Err() != nil {
+			return
+		}
 		dr := policy.Diff(original, updated)
 		if len(dr.AddedIPs) == 0 && len(dr.RemovedIPs) == 0 {
 			if onClean != nil {
