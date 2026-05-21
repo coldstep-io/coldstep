@@ -67,6 +67,7 @@ struct {
 static __always_inline void note_ktls_reserve_failed(void)
 {
 	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!v` returns before deref. */
 	__u32 *v = bpf_map_lookup_elem(&ktls_ringbuf_reserve_failures, &k);
 
 	if (!v)
@@ -107,6 +108,8 @@ int handle_raw_sys_enter_ktls(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 	}
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct ktls_event *ev = bpf_ringbuf_reserve(&ktls_events, sizeof(*ev), 0);
 	if (!ev) {
 		note_ktls_reserve_failed();

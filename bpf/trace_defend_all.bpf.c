@@ -62,5 +62,17 @@ char LICENSE[] SEC("license") = "Dual BSD/GPL";
 _Static_assert(sizeof(struct deny_event) == 46,
 	       "deny_event wire size must match denyEventWireSize=46 in agent_linux.go");
 
+/*
+ * AUDIT(H18): safety annotations (5a/5b/5c/5d/5e/5f) live in the included
+ * translation units below — defend_policy.inc supplies the shared LPM /
+ * ringbuf emit path, while trace_defend_cgroup.inc and trace_lsm_defend_lsm.inc
+ * carry the cgroup IPv4/IPv6 and LSM-specific hooks respectively. Each
+ * `bpf_map_lookup_elem`, `bpf_ringbuf_reserve`, and `bpf_probe_read_*` call
+ * site there has an AUDIT(5x) annotation describing why it is safe (or, for
+ * the LSM `bpf_probe_read_kernel` arms whose return is intentionally not
+ * checked, why the zero-init defense-in-depth pattern is enough). Cgroup
+ * attach cleanup (5g) is audited in `internal/agent/agent_linux.go`.
+ */
+
 #include "trace_defend_cgroup.inc"
 #include "trace_lsm_defend_lsm.inc"
