@@ -377,3 +377,54 @@ func normalizeAllowlistDomains(domains []string) []string {
 func NormalizeDomainsFromRaw(raw string) []string {
 	return normalizeAllowlistDomains(splitFields(raw))
 }
+
+// DriftReport summarizes the difference between two CompileResult snapshots
+// of the same domain allowlist. AddedIPs / RemovedIPs are deterministic
+// (sorted ascending) so the caller can emit them in a stable JSONL payload.
+//
+// H16 DNS allowlist trust hardening: emitted as warning-only telemetry by the
+// background re-resolution goroutine in internal/agent. Drift does NOT trigger
+// a live BPF policy update — mid-job expansion is intentionally out of scope
+// to avoid TOCTOU races where a freshly-resolved CDN tenant IP is added to
+// the enforce set between the lookup and the egress attempt.
+type DriftReport struct {
+	AddedIPs   []string  // dotted-quad IPv4 addresses present in updated but not original
+	RemovedIPs []string  // dotted-quad IPv4 addresses present in original but not updated
+	CheckedAt  time.Time // wall-clock time the re-resolution finished
+}
+
+// ReResolve re-runs CompileDomainAllowlist with the same domain list as
+// the original compile and returns the new snapshot for comparison via Diff.
+// Concurrency and per-lookup timeout limits match the original compile path
+// (set by CompileDomainAllowlist itself via the package-level constants).
+// resolver may be nil (defaults to net.DefaultResolver.LookupIP); maxAttempts
+// is clamped to ≥1 by CompileDomainAllowlist.
+func ReResolve(ctx context.Context, original CompileResult, resolver LookupIPFunc, maxAttempts int) CompileResult {
+	return CompileDomainAllowlist(ctx, original.Domains, resolver, maxAttempts)
+}
+
+// Diff returns the set difference between original and updated allowlist
+// IPv4 resolutions. IPv6 diffing is deferred until H14 lands. Output slices
+// are sorted ascending so the resulting DriftReport is byte-stable for
+// deterministic JSONL emission. CheckedAt is set to time.Now().
+func Diff(original, updated CompileResult) DriftReport {
+	added := make([]string, 0)
+	removed := make([]string, 0)
+	updated.AllowedIPv4.ForEach(func(k [4]byte) {
+		if !original.AllowedIPv4.Contains(net.IP(k[:])) {
+			added = append(added, net.IP(k[:]).String())
+		}
+	})
+	original.AllowedIPv4.ForEach(func(k [4]byte) {
+		if !updated.AllowedIPv4.Contains(net.IP(k[:])) {
+			removed = append(removed, net.IP(k[:]).String())
+		}
+	})
+	slices.Sort(added)
+	slices.Sort(removed)
+	return DriftReport{
+		AddedIPs:   added,
+		RemovedIPs: removed,
+		CheckedAt:  time.Now(),
+	}
+}

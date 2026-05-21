@@ -1191,7 +1191,8 @@ func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 	hasStale := staleAge > 0
 	hasEntryCount := in.AllowlistEntryCount > 0 && isBlockingDigestMode(in.DefendMode)
 	hasContactSummary := isBlockingDigestMode(in.DefendMode) && len(in.AllowlistDomains) > 0
-	if !hasUnresolved && !hasWildcard && !hasStale && !hasEntryCount && !hasContactSummary {
+	hasDrift := in.DNSDriftCount > 0
+	if !hasUnresolved && !hasWildcard && !hasStale && !hasEntryCount && !hasContactSummary && !hasDrift {
 		return
 	}
 
@@ -1219,6 +1220,12 @@ func writeAllowlistTrust(b *strings.Builder, in DigestInput) {
 		b.WriteString(fmt.Sprintf(
 			"> ⚠️ **DNS allowlist may be stale** — compiled %.0f minutes ago. DNS TTLs may have expired.\n\n",
 			staleAge.Minutes()))
+	}
+
+	if hasDrift {
+		b.WriteString(fmt.Sprintf(
+			"> ⚠️ **DNS drift detected** — allowlist IPs changed %d time(s) during this run. Enforcement was not updated mid-job.\n\n",
+			in.DNSDriftCount))
 	}
 
 	if hasEntryCount {

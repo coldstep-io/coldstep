@@ -96,6 +96,14 @@ type runStats struct {
 	allowlistUnresolvedDomains   []string
 	allowlistWildcardRiskDomains []string
 
+	// dnsDriftN counts the number of times the H16 background re-resolution
+	// goroutine observed IPv4 drift (added or removed) between the startup
+	// snapshot and a periodic re-resolution. Each non-empty DriftReport
+	// bumps this counter by 1. Live BPF policy is NOT updated on drift —
+	// the counter is purely advisory and surfaces in the shutdown digest as
+	// a "DNS drift detected" warning.
+	dnsDriftN int
+
 	// dstDomainCounts maps observed FQDN → connection-event count across TCP +
 	// UDP egress (P1-1 6e). Empty FQDNs are ignored.
 	dstDomainCounts map[string]int
@@ -826,6 +834,22 @@ func (s *runStats) allowlistSnapshot() (compileTime time.Time, ipCount int, doma
 		slices.Clone(s.allowlistDomains),
 		slices.Clone(s.allowlistUnresolvedDomains),
 		slices.Clone(s.allowlistWildcardRiskDomains)
+}
+
+// addDNSDrift bumps the H16 drift-observation counter. Called by the
+// background re-resolution goroutine's onDrift closure.
+func (s *runStats) addDNSDrift() {
+	s.mu.Lock()
+	s.dnsDriftN++
+	s.mu.Unlock()
+}
+
+// dnsDriftTotal returns the count of distinct drift observations during the
+// run. Zero when DNS was stable or re-resolution never fired.
+func (s *runStats) dnsDriftTotal() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.dnsDriftN
 }
 
 // incDomainCount bumps the per-FQDN observation counter (P1-1 6e). No-op for

@@ -3,6 +3,7 @@ package telemetry
 import (
 	"encoding/json"
 	"sync"
+	"time"
 )
 
 // SchemaVersion is bumped when JSONL field shapes change incompatibly.
@@ -587,6 +588,31 @@ type BPFTamperEvent struct {
 	Expected string `json:"expected,omitempty"`
 	Actual   string `json:"actual,omitempty"`
 	Sig      string `json:"sig,omitempty"`
+}
+
+// EventTypeDNSDrift is the JSONL discriminator for DNSDriftEvent.
+const EventTypeDNSDrift = "dns_drift"
+
+// DNSDriftEvent is one JSONL record emitted when the periodic allowlist
+// re-resolution observes IPv4 addresses changing relative to the startup
+// compile. Drift is warning-only — the live BPF enforce policy is intentionally
+// NOT updated mid-run (H16 DNS allowlist trust hardening). The event lets
+// operators see that DNS TTLs flipped CDN tenants mid-job without exposing the
+// enforcement path to TOCTOU expansion races.
+//
+// AddedIPs and RemovedIPs are dotted-quad strings, sorted ascending by
+// policy.Diff. DomainCount snapshots the size of the allowlist domain list
+// at the time of the re-resolution (the same input to CompileDomainAllowlist).
+// CheckedAt records when the re-resolution finished; Timestamp/TS is the
+// JSONL emission time as with other event types.
+type DNSDriftEvent struct {
+	Type        string    `json:"type"` // "dns_drift"
+	TS          string    `json:"ts"`
+	AddedIPs    []string  `json:"added_ips,omitempty"`
+	RemovedIPs  []string  `json:"removed_ips,omitempty"`
+	DomainCount int       `json:"domain_count"`
+	CheckedAt   time.Time `json:"checked_at"`
+	Sig         string    `json:"sig,omitempty"`
 }
 
 // SeqGen assigns monotonic per-run sequence numbers in userspace.
