@@ -264,6 +264,7 @@ func buildDigestInput(
 	in.WildcardRiskDomains = wildcardRisk
 	in.AllowlistCompileTime = compileTime
 	in.AllowlistEntryCount = defendState.allowlistSize
+	in.DNSDriftCount = stats.dnsDriftTotal()
 	in.DomainContactCounts = stats.snapshotDomainCounts()
 
 	return in
