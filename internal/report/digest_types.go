@@ -240,6 +240,20 @@ type DigestInput struct {
 	// pure block-all IPv6 posture.
 	IPv6ConnectObserved uint32
 	IPv6SendmsgObserved uint32
+	// IPv6EventCount is the H7 detect-mode counter: one increment per
+	// non-loopback, non-link-local IPv6 ringbuf record decoded by
+	// readIPv6ObsRing. Always 0 in defend mode (the traceipv6 object is
+	// not loaded there — defend's own IPv6 cgroup hooks attach instead and
+	// surface via IPv6Connect/SendmsgObserved). When non-zero in detect
+	// mode, the digest renders an `IPv6 egress detected (not enforced)`
+	// warning so operators see the IPv4-only enforcement gap before
+	// switching to defend.
+	IPv6EventCount int
+	// IPv6RingbufReserveFailures counts ringbuf reserve failures on the
+	// H7 ipv6_obs_events channel — non-zero means at least one IPv6
+	// connect/sendmsg fired with a full ringbuf, so the event count is a
+	// lower bound. Detect-mode-only.
+	IPv6RingbufReserveFailures int
 	// DefendIPv6AllowlistSize is the number of /128 entries programmed
 	// into the BPF allowed_ipv6 LPM trie at agent startup. Used by the
 	// digest to distinguish two Phase 2 defend postures:

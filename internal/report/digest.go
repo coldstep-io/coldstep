@@ -48,12 +48,18 @@ func droppedTotal(in DigestInput) int {
 }
 
 // ipv6EgressObserved returns the total non-loopback IPv6 egress attempts
-// observed by the cgroup/connect6 + cgroup/sendmsg6 hooks. Non-zero means
-// IPv6 destinations were contacted during the run. Under Phase 2, defend
-// mode enforces on these — see ipv6DefendActive for the predicate that
-// chooses the ✅/⚠️ verdict.
+// observed during the run. Two sources feed it:
+//   - IPv6Connect/SendmsgObserved: per-CPU counters from the defend object's
+//     cgroup/connect6+sendmsg6 hooks (defend mode only).
+//   - IPv6EventCount: per-event ringbuf records from the H7 traceipv6 object
+//     attached in detect mode (cgroup/connect6+sendmsg6, observe-only).
+//
+// At most one of those sources contributes per run because the H7 object is
+// not loaded in defend mode (defend's own IPv6 hooks attach to the same
+// cgroup, and cgroup hook attach is single-program).
 func ipv6EgressObserved(in DigestInput) uint32 {
-	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved
+	// #nosec G115 -- IPv6EventCount is a monotonic ringbuf-event counter bounded by per-job throughput; uint32 conversion is safe in practice. //nolint:gosec
+	return in.IPv6ConnectObserved + in.IPv6SendmsgObserved + uint32(in.IPv6EventCount)
 }
 
 // ipv6DefendActive reports whether Phase 2 IPv6 enforcement is fully
@@ -67,14 +73,27 @@ func ipv6DefendActive(in DigestInput) bool {
 	return isBlockingDigestMode(in.DefendMode) && in.DefendIPv6AllowlistSize > 0
 }
 
-// ipv6HooksLoaded reports whether the IPv6 enforcement hooks
-// (cgroup/connect6, cgroup/sendmsg6) are loaded for this run. Today the
-// IPv6 hooks are only attached in defend mode — detect mode never attaches
-// them, so detect mode is treated as "no IPv6 hooks". When the runner has
-// IPv6 connectivity (MetaEvent.RunnerHasIPv6) and no IPv6 hooks are loaded,
-// the verdict is downgraded so the headline reflects the partial coverage.
+// ipv6HooksLoaded reports whether IPv6 cgroup hooks
+// (cgroup/connect6, cgroup/sendmsg6) are loaded for this run.
+//
+// Two paths satisfy the predicate:
+//   - Defend mode: the defend object attaches enforcing hooks (P2-1).
+//   - Detect mode with the H7 traceipv6 hook attached: the BPFStatus row
+//     `cgroup/connect6+sendmsg6 (ipv6_obs)` is present and OK.
+//
+// When the runner has IPv6 connectivity (MetaEvent.RunnerHasIPv6) and no
+// IPv6 hooks are loaded, the verdict is downgraded so the headline
+// reflects the partial coverage.
 func ipv6HooksLoaded(in DigestInput) bool {
-	return isBlockingDigestMode(in.DefendMode)
+	if isBlockingDigestMode(in.DefendMode) {
+		return true
+	}
+	for _, row := range in.BPF {
+		if row.Name == "cgroup/connect6+sendmsg6 (ipv6_obs)" && row.OK {
+			return true
+		}
+	}
+	return false
 }
 
 // verdictEmoji returns ✅ / ⚠️ / 🚨 for the headline. Mirrors the prior
@@ -174,13 +193,23 @@ func writeHeader(b *strings.Builder, in DigestInput) {
 	if hasPartialCoverageSignals(in) {
 		b.WriteString("> ⚠️ Partial coverage — see Coverage block below.\n\n")
 	}
+	// H7: detect-mode IPv6 egress visibility line. Fires only when the H7
+	// traceipv6 hook captured ringbuf events (defend mode reports via the
+	// triage row below — its IPv6 verdict is conditional on the LPM trie
+	// state, so the flat "not enforced" line would be misleading there).
+	if in.IPv6EventCount > 0 && !isBlockingDigestMode(in.DefendMode) {
+		fmt.Fprintf(b, "> ⚠️ **IPv6 egress detected (not enforced)** — %d connection(s) observed\n\n", in.IPv6EventCount)
+	}
 }
 
 // ipv6CoverageCell returns the IPv6 row text in the Coverage scope table.
 // IPv6 state is per-run: defend with a populated allowed_ipv6 trie is "✓
-// gated"; defend without is "✓ gated (block-all)"; detect mode is "✗ not
-// observed" by default but flips to "⚠ observed (no enforcement)" when
-// the cgroup/connect6+sendmsg6 hooks reported egress.
+// gated"; defend without is "✓ gated (block-all)"; detect mode with the
+// H7 observe-only hook attached is "✓ observed" (no events) or "⚠
+// observed (no enforcement)" (events fired). When IPv6 hooks failed to
+// load and the runner advertises IPv6 connectivity, the row flips to
+// "✗ not observed (runner has IPv6 — coverage gap)" so the digest names
+// the blind spot.
 func ipv6CoverageCell(in DigestInput) string {
 	switch {
 	case ipv6DefendActive(in):
@@ -189,6 +218,8 @@ func ipv6CoverageCell(in DigestInput) string {
 		return "✓ gated (defend block-all — empty allowed_ipv6)"
 	case ipv6EgressObserved(in) > 0:
 		return "⚠ observed (detect — no enforcement)"
+	case ipv6HooksLoaded(in):
+		return "✓ observed (detect — H7 observe-only hook, no events)"
 	case in.RunnerHasIPv6:
 		return "✗ not observed (runner has IPv6 — coverage gap)"
 	default:
@@ -425,10 +456,23 @@ func buildTriageRows(in DigestInput) [][2]string {
 			badge = "⚠️"
 			suffix = "detect mode — IPv6 visibility only, Phase 2 enforcement runs in defend"
 		}
+		// Per-source breakdown. The two counter families are mutually exclusive
+		// in production (defend object's per-CPU connect/sendmsg counters in
+		// defend mode; H7 ringbuf events in detect mode) but the digest tolerates
+		// both being non-zero for replay / tests.
+		breakdown := fmt.Sprintf("connect=%d sendmsg=%d", in.IPv6ConnectObserved, in.IPv6SendmsgObserved)
+		if in.IPv6EventCount > 0 {
+			if in.IPv6ConnectObserved == 0 && in.IPv6SendmsgObserved == 0 {
+				breakdown = fmt.Sprintf("%d ringbuf event(s)", in.IPv6EventCount)
+			} else {
+				breakdown = fmt.Sprintf("connect=%d sendmsg=%d, %d ringbuf event(s)",
+					in.IPv6ConnectObserved, in.IPv6SendmsgObserved, in.IPv6EventCount)
+			}
+		}
 		rows = append(rows, [2]string{
 			"**IPv6 egress detected**",
-			fmt.Sprintf("%s **%d** non-loopback IPv6 destinations (connect=%d sendmsg=%d) — %s",
-				badge, n, in.IPv6ConnectObserved, in.IPv6SendmsgObserved, suffix),
+			fmt.Sprintf("%s **%d** non-loopback IPv6 destinations (%s) — %s",
+				badge, n, breakdown, suffix),
 		})
 	}
 
@@ -580,6 +624,12 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 			label = "**🚨 ipv6 sendmsg6 denied (defend has empty allowed_ipv6 — block-all)**"
 		}
 		fmt.Fprintf(b, "| %s | %d |\n", label, in.IPv6SendmsgObserved)
+	}
+	if in.IPv6EventCount > 0 {
+		fmt.Fprintf(b, "| **⚠️ ipv6 egress events (detect — observe-only, IPv4-only enforcement)** | %d |\n", in.IPv6EventCount)
+	}
+	if in.IPv6RingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **ipv6_obs_events ringbuf reserve failures** | %d |\n", in.IPv6RingbufReserveFailures)
 	}
 
 	// --- processes ---

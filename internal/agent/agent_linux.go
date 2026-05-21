@@ -29,6 +29,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
+	"github.com/coldstep-io/coldstep/internal/bpf/traceipv6"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
@@ -758,6 +759,49 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 	}
 
+	// H7: detect-mode IPv6 observe-only hooks. Loaded only when cfg.Mode is
+	// not defend — defend's own cgroup/connect6+sendmsg6 programs already
+	// attach there (and cgroup hook attach is single-program by default).
+	// Attach failures (very old kernels lacking cgroup/connect6 support, or
+	// missing /sys/fs/cgroup mount) are best-effort: the agent continues
+	// without IPv6 visibility, the digest's coverage scope reflects the gap.
+	var ipv6ObsRd ringReader
+	defer ipv6ObsRd.Close()
+	var ipv6ObsObjs *traceipv6.Traceipv6Objects
+	var ipv6ObsConnectLnk, ipv6ObsSendmsgLnk link.Link
+	if cfg.Mode != config.ModeDefend {
+		cgPath := cfg.CgroupAttachPath
+		if cgPath == "" {
+			cgPath = "/sys/fs/cgroup"
+		}
+		if r, o, c, s, err := startIPv6ObsTrace(cgPath); err != nil {
+			slog.Info("ipv6 observe-only trace disabled", "err", err)
+			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: false, Detail: bpfDetail(err)})
+		} else {
+			ipv6ObsRd.R = r
+			ipv6ObsObjs = o
+			ipv6ObsConnectLnk = c
+			ipv6ObsSendmsgLnk = s
+			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: true})
+			slog.Info("tracing IPv6 egress (observe-only)")
+			defer func() {
+				if ipv6ObsObjs != nil {
+					stats.setIPv6RingbufReserveFailures(readUint32PerCPUArraySum(ipv6ObsObjs.Ipv6ObsRingbufReserveFailures, "ipv6_obs_ringbuf_reserve_failures"))
+				}
+				ipv6ObsRd.Close()
+				if ipv6ObsSendmsgLnk != nil {
+					_ = ipv6ObsSendmsgLnk.Close()
+				}
+				if ipv6ObsConnectLnk != nil {
+					_ = ipv6ObsConnectLnk.Close()
+				}
+				if ipv6ObsObjs != nil {
+					_ = ipv6ObsObjs.Close()
+				}
+			}()
+		}
+	}
+
 	// Attach bpf() audit tracing only after other BPF collections finish loading.
 	// Otherwise coldstep's own bpf(2) syscalls during object load can fill the small
 	// audit ringbuf before readBPFAuditRing starts, dropping later canary traffic (e.g. bpftool).
@@ -834,6 +878,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		forkRd.Close()
 		fsRd.Close()
 		ktlsRd.Close()
+		ipv6ObsRd.Close()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
@@ -877,6 +922,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if ktlsRd.R != nil {
+		readerCount++
+	}
+	if ipv6ObsRd.R != nil {
 		readerCount++
 	}
 	if hasDefend {
@@ -1072,6 +1120,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer, ktlsTr))
+		}()
+	}
+	if ipv6ObsRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readIPv6ObsRing(runCtx, cfg, ipv6ObsRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 

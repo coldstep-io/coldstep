@@ -1054,3 +1054,103 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 		}
 	}
 }
+
+// ipv6ObsEventWireSize must match the _Static_assert in
+// bpf/trace_ipv6_obs.bpf.c (44 bytes). The layout is frozen:
+//
+//	daddr [16] + dport [2] + _pad0 [2] + pid [4] + comm [16] + hook [1] + _pad1 [3] = 44.
+const ipv6ObsEventWireSize = 44
+
+// ipv6ObsEventWire is the userspace mirror of struct ipv6_obs_event from
+// bpf/trace_ipv6_obs.bpf.c. Wire-format only — never written; decoded with
+// binary.LittleEndian via binary.Read. Dport is a [2]byte rather than a
+// uint16 so the network-order bytes are preserved through the LE decode;
+// it is converted to a host-order uint16 with binary.BigEndian.
+type ipv6ObsEventWire struct {
+	Daddr [16]byte
+	Dport [2]byte // network byte order — decode with binary.BigEndian
+	Pad0  [2]byte
+	PID   uint32
+	Comm  [16]byte
+	Hook  uint8
+	Pad1  [3]byte
+}
+
+// ipv6ObsHookName maps the BPF hook tag byte (0/1) to the JSONL "type"
+// discriminator. Unknown values fall through to EventTypeIPv6TCP — the BPF
+// program only emits 0 and 1, so a non-canonical value is treated as a
+// connect-class event for forensic continuity rather than dropped.
+func ipv6ObsHookName(hook uint8) string {
+	if hook == 1 {
+		return telemetry.EventTypeIPv6UDP
+	}
+	return telemetry.EventTypeIPv6TCP
+}
+
+// readIPv6ObsRing drains the H7 traceipv6 ringbuf. One record per
+// non-loopback, non-link-local IPv6 cgroup/connect6 or cgroup/sendmsg6;
+// loopback and link-local are filtered in BPF. Bumps stats.IPv6EventCount
+// and emits a telemetry.IPv6Event JSONL line per record.
+//
+// Defend mode does not load the traceipv6 object (its own defend IPv6
+// hooks already attach to the same cgroup), so this reader is detect-mode-
+// only — running it in defend mode would silently observe zero events.
+func readIPv6ObsRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (ipv6_obs)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		if len(record.RawSample) < ipv6ObsEventWireSize {
+			stats.addDropped("ipv6_obs_decode")
+			slog.Warn("decode ipv6_obs", "len", len(record.RawSample), "want", ipv6ObsEventWireSize)
+			continue
+		}
+
+		var wire ipv6ObsEventWire
+		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &wire); err != nil {
+			stats.addDropped("ipv6_obs_decode")
+			slog.Warn("decode ipv6_obs", "err", err)
+			continue
+		}
+
+		stats.addIPv6Event()
+		comm := telemetry.SanitizeField(nullTermStr(wire.Comm[:]), 16)
+		dport := binary.BigEndian.Uint16(wire.Dport[:])
+		dstIP := net.IP(wire.Daddr[:]).String()
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			n := seq.Next()
+			ev := telemetry.IPv6Event{
+				Type:  ipv6ObsHookName(wire.Hook),
+				TS:    ts,
+				Seq:   n,
+				PID:   wire.PID,
+				Comm:  comm,
+				Dst:   dstIP,
+				Dport: dport,
+				Note:  telemetry.IPv6NotEnforcedNote,
+			}
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("ipv6_obs_jsonl")
+				slog.Warn("events jsonl (ipv6_obs)", "err", werr)
+			}
+		}
+	}
+}
