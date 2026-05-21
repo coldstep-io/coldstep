@@ -42,6 +42,8 @@ static __always_inline int handle_tcp_obs_connect(__u32 fd32, unsigned long sock
 				__u32 tgid = (__u32)(pt >> 32);
 				__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
 
+				/* AUDIT(5a): update failure surfaced via percpu counter;
+				 * LRU map evicts stale entries automatically. */
 				if (bpf_map_update_elem(&connect4_by_tgid_fd, &mkey, &tup, BPF_ANY))
 					note_connect4_tuple_update_failed();
 			}
@@ -80,6 +82,8 @@ static __always_inline int handle_tcp_obs_connect6(__u32 fd32, unsigned long soc
 			__u32 tgid = (__u32)(pt >> 32);
 			__u64 mkey = ((__u64)tgid << 32) | (__u64)fd32;
 
+			/* AUDIT(5a): update failure surfaced via percpu counter;
+			 * LRU map evicts stale entries automatically. */
 			if (bpf_map_update_elem(&connect4_by_tgid_fd, &mkey, &tup, BPF_ANY))
 				note_connect4_tuple_update_failed();
 		}

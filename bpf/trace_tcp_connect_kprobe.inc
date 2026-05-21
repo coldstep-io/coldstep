@@ -57,7 +57,12 @@ int kprobe_tcp_v4_connect(struct pt_regs *ctx)
 	__u64 pt = bpf_get_current_pid_tgid();
 	__u8 v = 1;
 	/* BPF_NOEXIST avoids stomping a prior in-flight entry from a nested
-	 * call on the same task, which would mismatch the eventual return. */
+	 * call on the same task, which would mismatch the eventual return.
+	 * The return is intentionally ignored: a NOEXIST collision is a
+	 * legitimate skip (nested call), and an LRU full → silent-evict
+	 * outcome only loses an in-flight marker (worst case: missing
+	 * connect_result_event correlation; the entry connect_event is
+	 * untouched). */
 	bpf_map_update_elem(&tcp_v4_connect_inflight, &pt, &v, BPF_NOEXIST);
 	return 0;
 }
@@ -66,12 +71,15 @@ SEC("kretprobe/tcp_v4_connect")
 int kretprobe_tcp_v4_connect(struct pt_regs *ctx)
 {
 	__u64 pt = bpf_get_current_pid_tgid();
+	/* AUDIT(5a): null checked — `!seen` returns before any deref. */
 	__u8 *seen = bpf_map_lookup_elem(&tcp_v4_connect_inflight, &pt);
 
 	if (!seen)
 		return 0;
 	bpf_map_delete_elem(&tcp_v4_connect_inflight, &pt);
 
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and
+	 * submit is the `!ev` early return (no slot held). Submit unconditional. */
 	struct connect_result_event *ev =
 		bpf_ringbuf_reserve(&connect_events, sizeof(*ev), 0);
 	if (!ev) {
