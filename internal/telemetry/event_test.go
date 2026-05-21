@@ -266,6 +266,74 @@ func TestTCPStateName(t *testing.T) {
 	}
 }
 
+// TestUDPEventPossibleQUIC_OmitEmpty verifies the H19 PossibleQUIC flag
+// rides on UDPEvent as an omitempty bool — every emitter must be able to
+// leave the field zero without it appearing in the JSONL line. The flag is
+// rendered as `"possible_quic":true` only when the agent sets it for a
+// destination port-443 event.
+func TestUDPEventPossibleQUIC_OmitEmpty(t *testing.T) {
+	t.Parallel()
+	ev := UDPEvent{
+		Type:      "udp",
+		TS:        "2026-05-20T00:00:00Z",
+		Seq:       1,
+		PID:       100,
+		TGID:      100,
+		ThreadID:  100,
+		Comm:      "curl",
+		Dst:       "1.2.3.4",
+		Dport:     80,
+		Direction: "egress",
+		Policy:    "allowed",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`possible_quic`)) {
+		t.Fatalf("PossibleQUIC=false should be omitted, got %s", b)
+	}
+
+	ev.Dport = 443
+	ev.PossibleQUIC = true
+	b, err = json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"possible_quic":true`)) {
+		t.Fatalf("PossibleQUIC=true should appear, got %s", b)
+	}
+	if !bytes.Contains(b, []byte(`"dport":443`)) {
+		t.Fatalf("dport should still serialize, got %s", b)
+	}
+}
+
+// TestCoverageReportQuicObserved_OmitEmpty pins H19 wiring of
+// CoverageReport.QuicObserved. The field is the per-run total of
+// UDPEvent.PossibleQUIC=true records and is omitted from JSON when zero so
+// older runs (or runs without any UDP/443 egress) don't carry a stray
+// "quic_observed":0 in their MetaEvent.coverage.
+func TestCoverageReportQuicObserved_OmitEmpty(t *testing.T) {
+	t.Parallel()
+	cr := CoverageReport{IPv4TCP: true, IPv4UDPSendmsg: true, TLSSNI: "none"}
+	b, err := json.Marshal(cr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(b, []byte(`quic_observed`)) {
+		t.Fatalf("zero QuicObserved should be omitted, got %s", b)
+	}
+
+	cr.QuicObserved = 7
+	b, err = json.Marshal(cr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"quic_observed":7`)) {
+		t.Fatalf("expected quic_observed:7, got %s", b)
+	}
+}
+
 // TestCoverageReportJSON locks the on-disk shape of the H5 telemetry stub.
 // The field set ships at v0.2.9 even though QUICHTTP3 is wired as false
 // and IPv6 is a tri-state string (H14: "off" / "observe-only" / "enforce")

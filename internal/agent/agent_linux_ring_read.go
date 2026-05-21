@@ -625,6 +625,10 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 		}, stats)
 
 		ipStr := ip.String()
+		possibleQUIC := port == 443
+		if possibleQUIC {
+			stats.addQUICObserved()
+		}
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
 			n := seq.Next()
@@ -633,8 +637,9 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 				PID: tgid, TGID: tgid, ThreadID: tid,
 				Comm: comm, Dst: ipStr, Dport: port,
 				DatagramLen: dgramLen, FQDN: fqdn, FQDNProvenance: fqdnProv,
-				Direction: "egress",
-				Policy:    string(cl),
+				Direction:    "egress",
+				Policy:       string(cl),
+				PossibleQUIC: possibleQUIC,
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
 			jsonlMu.Unlock()

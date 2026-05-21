@@ -135,6 +135,12 @@ type CoverageReport struct {
 	IPv4UDPSendmsg bool   `json:"ipv4_udp_sendmsg"`
 	IPv6           string `json:"ipv6"`
 	QUICHTTP3      bool   `json:"quic_http3"`
+	// QuicObserved counts UDPEvent records where PossibleQUIC was set on
+	// this run (H19). It is the machine-readable twin of the digest's
+	// "QUIC/HTTP3 (UDP 443) — N events observed" coverage row; non-zero
+	// means port-443 UDP egress was seen and flagged as likely QUIC/HTTP3.
+	// Heuristic only — no QUIC framing is inspected.
+	QuicObserved uint64 `json:"quic_observed,omitempty"`
 	// TLSSNI is "full" when the TLS ClientHello sniff probe attached and the
 	// tls_sni feature gate is on, "none" otherwise. "partial" is reserved for
 	// future probe variants that capture some-but-not-all SNI sources.
@@ -331,7 +337,15 @@ type UDPEvent struct {
 	FQDNProvenance string `json:"fqdn_provenance,omitempty"`
 	Direction      string `json:"direction"`
 	Policy         string `json:"policy"`
-	Sig            string `json:"sig,omitempty"`
+	// PossibleQUIC marks UDP egress on destination port 443 as a likely
+	// QUIC/HTTP3 flow (H19). The flag is a userspace heuristic — full QUIC
+	// ClientHello parsing requires QUIC crypto decryption and is out of
+	// scope (same architectural limit as ECH). Operators reading the JSONL
+	// can use the flag to triage "what fell into the QUIC visibility gap"
+	// without re-deriving the predicate per consumer. The accompanying
+	// per-run total is surfaced on CoverageReport.QuicObserved.
+	PossibleQUIC bool   `json:"possible_quic,omitempty"`
+	Sig          string `json:"sig,omitempty"`
 }
 
 // HTTPEvent is one JSONL record for cleartext HTTP/1.x request prefix (BPF-capped).

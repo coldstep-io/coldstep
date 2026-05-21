@@ -306,6 +306,14 @@ type DigestInput struct {
 	// this run, classified as likely QUIC/HTTP3 flows. The payload is encrypted
 	// and not inspected — non-zero surfaces the visibility gap in the KPI table.
 	QUICCandidateCount int
+	// QuicObservedCount mirrors telemetry.CoverageReport.QuicObserved — the
+	// per-run total of UDPEvent records whose PossibleQUIC flag was set
+	// (destination port 443). H19: surfaced in the coverage scope table as
+	// the heuristic "QUIC/HTTP3 (UDP 443) — N events observed" cell and in
+	// the technical-details "possible-quic" note when non-zero. Distinct
+	// from QUICCandidateCount, which is the older non-loopback-IPv4-only
+	// predicate.
+	QuicObservedCount uint64
 	// TCPDNSResponsesObserved counts TCP DNS length-framed replies where the BPF
 	// path could inspect the QR bit (trace_dns.bpf.c read/recvfrom sys_exit).
 	TCPDNSResponsesObserved int

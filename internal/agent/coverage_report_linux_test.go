@@ -20,14 +20,16 @@ func TestBuildCoverageReport(t *testing.T) {
 	const tlsSniffHook = "raw_tp/sys_enter (connect, sendto, http sniff, tls)"
 
 	cases := []struct {
-		name         string
-		bpf          []telemetry.BPFStatus
-		tlsGate      bool
-		ioUring      bool
-		ipv6Enforced bool
-		wantTLSSNI   string
-		wantIoUring  bool
-		wantIPv6     string
+		name             string
+		bpf              []telemetry.BPFStatus
+		tlsGate          bool
+		ioUring          bool
+		ipv6Enforced     bool
+		quicObserved     uint64
+		wantTLSSNI       string
+		wantIoUring      bool
+		wantIPv6         string
+		wantQuicObserved uint64
 	}{
 		{
 			name:        "default detect — gate off",
@@ -84,11 +86,22 @@ func TestBuildCoverageReport(t *testing.T) {
 			wantIoUring:  false,
 			wantIPv6:     telemetry.CoverageIPv6Enforce,
 		},
+		{
+			name:             "quic observed propagates to report (H19)",
+			bpf:              []telemetry.BPFStatus{{Name: tlsSniffHook, OK: true}},
+			tlsGate:          false,
+			ioUring:          false,
+			quicObserved:     7,
+			wantTLSSNI:       "none",
+			wantIoUring:      false,
+			wantIPv6:         telemetry.CoverageIPv6Off,
+			wantQuicObserved: 7,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := buildCoverageReport(tc.bpf, tc.tlsGate, tc.ioUring, tc.ipv6Enforced)
+			got := buildCoverageReport(tc.bpf, tc.tlsGate, tc.ioUring, tc.ipv6Enforced, tc.quicObserved)
 			if got == nil {
 				t.Fatal("expected non-nil CoverageReport")
 			}
@@ -109,6 +122,9 @@ func TestBuildCoverageReport(t *testing.T) {
 			}
 			if got.IoUring != tc.wantIoUring {
 				t.Errorf("IoUring = %v, want %v", got.IoUring, tc.wantIoUring)
+			}
+			if got.QuicObserved != tc.wantQuicObserved {
+				t.Errorf("QuicObserved = %d, want %d", got.QuicObserved, tc.wantQuicObserved)
 			}
 		})
 	}

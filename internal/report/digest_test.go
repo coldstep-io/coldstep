@@ -489,6 +489,29 @@ func TestBuildDetectMarkdown_CoverageScopeTable_QUICRowFlipsOnCandidate(t *testi
 	}
 }
 
+// TestBuildDetectMarkdown_CoverageScopeTable_QUICRowH19 locks the H19 cell
+// wording when QuicObservedCount is set. QuicObservedCount takes precedence
+// over the older QUICCandidateCount predicate so a single run carries the
+// heuristic phrasing in both the coverage row and the technical-details
+// "possible-quic" note.
+func TestBuildDetectMarkdown_CoverageScopeTable_QUICRowH19(t *testing.T) {
+	t.Parallel()
+	md := BuildDetectMarkdown(DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "exec", OK: true}},
+		QuicObservedCount: 12,
+	})
+	for _, needle := range []string{
+		"| QUIC / HTTP3 | ⚠️ QUIC/HTTP3 (UDP 443) — 12 events observed (heuristic, not enforced) |",
+		"**note: possible-quic**",
+		"heuristic only",
+		"out of scope",
+	} {
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_NoForbiddenGFMTags(t *testing.T) {
 	// Job Summaries render GFM; <font>, <p align>, <sub>, <center> are not in
 	// the allowlist and would appear as literal text. This guards against

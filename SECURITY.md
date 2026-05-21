@@ -28,7 +28,7 @@ coldstep observes and enforces a **deliberately scoped** subset of egress. Trust
 | IPv4 UDP (`write` on connected socket) | partial | ✓ | `write(2)` on a connected UDP socket may not emit a per-message event; cgroup `sendmsg4` still enforces |
 | IPv6 TCP (`connect6`) | ✗ | ✓ | Defend mode attaches `cgroup/connect6` + AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0). `::1` (loopback) and `fe80::/10` (link-local) always bypass. Detect mode does not observe IPv6. |
 | IPv6 UDP (`sendmsg6`) | ✗ | ✓ | Defend mode attaches `cgroup/sendmsg6` against the same `allowed_ipv6` trie. Detect mode does not observe IPv6. |
-| QUIC / HTTP3 (UDP/443) | UDP event only | ✓ (port/IP) | Inner QUIC framing not inspected; SNI not extracted |
+| QUIC / HTTP3 (UDP/443) | heuristic observation only (UDP port 443 flagged as `possible-quic`; not enforced) | ✓ (port/IP) | Inner QUIC framing not inspected; SNI not extracted. The H19 heuristic sets `possible_quic:true` on the underlying `udp` JSONL event and increments `MetaEvent.coverage.quic_observed`; full QUIC ClientHello parsing requires QUIC crypto decryption and is out of scope. |
 | TLS via io_uring | partial (enhanced) | ✗ | io_uring detection gated behind `detect-profile: enhanced` (raw_tp/io_uring_submit_sqe); the sysctl `io-uring-disable` remains the primary defense |
 | Unix domain sockets | ✗ | ✗ | AF_UNIX not tracked |
 | Docker-in-Docker inner containers | ✗ | ✗ | Separate cgroup/network namespace |
