@@ -9,6 +9,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.3.0] — 2026-05-20
+
+### Added
+- **H7**: IPv6 egress observe-only hooks — `cgroup/connect6` + `cgroup/sendmsg6` emit `tcp6`/`udp6` JSONL events with `note: "ipv6-not-enforced"`. Digest ⚠️ box when IPv6 egress detected. `CoverageReport.ipv6` transitions to `"observe-only"`.
+- **H8**: TLS SNI confidence scoring — `TLSConfidence` enum (`full`/`partial`/`inferred`/`unknown`) on `TLSEvent`. Digest KPI row; badge downgrades to ⚠️ when partial+unknown>0.
+- **H9**: DNS TTL staleness warning — digest ⚠️ when allowlist compiled >5 min ago.
+- **H9**: Wildcard CDN risk scoring — flags `*.githubusercontent.com`, `*.s3.amazonaws.com`, `*.blob.core.windows.net`, `*.azureedge.net`, `*.cloudfront.net`; `slog.Warn` per domain; included in JSONL meta event.
+- **H10**: Per-domain observation counts — agent tracks `dst_domain → connection_count`; digest lists zero-contact allowlist entries as trimming candidates.
+- **H11**: Summary file integrity — SHA-256 of `.coldstep-events.jsonl` in `MetaEvent.EventsFileSHA256`; `<!-- coldstep-digest-sha256: <hex> -->` appended to digest Markdown.
+- **H12**: Allowlist startup entry count — `MetaEvent.AllowlistEntryCount` records LPM trie size at startup.
+- **H13**: Docker-in-Docker detection — reads `/proc/1/cgroup`; emits `MetaEvent.RunnerEnv` (`"dind"`/`"standard"`/`"unknown"`); digest ⚠️ box when DinD detected.
+
+### Audited
+- **H18**: eBPF safety audit (#204) — every BPF C source under `bpf/` annotated inline against the Section 5 checklist: 5a (map lookup null checks), 5b (ringbuf reserve/discard pairing on every exit path), 5c (pointer arithmetic bounds), 5d (loop bounds — `#pragma unroll` sendmmsg walk capped at `SENDMMSG_EXTRA_MAX = 7`), 5e (BTF CO-RE field stability), 5f (helper return checks / zero-init), 5g (cgroup attach cleanup on partial-attach failure), 5h (allowlist startup entry count log — wired by H12). **No safety gaps found**; no behavioural BPF changes — comments only. Two superseded standalone defend translation units (`trace_defend.bpf.c`, `trace_lsm_defend.bpf.c`) documented as dead code; active path remains `trace_defend_all.bpf.c` with the included `.inc` files.
+
+---
+
 ## [v0.2.9] — 2026-05-20
 
 ### Added
@@ -141,6 +158,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[v0.3.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.3.0
 [v0.2.9]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.9
 [v0.2.8]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.8
 [v0.2.7]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.7
