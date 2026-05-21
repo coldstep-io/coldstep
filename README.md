@@ -19,7 +19,7 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 | Mode | What it does | Allowlist |
 | :--- | :------------- | :-------- |
 | **`detect`** (default) | Observe and log IPv4-focused TCP/UDP egress activity (IPv6 and QUIC not observed); no blocking. | Optional (policy labels only). |
-| **`defend`** | Block IPv4 egress not on the allowlist (IPv4 TCP/UDP only — IPv6 and QUIC not blocked; cgroup programs). | **Required** — non-empty effective allowlist. |
+| **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
 
 **Upgrading from old workflows**
 
@@ -59,7 +59,7 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 
 | Topic | Detail |
 | :---- | :----- |
-| **IP versions** | Coldstep observes and enforces **IPv4 TCP/UDP only**. **IPv6 is not supported** — IPv6 egress is silently bypassed in both detect and defend modes. QUIC/HTTP3 traffic is observed as UDP/443 events but the inner framing is not inspected. See **[Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix (Unix sockets, io_uring, service containers, Docker-in-Docker). |
+| **IP versions** | Coldstep observes IPv4 TCP/UDP egress (detect + defend). In **defend mode** coldstep also enforces IPv6 TCP/UDP egress via cgroup `connect6` + `sendmsg6` hooks against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` (loopback) and `fe80::/10` (link-local) bypass enforcement by design. Detect-mode IPv6 egress is still silently bypassed (no observation). QUIC/HTTP3 traffic is observed as UDP/443 events but the inner framing is not inspected. See **[Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix (Unix sockets, io_uring, service containers, Docker-in-Docker). |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |

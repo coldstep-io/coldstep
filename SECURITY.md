@@ -26,19 +26,20 @@ coldstep observes and enforces a **deliberately scoped** subset of egress. Trust
 | IPv4 TCP | ✓ | ✓ | Via `connect4` tracepoint + cgroup hook |
 | IPv4 UDP (`sendmsg`) | ✓ | ✓ | Via `sendmsg4` tracepoint + cgroup hook |
 | IPv4 UDP (`write` on connected socket) | partial | ✓ | `write(2)` on a connected UDP socket may not emit a per-message event; cgroup `sendmsg4` still enforces |
-| IPv6 (all) | ✗ | ✗ | No IPv6 hooks; silent bypass in all modes |
+| IPv6 TCP (`connect6`) | ✗ | ✓ | Defend mode attaches `cgroup/connect6` + AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0). `::1` (loopback) and `fe80::/10` (link-local) always bypass. Detect mode does not observe IPv6. |
+| IPv6 UDP (`sendmsg6`) | ✗ | ✓ | Defend mode attaches `cgroup/sendmsg6` against the same `allowed_ipv6` trie. Detect mode does not observe IPv6. |
 | QUIC / HTTP3 (UDP/443) | UDP event only | ✓ (port/IP) | Inner QUIC framing not inspected; SNI not extracted |
 | TLS via io_uring | partial (enhanced) | ✗ | io_uring detection gated behind `detect-profile: enhanced` (raw_tp/io_uring_submit_sqe); the sysctl `io-uring-disable` remains the primary defense |
 | Unix domain sockets | ✗ | ✗ | AF_UNIX not tracked |
 | Docker-in-Docker inner containers | ✗ | ✗ | Separate cgroup/network namespace |
 | GitHub Actions service containers | ✗ | ✗ | Docker networking, separate namespace |
 
-**Why IPv4-only.** Defend hooks attach to the kernel-side BPF program types `cgroup/connect4` and `cgroup/sendmsg4`. These hook types are address-family-specific by ABI — the analogous `connect6` / `sendmsg6` slots would have to be implemented, attached, and verified separately, and require parallel IPv6 LPM map machinery on the userspace side. Until those land, IPv6 egress is not observed by coldstep tracepoints and is not gated by coldstep cgroup hooks. Treat any IPv6-capable destination as an uncovered path.
+**Defend-mode IPv6 enforcement (H14, v0.4.0).** Defend mode attaches `cgroup/connect6` and `cgroup/sendmsg6` programs against an `allowed_ipv6` LPM trie populated from AAAA resolutions of the configured allowlist (alongside the existing IPv4 cgroup hooks). Non-loopback / non-link-local IPv6 destinations that miss the trie return EPERM, mirroring the IPv4 path. `::1` (loopback) and `fe80::/10` (link-local) always bypass enforcement so test runners' localhost traffic and IPv6 neighbour-discovery / SLAAC are not disrupted. **Detect mode does not currently observe IPv6 egress** — IPv6 visibility outside defend is a known coverage gap (tracked separately).
 
 **Operational implications.**
 
-- **Detect-mode allowlist promotion** (`suggested-allow` output) reflects IPv4 destinations only. A workload that exfiltrates over IPv6, QUIC inner payload, or AF_UNIX → host-proxy will appear clean in detect and will not contribute to the suggested allowlist.
-- **Defend-mode enforcement** does not bar IPv6 destinations even when an IPv4 entry of the "same" host exists; if the runner resolves AAAA and prefers IPv6, the connection is unenforced.
+- **Detect-mode allowlist promotion** (`suggested-allow` output) reflects IPv4 destinations only. A workload that exfiltrates over IPv6, QUIC inner payload, or AF_UNIX → host-proxy will appear clean in detect and will not contribute to the suggested allowlist. IPv6 visibility in detect mode is on the roadmap.
+- **Defend-mode enforcement** gates IPv4 and IPv6 destinations against their respective allowlists. AAAA-resolved hosts are programmed as `/128` entries in `allowed_ipv6`; if the runner resolves AAAA and prefers IPv6, the connection is now subject to the allowlist (no longer silently allowed). An IPv4-only allowlist with no AAAA resolutions still defends IPv6 — every non-loopback IPv6 destination is denied because the trie is empty.
 - **Service containers and DinD** run in separate network namespaces from the job's primary cgroup. Egress originating inside those namespaces is outside coldstep's hook scope; route them through the job container or rely on organizational network controls.
 - **DNS allowlist is compiled once at startup.** A background goroutine re-resolves every 5 minutes and emits `dns_drift` JSONL events (with added/removed IPv4 addresses) when CDN tenants or load-balancer pools shift mid-run, but **does not update the live enforce policy mid-run** to avoid TOCTOU races. The shutdown digest surfaces the drift count under "Allowlist trust model"; long-running jobs that need fresh CDN coverage must restart the agent (or pin literal IPs / CIDRs).
 
@@ -48,7 +49,7 @@ Coldstep is commonly used in **GitHub-hosted Ubuntu** jobs. This section summari
 
 ### What a job adversary can do
 
-Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep’s **defend** (blocking) path is **IPv4-only** for cgroup **connect** / **sendmsg** hooks. **IPv6 is not supported** — see **README** → Requirements.
+Workflow steps run with the **same privileges** as the job (modulo `sudo` elevation for the agent per action design). A malicious or compromised step can attempt **egress**, **binary execution**, or **tampering** patterns similar to those discussed in public literature on **eBPF monitoring limits** (instrumentation gaps, overload/drops, cgroup scope). Coldstep's **defend** (blocking) path gates **IPv4 and IPv6** via cgroup `connect4`/`sendmsg4` and `connect6`/`sendmsg6` hooks (H14, v0.4.0); **detect** mode currently observes IPv4 only. See **README** → Requirements.
 
 ### Mitigations consumers should apply
 
@@ -64,9 +65,9 @@ Workflow steps run with the **same privileges** as the job (modulo `sudo` elevat
 
 Coldstep’s contract has three layers:
 
-1. **Defend (when programs are loaded and mode is blocking):** **IPv4** egress that hits the attached **cgroup** and/or **BPF LSM** hooks is **denied** unless it matches the **effective allowlist** (IPv4 literals / CIDRs in the LPM map, plus optional **DNS cache–backed** domain rules). This is **hook-scoped** and **IPv4-only**; it is not a promise that every kernel egress mechanism was evaluated.
-2. **Detect:** Syscall and tracepoint visibility is **best-effort**. Counters may show **partial** visibility (e.g. unobserved syscall families, multi-iovec captures, ringbuf reserve failures). **Absence of JSONL lines does not prove absence of traffic.**
-3. **Explicit non-coverage:** **IPv6** is unsupported. **io_uring** and similar paths can **bypass typical syscall tracepoints**; Coldstep may surface `io_uring_setup` as a **signal**, not as payload visibility. **Defend mode (Linux 5.19+ with `CONFIG_BPF_LSM` + `bpf` in the kernel's `lsm=` boot chain):** `lsm/io_uring_cmd` (H15) denies IPv4 egress via `IORING_OP_URING_CMD` to non-allowlisted destinations, closing the URING_CMD branch that does not flow through `security_socket_sendmsg()`. `IORING_OP_SEND` / `IORING_OP_SENDMSG` are already covered by the existing `lsm/socket_sendmsg` hook because they go through `sock_sendmsg()`. On older kernels (pre-5.19) or kernels without `CONFIG_BPF_LSM`, the `lsm/io_uring_cmd` hook is silently skipped at load time and no status row is emitted — the cgroup IPv4 hooks remain the primary defense path. Organizational controls remain necessary for audit-grade posture (see **Residual risk** below).
+1. **Defend (when programs are loaded and mode is blocking):** **IPv4 and IPv6** egress that hits the attached **cgroup** (`connect4`/`sendmsg4`/`connect6`/`sendmsg6`) and/or **BPF LSM** hooks is **denied** unless it matches the **effective allowlist** (IPv4 literals / CIDRs and AAAA-resolved `/128` IPv6 entries in the respective LPM maps, plus optional **DNS cache–backed** domain rules). This is **hook-scoped**; it is not a promise that every kernel egress mechanism was evaluated. IPv6 loopback (`::1`) and link-local (`fe80::/10`) always bypass enforcement by design.
+2. **Detect:** Syscall and tracepoint visibility is **best-effort** and currently **IPv4 only**. Counters may show **partial** visibility (e.g. unobserved syscall families, multi-iovec captures, ringbuf reserve failures). **Absence of JSONL lines does not prove absence of traffic.**
+3. **Explicit non-coverage:** **Detect-mode IPv6** is not observed (defend mode does enforce IPv6). **io_uring** and similar paths can **bypass typical syscall tracepoints**; Coldstep may surface `io_uring_setup` as a **signal**, not as payload visibility. **Defend mode (Linux 5.19+ with `CONFIG_BPF_LSM` + `bpf` in the kernel's `lsm=` boot chain):** `lsm/io_uring_cmd` (H15) denies IPv4 egress via `IORING_OP_URING_CMD` to non-allowlisted destinations, closing the URING_CMD branch that does not flow through `security_socket_sendmsg()`. `IORING_OP_SEND` / `IORING_OP_SENDMSG` are already covered by the existing `lsm/socket_sendmsg` hook because they go through `sock_sendmsg()`. On older kernels (pre-5.19) or kernels without `CONFIG_BPF_LSM`, the `lsm/io_uring_cmd` hook is silently skipped at load time and no status row is emitted — the cgroup hooks remain the primary defense path. Organizational controls remain necessary for audit-grade posture (see **Residual risk** below).
 
 **DNS domain allowlists (defend):** Resolution and BPF `dns_cache` updates are **best-effort**. High cardinality answers, shared IPs, and cache timing can make **allow-by-domain** subtle. Prefer **IPv4 literals or CIDRs** when you need crisp policy; treat domain rules as convenient but higher-ambiguity. The agent may **log a warning** when a single allowed domain resolves to more than **10** distinct IPv4 addresses (warn-only — does not change the effective allowlist). Future digest surfacing may add operator-visible notes without changing allow/deny unless explicitly documented.
 
@@ -74,11 +75,11 @@ Coldstep’s contract has three layers:
 
 | Layer | BPF object (repo) | Role |
 | ----- | ----------------- | ---- |
-| **cgroup** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_defend_cgroup.inc`) | **`cgroup/connect4`**, **`cgroup/sendmsg4`** — primary IPv4 egress defend for TCP and UDP on the job cgroup. |
-| **LSM** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_lsm.inc`) | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available). |
-| **LSM (io_uring)** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_iouring.inc`) | **`lsm/io_uring_cmd`** — H15 defense-in-depth on `IORING_OP_URING_CMD` paths that bypass `security_socket_sendmsg()`. Requires Linux **5.19+** (`security_uring_cmd` BTF) plus `CONFIG_BPF_LSM`; silently skipped on older kernels. |
+| **cgroup** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_defend_cgroup.inc`) | **`cgroup/connect4`**, **`cgroup/sendmsg4`**, **`cgroup/connect6`**, **`cgroup/sendmsg6`** — primary IPv4 and IPv6 egress defend for TCP and UDP on the job cgroup. IPv6 (H14) consults the AAAA-populated `allowed_ipv6` LPM trie; `::1` and `fe80::/10` always bypass. |
+| **LSM** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_lsm.inc`) | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available; IPv4 path only). |
+| **LSM (io_uring)** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_iouring.inc`) | **`lsm/io_uring_cmd`** — H15 defense-in-depth on `IORING_OP_URING_CMD` paths that bypass `security_socket_sendmsg()`. Requires Linux **5.19+** (`security_uring_cmd` BTF) plus `CONFIG_BPF_LSM`; silently skipped on older kernels. IPv4 path only. |
 
-All three are **IPv4 only**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
+The LSM supplemental paths remain **IPv4 only**; the cgroup path gates **IPv4 and IPv6**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
 
 ### File integrity
 

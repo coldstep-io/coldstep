@@ -112,21 +112,43 @@ type MetaEvent struct {
 // consumers can reason about the observation envelope without re-deriving it
 // from individual probe-attach rows.
 //
-// IPv6 and QUICHTTP3 are wired as `false` for v0.2.9 because the underlying
-// probes are not yet implemented in the agent. They ship as explicit fields
-// (not omitempty) so consumers can rely on the shape being stable as those
+// QUICHTTP3 is wired as `false` for v0.2.9 because the underlying probe is
+// not yet implemented in the agent. It ships as an explicit field (not
+// omitempty) so consumers can rely on the shape being stable as those
 // probes land.
+//
+// IPv6 (H14 v0.4.0): tri-state enforcement label. P2-1 added defend-mode
+// `cgroup/connect6` + `cgroup/sendmsg6` hooks that look up the AAAA-resolved
+// `allowed_ipv6` LPM trie and return EPERM on non-loopback misses; this
+// field now distinguishes that enforcement state from a pre-Phase-2 stub.
+// Valid values:
+//   - `"enforce"`: defend mode is active and the allowed_ipv6 LPM trie
+//     was programmed from AAAA resolutions (non-loopback IPv6 destinations
+//     are blocked unless they match the allowlist).
+//   - `"observe-only"`: an IPv6 visibility hook attached but did not
+//     enforce (reserved for the H7 detect-mode observer once it lands;
+//     not emitted by the current code path).
+//   - `"off"`: no IPv6 enforcement or observation on this run — detect
+//     mode today, or defend mode where no AAAA records resolved.
 type CoverageReport struct {
-	IPv4TCP        bool `json:"ipv4_tcp"`
-	IPv4UDPSendmsg bool `json:"ipv4_udp_sendmsg"`
-	IPv6           bool `json:"ipv6"`
-	QUICHTTP3      bool `json:"quic_http3"`
+	IPv4TCP        bool   `json:"ipv4_tcp"`
+	IPv4UDPSendmsg bool   `json:"ipv4_udp_sendmsg"`
+	IPv6           string `json:"ipv6"`
+	QUICHTTP3      bool   `json:"quic_http3"`
 	// TLSSNI is "full" when the TLS ClientHello sniff probe attached and the
 	// tls_sni feature gate is on, "none" otherwise. "partial" is reserved for
 	// future probe variants that capture some-but-not-all SNI sources.
 	TLSSNI  string `json:"tls_sni_full"`
 	IoUring bool   `json:"io_uring"`
 }
+
+// IPv6 coverage label values for CoverageReport.IPv6 (H14 v0.4.0). Kept as
+// string constants so callers don't drift the on-disk JSON.
+const (
+	CoverageIPv6Off         = "off"
+	CoverageIPv6ObserveOnly = "observe-only"
+	CoverageIPv6Enforce     = "enforce"
+)
 
 // MetaGitHub holds non-secret GitHub Actions context.
 type MetaGitHub struct {

@@ -267,15 +267,16 @@ func TestTCPStateName(t *testing.T) {
 }
 
 // TestCoverageReportJSON locks the on-disk shape of the H5 telemetry stub.
-// The field set ships at v0.2.9 even though IPv6 / QUICHTTP3 are wired as
-// false — consumers can rely on the keys being present and stable as those
+// The field set ships at v0.2.9 even though QUICHTTP3 is wired as false
+// and IPv6 is a tri-state string (H14: "off" / "observe-only" / "enforce")
+// — consumers can rely on the keys being present and stable as those
 // probes land in later releases.
 func TestCoverageReportJSON(t *testing.T) {
 	t.Parallel()
 	cr := CoverageReport{
 		IPv4TCP:        true,
 		IPv4UDPSendmsg: true,
-		IPv6:           false,
+		IPv6:           CoverageIPv6Enforce,
 		QUICHTTP3:      false,
 		TLSSNI:         "full",
 		IoUring:        true,
@@ -287,7 +288,7 @@ func TestCoverageReportJSON(t *testing.T) {
 	for _, needle := range []string{
 		`"ipv4_tcp":true`,
 		`"ipv4_udp_sendmsg":true`,
-		`"ipv6":false`,
+		`"ipv6":"enforce"`,
 		`"quic_http3":false`,
 		`"tls_sni_full":"full"`,
 		`"io_uring":true`,
@@ -302,6 +303,27 @@ func TestCoverageReportJSON(t *testing.T) {
 	}
 	if got != cr {
 		t.Fatalf("round-trip mismatch: got %+v want %+v", got, cr)
+	}
+}
+
+// TestCoverageReportIPv6OffSerialization confirms the H14 default ("off")
+// round-trips through JSON without omitempty truncating it. Detect-mode
+// runs ship this value today.
+func TestCoverageReportIPv6OffSerialization(t *testing.T) {
+	t.Parallel()
+	cr := CoverageReport{
+		IPv4TCP:        true,
+		IPv4UDPSendmsg: true,
+		IPv6:           CoverageIPv6Off,
+		QUICHTTP3:      false,
+		TLSSNI:         "none",
+	}
+	b, err := json.Marshal(cr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(b, []byte(`"ipv6":"off"`)) {
+		t.Fatalf(`expected "ipv6":"off" in %s`, string(b))
 	}
 }
 
