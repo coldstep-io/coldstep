@@ -378,6 +378,12 @@ type DigestInput struct {
 	// DomainContactCounts maps observed FQDN → observation count across TCP +
 	// UDP egress. Sorted descending by count in the digest section.
 	DomainContactCounts map[string]int
+	// AllowlistDomains lists the FQDN entries compiled into the defend
+	// allowlist at agent startup (P1-1 6e cross-reference). Used by the
+	// digest to produce a per-allowlist-domain contact summary so operators
+	// can spot allowlist entries that observed zero egress this run —
+	// candidates for trimming. Empty in detect mode.
+	AllowlistDomains []string
 }
 
 // TruncateUTF8ToMaxBytes cuts s so len(result) <= maxBytes without splitting a UTF-8 code point.
