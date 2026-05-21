@@ -48,6 +48,12 @@ func assertIntegrity(args []string) error {
 		return errors.New("integrity gate verdict=fail (short_observation_window)")
 	}
 
+	// H17: warn-only surface for single-observation and DGA-shaped
+	// destinations. The poisoning gate is the diff/window check above —
+	// these are reviewer hints (allowlist promotion of a once-seen or
+	// DGA-shaped domain warrants a second look), not a hard fail.
+	reportLearningModeReviewerHints(m.SuspiciousDomains)
+
 	switch m.CapabilityEval.Verdict {
 	case integrity.VerdictPass:
 		fmt.Printf("Coldstep Integrity Pass: verdict=%s score=%d\n", m.CapabilityEval.Verdict, m.CapabilityEval.Score)
@@ -68,5 +74,39 @@ func assertIntegrity(args []string) error {
 		return errors.New("integrity gate verdict=fail")
 	default:
 		return fmt.Errorf("missing or unsupported capability_eval.verdict: %q", m.CapabilityEval.Verdict)
+	}
+}
+
+// reportLearningModeReviewerHints prints a warn-only section listing
+// destinations that the H17 poisoning heuristic flagged for manual
+// review (DGA-shaped left labels and once-seen domains). Empty input
+// stays silent. The integrity verdict is not changed — this is a
+// reviewer hint, not a gate. Sorted DGA-first so the highest-priority
+// reviewer signal sorts to the top of the section.
+func reportLearningModeReviewerHints(rows []model.SuspiciousDomain) {
+	if len(rows) == 0 {
+		return
+	}
+	var dga, single []model.SuspiciousDomain
+	for _, r := range rows {
+		switch r.RiskHint {
+		case model.RiskHintSuspiciousDGA:
+			dga = append(dga, r)
+		case model.RiskHintSingleObservation:
+			single = append(single, r)
+		}
+	}
+	if len(dga) == 0 && len(single) == 0 {
+		return
+	}
+	fmt.Printf(
+		"::warning title=Coldstep learning-mode reviewer hints (H17)::%d DGA-shaped / %d single-observation destination(s) — review before promoting to allowlist\n",
+		len(dga), len(single),
+	)
+	for _, r := range dga {
+		fmt.Printf("::warning::DGA-shaped destination: %s (observation_count=%d)\n", r.Domain, r.ObservationCount)
+	}
+	for _, r := range single {
+		fmt.Printf("::warning::Single-observation destination: %s\n", r.Domain)
 	}
 }
