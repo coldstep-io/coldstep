@@ -19,8 +19,14 @@ import (
 // We also strip the LSM-only maps in that case so we don't waste a 16 MiB
 // ringbuf nobody reads from.
 //
+// The lsm/io_uring_cmd hook (H15) needs `security_uring_cmd` in the
+// kernel BTF (added in Linux 5.19). When wantLSM is true but
+// wantIOUringLSM is false, only that one program is stripped — the
+// other LSM hooks still load. Callers should compute wantIOUringLSM via
+// HaveIOUringLSM().
+//
 // Caller is responsible for closing obj on shutdown.
-func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
+func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool) error {
 	spec, err := LoadDefend()
 	if err != nil {
 		return err
@@ -33,6 +39,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		// the program is only present after the BPF stubs have been
 		// regenerated on Linux with the new SEC, hence the silent delete.
 		delete(spec.Programs, "lsm_socket_sendpage")
+		delete(spec.Programs, "lsm_io_uring_cmd")
 		delete(spec.Maps, "lsm_deny_events")
 		delete(spec.Maps, "lsm_deny_reserve_failures")
 		delete(spec.Maps, "lsm_defend_cfg")
@@ -41,17 +48,27 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 		// sendpage_observed lives in the LSM section; strip it when LSM is
 		// disabled so we don't pin a per-cpu counter nobody reads.
 		delete(spec.Maps, "sendpage_observed")
-	} else if !kernelHasLSMHook("socket_sendpage") {
-		// Kernel 6.5+ removed the socket_sendpage LSM hook (proto_ops
-		// ->sendpage and security_socket_sendpage were dropped together).
-		// On those kernels sendfile(2)/splice(2) route through sendmsg
-		// with MSG_SPLICE_PAGES, so cgroup/sendmsg4 + lsm/socket_sendmsg
-		// already cover them. Leaving the program in the spec would fail
-		// prog_load (ENOENT on the BTF attach target) and bring down the
-		// whole defend collection. The sendpage_observed counter is also
-		// stripped because nothing will write to it.
-		delete(spec.Programs, "lsm_socket_sendpage")
-		delete(spec.Maps, "sendpage_observed")
+	} else {
+		if !kernelHasLSMHook("socket_sendpage") {
+			// Kernel 6.5+ removed the socket_sendpage LSM hook (proto_ops
+			// ->sendpage and security_socket_sendpage were dropped together).
+			// On those kernels sendfile(2)/splice(2) route through sendmsg
+			// with MSG_SPLICE_PAGES, so cgroup/sendmsg4 + lsm/socket_sendmsg
+			// already cover them. Leaving the program in the spec would fail
+			// prog_load (ENOENT on the BTF attach target) and bring down the
+			// whole defend collection. The sendpage_observed counter is also
+			// stripped because nothing will write to it.
+			delete(spec.Programs, "lsm_socket_sendpage")
+			delete(spec.Maps, "sendpage_observed")
+		}
+		if !wantIOUringLSM {
+			// Kernel has CONFIG_BPF_LSM but no security_uring_cmd BTF symbol
+			// (pre-5.19) — drop just the io_uring_cmd program so prog_load
+			// for the rest of the LSM section can still succeed. LSM-only
+			// maps stay because lsm_socket_connect / lsm_socket_sendmsg
+			// still use them.
+			delete(spec.Programs, "lsm_io_uring_cmd")
+		}
 	}
 
 	coll, err := ebpf.NewCollection(spec)
@@ -168,6 +185,11 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 				return err
 			}
 		}
+		if wantIOUringLSM {
+			if err := detachProgram(coll, "lsm_io_uring_cmd", &obj.LsmIoUringCmd); err != nil {
+				return err
+			}
+		}
 		lsmMaps := []struct {
 			name string
 			dst  **ebpf.Map
@@ -197,6 +219,18 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM bool) error {
 
 	success = true
 	return nil
+}
+
+// HaveIOUringLSM reports whether the running kernel exposes the
+// `bpf_lsm_io_uring_cmd` BPF LSM dispatch target — required by H15's
+// SEC("lsm/io_uring_cmd") program for both prog_load and attach.
+// Probing `bpf_lsm_<hook>` (rather than `security_uring_cmd` alone)
+// covers kernels that have the C-side LSM hook in BTF but do not
+// expose it to BPF LSM (CONFIG_BPF_LSM off or "bpf" missing from the
+// kernel `lsm=` boot chain). Returns false on any BTF lookup failure
+// so callers degrade safely to the older LSM hook set.
+func HaveIOUringLSM() bool {
+	return kernelHasLSMHook("io_uring_cmd")
 }
 
 func detachProgram(coll *ebpf.Collection, name string, dst **ebpf.Program) error {

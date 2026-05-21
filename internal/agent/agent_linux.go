@@ -244,10 +244,15 @@ func Run(ctx context.Context, cfg config.Config) error {
 			haveLSM = true
 		}
 
+		// H15: lsm/io_uring_cmd needs `security_uring_cmd` in kernel BTF
+		// (Linux 5.19+). Probe before loading so older kernels keep the
+		// other LSM hooks instead of failing prog_load for the whole spec.
+		haveIOUringLSM := haveLSM && defend.HaveIOUringLSM()
+
 		// Phase 2.3: cgroup + LSM share one bpf2go object. The loader strips
 		// LSM programs (and their dedicated maps) from the spec when the
 		// kernel lacks CONFIG_BPF_LSM so prog_load doesn't fail.
-		if err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM); err != nil {
+		if err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM, haveIOUringLSM); err != nil {
 			return fmt.Errorf("load defend bpf objects: %w", err)
 		}
 		hasDefend = true
@@ -271,6 +276,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}()
 
 		var lsmAttachErr error
+		var ioUringAttachErr error
+		ioUringAttempted := false
 
 		if haveLSM {
 			if _, _, loadErr := loadLSMDefendMaps(&defendObjs, defendCompiled, pol); loadErr != nil {
@@ -322,8 +329,30 @@ func Run(ctx context.Context, cfg config.Config) error {
 					} else {
 						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
 					}
+
+					// H15: lsm/io_uring_cmd is best-effort defense-in-depth on
+					// IORING_OP_URING_CMD; only emit a BPFStatus row when we
+					// actually attempted attach so pre-5.19 kernels are not
+					// reported as degraded for a hook they can't host.
+					if haveIOUringLSM && defendObjs.LsmIoUringCmd != nil {
+						ioUringAttempted = true
+						if lnk3, ioErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmIoUringCmd}); ioErr != nil {
+							slog.Info("lsm/io_uring_cmd attach failed; cgroup+socket LSM still active", "err", ioErr)
+							ioUringAttachErr = ioErr
+						} else {
+							defer lnk3.Close()
+						}
+					}
 				}
 			}
+		}
+
+		if ioUringAttempted {
+			row := telemetry.BPFStatus{Name: "lsm/io_uring_cmd", OK: ioUringAttachErr == nil}
+			if ioUringAttachErr != nil {
+				row.Detail = bpfDetail(ioUringAttachErr)
+			}
+			bpfSt = append(bpfSt, row)
 		}
 
 		backend := chooseDefendBackend(
