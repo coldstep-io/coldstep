@@ -50,7 +50,12 @@ func Run(ctx context.Context, cfg config.Config) error {
 	for _, w := range compatWarnings {
 		slog.Warn("runner_compat_warning", "code", w.Code, "detail", w.Detail)
 	}
+	runnerEnv := DetectRunnerEnv()
+	if runnerEnv != RunnerEnvStandard {
+		slog.Info("runner_env_detected", "env", runnerEnv)
+	}
 	stats := newRunStats()
+	stats.setRunnerEnv(runnerEnv)
 	// P4: shared between readKTLSRing (Mark) and readTLSRing (IsKTLS) so a
 	// pre-offload ClientHello sniff is reclassified as Confidence=unknown
 	// with confidence_reason="ktls" before it lands in JSONL.
@@ -852,6 +857,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 			}
 			meta.UnresolvedDomains = defendCompiled.UnresolvedDomains
 			meta.RunnerHasIPv6 = cfg.RunnerHasIPv6
+			if runnerEnv != RunnerEnvStandard {
+				meta.RunnerEnv = runnerEnv
+			}
 			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil)
 			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
 				slog.Warn("meta jsonl", "err", err)
