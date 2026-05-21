@@ -143,6 +143,73 @@ func TestWriteSummaryIncludesTLSConfidenceCounters(t *testing.T) {
 	}
 }
 
+// TestWriteSummaryIncludesNewCounters pins that the recently-added
+// counters (TCP state aggregates, QUIC heuristic observation total, DNS
+// drift observation total) round-trip through `.coldstep-telemetry.json`.
+// Without these, the digest's TCP handshake / QUIC / DNS drift cells would
+// have no machine-readable twin on the summary file — downstream consumers
+// would be forced to reparse JSONL to recover the same totals.
+func TestWriteSummaryIncludesNewCounters(t *testing.T) {
+	dir := t.TempDir()
+	p := filepath.Join(dir, "telemetry.json")
+	s := Summary{
+		Version: 2, SchemaVersion: SchemaVersion,
+		ExecEvents:                     1,
+		TCPStateTotal:                  9,
+		TCPStateConfirmed:              7,
+		TCPStateRefused:                2,
+		TCPStateRingbufReserveFailures: 1,
+		QuicObserved:                   4,
+		DNSDriftObservations:           3,
+		PolicyCounts:                   map[string]int{"monitor": 1},
+	}
+	if err := WriteSummary(p, s, nil); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range [][]byte{
+		[]byte(`"tcp_state_total": 9`),
+		[]byte(`"tcp_state_confirmed": 7`),
+		[]byte(`"tcp_state_refused": 2`),
+		[]byte(`"tcp_state_ringbuf_reserve_failures": 1`),
+		[]byte(`"quic_observed": 4`),
+		[]byte(`"dns_drift_observations": 3`),
+	} {
+		if !bytes.Contains(b, needle) {
+			t.Fatalf("missing %q in summary:\n%s", needle, b)
+		}
+	}
+	// Zero-default fields must remain omitted.
+	zeroDefault := Summary{
+		Version: 2, SchemaVersion: SchemaVersion,
+		ExecEvents:   1,
+		PolicyCounts: map[string]int{"monitor": 1},
+	}
+	pZero := filepath.Join(dir, "zero.json")
+	if err := WriteSummary(pZero, zeroDefault, nil); err != nil {
+		t.Fatal(err)
+	}
+	bZero, err := os.ReadFile(pZero)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, needle := range []string{
+		`"tcp_state_total"`,
+		`"tcp_state_confirmed"`,
+		`"tcp_state_refused"`,
+		`"tcp_state_ringbuf_reserve_failures"`,
+		`"quic_observed"`,
+		`"dns_drift_observations"`,
+	} {
+		if bytes.Contains(bZero, []byte(needle)) {
+			t.Fatalf("zero-value %s should be omitted, got:\n%s", needle, bZero)
+		}
+	}
+}
+
 func TestSumRingbufReserveFailuresDetectPath(t *testing.T) {
 	t.Parallel()
 	const (
