@@ -74,6 +74,11 @@ jobs:
         with:
           subject-path: '${{ github.workspace }}/bin/coldstep'
 
+      - name: Attest — build provenance (coldstep-report binary)
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        with:
+          subject-path: '${{ github.workspace }}/bin/coldstep-report'
+
       - name: Attest — build provenance (action bundle tarball)
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
         with:
@@ -85,14 +90,23 @@ jobs:
           subject-path: '${{ github.workspace }}/bin/coldstep'
           sbom-path: '${{ github.workspace }}/sbom-go.cdx.json'
 
+      - name: Attest — SBOM for coldstep-report binary subject
+        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        with:
+          subject-path: '${{ github.workspace }}/bin/coldstep-report'
+          sbom-path: '${{ github.workspace }}/sbom-go.cdx.json'
+
       - name: Attest — SBOM for action bundle subject
         uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
         with:
           subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
           sbom-path: '${{ github.workspace }}/sbom-action.cdx.json'
 
-      # One published binary per tag; demo workflows download this instead of compiling on every run.
+      # Published binaries per tag; demo / consumer workflows download these instead of compiling on every run.
       # Immutable releases may reject uploads: fail if coldstep-linux-amd64 is still missing (otherwise demos see "no assets to download").
+      # coldstep-report-linux-amd64 (added per issue #219) is treated as best-effort under immutable-release rejection — agent is the
+      # hard requirement; the report binary unlocks consumer render-html flows but a stale missing report asset must not block the
+      # tag if the agent is already present.
       - name: Upload Linux agent to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:
@@ -101,16 +115,22 @@ jobs:
           set -euo pipefail
           cp bin/coldstep coldstep-linux-amd64
           chmod +x coldstep-linux-amd64
+          cp bin/coldstep-report coldstep-report-linux-amd64
+          chmod +x coldstep-report-linux-amd64
           tag="${GITHUB_REF_NAME}"
           if gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1; then
             rc=0
-            out="$(gh release upload "${tag}" coldstep-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber 2>&1)" || rc=$?
+            out="$(gh release upload "${tag}" coldstep-linux-amd64 coldstep-report-linux-amd64 --repo "${GITHUB_REPOSITORY}" --clobber 2>&1)" || rc=$?
             if [[ "$rc" -ne 0 ]]; then
               if echo "$out" | grep -qiE 'immutable release|Cannot upload assets'; then
                 has_bin="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | any(. == "coldstep-linux-amd64")' 2>/dev/null || echo false)"
                 if [[ "${has_bin}" != "true" ]]; then
                   echo "::error title=Missing coldstep-linux-amd64::Release ${tag} rejected uploads and has no coldstep-linux-amd64 asset. Delete or fix the empty/immutable release, or attach bin/coldstep as coldstep-linux-amd64 from the supply-chain-artifacts artifact, then re-run this workflow on the tag."
                   exit 1
+                fi
+                has_report="$(gh release view "${tag}" --repo "${GITHUB_REPOSITORY}" --json assets --jq '[.assets[].name] | any(. == "coldstep-report-linux-amd64")' 2>/dev/null || echo false)"
+                if [[ "${has_report}" != "true" ]]; then
+                  echo "::warning title=Missing coldstep-report-linux-amd64::Release ${tag} rejected uploads and has no coldstep-report-linux-amd64 asset. Attach bin/coldstep-report as coldstep-report-linux-amd64 from the supply-chain-artifacts artifact, or supersede with a higher version."
                 fi
                 echo "::warning title=Skipped release binary re-upload::Release ${tag} rejected upload; coldstep-linux-amd64 already present."
                 exit 0
@@ -119,10 +139,10 @@ jobs:
               exit "$rc"
             fi
           else
-            gh release create "${tag}" coldstep-linux-amd64 \
+            gh release create "${tag}" coldstep-linux-amd64 coldstep-report-linux-amd64 \
               --repo "${GITHUB_REPOSITORY}" \
               --title "${tag}" \
-              --notes "Linux amd64 eBPF agent (ubuntu-latest). Composite action and SBOMs: see repository and workflow artifacts."
+              --notes "Linux amd64 eBPF agent and coldstep-report CLI (ubuntu-latest). Composite action and SBOMs: see repository and workflow artifacts."
           fi
 
       - name: Upload attestable artifacts
@@ -131,6 +151,7 @@ jobs:
           name: supply-chain-artifacts-${{ github.run_id }}
           path: |
             bin/coldstep
+            bin/coldstep-report
             coldstep-action-bundle.tar.gz
             sbom-go.cdx.json
             sbom-action.cdx.json
