@@ -75,12 +75,14 @@ linters:
         - -QF1012
   exclusions:
     paths:
-      - "internal/bpf/"
+      # Only the bpf2go-generated stubs (_bpfel.go / _bpfeb.go) bypass linting —
+      # they use unsafe.Pointer / map-iter patterns that confuse typecheck and
+      # staticcheck. Non-generated files under internal/bpf/ (loaders, gen.go
+      # directives, abi tests, the bpfgen tool) are linted with the standard set.
+      - "internal/bpf/.*_bpf(el|eb)\\.go$"
     rules:
       - path: "_test\\.go"
         linters: [gosec]
-      - path: "internal/bpf/"
-        linters: [typecheck]
 formatters:
   enable:
     - gofmt

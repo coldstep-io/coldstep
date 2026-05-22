@@ -142,3 +142,7 @@ When CI fails on BPF verifier or generated-stub drift, run `bash scripts/agent-l
 - **Docs alignment:** changes to `action.yml` inputs or workflow pins require updating `README.md`, `QUICK_START.md`, and the input descriptions in lockstep. Release pins (`MARKETPLACE_COLDSTEP_TAG`, `COLDSTEP_AGENT_VERSION`, `website/`) follow the two-train flow in `RELEASE_PROCESS.md` — repo docs + CI pins land in the release PR before `git tag`; `website/` bumps land in a **separate follow-up PR after** the tag exists on Releases.
 - **PR descriptions:** prefer the templates under `.github/pr-bodies/` (`gh pr create --body-file`); see `scripts/gh-pr-body.ps1` for the Windows wrapper.
 - **Optional pre-commit:** `.pre-commit-config.yaml` runs `scripts/check-encoding.sh` if the user installs pre-commit.
+- **Security lint suppressions:** Two separate linters run in CI with different suppression syntax — do not mix them up:
+  - `staticcheck` / `golangci-lint`: use `//nolint:staticcheck` or `//nolint:gosec` inline comments.
+  - `securego/gosec` (the standalone job in `hosted-linux/gosec`): use `// #nosec GXX` comments (e.g., `// #nosec G115`). The `//nolint:gosec` form is **not** recognized by the standalone gosec job and will leave the violation unresolved.
+  - When suppressing a gosec finding, always include both forms on the same line and a brief justification: `// #nosec G115 -- int32 reinterpret of BPF u32 return code; round-trip is intentional //nolint:gosec`.
