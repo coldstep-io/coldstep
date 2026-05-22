@@ -5,7 +5,9 @@
 # after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Both jobs pass `release-path`; report tooling uses `build-coldstep-report-linux.sh`.
+# (`supply-chain-attest.yml`). Both jobs pass `release-path`. Report tooling is built from source via
+# `build-coldstep-report-linux.sh`; the trailing "Render HTML report" step also demos the consumer pattern
+# (download `coldstep-report-linux-amd64` from the same release — issue #219) and uploads an HTML artifact.
 
 name: coldstep-demo
 
@@ -287,6 +289,60 @@ jobs:
           retention-days: 14
           include-hidden-files: true
           overwrite: true
+
+      # Issue #219 consumer pattern demo: download coldstep-report-linux-amd64 from the same Release that
+      # publishes the agent, render an HTML report from the JSONL, upload it as a clickable artifact.
+      # Fail-soft on the download because the asset only exists for tags from v0.4.1 onward; once
+      # COLDSTEP_AGENT_VERSION points at a tag with the asset, the subsequent build-model + render-html
+      # steps activate. Until then, the warning is the only signal.
+      - name: Download coldstep-report binary from GitHub Release
+        if: always()
+        id: download-coldstep-report
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p bin-release
+          for attempt in 1 2 3; do
+            if gh release download "${COLDSTEP_AGENT_VERSION}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --pattern 'coldstep-report-linux-amd64' \
+              --dir bin-release; then
+              break
+            fi
+            if [[ "${attempt}" -eq 3 ]]; then
+              echo "::warning title=coldstep-report binary missing::coldstep-report-linux-amd64 not present on release ${COLDSTEP_AGENT_VERSION} (issue #219 ships this from v0.4.1 onward)"
+              exit 0
+            fi
+            sleep $((attempt * 5))
+          done
+          if [[ -f bin-release/coldstep-report-linux-amd64 ]]; then
+            chmod +x bin-release/coldstep-report-linux-amd64
+            echo "available=true" >> "${GITHUB_OUTPUT}"
+          fi
+
+      - name: Render HTML report from JSONL
+        if: always() && steps.download-coldstep-report.outputs.available == 'true'
+        env:
+          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
+          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
+          COLDSTEP_DETECT_PROFILE: enhanced
+        run: |
+          set -euo pipefail
+          ./bin-release/coldstep-report-linux-amd64 build-model
+          COLDSTEP_REPORT_MODEL_IN="${GITHUB_WORKSPACE}/.coldstep-report-model.json" \
+          COLDSTEP_REPORT_HTML_OUT="${GITHUB_WORKSPACE}/coldstep-detect-report.html" \
+            ./bin-release/coldstep-report-linux-amd64 render-html
+
+      - name: Upload detect HTML report
+        if: always() && steps.download-coldstep-report.outputs.available == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-detect-html-report
+          path: ${{ github.workspace }}/coldstep-detect-report.html
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: List workspace Coldstep artifacts
         if: always()
