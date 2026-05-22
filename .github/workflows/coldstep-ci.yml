@@ -60,3 +60,37 @@ jobs:
         uses: golangci/golangci-lint-action@v8
         with:
           version: latest
+
+  dist-up-to-date:
+    # Fails the PR if committed dist/ bundles do not match what `npm run build` produces
+    # from current src/*.ts. Catches the recurring "stale dist after a src change" drift.
+    name: dist/ matches src/
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Rebuild dist/
+        run: npm run build
+
+      - name: Fail if dist/ drifted
+        run: |
+          if ! git diff --exit-code -- dist/; then
+            echo "::error::dist/ is stale — run 'npm run build' locally and commit the result."
+            echo "::group::dist/ diff (first 200 lines)"
+            git diff -- dist/ | head -200
+            echo "::endgroup::"
+            exit 1
+          fi
