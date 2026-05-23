@@ -187,7 +187,10 @@ func BuildEgressSankey(events []Event) []SankeyEdge {
 }
 
 func BuildDiff(current []Event, baseline []Event) DiffPayload {
-	if baseline == nil {
+	// An empty (or nil) baseline is "no comparison data," not "everything in
+	// current is new" — LoadEvents returns a non-nil empty slice for an empty
+	// or unparseable JSONL file, so guard on length rather than nil-ness.
+	if len(baseline) == 0 {
 		return DiffPayload{
 			Status:         "unavailable",
 			Reason:         "no_baseline_provided",
