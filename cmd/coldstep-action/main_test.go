@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSanitizeDigestForMarkdown_BOM(t *testing.T) {
@@ -333,5 +334,34 @@ func TestClassifyReadyStatus(t *testing.T) {
 			t.Fatalf("classifyReadyStatus(%q) = (%v,%v,%v,%v) want (%v,%v,%v,%v)",
 				tc.raw, r, f, m, i, tc.wantReady, tc.wantFail, tc.wantMal, tc.wantInc)
 		}
+	}
+}
+
+// Bug #8: replace the fixed 400ms post-SIGTERM sleep with a poll loop that
+// waits up to the timeout for the agent to exit.
+func TestWaitForAgentExit_ReturnsTrueWhenPidGone(t *testing.T) {
+	// PID 0 (and negative pids) cannot be alive; the helper short-circuits to
+	// false. Use a fake high pid that is overwhelmingly unlikely to be in use.
+	const fakePID = 0x6ff7c001
+	start := time.Now()
+	ok := waitForAgentExit(fakePID, 1*time.Second, 10*time.Millisecond)
+	elapsed := time.Since(start)
+	if !ok {
+		t.Fatalf("waitForAgentExit(fakePID) = false; want true (pid not in use)")
+	}
+	if elapsed >= 250*time.Millisecond {
+		t.Errorf("waitForAgentExit took %s; expected <250ms for a dead pid", elapsed)
+	}
+}
+
+func TestWaitForAgentExit_RejectsZeroAndNegative(t *testing.T) {
+	if waitForAgentExit(0, time.Second, 10*time.Millisecond) {
+		t.Errorf("waitForAgentExit(0) = true; want false")
+	}
+	if waitForAgentExit(-1, time.Second, 10*time.Millisecond) {
+		t.Errorf("waitForAgentExit(-1) = true; want false")
+	}
+	if waitForAgentExit(1234, 0, 10*time.Millisecond) {
+		t.Errorf("waitForAgentExit(timeout=0) = true; want false")
 	}
 }
