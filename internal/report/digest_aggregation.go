@@ -114,12 +114,18 @@ func buildHotEgressList(in DigestInput) []hotEgressAgg {
 	return out
 }
 
+// isBlockingDigestMode reports whether the DefendMode label written into a
+// JSONL artifact represents a blocking (defend-equivalent) run. "defend" and
+// "defend+<backend>" cover the current naming. "enforce" / "enforce+<backend>"
+// are accepted as legacy aliases so digests replayed from artifacts produced
+// by pre-rename agents still surface the defend triage row, allowlist-trust
+// section, and IPv6-defend logic instead of degrading to detect-mode output.
 func isBlockingDigestMode(m string) bool {
-	m = strings.TrimSpace(m)
-	if strings.EqualFold(m, "defend") {
+	m = strings.ToLower(strings.TrimSpace(m))
+	if m == "defend" || m == "enforce" {
 		return true
 	}
-	return strings.HasPrefix(strings.ToLower(m), "defend+")
+	return strings.HasPrefix(m, "defend+") || strings.HasPrefix(m, "enforce+")
 }
 
 func digestModeCell(m string) string {

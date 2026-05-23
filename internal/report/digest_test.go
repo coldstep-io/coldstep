@@ -78,6 +78,61 @@ func TestBuildDetectMarkdown_TriageRibbon_DefendDeny(t *testing.T) {
 	}
 }
 
+// Bug #6: JSONL artifacts written by pre-rename agents carry mode:"enforce"
+// instead of "defend". Replaying them through BuildDetectMarkdown must still
+// treat the run as blocking — surface the defend triage row, allowlist-trust
+// section, and IPv6-defend logic — instead of degrading to detect-mode output.
+func TestBuildDetectMarkdown_LegacyEnforceModeTreatedAsDefend(t *testing.T) {
+	for _, mode := range []string{"enforce", "Enforce", "enforce+cgroup", "ENFORCE+lsm"} {
+		mode := mode
+		t.Run(mode, func(t *testing.T) {
+			md := BuildDetectMarkdown(DigestInput{
+				DefendMode:        mode,
+				DefendDenyCount:   7,
+				BPF:               []telemetry.BPFStatus{{Name: "connect", OK: true}},
+				MaxRowsPerSection: 50,
+			})
+			// The defend triage cell ("Mode | `defend`") and the deny-count
+			// suffix are produced only when isBlockingDigestMode returns true.
+			if !strings.Contains(md, "`defend`") {
+				t.Errorf("expected defend-mode triage row for legacy mode %q; output:\n%s", mode, md)
+			}
+			if !strings.Contains(md, "**deny events:** 7") {
+				t.Errorf("expected deny-count suffix for legacy mode %q; output:\n%s", mode, md)
+			}
+		})
+	}
+}
+
+// Bug #6: also exercise the predicate directly so failures point at the source
+// of truth instead of routing through BuildDetectMarkdown.
+func TestIsBlockingDigestMode_LegacyEnforceAlias(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode string
+		want bool
+	}{
+		{"defend", true},
+		{"DEFEND", true},
+		{"defend+cgroup", true},
+		{"defend+lsm", true},
+		{"enforce", true},
+		{"Enforce", true},
+		{"ENFORCE", true},
+		{"enforce+cgroup", true},
+		{"enforce+lsm", true},
+		{"detect", false},
+		{"", false},
+		{"unknown", false},
+		{"defendx", false},
+		{"enforcex", false},
+	} {
+		if got := isBlockingDigestMode(tc.mode); got != tc.want {
+			t.Errorf("isBlockingDigestMode(%q) = %v, want %v", tc.mode, got, tc.want)
+		}
+	}
+}
+
 func TestBuildDetectMarkdown_TriageRibbon_TruthfulnessInterpretation(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		BPF:                  []telemetry.BPFStatus{{Name: "syscalls", OK: true}},

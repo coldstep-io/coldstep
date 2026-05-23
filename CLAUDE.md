@@ -11,7 +11,7 @@ Two runtime modes (the only `mode:` values; `enforce` is rejected at input parsi
 - **`detect`** (default) — observe-only telemetry.
 - **`defend`** — block non-allowlisted IPv4 egress via cgroup `connect4`/`sendmsg4` (+ BPF LSM where available). Requires a non-empty effective allowlist.
 
-The config enum (`internal/config/config.go`) uses `ModeDefend` with the underlying string value `"defend"` — public input and internal value match. Older JSONL artifacts may show `"mode":"enforce"`; that is legacy data only, and `internal/report/digest.go` still parses it for replay.
+The config enum (`internal/config/config.go`) uses `ModeDefend` with the underlying string value `"defend"` — public input and internal value match. Older JSONL artifacts may show `"mode":"enforce"`; that is legacy data only, and `isBlockingDigestMode` in `internal/report/digest_aggregation.go` accepts `enforce` / `enforce+<backend>` as an alias for `defend` / `defend+<backend>` so digests replayed from pre-rename artifacts still surface the defend triage row, allowlist-trust section, and IPv6-defend logic.
 
 ## Build and dev commands
 
