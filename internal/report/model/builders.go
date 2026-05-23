@@ -201,8 +201,16 @@ func BuildDiff(current []Event, baseline []Event) DiffPayload {
 	}
 	// Minimal diff: count events by (type,dst,sni,host,fqdn) tuple. Plan 4 may
 	// extend this to match the Python ci_coldstep_jsonl_traffic_diff fingerprint.
-	cur := fingerprintCounts(current)
-	base := fingerprintCounts(baseline)
+	//
+	// Bug #11: a destination observed once with fqdn populated and once
+	// without (DNS cache miss race) would yield two distinct fingerprints —
+	// `tcp»example.com` and `tcp»1.2.3.4` — and surface as a spurious
+	// traffic_gone + traffic_new pair across otherwise-identical runs.
+	// Build a single dst→name map across current + baseline so the dst-only
+	// events resolve to the same fingerprint as their name-bearing siblings.
+	nameByDst := buildDstNameMap(current, baseline)
+	cur := fingerprintCounts(current, nameByDst)
+	base := fingerprintCounts(baseline, nameByDst)
 	fpIndicators := map[string]map[string]struct{}{}
 	addFingerprintIndicators := func(events []Event) {
 		for _, e := range events {
@@ -210,8 +218,7 @@ func BuildDiff(current []Event, baseline []Event) DiffPayload {
 			if _, ok := egressTypes[typ]; !ok {
 				continue
 			}
-			host := firstNonEmpty(e.AsString("fqdn"), e.AsString("host"), e.AsString("sni"), e.AsString("dst"))
-			fp := typ + "»" + host
+			fp := typ + "»" + resolveFingerprintHost(e, nameByDst)
 			if fpIndicators[fp] == nil {
 				fpIndicators[fp] = map[string]struct{}{}
 			}
@@ -296,18 +303,60 @@ func sortedIndicators(set map[string]struct{}) []string {
 	return out
 }
 
-func fingerprintCounts(events []Event) map[string]int {
+func fingerprintCounts(events []Event, nameByDst map[string]string) map[string]int {
 	out := map[string]int{}
 	for _, e := range events {
 		typ := e.AsString("type")
 		if _, ok := egressTypes[typ]; !ok {
 			continue
 		}
-		host := firstNonEmpty(e.AsString("fqdn"), e.AsString("host"), e.AsString("sni"), e.AsString("dst"))
-		fp := typ + "»" + host
+		fp := typ + "»" + resolveFingerprintHost(e, nameByDst)
 		out[fp]++
 	}
 	return out
+}
+
+// buildDstNameMap collects dst → first-observed name (fqdn / sni / host)
+// across all events, so dst-only events resolve to the same fingerprint as
+// their name-bearing siblings. Repeated dst with different names keeps the
+// first encountered (input order). Empty dst entries are skipped.
+func buildDstNameMap(eventSlices ...[]Event) map[string]string {
+	out := map[string]string{}
+	for _, events := range eventSlices {
+		for _, e := range events {
+			dst := e.AsString("dst")
+			if dst == "" || dst == "0.0.0.0" {
+				continue
+			}
+			if _, ok := out[dst]; ok {
+				continue
+			}
+			name := firstNonEmpty(e.AsString("fqdn"), e.AsString("sni"), e.AsString("host"))
+			if name == "" {
+				continue
+			}
+			out[dst] = name
+		}
+	}
+	return out
+}
+
+// resolveFingerprintHost picks the host portion of the fingerprint for e.
+// Prefers a name on the event itself; falls back to nameByDst (resolved
+// across the union of current + baseline events) so dst-only events match
+// their name-bearing siblings; finally falls back to dst when no name is
+// available anywhere.
+func resolveFingerprintHost(e Event, nameByDst map[string]string) string {
+	if name := firstNonEmpty(e.AsString("fqdn"), e.AsString("sni"), e.AsString("host")); name != "" {
+		return name
+	}
+	if dst := e.AsString("dst"); dst != "" {
+		if name, ok := nameByDst[dst]; ok && name != "" {
+			return name
+		}
+		return dst
+	}
+	return ""
 }
 
 func firstNonEmpty(args ...string) string {

@@ -67,10 +67,7 @@ func TestWalkForAgentComm_FindsKnownChild(t *testing.T) {
 	// child's comm to become readable. On loaded CI machines the immediate
 	// post-Start window can race.
 	deadline := time.Now().Add(500 * time.Millisecond)
-	for {
-		if readComm(cmd.Process.Pid) == "sleep" {
-			break
-		}
+	for readComm(cmd.Process.Pid) != "sleep" {
 		if !time.Now().Before(deadline) {
 			t.Skipf("child comm did not stabilise to 'sleep' within 500ms")
 		}
