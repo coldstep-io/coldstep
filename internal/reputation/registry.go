@@ -60,6 +60,13 @@ func Registered() []Enricher {
 //   - If one or more enrichers return an error, the errors are joined
 //     and returned alongside any successful results. Callers should not
 //     treat a partial error as fatal.
+//
+// Enricher ctx contract: implementations must observe ctx and return
+// promptly when it fires. Bug #12 — if an enricher ignores ctx, its
+// goroutine plus the drainer/closer goroutines stay alive until the
+// enricher eventually returns; EnrichAll itself still returns on ctx
+// cancellation without blocking the caller, but the background state
+// cannot be GC'd until the slow enricher exits.
 func EnrichAll(ctx context.Context, ip string) ([]*Result, error) {
 	enrichers := Registered()
 	if len(enrichers) == 0 {
@@ -93,43 +100,49 @@ func EnrichAll(ctx context.Context, ip string) ([]*Result, error) {
 		close(resCh)
 	}()
 
-	var results []*Result
-	var errs []error
-	for {
-		select {
-		case <-ctx.Done():
-			// Drain whatever already arrived before the deadline; do not
-			// wait on the still-running enrichers. Their goroutines exit
-			// when they observe ctx (or, worst case, run to completion in
-			// the background and their sends are dropped because nobody is
-			// reading).
-			for {
-				select {
-				case o, ok := <-resCh:
-					if !ok {
-						return finalize(results, errs, ctx.Err())
-					}
-					if o.res != nil {
-						results = append(results, o.res)
-					}
-					if o.err != nil {
-						errs = append(errs, o.err)
-					}
-				default:
-					return finalize(results, errs, ctx.Err())
-				}
-			}
-		case o, ok := <-resCh:
-			if !ok {
-				return finalize(results, errs, nil)
-			}
+	// Bug #12: drain resCh in a dedicated goroutine. If the caller returns
+	// early on ctx cancellation, the drainer keeps running until the closer
+	// fires close(resCh) — guaranteeing in-flight enricher sends never block
+	// and that the wg+channel+goroutine state becomes eligible for GC once
+	// the slow enricher eventually exits, even if the caller has long since
+	// moved on. The shared mutex + snapshot pattern lets ctx.Done() return
+	// partial results (preserves TestEnrichAll_HungEnricherDoesNotBlockOthers)
+	// while the drainer continues to consume in the background.
+	var (
+		mu        sync.Mutex
+		results   []*Result
+		errs      []error
+		drainDone = make(chan struct{})
+	)
+	go func() {
+		for o := range resCh {
+			mu.Lock()
 			if o.res != nil {
 				results = append(results, o.res)
 			}
 			if o.err != nil {
 				errs = append(errs, o.err)
 			}
+			mu.Unlock()
 		}
+		close(drainDone)
+	}()
+
+	snapshot := func(ctxErr error) ([]*Result, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		// Copy slices so the background drainer can keep appending after
+		// the caller returns without racing on the returned data.
+		snapResults := append([]*Result(nil), results...)
+		snapErrs := append([]error(nil), errs...)
+		return finalize(snapResults, snapErrs, ctxErr)
+	}
+
+	select {
+	case <-drainDone:
+		return snapshot(nil)
+	case <-ctx.Done():
+		return snapshot(ctx.Err())
 	}
 }
 
