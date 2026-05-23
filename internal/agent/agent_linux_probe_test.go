@@ -5,6 +5,7 @@ package agent
 import (
 	"net"
 	"testing"
+	"time"
 )
 
 func TestMatchProbeDenyEvent_Match(t *testing.T) {
@@ -43,5 +44,14 @@ func TestMatchProbeDenyEvent_ShortBuffer(t *testing.T) {
 	t.Parallel()
 	if matchProbeDenyEvent(make([]byte, denyEventWireSize-1)) {
 		t.Fatalf("expected no match: truncated payload must be rejected")
+	}
+}
+
+// Bug #3: a nil LSM ringbuf reader must short-circuit to silent=true so the
+// caller downgrades the backend label rather than claiming LSM defense.
+func TestProbeLSMSilent_NilReaderReturnsSilent(t *testing.T) {
+	t.Parallel()
+	if !probeLSMSilent(nil, 100*time.Millisecond) {
+		t.Fatalf("probeLSMSilent(nil) = false; want true (no reader → silent)")
 	}
 }

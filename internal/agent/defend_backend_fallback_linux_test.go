@@ -99,3 +99,26 @@ func TestDefendBackendUsesCgroupWhenLSMUnavailable(t *testing.T) {
 		t.Fatalf("expected cgroup backend without LSM, got %q", outcome.backend)
 	}
 }
+
+// Bug #3: downgradeMode flips the mode label after backend choice when the
+// post-attach LSM probe finds the hooks silent. It must NOT clobber the
+// allowlist counters captured by setModeAndAllowlist — those were populated
+// from the actual BPF maps and remain accurate even when LSM is silent.
+func TestDefendStateDowngradeModePreservesAllowlistCounters(t *testing.T) {
+	state := newDefendState()
+	state.setModeAndAllowlist(defendModeLSM, 7, 3)
+	state.setIPv6AllowlistSize(2)
+
+	state.downgradeMode(defendModeCgroup)
+
+	snap := state.snapshot()
+	if snap.mode != defendModeCgroup {
+		t.Errorf("mode = %q; want %q", snap.mode, defendModeCgroup)
+	}
+	if snap.allowlistSize != 7 {
+		t.Errorf("allowlistSize = %d; want 7 (must not be reset by downgrade)", snap.allowlistSize)
+	}
+	if snap.allowlistIPv6Size != 2 {
+		t.Errorf("allowlistIPv6Size = %d; want 2 (must not be reset by downgrade)", snap.allowlistIPv6Size)
+	}
+}

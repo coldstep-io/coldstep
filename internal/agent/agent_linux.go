@@ -489,6 +489,28 @@ func Run(ctx context.Context, cfg config.Config) error {
 			_ = writeAgentStatus(cfg.AgentStatusPath, false)
 			return fmt.Errorf("defend mode requires confirmed cgroup BPF enforcement: %w", err)
 		}
+
+		// Bug #3: AttachLSM can succeed but the kernel may still never invoke
+		// our LSM programs — Ubuntu 24.04 ships with `lsm=lockdown,yama,apparmor`
+		// by default (no `bpf` token), in which case `security_socket_connect`
+		// loads + attaches without ever dispatching. Cgroup probe just confirmed
+		// cgroup is firing; run the same dial-loop-and-drain pattern against the
+		// LSM ringbuf, and downgrade the backend label from `defend+lsm` to
+		// `defend+cgroup` when no LSM events arrive. The LSM ringbuf reader stays
+		// alive for any events that may yet fire — we just stop *claiming* LSM
+		// defense in the digest when it's observably absent.
+		if hasLSM && lsmDenyRd.R != nil {
+			if probeLSMSilent(lsmDenyRd.R, lsmProbeTimeout) {
+				defendState.downgradeMode(defendModeForBackend(defendBackendCgroup))
+				bpfSt = append(bpfSt, telemetry.BPFStatus{
+					Name:   "lsm_attached_but_silent",
+					OK:     false,
+					Detail: "lsm hooks attached but no deny events observed during post-attach probe; downgraded backend label to cgroup. Common on Ubuntu 24.04 where the kernel `lsm=` boot chain omits bpf — boot with e.g. `lsm=lockdown,yama,bpf,apparmor` to restore LSM dispatch.",
+				})
+				slog.Warn("defend: lsm hooks attached but silent during post-attach probe; downgrading backend label to cgroup",
+					"hint", "kernel `lsm=` boot chain likely missing `bpf` (Ubuntu 24.04 default)")
+			}
+		}
 	}
 
 	var execObjs traceexec.TraceexecObjects

@@ -107,6 +107,16 @@ func (s *defendState) setModeAndAllowlist(mode string, allowlistSize, ignoredSiz
 	s.expectedIgnoredEntries = ignoredSize
 }
 
+// downgradeMode replaces the mode label without disturbing allowlist
+// counters. Used by the LSM-silent probe to flip `defend+lsm` to
+// `defend+cgroup` after the fact when LSM attaches succeed but the kernel
+// never dispatches to the hooks (Ubuntu 24.04 default `lsm=` boot chain).
+func (s *defendState) downgradeMode(mode string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mode = mode
+}
+
 // setIPv6AllowlistSize records the number of /128 entries written into the
 // BPF allowed_ipv6 LPM trie at startup. Called from loadDefendMaps after
 // populateAllowedIPv6Map. Zero means defend is in pure block-all IPv6
