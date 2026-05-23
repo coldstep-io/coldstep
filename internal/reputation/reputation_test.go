@@ -203,6 +203,54 @@ func TestEnrichAll_HungEnricherDoesNotBlockOthers(t *testing.T) {
 	}
 }
 
+// ignoringHangEnricher blocks on a test-controlled channel and intentionally
+// ignores ctx. Used to verify Bug #12 — EnrichAll must not block the caller
+// when an enricher ignores ctx cancellation.
+type ignoringHangEnricher struct {
+	name    string
+	release <-chan struct{}
+}
+
+func (h *ignoringHangEnricher) Name() string { return h.name }
+func (h *ignoringHangEnricher) Enrich(_ context.Context, _ string) (*reputation.Result, error) {
+	<-h.release
+	return nil, nil
+}
+
+// Bug #12: EnrichAll must return promptly on ctx cancellation even when an
+// enricher ignores ctx. The slow goroutine is allowed to linger (memory will
+// be reclaimed once it exits); the caller must not be held hostage.
+func TestEnrichAll_DoesNotBlockOnCtxIgnoringEnricher(t *testing.T) {
+	reputation.Reset()
+	t.Cleanup(reputation.Reset)
+
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+
+	reputation.Register(&ignoringHangEnricher{name: "ignoring", release: release})
+	reputation.Register(&fakeEnricher{name: "fast", result: &reputation.Result{Score: 1}})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	done := make(chan struct{})
+	var err error
+	go func() {
+		_, err = reputation.EnrichAll(ctx, "1.1.1.1")
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		// EnrichAll returned promptly — fix is working.
+	case <-time.After(2 * time.Second):
+		t.Fatalf("EnrichAll did not return within 2s of ctx deadline (50ms) — caller blocked on ctx-ignoring enricher")
+	}
+	if err == nil {
+		t.Fatalf("expected ctx error from EnrichAll, got nil")
+	}
+}
+
 func TestEnrichAll_PartialErrorsReturned(t *testing.T) {
 	reputation.Reset()
 	t.Cleanup(reputation.Reset)

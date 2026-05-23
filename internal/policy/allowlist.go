@@ -246,10 +246,16 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 					lookupCtx, cancel := context.WithTimeout(gctx, coldstepDomainLookupAttemptTimeout)
 					ips4, err4 := resolver(lookupCtx, "ip4", d)
 					cancel()
+					// Bug #7: distinguish parent-cancel from per-attempt timeout.
+					// Both surface as context.Canceled / context.DeadlineExceeded on err4,
+					// but only parent-cancel means "stop retrying"; an attempt-context
+					// timeout is exactly the case retries exist for.
 					if err4 != nil && (errors.Is(err4, context.Canceled) || errors.Is(err4, context.DeadlineExceeded)) {
-						break
-					}
-					if err4 == nil {
+						if gctx.Err() != nil {
+							break
+						}
+						// per-attempt deadline fired: fall through to next attempt
+					} else if err4 == nil {
 						for _, ip := range ips4 {
 							if ip.To4() != nil {
 								res.ips4 = append(res.ips4, ip)
@@ -263,9 +269,11 @@ func CompileDomainAllowlist(ctx context.Context, domains []string, resolver Look
 					ips6, err6 := resolver(lookupCtx6, "ip6", d)
 					cancel6()
 					if err6 != nil && (errors.Is(err6, context.Canceled) || errors.Is(err6, context.DeadlineExceeded)) {
-						break
-					}
-					if err6 == nil {
+						if gctx.Err() != nil {
+							break
+						}
+						// per-attempt deadline fired: fall through to next attempt
+					} else if err6 == nil {
 						for _, ip := range ips6 {
 							if ip.To4() == nil && ip.To16() != nil {
 								res.ips6 = append(res.ips6, ip)
