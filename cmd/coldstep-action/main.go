@@ -367,9 +367,15 @@ func runStop(cfg stopConfig) error {
 			if p, perr := os.FindProcess(pid); perr == nil {
 				_ = p.Signal(syscall.SIGTERM)
 			}
+			// Poll for the agent to exit instead of using a fixed sleep. The
+			// previous 400ms hard sleep was shorter than the agent's actual
+			// shutdown drain on defend-mode runs (BPF ringbuf flush + digest
+			// write), producing truncated `.coldstep-detect.md` files. The 10s
+			// upper bound matches the defend-mode drain budget so we wait long
+			// enough on slow runners without hanging forever on a stuck agent.
+			waitForAgentExit(pid, 10*time.Second, 100*time.Millisecond)
 		}
 	}
-	time.Sleep(400 * time.Millisecond)
 
 	body := ""
 	if raw, err := os.ReadFile(detectLog); err == nil {
@@ -592,6 +598,29 @@ func pidAlive(pid int) bool {
 	}
 	err = p.Signal(syscall.Signal(0))
 	return err == nil
+}
+
+// waitForAgentExit polls pidAlive at the given tick until the agent process
+// is gone or the timeout elapses. Emits one stderr line either way so logs
+// distinguish a clean drain from a hung agent. Returns true when the agent
+// exited within the budget.
+func waitForAgentExit(pid int, timeout, tick time.Duration) bool {
+	if pid <= 0 || timeout <= 0 || tick <= 0 {
+		return false
+	}
+	start := time.Now()
+	deadline := start.Add(timeout)
+	for {
+		if !pidAlive(pid) {
+			fmt.Fprintf(os.Stderr, "coldstep: agent pid=%d exited cleanly after %s\n", pid, time.Since(start).Round(time.Millisecond))
+			return true
+		}
+		if !time.Now().Before(deadline) {
+			fmt.Fprintf(os.Stderr, "coldstep: agent pid=%d still alive after %s; proceeding with digest read anyway\n", pid, timeout)
+			return false
+		}
+		time.Sleep(tick)
+	}
 }
 
 func sanitizeDigestForMarkdown(body string) string {
