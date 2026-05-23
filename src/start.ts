@@ -30,6 +30,75 @@ function headUtf8File(filePath: string, maxChars: number): string {
   }
 }
 
+// Bug #15: on most PAM stacks sudo forks before exec'ing the agent. The
+// child.pid we get back from spawn('sudo', ...) is the sudo process; using
+// it for kill / liveness checks masks an agent crash and fails to propagate
+// SIGTERM. Walk /proc/<pid>/task/<pid>/children to locate the descendant
+// whose comm is "coldstep". Linux-only; on other platforms (test runs)
+// the sudo PID is returned unchanged. Falls back to sudoPid when no
+// descendant appears inside the budget so we never end up with a zero PID.
+function findAgentPidViaProc(sudoPid: number, timeoutMs: number): number {
+  if (process.platform !== 'linux' || sudoPid <= 0) return sudoPid;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (true) {
+    const found = walkProcForComm(sudoPid, 'coldstep');
+    if (found > 0) return found;
+    if (Date.now() >= deadline) return sudoPid;
+    // Busy-wait briefly. The expected total budget is ~2s; per-iteration
+    // sleep keeps wall-clock cost low without thrashing /proc.
+    const until = Date.now() + 25;
+    while (Date.now() < until) { /* spin */ }
+  }
+}
+
+function walkProcForComm(rootPid: number, wantComm: string): number {
+  const queue: number[] = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  let steps = 0;
+  while (queue.length > 0 && steps < 256) {
+    steps++;
+    const pid = queue.shift()!;
+    if (pid !== rootPid) {
+      try {
+        const raw = fs.readFileSync(`/proc/${pid}/comm`, 'utf8');
+        if (raw.trim() === wantComm) return pid;
+      } catch { /* process exited, ignore */ }
+    }
+    for (const child of readProcChildren(pid)) {
+      if (!seen.has(child)) {
+        seen.add(child);
+        queue.push(child);
+      }
+    }
+  }
+  return 0;
+}
+
+// Multi-threaded processes (the Go runtime, ld.so + a threaded test binary)
+// can fork from any worker thread; the children list lives under
+// /proc/<pid>/task/<forking-tid>/children, not uniformly under the main TID.
+// Walk every thread TID to be safe — sudo is single-threaded so the common
+// case is one lookup, but the helper has to work in unit tests too.
+function readProcChildren(pid: number): number[] {
+  const out = new Set<number>();
+  let tids: string[];
+  try {
+    tids = fs.readdirSync(`/proc/${pid}/task`);
+  } catch {
+    tids = [String(pid)];
+  }
+  for (const tid of tids) {
+    try {
+      const raw = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, 'utf8');
+      for (const tok of raw.split(/\s+/)) {
+        const c = parseInt(tok, 10);
+        if (!isNaN(c) && c > 0) out.add(c);
+      }
+    } catch { /* thread may have exited mid-read */ }
+  }
+  return Array.from(out);
+}
+
 function pidLooksAlive(pid: number | undefined): boolean | undefined {
   if (pid === undefined || pid <= 0) return undefined;
   try {
@@ -204,7 +273,11 @@ export async function startAgent(): Promise<void> {
   const actionPath = actionRootPath();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
   const detectLog = path.join(baseDir, '.coldstep-detect.md');
-  // PID file lives in the workspace so bash steps can read it without knowing the action path.
+  // Bug #9: PID file lives under $GITHUB_WORKSPACE so the TS entrypoints,
+  // the Go cmd/coldstep-action runStart/runStop, and external bash steps
+  // all agree on a single location. Mixed-entrypoint use (Go start + TS
+  // stop, or vice versa) otherwise no-ops the stop SIGTERM — the agent
+  // runs until SIGKILL on runner teardown with no digest flush.
   const pidFile = path.join(baseDir, '.coldstep.pid');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');
   const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
@@ -295,8 +368,12 @@ export async function startAgent(): Promise<void> {
     return;
   }
   child.unref();
-  fs.writeFileSync(pidFile, String(child.pid), 'utf8');
-  core.info(`coldstep started pid=${child.pid} mode=${mode}`);
+  // Bug #15: child.pid is the sudo PID; record the agent's actual PID
+  // (sudo's coldstep descendant) so stop.ts can SIGTERM the right process
+  // and pidLooksAlive doesn't return a false positive after an agent crash.
+  const agentPid = findAgentPidViaProc(child.pid, 2000);
+  fs.writeFileSync(pidFile, String(agentPid), 'utf8');
+  core.info(`coldstep started pid=${agentPid} (sudo pid=${child.pid}) mode=${mode}`);
 
   if (!failOnError) {
     core.warning(
@@ -346,8 +423,13 @@ export async function startAgent(): Promise<void> {
           `coldstep agent did not become ready in time (${readyBudgetMs / 1000}s — BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`,
         );
       }
+      // Bug #15: signal the agent directly, not sudo (which does not
+      // propagate). Fall through to child.pid (sudo) as a last resort if
+      // discovery returned 0 — shouldn't happen because findAgentPidViaProc
+      // falls back to sudoPid itself, but be defensive.
+      const killTarget = agentPid > 0 ? agentPid : child.pid!;
       try {
-        process.kill(child.pid!, 'SIGTERM');
+        process.kill(killTarget, 'SIGTERM');
       } catch {
         /* ignore */
       }
