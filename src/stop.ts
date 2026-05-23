@@ -343,7 +343,10 @@ export async function stopAgent(): Promise<void> {
   }
 
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
-  // PID file is in the workspace (matches start.ts) so bash steps can read it too.
+  // Bug #9: PID file must match start.ts and cmd/coldstep-action's
+  // runStart — workspace location is the public, documented contract.
+  // Mixed-entrypoint use (e.g. Go start + TS stop) otherwise reads a
+  // different file, no-ops SIGTERM, and the agent is SIGKILLed instead.
   const pidFile = path.join(baseDir, '.coldstep.pid');
   if (!fs.existsSync(pidFile)) {
     core.warning('pid file missing; agent may not have started');

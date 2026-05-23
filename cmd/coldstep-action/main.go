@@ -192,7 +192,12 @@ func runStart(cfg startConfig) error {
 	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
 	binPath := filepath.Join(actionPath, "bin", "coldstep")
 	buildScript := filepath.Join(actionPath, "scripts", "build-agent-linux.sh")
-	pidFile := filepath.Join(actionPath, ".coldstep.pid")
+	// Bug #9: pidFile lives under $GITHUB_WORKSPACE (baseDir) so the Go
+	// entrypoints, the legacy TS entrypoints (src/start.ts and src/stop.ts),
+	// and external workflow steps all agree on where to find the agent's
+	// PID. Mixed-entrypoint use otherwise no-ops the stop SIGTERM, leaving
+	// the agent to be SIGKILLed on runner teardown with no digest flush.
+	pidFile := filepath.Join(baseDir, ".coldstep.pid")
 	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
 	stderrLog := filepath.Join(baseDir, ".coldstep-agent.stderr.log")
@@ -320,13 +325,24 @@ func runStart(cfg startConfig) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	// stopAgent terminates the child if we return an error after a successful Start.
+	// Bug #15: cmd.Process.Pid is the sudo PID, not the agent's. On most
+	// PAM stacks sudo forks before exec'ing the agent — using sudoPid for
+	// pidAlive polling masks an agent crash (sudo can stay alive after its
+	// child dies), and sending SIGTERM to sudo does not propagate. Walk the
+	// /proc descendant tree to find the agent, falling back to sudoPid only
+	// if discovery times out (so we never end up with a zero PID).
+	sudoPid := cmd.Process.Pid
+	agentPid := findAgentPID(sudoPid, 2*time.Second)
+	// stopAgent terminates the agent (not sudo) if we return an error after
+	// a successful Start.
 	stopAgent := func() {
-		if p := cmd.Process; p != nil {
-			_ = p.Signal(syscall.SIGTERM)
+		if agentPid > 0 {
+			if p, perr := os.FindProcess(agentPid); perr == nil {
+				_ = p.Signal(syscall.SIGTERM)
+			}
 		}
 	}
-	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644); err != nil {
+	if err := os.WriteFile(pidFile, []byte(strconv.Itoa(agentPid)), 0o644); err != nil {
 		stopAgent()
 		return err
 	}
@@ -337,7 +353,7 @@ func runStart(cfg startConfig) error {
 
 	if cfg.FailOnError {
 		seconds := clamp(cfg.ReadyTimeoutSeconds, 60, 2700)
-		outcome := waitForReady(agentStatus, time.Duration(seconds)*time.Second, cmd.Process.Pid)
+		outcome := waitForReady(agentStatus, time.Duration(seconds)*time.Second, agentPid)
 		if outcome != "ready" {
 			stopAgent()
 			return fmt.Errorf("coldstep agent did not report ready (%s)", outcome)
@@ -353,7 +369,9 @@ func runStart(cfg startConfig) error {
 func runStop(cfg stopConfig) error {
 	actionPath := getenvDefault("GITHUB_ACTION_PATH", mustGetwd())
 	baseDir := getenvDefault("GITHUB_WORKSPACE", actionPath)
-	pidFile := filepath.Join(actionPath, ".coldstep.pid")
+	// Bug #9: must match runStart's pidFile path so mixed-entrypoint runs
+	// (Go start + TS stop, or vice versa) read the same file.
+	pidFile := filepath.Join(baseDir, ".coldstep.pid")
 	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
 	readyMarker := filepath.Join(actionPath, ".coldstep.ready.ok")
