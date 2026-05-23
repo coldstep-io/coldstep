@@ -7,10 +7,11 @@ import (
 )
 
 // detectReportPreamble is written once when the detect log file is still empty.
-// Tuned for GitHub Actions job summaries (GFM + limited HTML). (Double-quoted so inline `…` renders in Markdown.)
+// Tuned for GitHub Actions job summaries: pure GFM only. Bug #13 — `<p align>`
+// and `<sub>` fall outside the GitHub Job Summary HTML allowlist and rendered
+// as literal HTML text rather than centered subtitled prose.
 const detectReportPreamble = "## Coldstep · detect\n\n" +
-	"<p align=\"center\"><strong>eBPF runtime audit trail</strong><br/>\n" +
-	"<sub>Process exec plus optional IPv4 TCP (and best-effort DNS names). Detect-only: observe, do not block.</sub></p>\n\n" +
+	"**eBPF runtime audit trail** — process exec plus optional IPv4 TCP (and best-effort DNS names). Detect-only: observe, do not block.\n\n" +
 	"> **Reading this table:** each row is one event from this job. **Comm** is the kernel task name (16-byte field), not full argv or binary path.\n\n" +
 	"<details>\n<summary><strong>Signal sources</strong></summary>\n\n" +
 	"| Kind | Origin |\n|:--|:--|\n" +

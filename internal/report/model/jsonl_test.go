@@ -28,6 +28,33 @@ func TestLoadEventsReturnsErrOnMissingFile(t *testing.T) {
 	}
 }
 
+// Bug #10: a leading UTF-8 BOM (EF BB BF) on the first line must not
+// cause the first event (typically meta) to be dropped via silent
+// json.Unmarshal failure. Reproduce a Windows-edited JSONL with BOM and
+// assert the meta event is parsed correctly.
+func TestLoadEventsStripsLeadingUTF8BOM(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, "bom.jsonl")
+	body := "\xef\xbb\xbf" + `{"type":"meta","schema":"v1"}` + "\n" +
+		`{"type":"tcp","dst":"10.0.0.1"}` + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events, err := LoadEvents(path)
+	if err != nil {
+		t.Fatalf("LoadEvents: %v", err)
+	}
+	if got, want := len(events), 2; got != want {
+		t.Fatalf("event count = %d; want %d (BOM must not drop the meta line)", got, want)
+	}
+	if events[0]["type"] != "meta" {
+		t.Fatalf("first event type = %v; want meta (BOM must not corrupt parse)", events[0]["type"])
+	}
+	if events[0]["schema"] != "v1" {
+		t.Fatalf("first event schema = %v; want v1", events[0]["schema"])
+	}
+}
+
 func TestLoadEventsRejectsTooManyParsedEvents(t *testing.T) {
 	tmp := t.TempDir()
 	path := filepath.Join(tmp, "e.jsonl")

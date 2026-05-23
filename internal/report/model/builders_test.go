@@ -118,6 +118,38 @@ func TestDiffWithEmptyNonNilBaselineReportsUnavailable(t *testing.T) {
 	}
 }
 
+// Bug #11: BuildDiff fingerprint must conflate dst-only and name-bearing
+// events for the same destination IP. Two consecutive identical runs where
+// one has fqdn populated and the other doesn't (DNS cache miss race) must
+// produce zero diff entries.
+func TestDiffFingerprintCollapsesDNSCacheMiss(t *testing.T) {
+	// Baseline: dst has fqdn populated.
+	baseline := []Event{
+		{"type": "tcp", "fqdn": "example.com", "dst": "1.2.3.4"},
+		{"type": "tls", "fqdn": "example.com", "sni": "example.com", "dst": "1.2.3.4"},
+	}
+	// Current: identical egress, but DNS cache missed on the tcp event so
+	// fqdn is empty. The tls event still has the name.
+	current := []Event{
+		{"type": "tcp", "dst": "1.2.3.4"},
+		{"type": "tls", "fqdn": "example.com", "sni": "example.com", "dst": "1.2.3.4"},
+	}
+
+	d := BuildDiff(current, baseline)
+	if d.Status != "ok" {
+		t.Fatalf("diff.status = %q; want ok", d.Status)
+	}
+	if len(d.TrafficNew) != 0 {
+		t.Errorf("traffic_new = %v; want empty (DNS cache miss must not flip fingerprint)", d.TrafficNew)
+	}
+	if len(d.TrafficGone) != 0 {
+		t.Errorf("traffic_gone = %v; want empty (DNS cache miss must not flip fingerprint)", d.TrafficGone)
+	}
+	if len(d.TrafficChanged) != 0 {
+		t.Errorf("traffic_changed = %v; want empty", d.TrafficChanged)
+	}
+}
+
 func TestDiffWithBaselineIncludesNewGoneChangedAndIndicators(t *testing.T) {
 	current := []Event{
 		{"type": "tcp", "fqdn": "new.example", "dst": "1.1.1.1"},

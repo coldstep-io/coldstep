@@ -57,7 +57,12 @@ func loadEvents(path string, lim loadEventsLimits) ([]Event, error) {
 		if scanLines > lim.maxScanLines {
 			return nil, fmt.Errorf("jsonl exceeds max scan line count (%d)", lim.maxScanLines)
 		}
-		line := strings.TrimSpace(s.Text())
+		// Bug #10: strip a leading UTF-8 BOM (EF BB BF). Windows producers
+		// (or copy-pasted artifacts edited in Notepad) prepend the BOM to
+		// the first line; without this strip, json.Unmarshal fails silently
+		// on that line, discarding the first event — typically `meta` —
+		// which skews ObservationWindow and can flip the integrity gate.
+		line := strings.TrimPrefix(strings.TrimSpace(s.Text()), "\xef\xbb\xbf")
 		if line == "" {
 			continue
 		}
