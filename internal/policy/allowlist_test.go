@@ -161,6 +161,40 @@ func TestCompileDomainAllowlist_ContextCanceledStopsRetries(t *testing.T) {
 	}
 }
 
+// Bug #7: per-attempt DeadlineExceeded must not abort the retry loop.
+// When a resolver returns context.DeadlineExceeded on attempt 1 (the
+// per-attempt context fired) and succeeds on attempt 2, the result must
+// land the IP in AllowedIPv4 — proving the retry loop did not break.
+func TestCompileDomainAllowlist_PerAttemptTimeoutRetries(t *testing.T) {
+	ctx := context.Background()
+	var ip4Calls atomic.Int32
+	resolver := func(_ context.Context, network, _ string) ([]net.IP, error) {
+		switch network {
+		case "ip4":
+			n := ip4Calls.Add(1)
+			if n == 1 {
+				return nil, context.DeadlineExceeded
+			}
+			return []net.IP{net.ParseIP("10.0.0.1")}, nil
+		case "ip6":
+			return nil, nil
+		default:
+			return nil, errors.New("unexpected network")
+		}
+	}
+
+	got := CompileDomainAllowlist(ctx, []string{"retry.example.com"}, resolver, 3)
+	if len(got.UnresolvedDomains) != 0 {
+		t.Fatalf("UnresolvedDomains: got %v want empty (retry should have succeeded)", got.UnresolvedDomains)
+	}
+	if !got.AllowedIPv4.Contains(net.ParseIP("10.0.0.1")) {
+		t.Fatalf("AllowedIPv4 missing 10.0.0.1; second attempt should have populated it")
+	}
+	if n := ip4Calls.Load(); n < 2 {
+		t.Fatalf("ip4 resolver calls: got %d want >=2 (must have retried after per-attempt timeout)", n)
+	}
+}
+
 func TestCompileDomainAllowlist_MaxAttemptsFloor(t *testing.T) {
 	ctx := context.Background()
 	calls := 0
