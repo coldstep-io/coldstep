@@ -309,109 +309,28 @@ func Run(ctx context.Context, cfg config.Config) error {
 			_ = defendObjs.Close()
 		}()
 
-		var lsmAttachErr error
-		var ioUringAttachErr error
-		ioUringAttempted := false
-
-		if haveLSM {
-			if _, _, loadErr := loadLSMDefendMaps(&defendObjs, defendCompiled, pol); loadErr != nil {
-				return loadErr
-			}
-
-			rd, err := ringbuf.NewReader(defendObjs.LsmDenyEvents)
-			if err != nil {
-				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
-			}
-
-			lnk1, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketConnect})
-			if err != nil {
-				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
-				_ = rd.Close()
-			} else {
-				lnk2, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendmsg})
-				if err != nil {
-					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
-					_ = lnk1.Close()
-					_ = rd.Close()
-				} else {
-					hasLSM = true
-					// Keep the LSM ringbuf as a secondary reader. The primary denyRd
-					// always reads from the cgroup ringbuf (attached below) because on
-					// some kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but
-					// never fire — `lsm_deny_events` then stays empty even though
-					// cgroup is defending.
-					lsmDenyRd.R = rd
-					defer lnk1.Close()
-					defer lnk2.Close()
-
-					// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
-					// so the sock_sendpage() path is gated against the same IPv4
-					// allowlist. Optional — tolerate missing program (older stubs)
-					// and attach failures (very old kernels that lack the
-					// sendpage LSM hook). On kernel 6.8+ this hook is never
-					// invoked because sendfile/splice go through sendmsg with
-					// MSG_SPLICE_PAGES; attaching anyway is harmless.
-					// TODO: regenerate defend objects after build on Linux so
-					// defendObjs.LsmSocketSendpage is always populated.
-					if defendObjs.LsmSocketSendpage != nil {
-						sendpageLnk, attachErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendpage})
-						if attachErr != nil {
-							slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
-						} else {
-							defer sendpageLnk.Close()
-						}
-					} else {
-						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
-					}
-
-					// H15: lsm/io_uring_cmd is best-effort defense-in-depth on
-					// IORING_OP_URING_CMD; only emit a BPFStatus row when we
-					// actually attempted attach so pre-5.19 kernels are not
-					// reported as degraded for a hook they can't host.
-					if haveIOUringLSM && defendObjs.LsmIoUringCmd != nil {
-						ioUringAttempted = true
-						if lnk3, ioErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmIoUringCmd}); ioErr != nil {
-							slog.Info("lsm/io_uring_cmd attach failed; cgroup+socket LSM still active", "err", ioErr)
-							ioUringAttachErr = ioErr
-						} else {
-							defer lnk3.Close()
-						}
-					}
-				}
-			}
-		}
-
-		if ioUringAttempted {
-			row := telemetry.BPFStatus{Name: "lsm/io_uring_cmd", OK: ioUringAttachErr == nil}
-			if ioUringAttachErr != nil {
-				row.Detail = bpfDetail(ioUringAttachErr)
-			}
-			bpfSt = append(bpfSt, row)
-		}
-
-		backend := chooseDefendBackend(
-			defendBackendConfig{
-				modeDefend: cfg.Mode == config.ModeDefend,
-				haveLSM:    haveLSM,
-			},
-			lsmAttachErr,
-		)
-		if lsmAttachErr != nil {
-			slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
-		}
-
-		// Always program the cgroup defend maps and attach the cgroup hooks,
-		// regardless of whether LSM also attached. The cgroup hook is the
-		// reliable always-on defense path: LSM hooks may attach but never fire
-		// when the kernel's `lsm=` boot chain excludes BPF (Ubuntu 24.04 ships
-		// this way). The primary deny reader watches the cgroup `deny_events`
-		// ringbuf; the LSM ringbuf, when present, is drained by a separate
-		// reader.
+		// Bug #14 — attach order: cgroup hooks attach BEFORE LSM hooks.
+		//
+		// On kernels where LSM programs load + attach successfully but
+		// never fire (Ubuntu 24.04 default boots with
+		// `lsm=lockdown,yama,apparmor` — no `bpf` token, so
+		// security_socket_connect dispatch skips BPF entirely), the previous
+		// LSM-first order created a ~50-500 ms window between LSM attach
+		// completing and cgroup attach completing where neither hook was
+		// blocking: LSM had attached but the kernel never invoked it, and
+		// cgroup had not attached yet. Outbound connections in that window
+		// went through unfiltered.
+		//
+		// The cgroup hook is the reliable always-on defense path on all
+		// supported kernels (5.5+ with cgroupv2). Attach it first, run
+		// probeDefendEnforcement to confirm it is actively denying, and
+		// only then attempt LSM as defense-in-depth on top. If LSM attaches
+		// but stays silent, probeLSMSilent below downgrades the backend
+		// label without disturbing the already-confirmed cgroup defense.
 		allowlistSize, ipv6AllowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
 		if loadErr != nil {
 			return loadErr
 		}
-		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
 		defendState.setIPv6AllowlistSize(ipv6AllowlistSize)
 		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
@@ -485,10 +404,108 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// kernel has been observed to not yet enforce for newly-created sockets for
 		// ~1-3s afterward — so the first connect after .coldstep-ready.json was
 		// written could slip through. Block until a live probe deny is observed.
+		// This also closes the Bug #14 window: by the time we attempt LSM attach
+		// (below), cgroup is proven to be actively denying — so any connections
+		// during the LSM-attach phase remain covered.
 		if err := probeDefendEnforcement(denyRd.R, defaultProbeTimeout); err != nil {
 			_ = writeAgentStatus(cfg.AgentStatusPath, false)
 			return fmt.Errorf("defend mode requires confirmed cgroup BPF enforcement: %w", err)
 		}
+
+		// LSM attaches on top of confirmed cgroup defense. If any LSM hook
+		// fails to attach, cgroup keeps enforcing and the digest reflects
+		// `defend+cgroup` instead of `defend+lsm`.
+		var lsmAttachErr error
+		var ioUringAttachErr error
+		ioUringAttempted := false
+
+		if haveLSM {
+			if _, _, loadErr := loadLSMDefendMaps(&defendObjs, defendCompiled, pol); loadErr != nil {
+				return loadErr
+			}
+
+			rd, err := ringbuf.NewReader(defendObjs.LsmDenyEvents)
+			if err != nil {
+				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
+			}
+
+			lnk1, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketConnect})
+			if err != nil {
+				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
+				_ = rd.Close()
+			} else {
+				lnk2, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendmsg})
+				if err != nil {
+					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
+					_ = lnk1.Close()
+					_ = rd.Close()
+				} else {
+					hasLSM = true
+					// Keep the LSM ringbuf as a secondary reader. The primary denyRd
+					// reads from the cgroup ringbuf (attached above) because on some
+					// kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but never
+					// fire — `lsm_deny_events` then stays empty even though cgroup
+					// is defending.
+					lsmDenyRd.R = rd
+					defer lnk1.Close()
+					defer lnk2.Close()
+
+					// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
+					// so the sock_sendpage() path is gated against the same IPv4
+					// allowlist. Optional — tolerate missing program (older stubs)
+					// and attach failures (very old kernels that lack the
+					// sendpage LSM hook). On kernel 6.8+ this hook is never
+					// invoked because sendfile/splice go through sendmsg with
+					// MSG_SPLICE_PAGES; attaching anyway is harmless.
+					// TODO: regenerate defend objects after build on Linux so
+					// defendObjs.LsmSocketSendpage is always populated.
+					if defendObjs.LsmSocketSendpage != nil {
+						sendpageLnk, attachErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendpage})
+						if attachErr != nil {
+							slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
+						} else {
+							defer sendpageLnk.Close()
+						}
+					} else {
+						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
+					}
+
+					// H15: lsm/io_uring_cmd is best-effort defense-in-depth on
+					// IORING_OP_URING_CMD; only emit a BPFStatus row when we
+					// actually attempted attach so pre-5.19 kernels are not
+					// reported as degraded for a hook they can't host.
+					if haveIOUringLSM && defendObjs.LsmIoUringCmd != nil {
+						ioUringAttempted = true
+						if lnk3, ioErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmIoUringCmd}); ioErr != nil {
+							slog.Info("lsm/io_uring_cmd attach failed; cgroup+socket LSM still active", "err", ioErr)
+							ioUringAttachErr = ioErr
+						} else {
+							defer lnk3.Close()
+						}
+					}
+				}
+			}
+		}
+
+		if ioUringAttempted {
+			row := telemetry.BPFStatus{Name: "lsm/io_uring_cmd", OK: ioUringAttachErr == nil}
+			if ioUringAttachErr != nil {
+				row.Detail = bpfDetail(ioUringAttachErr)
+			}
+			bpfSt = append(bpfSt, row)
+		}
+
+		backend := chooseDefendBackend(
+			defendBackendConfig{
+				modeDefend: cfg.Mode == config.ModeDefend,
+				haveLSM:    haveLSM,
+			},
+			lsmAttachErr,
+		)
+		if lsmAttachErr != nil {
+			slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
+		}
+		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
 
 		// Bug #3: AttachLSM can succeed but the kernel may still never invoke
 		// our LSM programs — Ubuntu 24.04 ships with `lsm=lockdown,yama,apparmor`
