@@ -27,7 +27,9 @@ inputs:
       Merged with allow-file and the legacy per-type inputs. In defend mode each
       domain is resolved for both A and AAAA records; matching IPv4 and IPv6
       addresses populate the BPF allowlists. IPv6 literals are not accepted as
-      input today — use AAAA-bearing hostnames instead.
+      input today — use AAAA-bearing hostnames instead. Wildcard entries
+      (*.example.com) are detect-only — they are rejected at parse time when
+      mode=defend, because the BPF allowed_domains map uses exact-string lookup.
     required: false
     default: ''
 

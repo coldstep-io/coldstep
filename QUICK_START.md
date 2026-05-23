@@ -102,7 +102,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 | Input | Default | Summary |
 | :---- | :------ | :------ |
 | **`mode`** | `detect` | **`detect`** — observe only. **`defend`** — block non-allowlisted egress (**`enforce`** is rejected). |
-| **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com`), IPv4 literals (`1.2.3.4`), and CIDRs (`10.0.0.0/8`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
+| **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com` — **detect only**, rejected at parse time when `mode: defend`), IPv4 literals (`1.2.3.4`), and CIDRs (`10.0.0.0/8`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
 | **`allow-file`** | *(empty)* | Comma-separated workspace paths to UTF-8 files; same format as `allow`. Merged after inline `allow`. |
 | **`ignored-nets`** | *(empty)* | Extra IPv4 CIDRs to treat as ignored (plus implicit RFC1918 unless disabled below). Also accepts `!CIDR` entries via `allow`. Max **128** merged CIDRs total. |
 | **`ignored-nets-file`** | *(empty)* | File paths for more ignored CIDRs. |
