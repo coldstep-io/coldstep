@@ -74,8 +74,40 @@ func readComm(pid int) string {
 	return strings.TrimSpace(string(raw))
 }
 
+// readProcChildren returns the union of /proc/<pid>/task/<tid>/children
+// across every thread (TID) of pid. A multi-threaded process can fork from
+// any thread; the children list lives under the TID that called fork, not
+// uniformly under /proc/<pid>/task/<pid>. Single-threaded native programs
+// (sudo) populate /proc/<pid>/task/<pid>/children, but the Go-side unit
+// tests fork from the Go runtime's worker threads — we must walk every TID
+// to find them.
 func readProcChildren(pid int) []int {
-	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, pid))
+	entries, err := os.ReadDir(fmt.Sprintf("/proc/%d/task", pid))
+	if err != nil {
+		// Fallback: try the conventional path. Useful when /proc/<pid>/task
+		// is unreadable but /proc/<pid>/task/<pid>/children is.
+		return readChildrenFile(pid, pid)
+	}
+	seen := map[int]struct{}{}
+	var out []int
+	for _, ent := range entries {
+		tid, err := strconv.Atoi(ent.Name())
+		if err != nil {
+			continue
+		}
+		for _, child := range readChildrenFile(pid, tid) {
+			if _, ok := seen[child]; ok {
+				continue
+			}
+			seen[child] = struct{}{}
+			out = append(out, child)
+		}
+	}
+	return out
+}
+
+func readChildrenFile(pid, tid int) []int {
+	raw, err := os.ReadFile(fmt.Sprintf("/proc/%d/task/%d/children", pid, tid))
 	if err != nil {
 		return nil
 	}

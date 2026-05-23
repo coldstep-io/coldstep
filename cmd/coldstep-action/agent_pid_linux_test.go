@@ -50,34 +50,34 @@ func TestFindAgentPID_ZeroSudoPidReturnsZero(t *testing.T) {
 	}
 }
 
-func TestWalkForAgentComm_FindsSelfComm(t *testing.T) {
-	// readComm(self) returns this test process's comm — typically
-	// "coldstep-action.test" (truncated to 15 chars by the kernel). Use it
-	// as the wantComm so the walk has something to match. The root pid is
-	// 1 (init), and self should be a descendant.
-	selfComm := readComm(os.Getpid())
-	if selfComm == "" {
-		t.Skipf("could not read /proc/self/comm")
-	}
-	// Walking from init might be slow on busy systems; instead walk from
-	// our own pid with a child to find. Spawn a sh process so we have a
-	// known descendant.
-	cmd := exec.Command("sh", "-c", "sleep 5")
+func TestWalkForAgentComm_FindsKnownChild(t *testing.T) {
+	// Spawn `sleep` directly so the child's comm is stable as "sleep" — no
+	// fork-exec race (a shell wrapper like `sh -c "sleep 5"` may exec into
+	// sleep, briefly making comm transition from "sh" to "sleep" and
+	// breaking deterministic comparison).
+	cmd := exec.Command("sleep", "5")
 	if err := cmd.Start(); err != nil {
-		t.Skipf("sh not available: %v", err)
+		t.Skipf("sleep not available: %v", err)
 	}
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_, _ = cmd.Process.Wait()
 	})
-	// Give the kernel a moment to populate /proc/<self>/task/<self>/children.
-	time.Sleep(50 * time.Millisecond)
-	want := readComm(cmd.Process.Pid)
-	if want == "" {
-		t.Skipf("could not read child comm")
+	// Poll briefly for the kernel to populate the children list and for the
+	// child's comm to become readable. On loaded CI machines the immediate
+	// post-Start window can race.
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for {
+		if readComm(cmd.Process.Pid) == "sleep" {
+			break
+		}
+		if !time.Now().Before(deadline) {
+			t.Skipf("child comm did not stabilise to 'sleep' within 500ms")
+		}
+		time.Sleep(25 * time.Millisecond)
 	}
-	got := walkForAgentComm(os.Getpid(), want)
+	got := walkForAgentComm(os.Getpid(), "sleep")
 	if got != cmd.Process.Pid {
-		t.Fatalf("walkForAgentComm(%q): got %d want %d", want, got, cmd.Process.Pid)
+		t.Fatalf("walkForAgentComm(\"sleep\"): got %d want %d", got, cmd.Process.Pid)
 	}
 }

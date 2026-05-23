@@ -64,18 +64,39 @@ function walkProcForComm(rootPid: number, wantComm: string): number {
         if (raw.trim() === wantComm) return pid;
       } catch { /* process exited, ignore */ }
     }
-    try {
-      const raw = fs.readFileSync(`/proc/${pid}/task/${pid}/children`, 'utf8');
-      for (const tok of raw.split(/\s+/)) {
-        const c = parseInt(tok, 10);
-        if (!isNaN(c) && c > 0 && !seen.has(c)) {
-          seen.add(c);
-          queue.push(c);
-        }
+    for (const child of readProcChildren(pid)) {
+      if (!seen.has(child)) {
+        seen.add(child);
+        queue.push(child);
       }
-    } catch { /* process exited, ignore */ }
+    }
   }
   return 0;
+}
+
+// Multi-threaded processes (the Go runtime, ld.so + a threaded test binary)
+// can fork from any worker thread; the children list lives under
+// /proc/<pid>/task/<forking-tid>/children, not uniformly under the main TID.
+// Walk every thread TID to be safe — sudo is single-threaded so the common
+// case is one lookup, but the helper has to work in unit tests too.
+function readProcChildren(pid: number): number[] {
+  const out = new Set<number>();
+  let tids: string[];
+  try {
+    tids = fs.readdirSync(`/proc/${pid}/task`);
+  } catch {
+    tids = [String(pid)];
+  }
+  for (const tid of tids) {
+    try {
+      const raw = fs.readFileSync(`/proc/${pid}/task/${tid}/children`, 'utf8');
+      for (const tok of raw.split(/\s+/)) {
+        const c = parseInt(tok, 10);
+        if (!isNaN(c) && c > 0) out.add(c);
+      }
+    } catch { /* thread may have exited mid-read */ }
+  }
+  return Array.from(out);
 }
 
 function pidLooksAlive(pid: number | undefined): boolean | undefined {

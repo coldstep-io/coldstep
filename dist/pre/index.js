@@ -19403,19 +19403,34 @@ function walkProcForComm(rootPid, wantComm) {
       } catch {
       }
     }
+    for (const child of readProcChildren(pid)) {
+      if (!seen.has(child)) {
+        seen.add(child);
+        queue.push(child);
+      }
+    }
+  }
+  return 0;
+}
+function readProcChildren(pid) {
+  const out = /* @__PURE__ */ new Set();
+  let tids;
+  try {
+    tids = fs4.readdirSync(`/proc/${pid}/task`);
+  } catch {
+    tids = [String(pid)];
+  }
+  for (const tid of tids) {
     try {
-      const raw = fs4.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8");
+      const raw = fs4.readFileSync(`/proc/${pid}/task/${tid}/children`, "utf8");
       for (const tok of raw.split(/\s+/)) {
         const c = parseInt(tok, 10);
-        if (!isNaN(c) && c > 0 && !seen.has(c)) {
-          seen.add(c);
-          queue.push(c);
-        }
+        if (!isNaN(c) && c > 0) out.add(c);
       }
     } catch {
     }
   }
-  return 0;
+  return Array.from(out);
 }
 function pidLooksAlive(pid) {
   if (pid === void 0 || pid <= 0) return void 0;
