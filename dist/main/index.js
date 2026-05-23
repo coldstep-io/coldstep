@@ -20292,6 +20292,46 @@ function headUtf8File(filePath, maxChars) {
     return "";
   }
 }
+function findAgentPidViaProc(sudoPid, timeoutMs) {
+  if (process.platform !== "linux" || sudoPid <= 0) return sudoPid;
+  const deadline = Date.now() + Math.max(0, timeoutMs);
+  while (true) {
+    const found = walkProcForComm(sudoPid, "coldstep");
+    if (found > 0) return found;
+    if (Date.now() >= deadline) return sudoPid;
+    const until = Date.now() + 25;
+    while (Date.now() < until) {
+    }
+  }
+}
+function walkProcForComm(rootPid, wantComm) {
+  const queue = [rootPid];
+  const seen = /* @__PURE__ */ new Set([rootPid]);
+  let steps = 0;
+  while (queue.length > 0 && steps < 256) {
+    steps++;
+    const pid = queue.shift();
+    if (pid !== rootPid) {
+      try {
+        const raw = fs4.readFileSync(`/proc/${pid}/comm`, "utf8");
+        if (raw.trim() === wantComm) return pid;
+      } catch {
+      }
+    }
+    try {
+      const raw = fs4.readFileSync(`/proc/${pid}/task/${pid}/children`, "utf8");
+      for (const tok of raw.split(/\s+/)) {
+        const c = parseInt(tok, 10);
+        if (!isNaN(c) && c > 0 && !seen.has(c)) {
+          seen.add(c);
+          queue.push(c);
+        }
+      }
+    } catch {
+    }
+  }
+  return 0;
+}
 function pidLooksAlive(pid) {
   if (pid === void 0 || pid <= 0) return void 0;
   try {
@@ -20525,8 +20565,9 @@ async function startAgent() {
     return;
   }
   child.unref();
-  fs4.writeFileSync(pidFile, String(child.pid), "utf8");
-  info(`coldstep started pid=${child.pid} mode=${mode}`);
+  const agentPid = findAgentPidViaProc(child.pid, 2e3);
+  fs4.writeFileSync(pidFile, String(agentPid), "utf8");
+  info(`coldstep started pid=${agentPid} (sudo pid=${child.pid}) mode=${mode}`);
   if (!failOnError) {
     warning(
       "fail-on-error is false: workflow steps run immediately without waiting for .coldstep-ready.json \u2014 short jobs may observe incomplete BPF attach."
@@ -20574,8 +20615,9 @@ ${tail}`);
           `coldstep agent did not become ready in time (${readyBudgetMs / 1e3}s \u2014 BPF verifier/load/DNS/cgroup attach). Increase ready-timeout-seconds if loads are legitimately slow; see COLDSTEP_BPF_VERBOSE_VERIFY in README.`
         );
       }
+      const killTarget = agentPid > 0 ? agentPid : child.pid;
       try {
-        process.kill(child.pid, "SIGTERM");
+        process.kill(killTarget, "SIGTERM");
       } catch {
       }
     } else {
