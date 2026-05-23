@@ -35,6 +35,18 @@ func TestFormatDetectTCPRow(t *testing.T) {
 	}
 }
 
+// Bug #13: the detect preamble used <p align="center"> and <sub> which are
+// outside GitHub's Job Summary HTML allowlist and rendered as literal text.
+// Regression guard: the preamble must contain only pure GFM.
+func TestDetectReportPreamble_NoForbiddenHTML(t *testing.T) {
+	forbidden := []string{"<p align", "<sub>", "</sub>", "<center", "<font"}
+	for _, tag := range forbidden {
+		if strings.Contains(detectReportPreamble, tag) {
+			t.Fatalf("detect preamble contains forbidden GFM tag %q (renders as literal text in Job Summaries):\n%s", tag, detectReportPreamble)
+		}
+	}
+}
+
 func TestAppendDetectRecord_PreambleOnce(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "detect.md")
