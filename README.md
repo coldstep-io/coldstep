@@ -128,7 +128,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | Input | Purpose |
 | :---- | :------ |
 | `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
-| `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards, IPv4 literals/CIDRs, and `!CIDR` ignore entries. |
+| `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards (**detect only** — rejected at parse time in `defend`), IPv4 literals/CIDRs, and `!CIDR` ignore entries. |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode. |
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
 | `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
