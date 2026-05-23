@@ -10,6 +10,25 @@ import (
 	"github.com/cilium/ebpf/btf"
 )
 
+// LoadResult carries non-error outcomes from LoadDefendObjectsForKernel that
+// the caller needs to surface in telemetry — primarily that wantLSM=true was
+// requested but the LSM section had to be stripped after a prog_load failure
+// so the cgroup-only path could still load.
+type LoadResult struct {
+	// LSMFellBack is true when wantLSM=true was requested but prog_load
+	// rejected the LSM section for a reason other than the kernel-6.5+
+	// socket_sendpage removal (which is handled silently), so the loader
+	// stripped all LSM programs and reloaded the cgroup-only collection.
+	// Callers should set their local haveLSM bool to false in this case,
+	// skip LSM attach, and emit a `lsm_load_failed_fallback_cgroup`
+	// BPFStatus row so the digest records the degraded posture.
+	LSMFellBack bool
+
+	// LSMFallbackErr is the original prog_load error that triggered the
+	// fallback. Empty when LSMFellBack is false.
+	LSMFallbackErr error
+}
+
 // LoadDefendObjectsForKernel populates obj with the cgroup defend programs
 // + shared/cgroup maps unconditionally, plus the LSM programs + LSM-only
 // maps when wantLSM is true.
@@ -25,29 +44,23 @@ import (
 // other LSM hooks still load. Callers should compute wantIOUringLSM via
 // HaveIOUringLSM().
 //
+// Return contract: a nil error means obj is populated and ready to be
+// closed by the caller. The returned LoadResult reports whether the LSM
+// section had to be stripped after a prog_load failure (LSMFellBack); when
+// true, the caller MUST treat haveLSM as false (do not attempt LSM attach)
+// and emit a `lsm_load_failed_fallback_cgroup` BPFStatus row. A non-nil
+// error means obj is untouched and the cgroup-only fallback could not be
+// constructed either — defend cannot start.
+//
 // Caller is responsible for closing obj on shutdown.
-func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool) error {
+func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool) (LoadResult, error) {
 	spec, err := LoadDefend()
 	if err != nil {
-		return err
+		return LoadResult{}, err
 	}
 
 	if !wantLSM {
-		delete(spec.Programs, "lsm_socket_connect")
-		delete(spec.Programs, "lsm_socket_sendmsg")
-		// lsm_socket_sendpage closes the sendfile/splice gap (kernel 5.15);
-		// the program is only present after the BPF stubs have been
-		// regenerated on Linux with the new SEC, hence the silent delete.
-		delete(spec.Programs, "lsm_socket_sendpage")
-		delete(spec.Programs, "lsm_io_uring_cmd")
-		delete(spec.Maps, "lsm_deny_events")
-		delete(spec.Maps, "lsm_deny_reserve_failures")
-		delete(spec.Maps, "lsm_defend_cfg")
-		delete(spec.Maps, "lsm_allowed_ipv4")
-		delete(spec.Maps, "lsm_ignored_ipv4_lpm")
-		// sendpage_observed lives in the LSM section; strip it when LSM is
-		// disabled so we don't pin a per-cpu counter nobody reads.
-		delete(spec.Maps, "sendpage_observed")
+		stripAllLSM(spec)
 	} else {
 		if !kernelHasLSMHook("socket_sendpage") {
 			// Kernel 6.5+ removed the socket_sendpage LSM hook (proto_ops
@@ -71,6 +84,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 	}
 
+	result := LoadResult{}
 	coll, err := ebpf.NewCollection(spec)
 	if err != nil {
 		// Defensive fallback: BTF lookup may have succeeded but prog_load
@@ -80,14 +94,34 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		if wantLSM && isSendpageLoadFailure(err) {
 			spec2, err2 := LoadDefend()
 			if err2 != nil {
-				return err2
+				return LoadResult{}, err2
 			}
 			delete(spec2.Programs, "lsm_socket_sendpage")
 			delete(spec2.Maps, "sendpage_observed")
 			coll, err = ebpf.NewCollection(spec2)
+		} else if wantLSM {
+			// Non-sendpage LSM load failure (e.g. CONFIG_BPF_LSM absent
+			// despite features.HaveProgramType(ebpf.LSM) returning ok,
+			// `lsm=` boot chain without bpf, BTF mismatch on one of the
+			// other LSM hooks). Before this fallback, any such failure
+			// killed the whole defend collection and forced detect-mode-
+			// only operation, even though the cgroup path is independent.
+			// Strip every LSM section and reload — the cgroup connect4 /
+			// sendmsg4 enforcement still works.
+			origLoadErr := err
+			spec2, err2 := LoadDefend()
+			if err2 != nil {
+				return LoadResult{}, err2
+			}
+			stripAllLSM(spec2)
+			coll, err = ebpf.NewCollection(spec2)
+			if err == nil {
+				result.LSMFellBack = true
+				result.LSMFallbackErr = origLoadErr
+			}
 		}
 		if err != nil {
-			return err
+			return LoadResult{}, err
 		}
 	}
 	success := false
@@ -106,7 +140,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	}
 	for _, p := range cgPrograms {
 		if err := detachProgram(coll, p.name, p.dst); err != nil {
-			return err
+			return LoadResult{}, err
 		}
 	}
 
@@ -141,7 +175,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	}
 	for _, m := range cgAndSharedMaps {
 		if err := detachMap(coll, m.name, m.dst); err != nil {
-			return err
+			return LoadResult{}, err
 		}
 	}
 
@@ -172,7 +206,11 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	// allowed_ipv6 map.
 	detachMapIfPresent(coll, "allowed_ipv6", &obj.AllowedIpv6)
 
-	if wantLSM {
+	// LSM section: present only when wantLSM was requested AND the fallback
+	// reload did not strip it. After a fallback, every LSM program/map was
+	// removed from the spec before NewCollection, so detachProgram would
+	// fail with "missing program" — skip the whole block.
+	if wantLSM && !result.LSMFellBack {
 		lsmPrograms := []struct {
 			name string
 			dst  **ebpf.Program
@@ -182,12 +220,12 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 		for _, p := range lsmPrograms {
 			if err := detachProgram(coll, p.name, p.dst); err != nil {
-				return err
+				return LoadResult{}, err
 			}
 		}
 		if wantIOUringLSM {
 			if err := detachProgram(coll, "lsm_io_uring_cmd", &obj.LsmIoUringCmd); err != nil {
-				return err
+				return LoadResult{}, err
 			}
 		}
 		lsmMaps := []struct {
@@ -202,7 +240,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 		for _, m := range lsmMaps {
 			if err := detachMap(coll, m.name, m.dst); err != nil {
-				return err
+				return LoadResult{}, err
 			}
 		}
 
@@ -218,7 +256,29 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	}
 
 	success = true
-	return nil
+	return result, nil
+}
+
+// stripAllLSM removes every LSM program and LSM-only map from the spec so
+// the resulting collection loads on kernels without CONFIG_BPF_LSM (or with
+// `lsm=` boot chains that omit bpf). Shared between the wantLSM=false
+// initial path and the wantLSM=true post-load fallback.
+func stripAllLSM(spec *ebpf.CollectionSpec) {
+	delete(spec.Programs, "lsm_socket_connect")
+	delete(spec.Programs, "lsm_socket_sendmsg")
+	// lsm_socket_sendpage closes the sendfile/splice gap (kernel 5.15);
+	// the program is only present after the BPF stubs have been
+	// regenerated on Linux with the new SEC, hence the silent delete.
+	delete(spec.Programs, "lsm_socket_sendpage")
+	delete(spec.Programs, "lsm_io_uring_cmd")
+	delete(spec.Maps, "lsm_deny_events")
+	delete(spec.Maps, "lsm_deny_reserve_failures")
+	delete(spec.Maps, "lsm_defend_cfg")
+	delete(spec.Maps, "lsm_allowed_ipv4")
+	delete(spec.Maps, "lsm_ignored_ipv4_lpm")
+	// sendpage_observed lives in the LSM section; strip it when LSM is
+	// disabled so we don't pin a per-cpu counter nobody reads.
+	delete(spec.Maps, "sendpage_observed")
 }
 
 // HaveIOUringLSM reports whether the running kernel exposes the
