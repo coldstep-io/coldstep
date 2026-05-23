@@ -3,6 +3,7 @@
 package defend
 
 import (
+	"errors"
 	"testing"
 )
 
@@ -50,6 +51,70 @@ func TestDefendSpecStripsIOUringLSMWithoutLSM(t *testing.T) {
 		if _, present := spec.Programs[name]; !present {
 			t.Fatalf("expected %q to remain in spec.Programs after LSM strip", name)
 		}
+	}
+}
+
+// TestStripAllLSM verifies the shared helper used by both the wantLSM=false
+// initial path and the wantLSM=true post-load fallback removes every LSM
+// program + LSM-only map while leaving cgroup and shared sections intact.
+func TestStripAllLSM(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	stripAllLSM(spec)
+
+	mustBeGone := []string{
+		"lsm_socket_connect",
+		"lsm_socket_sendmsg",
+		"lsm_socket_sendpage",
+		"lsm_io_uring_cmd",
+	}
+	for _, name := range mustBeGone {
+		if _, present := spec.Programs[name]; present {
+			t.Errorf("stripAllLSM: program %q still present", name)
+		}
+	}
+	mustBeGoneMaps := []string{
+		"lsm_deny_events",
+		"lsm_deny_reserve_failures",
+		"lsm_defend_cfg",
+		"lsm_allowed_ipv4",
+		"lsm_ignored_ipv4_lpm",
+		"sendpage_observed",
+	}
+	for _, name := range mustBeGoneMaps {
+		if _, present := spec.Maps[name]; present {
+			t.Errorf("stripAllLSM: map %q still present", name)
+		}
+	}
+	for _, name := range []string{"defend_connect4", "defend_sendmsg4"} {
+		if _, present := spec.Programs[name]; !present {
+			t.Errorf("stripAllLSM: cgroup program %q must remain", name)
+		}
+	}
+	for _, name := range []string{"deny_events", "deny_reserve_failures", "defend_cfg", "allowed_ipv4"} {
+		if _, present := spec.Maps[name]; !present {
+			t.Errorf("stripAllLSM: shared/cgroup map %q must remain", name)
+		}
+	}
+}
+
+// TestLoadResultZeroValueSafe pins the public contract that callers can
+// read a zero-value LoadResult without panicking — the caller branch in
+// agent_linux.go relies on LSMFellBack defaulting to false and FallbackErr
+// being a nil error on the happy path.
+func TestLoadResultZeroValueSafe(t *testing.T) {
+	var r LoadResult
+	if r.LSMFellBack {
+		t.Errorf("zero LoadResult.LSMFellBack = true; want false")
+	}
+	if r.LSMFallbackErr != nil {
+		t.Errorf("zero LoadResult.LSMFallbackErr != nil; want nil")
+	}
+	// errors.Is on a nil error must be safe.
+	if errors.Is(r.LSMFallbackErr, errors.New("any")) {
+		t.Errorf("errors.Is(nil, _) returned true unexpectedly")
 	}
 }
 

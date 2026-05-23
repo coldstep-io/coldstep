@@ -263,8 +263,31 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// Phase 2.3: cgroup + LSM share one bpf2go object. The loader strips
 		// LSM programs (and their dedicated maps) from the spec when the
 		// kernel lacks CONFIG_BPF_LSM so prog_load doesn't fail.
-		if err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM, haveIOUringLSM); err != nil {
+		//
+		// Bug #2: when prog_load rejects LSM for a non-sendpage reason
+		// (e.g. CONFIG_BPF_LSM absent despite the feature probe succeeding,
+		// `lsm=` boot chain without bpf), the loader silently strips every
+		// LSM section and reloads cgroup-only. Honour the LSMFellBack
+		// signal here: pretend the kernel never claimed LSM support so we
+		// skip the LSM attach block, and record the degradation as a
+		// BPFStatus row for the digest.
+		loadResult, err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM, haveIOUringLSM)
+		if err != nil {
 			return fmt.Errorf("load defend bpf objects: %w", err)
+		}
+		if loadResult.LSMFellBack {
+			haveLSM = false
+			detail := "lsm prog_load failed; reloaded cgroup-only defend collection"
+			if loadResult.LSMFallbackErr != nil {
+				detail = fmt.Sprintf("%s: %v", detail, loadResult.LSMFallbackErr)
+			}
+			bpfSt = append(bpfSt, telemetry.BPFStatus{
+				Name:   "lsm_load_failed_fallback_cgroup",
+				OK:     false,
+				Detail: detail,
+			})
+			slog.Warn("defend: lsm prog_load failed; continuing with cgroup-only enforcement",
+				"err", loadResult.LSMFallbackErr)
 		}
 		hasDefend = true
 		defer func() {
