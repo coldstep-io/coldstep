@@ -278,6 +278,12 @@ func runStart(cfg startConfig) error {
 		allow.ips = append(allow.ips, bsIPs...)
 	}
 
+	if mode == "defend" {
+		if err := rejectDefendWildcards(allow); err != nil {
+			return err
+		}
+	}
+
 	detectProfile := strings.ToLower(strings.TrimSpace(cfg.DetectProfile))
 	featureGates := ""
 	if detectProfile == "enhanced" {

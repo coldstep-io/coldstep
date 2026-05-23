@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -89,6 +90,44 @@ func TestReadBootstrapTokens(t *testing.T) {
 	got2, err := readBootstrapTokens(filepath.Join(dir, "missing.txt"))
 	if err != nil || got2 != nil {
 		t.Errorf("missing file: got %v err %v", got2, err)
+	}
+}
+
+func TestRejectDefendWildcards(t *testing.T) {
+	t.Parallel()
+
+	// No wildcards — accepted in defend mode.
+	clean := classifyAllowTokens([]string{"example.com", "api.example.com", "1.2.3.4"})
+	if err := rejectDefendWildcards(clean); err != nil {
+		t.Fatalf("clean allowlist: unexpected error %v", err)
+	}
+
+	// Wildcard entry — must be rejected with a message that names the entry.
+	withWild := classifyAllowTokens([]string{"example.com", "*.example.com"})
+	err := rejectDefendWildcards(withWild)
+	if err == nil {
+		t.Fatal("expected error for wildcard entry")
+	}
+	if !strings.Contains(err.Error(), "*.example.com") {
+		t.Errorf("error %q does not name the offending entry", err)
+	}
+	if !strings.Contains(err.Error(), "defend") {
+		t.Errorf("error %q does not mention defend mode", err)
+	}
+
+	// Multiple wildcards — each surfaced, no duplicates.
+	multi := classifyAllowTokens([]string{"*.a.com", "*.b.com", "*.a.com"})
+	err = rejectDefendWildcards(multi)
+	if err == nil {
+		t.Fatal("expected error for multiple wildcards")
+	}
+	for _, want := range []string{"*.a.com", "*.b.com"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q missing %q", err, want)
+		}
+	}
+	if strings.Count(err.Error(), "*.a.com") != 1 {
+		t.Errorf("expected each wildcard listed once, got %q", err)
 	}
 }
 

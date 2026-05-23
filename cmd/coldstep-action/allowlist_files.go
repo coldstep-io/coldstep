@@ -17,6 +17,31 @@ type classifiedAllow struct {
 	ignoredNets []string
 }
 
+// rejectDefendWildcards returns an error if any allow-list host entry uses the
+// `*.suffix` wildcard form. Defend mode loads exact hostnames into the BPF
+// allowed_domains map (which has no wildcard matching), so a wildcard would be
+// silently dropped — subdomains the user expected to be allowed would get
+// blocked with no error. Same posture as rejecting `enforce` mode at parse time.
+func rejectDefendWildcards(c classifiedAllow) error {
+	var bad []string
+	seen := make(map[string]struct{})
+	for _, list := range [][]string{c.hosts, c.domains} {
+		for _, h := range list {
+			if strings.HasPrefix(h, "*.") {
+				if _, ok := seen[h]; ok {
+					continue
+				}
+				seen[h] = struct{}{}
+				bad = append(bad, h)
+			}
+		}
+	}
+	if len(bad) == 0 {
+		return nil
+	}
+	return fmt.Errorf("defend mode does not support wildcard allow-list entries (BPF allowed_domains map uses exact-string lookup); replace with exact hostnames or IPv4 literals/CIDRs: %s", strings.Join(bad, ", "))
+}
+
 // classifyAllowTokens splits unified allow-list tokens into per-type buckets.
 // Plain or wildcard domains go to both hosts and domains; IPv4 literals/CIDRs
 // go to ips; a leading `!` on an IPv4 CIDR routes it to ignoredNets.
