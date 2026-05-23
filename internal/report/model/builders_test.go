@@ -90,6 +90,34 @@ func TestDiffWithoutBaselineReportsUnavailable(t *testing.T) {
 	}
 }
 
+// Regression: a non-nil but empty baseline (e.g. LoadEvents on an empty
+// JSONL file returns []Event{}, not nil) must report unavailable instead of
+// marking every current event as "new" traffic.
+func TestDiffWithEmptyNonNilBaselineReportsUnavailable(t *testing.T) {
+	current := []Event{
+		{"type": "tcp", "fqdn": "example.com", "dst": "1.1.1.1"},
+		{"type": "tls", "fqdn": "example.org", "dst": "2.2.2.2"},
+	}
+	baseline := []Event{} // non-nil, length 0
+
+	d := BuildDiff(current, baseline)
+	if d.Status != "unavailable" {
+		t.Errorf("diff.status = %q; want unavailable", d.Status)
+	}
+	if d.Reason != "no_baseline_provided" {
+		t.Errorf("diff.reason = %q; want no_baseline_provided", d.Reason)
+	}
+	if len(d.TrafficNew) != 0 {
+		t.Errorf("traffic_new = %d entries; want 0 for empty baseline", len(d.TrafficNew))
+	}
+	if len(d.TrafficGone) != 0 {
+		t.Errorf("traffic_gone = %d entries; want 0 for empty baseline", len(d.TrafficGone))
+	}
+	if len(d.TrafficChanged) != 0 {
+		t.Errorf("traffic_changed = %d entries; want 0 for empty baseline", len(d.TrafficChanged))
+	}
+}
+
 func TestDiffWithBaselineIncludesNewGoneChangedAndIndicators(t *testing.T) {
 	current := []Event{
 		{"type": "tcp", "fqdn": "new.example", "dst": "1.1.1.1"},
