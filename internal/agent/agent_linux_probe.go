@@ -24,6 +24,12 @@ const (
 	defaultProbeTimeout time.Duration = 5 * time.Second
 	probeDialTimeout    time.Duration = 50 * time.Millisecond
 	probeDialRetryEvery time.Duration = 50 * time.Millisecond
+	// lsmProbeTimeout bounds how long probeLSMSilent waits for an LSM deny
+	// event before declaring the LSM section attached-but-silent. Kept
+	// shorter than defaultProbeTimeout because the dial loop's connects
+	// also land in the cgroup ringbuf as background self-denies, and we do
+	// not want to pile up more than a couple of seconds of those.
+	lsmProbeTimeout time.Duration = 1500 * time.Millisecond
 )
 
 // probeDefendEnforcement verifies that the cgroup defend BPF program is actively
@@ -99,6 +105,64 @@ func runProbeDialLoop(stop <-chan struct{}, deadline time.Time) {
 			return
 		case <-time.After(probeDialRetryEvery):
 		}
+	}
+}
+
+// probeLSMSilent mirrors probeDefendEnforcement's dial-loop-and-drain pattern
+// against the LSM deny ringbuf. If no matching deny event arrives within
+// timeout, the LSM programs are attached but the kernel never invokes them —
+// returns true (silent).
+//
+// Ubuntu 24.04 ships with `lsm=lockdown,yama,apparmor` by default; `bpf` is
+// missing from the boot chain, so AttachLSM succeeds but
+// `security_socket_connect` / `security_socket_sendmsg` never dispatch to
+// our SEC("lsm/...") programs. The cgroup `connect4` / `sendmsg4` hooks are
+// unaffected — they remain the load-bearing enforcement path on these
+// kernels. This probe lets the digest report that posture honestly via a
+// `lsm_attached_but_silent` BPFStatus row and a `defend+cgroup` mode label
+// instead of advertising LSM defense that does not exist. To restore LSM
+// dispatch on these distros, the operator must boot with the `bpf` token
+// in the kernel `lsm=` parameter (e.g.
+// `lsm=lockdown,yama,bpf,apparmor`).
+//
+// The dial loop's connects that get denied by cgroup (because LSM is silent
+// and cgroup is the one firing) land in the cgroup ringbuf and are processed
+// by the main agent reader later as background self-denies; that noise is
+// bounded by lsmProbeTimeout (≤ ~30 connects at the 50ms retry tick).
+func probeLSMSilent(rd *ringbuf.Reader, timeout time.Duration) bool {
+	if rd == nil {
+		// No LSM ringbuf reader to observe — treat as silent so the caller
+		// downgrades the label rather than claiming LSM defense.
+		return true
+	}
+	if timeout <= 0 {
+		timeout = lsmProbeTimeout
+	}
+	deadline := time.Now().Add(timeout)
+
+	stop := make(chan struct{})
+	defer close(stop)
+	go runProbeDialLoop(stop, deadline)
+
+	rd.SetDeadline(deadline)
+	defer rd.SetDeadline(time.Time{})
+
+	for {
+		rec, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, os.ErrDeadlineExceeded) {
+				return true
+			}
+			// Reader error other than deadline (e.g. closed) — treat as
+			// silent so the caller errs on the side of honesty about
+			// LSM's contribution to enforcement.
+			return true
+		}
+		if matchProbeDenyEvent(rec.RawSample) {
+			return false
+		}
+		// Non-probe deny event during startup — drain and keep waiting,
+		// matching probeDefendEnforcement's behaviour.
 	}
 }
 
