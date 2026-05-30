@@ -30,9 +30,11 @@ import "net"
 // Any other class (including ::, unique-local fc00::/7, multicast ff00::/8,
 // and globally routable 2000::/3) is NOT bypassed: those addresses go
 // through the LPM trie and are denied if absent. IPv4-mapped IPv6 inputs
-// (::ffff:0:0/96) are not considered bypass either — they should never
-// reach the IPv6 cgroup hook in practice (the kernel routes them through
-// the IPv4 path) but defensive coding treats them as ordinary IPv6.
+// (::ffff:0:0/96) are NOT bypass and NOT ordinary IPv6 — a dual-stack socket
+// can connect to ::ffff:a.b.c.d and reach the IPv6 cgroup hook, so the BPF
+// program routes the embedded IPv4 to the IPv4 allowlist instead (see
+// cg_ipv6_is_v4mapped + IPv4MappedEmbeddedIPv4). This function returns false
+// for them; IPv4MappedEmbeddedIPv4 is the classifier that matters there.
 func IPv6BypassesDefend(ip net.IP) bool {
 	if ip == nil {
 		return false
@@ -52,4 +54,33 @@ func IPv6BypassesDefend(ip net.IP) bool {
 	// == 0x80). Matches the BPF check `(user_ip6[0] & htonl(0xffc00000))
 	// == htonl(0xfe800000)`.
 	return ip16[0] == 0xfe && (ip16[1]&0xc0) == 0x80
+}
+
+// IPv4MappedEmbeddedIPv4 reports whether ip is an IPv4-mapped IPv6 address
+// (::ffff:0:0/96) and, if so, returns the embedded 4-byte IPv4. This is the
+// userspace mirror of cg_ipv6_is_v4mapped in bpf/trace_defend_cgroup.inc: a
+// dual-stack socket connecting to ::ffff:a.b.c.d reaches the cgroup/connect6 +
+// sendmsg6 hooks, which must gate the embedded IPv4 against the IPv4 allowlist
+// (allowed_ipv4 / ignored trie) rather than the AAAA-only allowed_ipv6 trie —
+// otherwise a v4-mapped connection to an allowlisted IPv4 is falsely denied.
+//
+// The prefix test (bytes 0-9 zero, bytes 10-11 == 0xff) mirrors the BPF check
+// `user_ip6[0]==0 && user_ip6[1]==0 && user_ip6[2]==htonl(0x0000ffff)`. Keep
+// the two in lockstep.
+func IPv4MappedEmbeddedIPv4(ip net.IP) (net.IP, bool) {
+	ip16 := ip.To16()
+	if ip16 == nil {
+		return nil, false
+	}
+	for i := 0; i < 10; i++ {
+		if ip16[i] != 0 {
+			return nil, false
+		}
+	}
+	if ip16[10] != 0xff || ip16[11] != 0xff {
+		return nil, false
+	}
+	out := make(net.IP, net.IPv4len)
+	copy(out, ip16[12:16])
+	return out, true
 }
