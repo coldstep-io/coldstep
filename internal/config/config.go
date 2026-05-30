@@ -141,7 +141,7 @@ func LoadFromEnv() (Config, error) {
 		FeatureGates:         gates,
 		DetectProfile:        profile,
 		CgroupAttachPath:     cgPath,
-		SigningKey:           os.Getenv("COLDSTEP_SIGNING_KEY"),
+		SigningKey:           strings.TrimSpace(os.Getenv("COLDSTEP_SIGNING_KEY")),
 		RunnerHasIPv6:        envBoolTrue("COLDSTEP_RUNNER_HAS_IPV6"),
 	}, nil
 }
