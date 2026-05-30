@@ -52,6 +52,14 @@ var httpNotifyClient = &http.Client{Timeout: 60 * time.Second}
 // GitHub allows alphanumeric, hyphens, dots, and underscores in org/repo names.
 var githubRepoPartRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
+// Markdown fence runs escaped per-line by sanitizeDigestForMarkdown. Compiled
+// once at package scope — the function runs over every digest line, so a
+// per-call MustCompile was needless work on the post-step hot path.
+var (
+	markdownBacktickRunRE = regexp.MustCompile("`{3,}")
+	markdownTildeRunRE    = regexp.MustCompile("~{3,}")
+)
+
 const (
 	maxReadyStatusJSONBytes = 512 << 10 // agent status should be tiny; bound disk/memory abuse
 	maxGitHubEventJSONBytes = 8 << 20   // $GITHUB_EVENT_PATH payload cap before full json.Unmarshal
@@ -656,8 +664,6 @@ func sanitizeDigestForMarkdown(body string) string {
 	body = strings.TrimPrefix(body, "\uFEFF")
 	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n")
 	lines := strings.Split(body, "\n")
-	backticks := regexp.MustCompile("`{3,}")
-	tildes := regexp.MustCompile("~{3,}")
 	for i := range lines {
 		line := lines[i]
 		if len(line) > 4096 {
@@ -670,10 +676,10 @@ func sanitizeDigestForMarkdown(body string) string {
 		}
 		line = strings.ReplaceAll(line, "\\", "\\\\")
 		line = strings.ReplaceAll(line, "<", "&lt;")
-		line = backticks.ReplaceAllStringFunc(line, func(m string) string {
+		line = markdownBacktickRunRE.ReplaceAllStringFunc(line, func(m string) string {
 			return strings.Repeat("\\`", len(m))
 		})
-		line = tildes.ReplaceAllStringFunc(line, func(m string) string {
+		line = markdownTildeRunRE.ReplaceAllStringFunc(line, func(m string) string {
 			return strings.Repeat("\\~", len(m))
 		})
 		lines[i] = line
