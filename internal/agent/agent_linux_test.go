@@ -483,6 +483,98 @@ func TestAppendDenyFromRaw_TwoSamples(t *testing.T) {
 	}
 }
 
+// TestAppendDenyFromRaw_CrossLayerDedup verifies the cgroup+LSM dedup: one
+// blocked syscall reported by both hook families within the window emits a
+// single JSONL line and counts once, with the twin tallied as corroborated.
+func TestAppendDenyFromRaw_CrossLayerDedup(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: events}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newDefendState()
+
+	raw := fillTestDenyRawV4(4321, 5001, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.2.3.4"), 443)
+
+	// Same logical deny, both hook families.
+	if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "cgroup", nil); err != nil {
+		t.Fatalf("cgroup deny: %v", err)
+	}
+	if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "lsm", nil); err != nil {
+		t.Fatalf("lsm deny: %v", err)
+	}
+
+	if got := state.denyCount(); got != 1 {
+		t.Fatalf("denyCount=%d want 1 (cross-layer twin must not double-count)", got)
+	}
+	if got := state.denyCorroborated(); got != 1 {
+		t.Fatalf("denyCorroborated=%d want 1", got)
+	}
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatalf("read events: %v", err)
+	}
+	if n := strings.Count(string(b), `"type":"deny"`); n != 1 {
+		t.Fatalf("expected exactly 1 deny JSONL line, got %d:\n%s", n, string(b))
+	}
+}
+
+// TestAppendDenyFromRaw_SameFamilyNotDeduped verifies genuine repeats on the
+// same hook family (e.g. a retry loop) are never collapsed — only cross-family
+// twins are.
+func TestAppendDenyFromRaw_SameFamilyNotDeduped(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: events}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newDefendState()
+
+	raw := fillTestDenyRawV4(7, 8, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("5.6.7.8"), 443)
+
+	for i := 0; i < 3; i++ {
+		if _, err := appendDenyFromRaw(cfg, raw, &seq, &jsonlMu, state, nil, "cgroup", nil); err != nil {
+			t.Fatalf("cgroup deny %d: %v", i, err)
+		}
+	}
+	if got := state.denyCount(); got != 3 {
+		t.Fatalf("denyCount=%d want 3 (same-family repeats must all emit)", got)
+	}
+	if got := state.denyCorroborated(); got != 0 {
+		t.Fatalf("denyCorroborated=%d want 0", got)
+	}
+}
+
+// TestAppendDenyFromRaw_DistinctDstCrossFamily verifies cross-family denies to
+// DIFFERENT destinations are both real and both emit.
+func TestAppendDenyFromRaw_DistinctDstCrossFamily(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	events := filepath.Join(dir, "events.jsonl")
+	cfg := config.Config{Mode: config.ModeDefend, EventsLogPath: events}
+	var seq telemetry.SeqGen
+	var jsonlMu sync.Mutex
+	state := newDefendState()
+
+	rawA := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("1.1.1.1"), 443)
+	rawB := fillTestDenyRawV4(1, 1, "curl", denyProtoTCP, denyReasonDstNotAllowlisted, net.ParseIP("2.2.2.2"), 443)
+
+	if _, err := appendDenyFromRaw(cfg, rawA, &seq, &jsonlMu, state, nil, "cgroup", nil); err != nil {
+		t.Fatalf("deny A: %v", err)
+	}
+	if _, err := appendDenyFromRaw(cfg, rawB, &seq, &jsonlMu, state, nil, "lsm", nil); err != nil {
+		t.Fatalf("deny B: %v", err)
+	}
+	if got := state.denyCount(); got != 2 {
+		t.Fatalf("denyCount=%d want 2 (distinct dst must not dedup)", got)
+	}
+	if got := state.denyCorroborated(); got != 0 {
+		t.Fatalf("denyCorroborated=%d want 0", got)
+	}
+}
+
 func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{Mode: config.ModeDefend}

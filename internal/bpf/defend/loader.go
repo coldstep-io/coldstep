@@ -3,6 +3,7 @@
 package defend
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -345,14 +346,35 @@ func kernelHasLSMHook(name string) bool {
 	return spec.TypeByName("bpf_lsm_"+name, &fn) == nil
 }
 
-// isSendpageLoadFailure pattern-matches an ebpf.NewCollection error to
-// detect prog_load rejection of lsm_socket_sendpage specifically. Used
-// as a defensive fallback when the BTF pre-check missed the kernel's
-// removal of the hook.
+// isSendpageLoadFailure detects an ebpf.NewCollection error that represents
+// prog_load rejection of lsm_socket_sendpage specifically. Used as a
+// defensive fallback when the BTF pre-check missed the kernel's removal of
+// the hook.
+//
+// Two signals are required, not one:
+//
+//  1. The error chain names the sendpage program/hook. The failing program
+//     name ("lsm_socket_sendpage") only appears in cilium/ebpf's
+//     "program <name>: ..." wrap, so a substring check is the only way to
+//     attribute the failure to this program rather than another LSM hook.
+//
+//  2. The error is a recognized structured load failure. On kernel 6.5+ the
+//     missing bpf_lsm_socket_sendpage BTF target surfaces as btf.ErrNotFound
+//     (prog_load fails at attach-target resolution before the verifier runs,
+//     so it is NOT an *ebpf.VerifierError); a genuine verifier rejection
+//     surfaces as *ebpf.VerifierError. Accept either.
+//
+// Requiring both guards against stripping sendpage on an unrelated error that
+// merely happens to contain the substring, while still firing for the real
+// 6.5+ removal case that pure VerifierError matching would miss.
 func isSendpageLoadFailure(err error) bool {
 	if err == nil {
 		return false
 	}
 	s := err.Error()
-	return strings.Contains(s, "lsm_socket_sendpage") || strings.Contains(s, "socket_sendpage")
+	if !strings.Contains(s, "lsm_socket_sendpage") && !strings.Contains(s, "socket_sendpage") {
+		return false
+	}
+	var ve *ebpf.VerifierError
+	return errors.Is(err, btf.ErrNotFound) || errors.As(err, &ve)
 }
