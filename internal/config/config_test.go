@@ -295,6 +295,37 @@ func TestLoadFromEnv_AllowlistNormalization(t *testing.T) {
 	}
 }
 
+func TestLoadFromEnv_SigningKeyTrimmed(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_SIGNING_KEY", "  AAAA==\n")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// NewSigner treats a bad-base64 key as fatal; surrounding whitespace from a
+	// CI secret injection must be trimmed or an otherwise-valid key crashes the
+	// agent at startup.
+	if c.SigningKey != "AAAA==" {
+		t.Fatalf("SigningKey = %q, want trimmed %q", c.SigningKey, "AAAA==")
+	}
+}
+
+func TestLoadFromEnv_SigningKeyBlankStaysEmpty(t *testing.T) {
+	clearColdstepPolicyEnv(t)
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", "")
+	t.Setenv("COLDSTEP_SIGNING_KEY", "   \n")
+	c, err := LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.SigningKey != "" {
+		t.Fatalf("SigningKey = %q, want empty (signing disabled)", c.SigningKey)
+	}
+}
+
 func TestParseFeatureGates(t *testing.T) {
 	t.Parallel()
 	m := ParseFeatureGates(" proc_tree=1 , FS_EVENTS=false ")
