@@ -35,6 +35,11 @@ func Bytes(path string, data []byte, perm os.FileMode) error {
 	if err := f.Close(); err != nil {
 		return err
 	}
+	if perm != 0 {
+		if err := os.Chmod(tmpPath, perm); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(tmpPath, path); err != nil {
 		return err
 	}
@@ -43,11 +48,6 @@ func Bytes(path string, data []byte, perm os.FileMode) error {
 	if dir, derr := os.Open(filepath.Dir(path)); derr == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
-	}
-	if perm != 0 {
-		if err := os.Chmod(path, perm); err != nil {
-			return err
-		}
 	}
 	return nil
 }
