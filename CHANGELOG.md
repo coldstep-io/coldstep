@@ -9,6 +9,39 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [v0.4.1] — 2026-05-30
+
+### Security
+
+- **DNS cache trust — defend-mode poisoning fix (#237).** The defend allow-path fallback (`dst_is_allowlisted`: `dns_cache[ip] -> owner -> allowed_domains[owner]`) was fed from DNS replies **sniffed off runner traffic**. A hostile build step could forge a reply mapping an allowlisted FQDN to an attacker IP, poison the BPF enforcement map, and egress to that IP past the allowlist. The sniffed cache now feeds detection enrichment only; the defend enforcement map is seeded from the agent's own resolver via `policy.ResolveOwners` at startup and refreshed on each DNS-drift tick, raising the runtime fallback trust to match the startup allowlist-compile trust.
+
+### Added
+
+- **Pure-Markdown report generator (#238).** New `internal/report/markdown` package reads `.coldstep-events.jsonl` and renders a simple (job-summary) and detailed (artifact) report with zero embedded HTML. Phase 0 of consolidating the separate `coldstep-report` binary; unused until later phases wire it in.
+
+### Fixed
+
+- **Cross-layer deny dedup; sendpage load detection (#237).** One blocked syscall fires both the cgroup and LSM hook on LSM-enabled kernels, double-counting denies. Denies are now de-duplicated across hook families within a 1s window (same-family repeats still emit); the suppressed twin is tallied as corroboration.
+- **Signing key not trimmed; per-call markdown regexes (#239).** `COLDSTEP_SIGNING_KEY` was the only `LoadFromEnv` env read not `TrimSpace`'d — a CI-injected trailing newline crashed agent startup (NewSigner treats bad base64 as fatal). `sanitizeDigestForMarkdown` recompiled two fence regexes per call; hoisted to package scope.
+- **Digest replay accepts legacy `enforce` alias (#232).** `isBlockingDigestMode` treats `enforce` / `enforce+<backend>` as `defend` so digests replayed from pre-rename JSONL still surface the defend triage row, allowlist-trust section, and IPv6-defend logic.
+- **Enrichment model canonical JSON encoder (#228).** Reputation enrichment writes the model with the canonical encoder so signatures and downstream diffs stay stable.
+- **Report BOM strip, fingerprint conflation, preamble HTML (#230).**
+- **Action pidfile path; track agent PID not sudo PID (#229).**
+- **Distinguish DNS attempt timeout from cancel; drain enrich resCh (#227).**
+- **Reject wildcard allow-list entries in defend mode (#226).** Wildcards are classify-only and not programmed into the exact-match BPF `allowed_domains` map; defend now rejects them explicitly instead of silently ignoring.
+- **Downgrade `defend+lsm` label when LSM hooks attach but stay silent (#225).**
+- **Fall back to cgroup-only on non-sendpage LSM load failure (#224).**
+- **Poll agent exit instead of fixed 400ms sleep in runStop (#223).**
+- **Treat empty baseline as unavailable in BuildDiff (#222).**
+
+### Changed
+
+- **Publish `coldstep-report-linux-amd64` as a release asset (#219, #220).**
+- **dist-up-to-date CI gate, tighter golangci exclusions, docs (#221).**
+- **Dependency bumps:** `golang.org/x/sys` 0.44.0 → 0.45.0 (#233), `golangci/golangci-lint-action` 8 → 9 (#234), `actions/setup-go` 5 → 6 (#235), `@types/node` 25.8.0 → 25.9.1 (#236).
+
+---
+
 ## [v0.4.0] — 2026-05-21
 
 ### Added
