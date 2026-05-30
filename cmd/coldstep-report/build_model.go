@@ -17,7 +17,7 @@ import (
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
-const buildVersion = "v0.4.0"
+const buildVersion = "v0.4.1"
 
 func buildModel(args []string) error {
 	fs := flag.NewFlagSet("build-model", flag.ContinueOnError)
