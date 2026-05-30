@@ -48,6 +48,10 @@ import (
 // cannot hang the composite until the job's global timeout.
 var httpNotifyClient = &http.Client{Timeout: 60 * time.Second}
 
+// githubRepoPartRE validates org and repo name segments from GITHUB_REPOSITORY.
+// GitHub allows alphanumeric, hyphens, dots, and underscores in org/repo names.
+var githubRepoPartRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
+
 const (
 	maxReadyStatusJSONBytes = 512 << 10 // agent status should be tiny; bound disk/memory abuse
 	maxGitHubEventJSONBytes = 8 << 20   // $GITHUB_EVENT_PATH payload cap before full json.Unmarshal
@@ -475,7 +479,7 @@ func postPRComment(token, body string) error {
 		return nil
 	}
 	parts := strings.SplitN(repo, "/", 2)
-	if len(parts) != 2 {
+	if len(parts) != 2 || !githubRepoPartRE.MatchString(parts[0]) || !githubRepoPartRE.MatchString(parts[1]) {
 		return nil
 	}
 	eventPath := strings.TrimSpace(os.Getenv("GITHUB_EVENT_PATH"))
@@ -564,9 +568,7 @@ func waitForReady(statusPath string, timeout time.Duration, pid int) string {
 
 	for time.Now().Before(deadline) {
 		raw, err := os.ReadFile(statusPath)
-		if err != nil {
-			malformedSince = nil
-		} else {
+		if err == nil {
 			ok, explicitFail, malformed, incomplete := classifyReadyStatus(raw)
 			switch {
 			case ok:
