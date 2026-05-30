@@ -192,6 +192,7 @@ type DigestInput struct {
 	DefendMode                string
 	DefendAllowlistSize       int
 	DefendDenyCount           int
+	DefendDenyCorroborated    int
 	DefendDenyReserveFailures int
 	DefendFirstDeny           *DenyDigestRow
 

@@ -6,10 +6,38 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
+
+// denyDedupWindow bounds how long after an emitted deny a second deny with the
+// SAME {tgid,tid,dst,dport,proto} key but a DIFFERENT hook family is treated as
+// the cross-layer twin of the same syscall (cgroup/connect4 + lsm/socket_connect
+// both fire on one connect() on LSM-enabled kernels). Cross-layer ringbuf
+// delivery is near-simultaneous; 1s is generous. Same-family repeats always emit
+// regardless of the window, so genuine retries are never collapsed.
+const denyDedupWindow = time.Second
+
+// denyDedupMaxEntries caps the dedup map so a long defend run with many distinct
+// blocked destinations cannot grow it without bound. Stale entries (older than
+// the window) are pruned opportunistically when the cap is exceeded.
+const denyDedupMaxEntries = 4096
+
+// denyDedupKey identifies one logical deny across hook families.
+type denyDedupKey struct {
+	tgid     uint32
+	tid      uint32
+	dst      string
+	dport    uint16
+	protocol string
+}
+
+type denyDedupEntry struct {
+	family string
+	nano   int64
+}
 
 type defendState struct {
 	mu                     sync.Mutex
@@ -17,11 +45,13 @@ type defendState struct {
 	allowlistSize          int
 	allowlistIPv6Size      int
 	denyCountN             int
+	denyCorroboratedN      int
 	denyReserveFailuresN   int
 	mapIntegrityFailures   int
 	expectedEntries        int
 	expectedIgnoredEntries int
 	firstDenyRowV          *report.DenyDigestRow
+	denyDedup              map[denyDedupKey]denyDedupEntry
 }
 
 type defendSnapshot struct {
@@ -29,6 +59,7 @@ type defendSnapshot struct {
 	allowlistSize        int
 	allowlistIPv6Size    int
 	denyCount            int
+	denyCorroborated     int
 	denyReserveFailures  int
 	mapIntegrityFailures int
 	firstDeny            *report.DenyDigestRow
@@ -139,6 +170,57 @@ func (s *defendState) mapIntegrityFailureCount() int {
 	return s.mapIntegrityFailures
 }
 
+// shouldEmitDeny reports whether a decoded deny should be emitted (JSONL +
+// counted) or treated as the cross-layer twin of a deny already emitted by the
+// other hook family within denyDedupWindow. Returns true to emit, false to
+// corroborate (the corroboration counter is bumped internally).
+//
+// A duplicate is recognized only across DIFFERENT hook families: cgroup/connect4
+// and lsm/socket_connect both fire on the same connect() syscall. Two denies
+// from the SAME family are genuine separate attempts (e.g. a retry loop) and
+// always emit, so no traffic is hidden. A nil receiver always emits.
+func (s *defendState) shouldEmitDeny(key denyDedupKey, family string, nowNano int64) bool {
+	if s == nil {
+		return true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.denyDedup == nil {
+		s.denyDedup = make(map[denyDedupKey]denyDedupEntry)
+	}
+	prev, ok := s.denyDedup[key]
+	fresh := ok && nowNano-prev.nano <= int64(denyDedupWindow)
+	if fresh && prev.family != "" && family != "" && prev.family != family {
+		// Cross-layer twin of a recently emitted deny: corroborate, don't
+		// re-emit. Keep the original emitting family; refresh the timestamp so
+		// a third hook family (e.g. sendpage) within the window also folds in.
+		s.denyCorroboratedN++
+		s.denyDedup[key] = denyDedupEntry{family: prev.family, nano: nowNano}
+		return false
+	}
+	s.denyDedup[key] = denyDedupEntry{family: family, nano: nowNano}
+	if len(s.denyDedup) > denyDedupMaxEntries {
+		s.pruneDenyDedupLocked(nowNano)
+	}
+	return true
+}
+
+// pruneDenyDedupLocked drops dedup entries older than the window. Caller holds mu.
+func (s *defendState) pruneDenyDedupLocked(nowNano int64) {
+	for k, e := range s.denyDedup {
+		if nowNano-e.nano > int64(denyDedupWindow) {
+			delete(s.denyDedup, k)
+		}
+	}
+}
+
+// denyCorroborated returns the number of denies suppressed as cross-layer twins.
+func (s *defendState) denyCorroborated() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.denyCorroboratedN
+}
+
 func (s *defendState) noteDeny(row report.DenyDigestRow) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -173,6 +255,7 @@ func (s *defendState) snapshot() defendSnapshot {
 		allowlistSize:        s.allowlistSize,
 		allowlistIPv6Size:    s.allowlistIPv6Size,
 		denyCount:            s.denyCountN,
+		denyCorroborated:     s.denyCorroboratedN,
 		denyReserveFailures:  s.denyReserveFailuresN,
 		mapIntegrityFailures: s.mapIntegrityFailures,
 	}

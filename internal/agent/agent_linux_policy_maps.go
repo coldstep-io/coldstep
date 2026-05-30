@@ -519,7 +519,8 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 	// blocked process whose argv[0] embeds newline / control bytes must not
 	// be able to forge an extra record in the event log.
 	comm := telemetry.SanitizeField(string(bytes.TrimRight(commb[:], "\x00")), 16)
-	ts := time.Now().UTC().Format(time.RFC3339Nano)
+	now := time.Now()
+	ts := now.UTC().Format(time.RFC3339Nano)
 	matchKind := "unknown"
 	if dns != nil && dns.Lookup(dstIP) != "" {
 		matchKind = "dns_cache"
@@ -545,6 +546,22 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 		deny.HookFamily = hookFamily
 	}
 	deny.MatchKind = matchKind
+	// Cross-layer dedup: on LSM-enabled kernels one blocked syscall fires both
+	// the cgroup hook (connect4/sendmsg4) and the LSM hook (socket_connect/
+	// socket_sendmsg), producing two deny ringbuf records for the same logical
+	// event. Suppress the second (other-family) report within denyDedupWindow so
+	// JSONL and the digest deny count are not doubled; the suppressed event is
+	// tallied in denyCorroboratedN instead. Same-family repeats always emit.
+	dedupKey := denyDedupKey{
+		tgid:     deny.TGID,
+		tid:      deny.ThreadID,
+		dst:      deny.Dst,
+		dport:    deny.Dport,
+		protocol: deny.Protocol,
+	}
+	if !state.shouldEmitDeny(dedupKey, hookFamily, now.UnixNano()) {
+		return deny, nil
+	}
 	if cfg.EventsLogPath != "" {
 		jsonlMu.Lock()
 		deny.Seq = seq.Next()

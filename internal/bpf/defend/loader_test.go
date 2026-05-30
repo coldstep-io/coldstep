@@ -4,8 +4,52 @@ package defend
 
 import (
 	"errors"
+	"fmt"
 	"testing"
+
+	"github.com/cilium/ebpf/btf"
 )
+
+// TestIsSendpageLoadFailure pins the two-signal contract: the error must name
+// the sendpage program AND be a recognized structured load failure (btf
+// not-found or verifier error). An unrelated error containing the substring,
+// or a sendpage btf.ErrNotFound without the name, must not trigger the strip.
+func TestIsSendpageLoadFailure(t *testing.T) {
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"nil", nil, false},
+		{
+			"sendpage btf not found (kernel 6.5+ removal)",
+			fmt.Errorf("program lsm_socket_sendpage: %w", btf.ErrNotFound),
+			true,
+		},
+		{
+			"unrelated btf not found without sendpage name",
+			fmt.Errorf("program lsm_socket_connect: %w", btf.ErrNotFound),
+			false,
+		},
+		{
+			"sendpage substring but not a structured load failure",
+			errors.New("write deny event for socket_sendpage: disk full"),
+			false,
+		},
+		{
+			"sendpage name plus btf not found in a deeper wrap",
+			fmt.Errorf("load defend: %w", fmt.Errorf("program lsm_socket_sendpage: %w", btf.ErrNotFound)),
+			true,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isSendpageLoadFailure(tc.err); got != tc.want {
+				t.Fatalf("isSendpageLoadFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
+	}
+}
 
 // TestDefendSpecExposesIOUringLSMProgram asserts the compiled BPF object
 // contains the H15 lsm/io_uring_cmd program. This is a pure spec parse —

@@ -17,7 +17,8 @@ struct {
 } dns_cache SEC(".maps");
 
 /*
- * allowed_domains map: FQDN (64 bytes) -> __u8.
+ * allowed_domains map: FQDN (char[256], matches dns_cache value width so a
+ * dns_cache value pointer can be used directly as an allowed_domains key) -> __u8.
  * Populated by userspace agent based on policy.
  */
 struct {

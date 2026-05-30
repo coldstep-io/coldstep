@@ -352,6 +352,9 @@ func buildTriageRows(in DigestInput) [][2]string {
 	modeCell := fmt.Sprintf("`%s`", mode)
 	if isBlockingDigestMode(in.DefendMode) {
 		modeCell += fmt.Sprintf(" — **deny events:** %d", in.DefendDenyCount)
+		if in.DefendDenyCorroborated > 0 {
+			modeCell += fmt.Sprintf(" (**+%d** corroborated by 2nd hook layer)", in.DefendDenyCorroborated)
+		}
 		if in.DefendDenyReserveFailures > 0 {
 			modeCell += fmt.Sprintf(" (**+%d** deny reserve failures)", in.DefendDenyReserveFailures)
 		}
@@ -776,6 +779,9 @@ func writeDefendDetails(b *strings.Builder, in DigestInput) {
 	fmt.Fprintf(b, "| Mode | `%s` |\n", sanitizeCell(mode))
 	fmt.Fprintf(b, "| Allowlist size | %d |\n", in.DefendAllowlistSize)
 	fmt.Fprintf(b, "| Deny count | %d |\n", in.DefendDenyCount)
+	if in.DefendDenyCorroborated > 0 {
+		fmt.Fprintf(b, "| Deny corroborated (2nd hook layer, deduped) | %d |\n", in.DefendDenyCorroborated)
+	}
 	if in.DefendDenyReserveFailures > 0 {
 		fmt.Fprintf(b, "| Deny ringbuf reserve failures (blocked, no JSONL) | %d |\n", in.DefendDenyReserveFailures)
 	}

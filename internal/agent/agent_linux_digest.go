@@ -201,6 +201,7 @@ func buildDigestInput(
 		DefendAllowlistSize:            defendState.allowlistSize,
 		DefendIPv6AllowlistSize:        defendState.allowlistIPv6Size,
 		DefendDenyCount:                defendState.denyCount,
+		DefendDenyCorroborated:         defendState.denyCorroborated,
 		DefendDenyReserveFailures:      defendState.denyReserveFailures,
 		DefendFirstDeny:                defendState.firstDeny,
 		Connect4TupleUpdateFailures:    stats.connect4TupleUpdateFailures(),
