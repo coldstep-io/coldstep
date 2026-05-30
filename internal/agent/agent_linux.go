@@ -413,6 +413,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 		}
 		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
 		defendState.setIPv6AllowlistSize(ipv6AllowlistSize)
+
+		// SECURITY (dns-cache-trust): seed the defend dns_cache owner-fallback map
+		// from the agent's own resolver so dst_is_allowlisted's late-binding path
+		// is trusted, never fed by poisonable sniffed traffic (see SetBPFMaps note
+		// below). At startup these IPs already overlap the allowed_ipv4 LPM
+		// snapshot; the fallback's real value is the trusted refresh performed by
+		// the DNS drift watcher when a domain's A-record set rotates mid-job.
+		if defendObjs.DnsCache != nil && len(cfg.AllowedDomains) > 0 {
+			owners := policy.ResolveOwners(compileCtx, cfg.AllowedDomains, nil, 2)
+			seeded := seedDefendOwners(defendObjs.DnsCache, owners, stats.addDNSCacheUpdateFailure)
+			slog.Info("defend dns_cache owner map seeded from trusted resolver", "entries", seeded)
+		}
 		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
 		if err != nil {
 			return fmt.Errorf("ringbuf reader deny: %w", err)
@@ -699,11 +711,17 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// late-binding IP -> FQDN attribution. Defend's cgroup + LSM sections
 		// share one dns_cache map (Phase 2.3 merge), so a single defend
 		// entry covers both hook families (M-14, paired with H-03's deletes).
-		dnsCacheMaps := []*ebpf.Map{dnsObjs.DnsCache}
-		if hasDefend && defendObjs.DnsCache != nil {
-			dnsCacheMaps = append(dnsCacheMaps, defendObjs.DnsCache)
-		}
-		dnsCache.SetBPFMaps(dnsCacheMaps)
+		// SECURITY (dns-cache-trust): the sniffed DNS cache feeds ONLY the
+		// detection-side enrichment map (dnsObjs.DnsCache), used for late-binding
+		// IP -> FQDN attribution in JSONL/digest. The defend ENFORCEMENT map
+		// (defendObjs.DnsCache), consulted by dst_is_allowlisted's owner fallback,
+		// is deliberately NOT registered here: a hostile build step can forge a DNS
+		// reply mapping an allowlisted FQDN to an attacker IP, and feeding that into
+		// the enforcement map would let the forged IP pass the allowlist (defend
+		// bypass). The defend map is seeded instead from the agent's own resolver
+		// via seedDefendOwners (policy.ResolveOwners) at startup and refreshed by
+		// the DNS drift watcher below.
+		dnsCache.SetBPFMaps([]*ebpf.Map{dnsObjs.DnsCache})
 		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
 		slog.Info("tracing DNS replies (recvfrom)")
 		defer dnsObjs.Close()
@@ -1144,8 +1162,25 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			// SECURITY (dns-cache-trust): refresh the defend dns_cache owner
+			// fallback from the trusted resolver on every re-resolution tick so a
+			// domain whose A-records rotate mid-job stays reachable via the
+			// trusted late-binding path — without ever trusting sniffed traffic.
+			// Runs on both drift and no-drift ticks (the IPv4 LPM stays frozen;
+			// only the owner fallback, which was already a live path, is updated).
+			reseedDefendOwners := func() {
+				if defendObjs.DnsCache == nil || len(cfg.AllowedDomains) == 0 {
+					return
+				}
+				rctx, rcancel := context.WithTimeout(runCtx, 60*time.Second)
+				owners := policy.ResolveOwners(rctx, cfg.AllowedDomains, nil, allowlistReCheckMaxAttempts)
+				rcancel()
+				seeded := seedDefendOwners(defendObjs.DnsCache, owners, stats.addDNSCacheUpdateFailure)
+				slog.Debug("defend dns_cache owner map refreshed from trusted resolver", "entries", seeded)
+			}
 			onDrift := func(dr policy.DriftReport) {
 				stats.addDNSDrift()
+				reseedDefendOwners()
 				if cfg.EventsLogPath == "" {
 					return
 				}
@@ -1165,6 +1200,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				}
 			}
 			onClean := func() {
+				reseedDefendOwners()
 				slog.Debug("allowlist DNS re-resolution: no drift", "domains", len(defendCompiled.Domains))
 			}
 			runDNSDriftWatch(runCtx, defendCompiled, nil, allowlistReCheckMaxAttempts, allowlistReCheckInterval, onDrift, onClean)

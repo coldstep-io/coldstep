@@ -386,6 +386,99 @@ func NormalizeDomainsFromRaw(raw string) []string {
 	return normalizeAllowlistDomains(splitFields(raw))
 }
 
+// ResolveOwners resolves the given domains (A records / IPv4 only) via resolver
+// and returns a map of resolved IPv4 address -> owning domain. The owner string
+// is the normalized (lowercased, trimmed) domain so it byte-matches the
+// allowed_domains BPF map keys; the BPF dns_cache allow-path can then resolve
+// dns_cache[ip] -> owner -> allowed_domains[owner].
+//
+// This is the TRUSTED late-binding source for defend mode: it uses the agent's
+// own resolver, NOT DNS responses sniffed from runner traffic. Feeding the BPF
+// dns_cache enforcement map from sniffed traffic let a hostile build step poison
+// it (craft a fake response mapping an allowlisted FQDN to an attacker IP, then
+// egress to that IP). ResolveOwners raises the runtime trust to match the
+// startup allowlist-compile trust (same resolver path).
+//
+// Wildcard entries (`*.suffix`) are skipped — they are not in allowed_domains
+// (exact-string map) and are not resolvable. When two domains resolve to the
+// same IPv4, the lexicographically smallest owner wins so the result is stable
+// across runs. resolver may be nil (defaults to net.DefaultResolver.LookupIP);
+// maxAttempts is clamped to >= 1.
+func ResolveOwners(ctx context.Context, domains []string, resolver LookupIPFunc, maxAttempts int) map[[4]byte]string {
+	if resolver == nil {
+		resolver = net.DefaultResolver.LookupIP
+	}
+	if maxAttempts < 1 {
+		maxAttempts = 1
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	normalized := normalizeAllowlistDomains(domains)
+
+	type ownerResult struct {
+		domain string
+		ips4   []net.IP
+	}
+	results := make([]ownerResult, len(normalized))
+
+	eg, gctx := errgroup.WithContext(ctx)
+	eg.SetLimit(coldstepDomainLookupConcurrencyLimit)
+	for i, domain := range normalized {
+		idx, d := i, domain
+		if strings.HasPrefix(d, "*.") {
+			continue
+		}
+		eg.Go(func() error {
+			res := ownerResult{domain: d}
+			for attempt := 0; attempt < maxAttempts; attempt++ {
+				if gctx.Err() != nil {
+					break
+				}
+				lookupCtx, cancel := context.WithTimeout(gctx, coldstepDomainLookupAttemptTimeout)
+				ips4, err := resolver(lookupCtx, "ip4", d)
+				cancel()
+				if err == nil {
+					for _, ip := range ips4 {
+						if ip.To4() != nil {
+							res.ips4 = append(res.ips4, ip)
+						}
+					}
+					break
+				}
+				if errors.Is(err, context.Canceled) && gctx.Err() != nil {
+					break
+				}
+				// per-attempt timeout or transient failure: retry
+			}
+			results[idx] = res
+			return nil
+		})
+	}
+	if err := eg.Wait(); err != nil {
+		slog.Warn("resolve owners: errgroup wait returned error", "err", err)
+	}
+
+	out := make(map[[4]byte]string)
+	for _, res := range results {
+		if res.domain == "" {
+			continue
+		}
+		for _, ip := range res.ips4 {
+			ip4 := ip.To4()
+			if ip4 == nil {
+				continue
+			}
+			var k [4]byte
+			copy(k[:], ip4)
+			if existing, ok := out[k]; !ok || res.domain < existing {
+				out[k] = res.domain
+			}
+		}
+	}
+	return out
+}
+
 // DriftReport summarizes the difference between two CompileResult snapshots
 // of the same domain allowlist. AddedIPs / RemovedIPs are deterministic
 // (sorted ascending) so the caller can emit them in a stable JSONL payload.
