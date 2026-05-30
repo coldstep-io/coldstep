@@ -11,7 +11,7 @@ export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 // the expected SHA-256 is fetched at runtime from the GitHub Releases API so we
 // don't have to hardcode an asset digest the supply-chain-attest build produces
 // only after the tag is pushed.
-export const COLDSTEP_BINARY_VERSION = 'v0.4.1';
+export const COLDSTEP_BINARY_VERSION = 'v0.4.0';
 export const COLDSTEP_BINARY_ASSET_NAME = 'coldstep-linux-amd64';
 export const COLDSTEP_BINARY_REPO = 'coldstep-io/coldstep';
 export const COLDSTEP_BINARY_URL =
