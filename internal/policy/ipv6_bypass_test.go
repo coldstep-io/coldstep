@@ -67,3 +67,45 @@ func TestIPv6BypassesDefend_NilSafe(t *testing.T) {
 		t.Fatal("IPv6BypassesDefend(nil) returned true, want false")
 	}
 }
+
+// TestIPv4MappedEmbeddedIPv4 pins the userspace mirror of cg_ipv6_is_v4mapped.
+// A v4-mapped destination on a dual-stack socket reaches the IPv6 cgroup hook;
+// the embedded IPv4 must be extracted so defend gates it against the IPv4
+// allowlist instead of the AAAA-only allowed_ipv6 trie.
+func TestIPv4MappedEmbeddedIPv4(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name   string
+		ip     string
+		wantOK bool
+		wantV4 string
+	}{
+		{"v4-mapped allowlisted", "::ffff:93.184.216.34", true, "93.184.216.34"},
+		{"v4-mapped zero", "::ffff:0.0.0.0", true, "0.0.0.0"},
+		{"v4-mapped 1.1.1.1", "::ffff:1.1.1.1", true, "1.1.1.1"},
+		{"native ipv4 not mapped via To16", "8.8.8.8", true, "8.8.8.8"}, // To16 of v4 yields ::ffff:8.8.8.8
+		{"real ipv6 global", "2606:4700:4700::1111", false, ""},
+		{"loopback v6", "::1", false, ""},
+		{"link-local", "fe80::1", false, ""},
+		{"ipv4-compatible (deprecated, not mapped)", "::1.2.3.4", false, ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			v4, ok := IPv4MappedEmbeddedIPv4(net.ParseIP(c.ip))
+			if ok != c.wantOK {
+				t.Fatalf("%s: ok=%v want %v", c.ip, ok, c.wantOK)
+			}
+			if ok && v4.String() != c.wantV4 {
+				t.Fatalf("%s: embedded=%s want %s", c.ip, v4, c.wantV4)
+			}
+		})
+	}
+}
+
+func TestIPv4MappedEmbeddedIPv4_NilSafe(t *testing.T) {
+	t.Parallel()
+	if _, ok := IPv4MappedEmbeddedIPv4(nil); ok {
+		t.Fatal("nil must return ok=false")
+	}
+}
