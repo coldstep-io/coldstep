@@ -278,13 +278,16 @@ func TestDigest_IOUringTLSSNIRow(t *testing.T) {
 		IoUringSendTotal:  4,
 		MaxRowsPerSection: 50,
 	}
-	in.IOUringTLSSNIs = []string{"example.com", "evil.test"}
+	in.IoUringTLSSNIs = []string{"example.com", "evil.test"}
 	md := BuildDetectMarkdown(in)
 	if !strings.Contains(md, "io_uring TLS SNI") {
 		t.Error("expected io_uring TLS SNI KPI row")
 	}
 	if !strings.Contains(md, "example.com") || !strings.Contains(md, "evil.test") {
 		t.Error("expected SNI hosts listed in the row")
+	}
+	if !strings.Contains(md, "| **io_uring TLS SNI** | 2 host(s) observed (no dst correlation): example.com, evil.test |") {
+		t.Error("expected full KPI row with count and joined SNIs")
 	}
 }
 

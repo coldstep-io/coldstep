@@ -299,12 +299,12 @@ type DigestInput struct {
 	// bypass path is being used to initiate TLS handshakes (the strongest
 	// signal Phase 2 can produce from the submission point).
 	IoUringTLSHelloObserved int
-	// IOUringTLSSNIs lists distinct SNI hostnames extracted from io_uring
+	// IoUringTLSSNIs lists distinct SNI hostnames extracted from io_uring
 	// SEND/SENDMSG ClientHello submissions (P6 Phase 2.5, enhanced profile).
 	// Sorted + deduplicated upstream. Destination IP is not resolvable from the
 	// io_uring submission path, so these hosts carry no dst correlation. Empty
 	// when no io_uring TLS SNI was observed; the digest row is then hidden.
-	IOUringTLSSNIs []string
+	IoUringTLSSNIs []string
 	// CanaryPipelineOK reflects telemetry integrity canary status. When false,
 	// the BPF ringbuf pipeline may be compromised (suppression, exhaustion).
 	CanaryPipelineOK bool
