@@ -4,6 +4,7 @@ package agent
 
 import (
 	"encoding/binary"
+	"net"
 	"testing"
 	"time"
 )
@@ -202,5 +203,64 @@ func TestTLSReassembler_BufferCapBoundsMemory(t *testing.T) {
 		if res.bufferLen > 64 {
 			t.Fatalf("buffer grew past cap: %d", res.bufferLen)
 		}
+	}
+}
+
+// v4mapped6 builds the 16-byte ::ffff:a.b.c.d wire form for a dotted IPv4.
+func v4mapped6(a, b, c, d byte) [16]byte {
+	var out [16]byte
+	out[10] = 0xff
+	out[11] = 0xff
+	out[12], out[13], out[14], out[15] = a, b, c, d
+	return out
+}
+
+func TestTLSReassemblyKeyForEvent_NativeIPv4(t *testing.T) {
+	key, ok := tlsReassemblyKeyForEvent(42, [4]byte{1, 2, 3, 4}, [16]byte{}, false, 443)
+	if !ok {
+		t.Fatal("native IPv4 must produce a reassembly key")
+	}
+	if key != (tlsReassemblyKey{PID: 42, Dst: [4]byte{1, 2, 3, 4}, Dport: 443}) {
+		t.Fatalf("unexpected key %+v", key)
+	}
+}
+
+func TestTLSReassemblyKeyForEvent_V4MappedIPv6(t *testing.T) {
+	// ::ffff:10.1.2.3 — wire traffic is IPv4; key on the embedded v4 so it
+	// shares the reassembly path with native IPv4 (dual-stack SNI recovery).
+	key, ok := tlsReassemblyKeyForEvent(7, [4]byte{}, v4mapped6(10, 1, 2, 3), true, 443)
+	if !ok {
+		t.Fatal("IPv4-mapped IPv6 must produce a reassembly key")
+	}
+	if key != (tlsReassemblyKey{PID: 7, Dst: [4]byte{10, 1, 2, 3}, Dport: 443}) {
+		t.Fatalf("unexpected key %+v", key)
+	}
+}
+
+func TestTLSReassemblyKeyForEvent_NativeIPv6Skipped(t *testing.T) {
+	var d6 [16]byte
+	copy(d6[:], net.ParseIP("2606:4700:4700::1111"))
+	if _, ok := tlsReassemblyKeyForEvent(9, [4]byte{}, d6, true, 443); ok {
+		t.Fatal("native IPv6 has no shared v4 key; must be skipped")
+	}
+}
+
+// End-to-end: a fragmented ClientHello over a dual-stack (IPv4-mapped IPv6)
+// socket must recover SNI via the same reassembly path as native IPv4.
+func TestTLSReassembler_V4MappedFragmentedClientHello(t *testing.T) {
+	r := newTLSReassembler()
+	hello := buildSyntheticClientHello(t, "dualstack.example")
+
+	key, ok := tlsReassemblyKeyForEvent(123, [4]byte{}, v4mapped6(93, 184, 216, 34), true, 443)
+	if !ok {
+		t.Fatal("expected v4-mapped key")
+	}
+
+	if res := r.appendAndParse(key, hello[:5]); res.parsed {
+		t.Fatal("record header alone must not recover SNI")
+	}
+	res := r.appendAndParse(key, hello[5:])
+	if !res.parsed || !res.reassembly || res.sni != "dualstack.example" {
+		t.Fatalf("v4-mapped reassembly: parsed=%v reassembly=%v sni=%q", res.parsed, res.reassembly, res.sni)
 	}
 }

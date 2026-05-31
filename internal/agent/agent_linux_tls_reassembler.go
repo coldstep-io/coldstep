@@ -3,6 +3,7 @@
 package agent
 
 import (
+	"net"
 	"sync"
 	"time"
 
@@ -39,6 +40,34 @@ type tlsReassemblyKey struct {
 	PID   uint32
 	Dst   [4]byte
 	Dport uint16
+}
+
+// tlsReassemblyKeyForEvent derives the reassembly key for a tls_sniff_event.
+//
+// Native IPv4 events key on daddr directly. The key's Dst is a [4]byte, so
+// native IPv6 streams have no usable key — they would all collapse to
+// {0,0,0,0} and cross-pollute each other, so the caller drops their fragments.
+//
+// IPv4-mapped IPv6 (::ffff:0:0/96) is the exception: the wire traffic is real
+// IPv4 carried over a dual-stack socket, and the low 4 bytes of daddr6 hold the
+// genuine IPv4 destination. net.IP.To4() returns that embedded v4 for the
+// mapped prefix and nil for native IPv6, so it doubles as the discriminator.
+// Mapped events are keyed on the embedded v4 and share the native-IPv4
+// reassembly path, recovering fragmented ClientHello SNI that was previously
+// dropped on dual-stack systems (detect-only telemetry gap).
+//
+// ok=false signals "no shared v4 key; drop this fragment".
+func tlsReassemblyKeyForEvent(tgid uint32, daddr [4]byte, daddr6 [16]byte, isIPv6 bool, dport uint16) (tlsReassemblyKey, bool) {
+	if !isIPv6 {
+		return tlsReassemblyKey{PID: tgid, Dst: daddr, Dport: dport}, true
+	}
+	v4 := net.IP(daddr6[:]).To4()
+	if v4 == nil {
+		return tlsReassemblyKey{}, false
+	}
+	var dst [4]byte
+	copy(dst[:], v4)
+	return tlsReassemblyKey{PID: tgid, Dst: dst, Dport: dport}, true
 }
 
 type tlsReassemblyEntry struct {

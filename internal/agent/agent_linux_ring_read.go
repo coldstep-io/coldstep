@@ -493,16 +493,19 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			// split where the 5-byte record header lands in one write() and the
 			// handshake body lands in the next.
 			//
-			// P5: skip reassembly for IPv6 — tlsReassemblyKey keys on the v4
-			// daddr ([4]byte), which would collapse to {0,0,0,0} for every
-			// IPv6 stream and cause cross-connection collisions. Extending
-			// the key shape is out of scope for the SNI-only P5 increment;
-			// fragmented v6 handshakes fall through to tls_sni_parse drop.
-			if isIPv6 {
+			// tlsReassemblyKey keys on a v4 daddr ([4]byte). Native IPv6
+			// streams have no usable v4 key (they would all collapse to
+			// {0,0,0,0} and collide), so they fall through to the
+			// tls_sni_parse drop. IPv4-mapped IPv6 (::ffff:0:0/96) is the
+			// exception: dual-stack sockets carry real IPv4 wire traffic, and
+			// tlsReassemblyKeyForEvent extracts the embedded v4 to route those
+			// onto the same reassembly path as native IPv4 (H21 fix).
+			key, ok := tlsReassemblyKeyForEvent(tgid, daddr, daddr6, isIPv6, port)
+			if !ok {
 				stats.addDropped("tls_sni_parse")
 				continue
 			}
-			res := reasm.appendAndParse(tlsReassemblyKey{PID: tgid, Dst: daddr, Dport: port}, rawPay)
+			res := reasm.appendAndParse(key, rawPay)
 			if !res.parsed {
 				stats.addDropped("tls_sni_parse")
 				continue
