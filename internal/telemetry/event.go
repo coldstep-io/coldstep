@@ -621,6 +621,7 @@ type IOUringTLSEvent struct {
 	Op   string `json:"op"` // "SEND" | "SENDMSG"
 	SNI  string `json:"sni"`
 	Dst  string `json:"dst"`
+	Sig  string `json:"sig,omitempty"`
 }
 
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
