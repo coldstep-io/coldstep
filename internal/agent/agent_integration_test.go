@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -93,7 +94,7 @@ func TestRun_DetectWritesSummary(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -145,7 +146,7 @@ func TestRun_TCPConnectLogged(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -234,7 +235,7 @@ func TestRun_DefendModeBlockedConnectEmitsDenyJSONL(t *testing.T) {
 	}
 
 	cancel()
-	if rerr := <-errCh; rerr != nil && rerr != context.Canceled {
+	if rerr := <-errCh; rerr != nil && !errors.Is(rerr, context.Canceled) {
 		t.Fatalf("Run: %v", rerr)
 	}
 
@@ -288,7 +289,7 @@ func TestRun_ExecJSONLIncludesExePath(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -351,7 +352,7 @@ func TestRun_ProcForkJSONLWhenFeatureGate(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -408,7 +409,7 @@ func TestRun_UDPSendtoLoggedJSONL(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -480,7 +481,7 @@ s.close()
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -564,7 +565,7 @@ s.close()
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -631,7 +632,7 @@ func TestRun_TLSClientHelloSNIJSONL(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -741,7 +742,7 @@ s.close()
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -851,7 +852,7 @@ s.close()
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -920,7 +921,7 @@ func TestRun_FSEventJSONLWhenFeatureGate(t *testing.T) {
 
 	time.Sleep(300 * time.Millisecond)
 	cancel()
-	if err := <-errCh; err != nil && err != context.Canceled {
+	if err := <-errCh; err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
@@ -1072,7 +1073,7 @@ func TestRun_BPFAuditLoggedJSONL(t *testing.T) {
 
 	cancel()
 	err = <-errCh
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("Run: %v", err)
 	}
 
