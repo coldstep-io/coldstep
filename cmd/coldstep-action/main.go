@@ -594,6 +594,12 @@ func waitForReady(statusPath string, timeout time.Duration, pid int) string {
 			case incomplete:
 				malformedSince = nil
 			}
+		} else {
+			// Read errors are transient I/O (status file mid-write,
+			// briefly missing); they are not a parseable-but-malformed
+			// status, so they must not advance the malformed budget.
+			// Reset the window and fall through to the liveness check.
+			malformedSince = nil
 		}
 
 		if !pidAlive(pid) {
