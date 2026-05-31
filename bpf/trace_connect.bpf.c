@@ -300,6 +300,24 @@ struct {
 } io_uring_tls_hello_observed SEC(".maps");
 
 /*
+ * P6 Phase 2.5: dedicated low-volume ringbuf for io_uring TLS ClientHello
+ * payload capture. Separate from io_uring_events so routine 40-byte sends do
+ * not pay the 296-byte slot. Written only on ClientHello signature match in
+ * the enhanced-profile peek path. 64 KiB matches io_uring_events sizing.
+ */
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 1 << 16);
+} io_uring_tls_events SEC(".maps");
+
+struct {
+	__uint(type, BPF_MAP_TYPE_PERCPU_ARRAY);
+	__uint(max_entries, 1);
+	__type(key, __u32);
+	__type(value, __u32);
+} io_uring_tls_ringbuf_reserve_failures SEC(".maps");
+
+/*
  * AUDIT(5a): null checked — every `note_*` counter helper below follows the
  * same pattern: bpf_map_lookup_elem then `if (!v) return;` before deref.
  */
@@ -416,6 +434,17 @@ static __always_inline void note_io_uring_tls_hello_observed(void)
 {
 	__u32 k = 0;
 	__u32 *v = bpf_map_lookup_elem(&io_uring_tls_hello_observed, &k);
+
+	if (!v)
+		return;
+	(*v)++;
+}
+
+static __always_inline void note_io_uring_tls_ringbuf_reserve_failed(void)
+{
+	__u32 k = 0;
+	/* AUDIT(5a): null checked — `!v` short-circuits before deref. */
+	__u32 *v = bpf_map_lookup_elem(&io_uring_tls_ringbuf_reserve_failures, &k);
 
 	if (!v)
 		return;
@@ -1001,6 +1030,40 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 					    peek[5] == 0x01) {   /* HandshakeType: ClientHello */
 						has_tls_hello = 1;
 						note_io_uring_tls_hello_observed();
+
+						/*
+						 * Phase 2.5: copy a bounded ClientHello prefix into
+						 * the dedicated TLS ringbuf for userspace SNI parsing
+						 * (telemetry.ParseClientHelloSNI). Constant read length
+						 * keeps the verifier happy (same pattern as
+						 * tls_sniff_event). On short reads capture_len stays 0
+						 * and Go skips the event.
+						 */
+						struct io_uring_tls_event *tev =
+							bpf_ringbuf_reserve(&io_uring_tls_events,
+									    sizeof(*tev), 0);
+						if (!tev) {
+							note_io_uring_tls_ringbuf_reserve_failed();
+						} else {
+							tev->timestamp_ns = bpf_ktime_get_ns();
+							tev->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
+							__builtin_memset(tev->comm, 0, sizeof(tev->comm));
+							bpf_get_current_comm(&tev->comm, sizeof(tev->comm));
+							tev->op = opcode;
+							tev->_pad[0] = tev->_pad[1] = tev->_pad[2] = 0;
+							tev->capture_len = 0;
+							__builtin_memset(tev->_pad2, 0, sizeof(tev->_pad2));
+							__builtin_memset(tev->payload, 0, sizeof(tev->payload));
+							/* AUDIT(5f): return checked — failure leaves
+							 * capture_len=0 so Go skips. */
+							if (bpf_probe_read_user(tev->payload,
+										sizeof(tev->payload),
+										(void *)buf_ptr) == 0) {
+								tev->capture_len = sizeof(tev->payload);
+							}
+							/* AUDIT(5b): reserve paired with unconditional submit. */
+							bpf_ringbuf_submit(tev, 0);
+						}
 					}
 				}
 			}
