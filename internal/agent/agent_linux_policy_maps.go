@@ -112,13 +112,18 @@ func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 // program unloaded) is logged at WARN and surfaced as zero so digest rendering
 // keeps progressing — losing the distinction between "counter is genuinely
 // zero" and "map is unreadable" was the M-07 anti-pattern.
-func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
+// readUint32PerCPUKeySum sums every CPU slot for a single key of a
+// BPF_MAP_TYPE_PERCPU_ARRAY with uint32 values. Failure semantics (M-07):
+// "key not found" is the legitimate zero state and is returned silently; any
+// other Lookup error is logged at WARN and surfaced as zero so callers keep
+// progressing. Shared core for readUint32PerCPUArraySum (key 0) and the
+// per-syscall partial-observe counters.
+func readUint32PerCPUKeySum(m *ebpf.Map, key uint32, helperName string) int {
 	if m == nil {
 		return 0
 	}
-	var k uint32
 	var vals []uint32
-	if err := m.Lookup(&k, &vals); err != nil {
+	if err := m.Lookup(&key, &vals); err != nil {
 		if errors.Is(err, ebpf.ErrKeyNotExist) {
 			return 0
 		}
@@ -132,6 +137,10 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 	return n
 }
 
+func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
+	return readUint32PerCPUKeySum(m, 0, helperName)
+}
+
 // readPartialEgressCounts returns the BG-01 per-syscall partial-observe
 // counters (sendfile, splice, sendmmsg) summed across CPUs. Slots:
 //
@@ -141,28 +150,9 @@ func readUint32PerCPUArraySum(m *ebpf.Map, helperName string) int {
 //
 // Reads each slot independently because PERCPU_ARRAY Lookup is per-key.
 func readPartialEgressCounts(m *ebpf.Map) (sendfile, splice, sendmmsg int) {
-	if m == nil {
-		return 0, 0, 0
-	}
-	read := func(key uint32, label string) int {
-		var vals []uint32
-		if err := m.Lookup(&key, &vals); err != nil {
-			if errors.Is(err, ebpf.ErrKeyNotExist) {
-				return 0
-			}
-			slog.Warn("percpu uint32 map lookup failed", "helper", label, "err", err)
-			return 0
-		}
-		n := 0
-		for _, v := range vals {
-			n += int(v)
-		}
-		return n
-	}
-	sendfile = read(0, "readPartialEgressCounts(sendfile)")
-	splice = read(1, "readPartialEgressCounts(splice)")
-	sendmmsg = read(2, "readPartialEgressCounts(sendmmsg)")
-	return
+	return readUint32PerCPUKeySum(m, 0, "readPartialEgressCounts(sendfile)"),
+		readUint32PerCPUKeySum(m, 1, "readPartialEgressCounts(splice)"),
+		readUint32PerCPUKeySum(m, 2, "readPartialEgressCounts(sendmmsg)")
 }
 
 // readIPv6ConnectObservedCount returns the per-CPU sum of the
