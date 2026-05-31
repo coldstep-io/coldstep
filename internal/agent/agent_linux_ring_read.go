@@ -1017,6 +1017,76 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 	}
 }
 
+// ioUringTLSEventFromRaw decodes a captured io_uring ClientHello and parses its
+// SNI via the same parser the syscall TLS sniffer uses (telemetry.ParseClientHelloSNI).
+// Returns emit=false when the payload does not parse as a ClientHello with a
+// server_name — the lightweight io_uring_send event already recorded the
+// has_tls_hello signal, so a parse miss is not a silent drop. Dst is always
+// "unknown": the io_uring submission path does not expose the destination.
+func ioUringTLSEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.IOUringTLSEvent, bool) {
+	_, pid, op, payload, commb, ok := decodeIOUringTLSEvent(raw)
+	if !ok {
+		return telemetry.IOUringTLSEvent{}, false
+	}
+	sni, parsed := telemetry.ParseClientHelloSNI(payload)
+	if !parsed || sni == "" {
+		return telemetry.IOUringTLSEvent{}, false
+	}
+	return telemetry.IOUringTLSEvent{
+		Type: telemetry.EventTypeIOUringTLS,
+		TS:   ts,
+		Seq:  seq,
+		PID:  pid,
+		Comm: telemetry.SanitizeField(nullTermStr(commb[:]), 16),
+		Op:   ioUringOpName(op),
+		SNI:  telemetry.SanitizeField(sni, 253),
+		Dst:  "unknown",
+	}, true
+}
+
+// readIoUringTLSRing drains io_uring_tls_events: io_uring SEND/SENDMSG
+// submissions whose captured user buffer parsed as a TLS ClientHello with an
+// extractable SNI (P6 Phase 2.5, enhanced profile). Each parsed SNI feeds the
+// digest "io_uring TLS SNI" KPI row via runStats.
+func readIoUringTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (io_uring_tls)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		jsonlMu.Lock()
+		n := seq.Next()
+		ev, emit := ioUringTLSEventFromRaw(record.RawSample, ts, n)
+		if !emit {
+			jsonlMu.Unlock()
+			continue
+		}
+		stats.addIoUringTLSSNI(ev.SNI)
+		var werr error
+		if cfg.EventsLogPath != "" {
+			werr = telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+		}
+		jsonlMu.Unlock()
+		if werr != nil {
+			stats.addDropped("io_uring_tls_jsonl")
+			slog.Warn("events jsonl (io_uring_tls)", "err", werr)
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {
