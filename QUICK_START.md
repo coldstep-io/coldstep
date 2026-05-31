@@ -11,7 +11,7 @@ Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`d
 | Observe-only telemetry (default) | `mode: detect` or omit `mode` |
 | Block egress not on the allowlist | `mode: defend` + non-empty **`allow`** / **`allow-file`** |
 
-> **Coverage scope:** coldstep observes and enforces **IPv4 TCP/UDP**. **IPv6, QUIC/HTTP3, and Unix socket traffic are not covered** (silently bypassed in both detect and defend). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
+> **Coverage scope:** **detect** mode observes **IPv4 TCP/UDP** only (IPv6 not observed). **defend** mode enforces **IPv4 _and_ IPv6 TCP/UDP** — cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`, with native IPv6 gated against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` and `fe80::/10` bypass by design. **QUIC/HTTP3 and Unix socket traffic remain uncovered** (QUIC inner framing uninspected; AF_UNIX silently bypassed). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
 
 If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`defend`**. See **[CHANGELOG — Breaking](CHANGELOG.md)**.
 
