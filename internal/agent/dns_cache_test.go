@@ -223,3 +223,24 @@ func dnsReplySingleA(ip [4]byte, label byte, ttl uint32) []byte {
 	b = append(b, ip[:]...)
 	return b
 }
+
+func BenchmarkDNSCacheTrimOverCap(b *testing.B) {
+	const capN = 16
+	const over = 256
+	future := time.Now().Add(time.Hour).Unix()
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		b.StopTimer()
+		c := NewDNSCache()
+		c.maxEntries = capN
+		for j := 0; j < over; j++ {
+			var k [4]byte
+			k[0] = byte(j)
+			k[1] = byte(j >> 8)
+			c.entries[k] = dnsEntry{name: "x", expires: future}
+		}
+		b.StartTimer()
+		c.trimLocked(time.Now())
+	}
+}

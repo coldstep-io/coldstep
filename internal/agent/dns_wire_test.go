@@ -180,3 +180,14 @@ func TestParseDNSResponseIPv4_typeAAAAIgnored(t *testing.T) {
 		t.Fatal("AAAA-only should yield no IPv4 map entries")
 	}
 }
+
+func BenchmarkJoinDNSLabels(b *testing.B) {
+	labels := []string{"a", "really", "long", "subdomain", "example", "com"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	var sink string
+	for i := 0; i < b.N; i++ {
+		sink = joinDNSLabels(labels)
+	}
+	_ = sink
+}
