@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/coldstep-io/coldstep/internal/reputation"
 	"github.com/coldstep-io/coldstep/internal/reputation/otx"
@@ -76,11 +77,18 @@ type virusTotalEnricher struct {
 	apiKey string
 }
 
+// virusTotalStubWarnOnce guards the not-implemented warning so it fires
+// at most once per process regardless of how many IPs are enriched. The
+// warning carries no IP — egress IPs must not leak into logs.
+var virusTotalStubWarnOnce sync.Once
+
 func (v *virusTotalEnricher) Name() string { return "virustotal" }
 
-func (v *virusTotalEnricher) Enrich(_ context.Context, ip string) (*reputation.Result, error) {
+func (v *virusTotalEnricher) Enrich(_ context.Context, _ string) (*reputation.Result, error) {
 	// Stub: keys are accepted (so LoadFromEnv can report the backend as
 	// "configured") but no HTTP call is made yet. Treat as no-data.
-	slog.Warn("virustotal enricher: not yet implemented; COLDSTEP_VIRUSTOTAL_API_KEY is set but no enrichment is performed", "ip", ip)
+	virusTotalStubWarnOnce.Do(func() {
+		slog.Warn("virustotal reputation backend not yet implemented; COLDSTEP_VIRUSTOTAL_API_KEY is set but no enrichment is performed")
+	})
 	return nil, nil
 }
