@@ -128,8 +128,28 @@ func isBlockingDigestMode(m string) bool {
 	return strings.HasPrefix(m, "defend+") || strings.HasPrefix(m, "enforce+")
 }
 
+// canonicalizeDigestMode maps a legacy "enforce" mode label (written into JSONL
+// artifacts by pre-rename agents) onto its current "defend" equivalent so the
+// triage ribbon and the Defend details table agree on a single label. The
+// ribbon canonicalizes via isBlockingDigestMode (always rendering "defend"),
+// so without this the details cell would leak the raw "enforce" string and the
+// same digest would carry two different mode labels. Backend suffixes are
+// preserved ("enforce+lsm" -> "defend+lsm"); non-enforce values pass through
+// trimmed but otherwise unchanged.
+func canonicalizeDigestMode(m string) string {
+	trimmed := strings.TrimSpace(m)
+	lower := strings.ToLower(trimmed)
+	if lower == "enforce" {
+		return "defend"
+	}
+	if strings.HasPrefix(lower, "enforce+") {
+		return "defend" + trimmed[len("enforce"):]
+	}
+	return trimmed
+}
+
 func digestModeCell(m string) string {
-	m = strings.TrimSpace(m)
+	m = canonicalizeDigestMode(m)
 	if m == "" {
 		return "detect"
 	}
