@@ -104,6 +104,52 @@ func TestBuildDetectMarkdown_LegacyEnforceModeTreatedAsDefend(t *testing.T) {
 	}
 }
 
+// Bug #2: the triage ribbon canonicalizes a legacy mode:"enforce" artifact to
+// `defend`, but the Defend details table used to render the raw mode string —
+// so one digest carried two different labels (ribbon `defend`, details
+// `enforce`). Both sites must now render `defend` for every enforce variant.
+func TestBuildDetectMarkdown_DefendDetailsCanonicalizesLegacyEnforce(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		mode string
+		want string
+	}{
+		{"enforce", "defend"},
+		{"Enforce", "defend"},
+		{"enforce+cgroup", "defend+cgroup"},
+		{"ENFORCE+lsm", "defend+lsm"},
+	} {
+		tc := tc
+		t.Run(tc.mode, func(t *testing.T) {
+			md := BuildDetectMarkdown(DigestInput{
+				DefendMode:          tc.mode,
+				DefendDenyCount:     2,
+				DefendAllowlistSize: 1,
+				BPF:                 []telemetry.BPFStatus{{Name: "connect", OK: true}},
+				MaxRowsPerSection:   50,
+			})
+			// Ribbon: Mode row canonicalizes to `defend`.
+			if !strings.Contains(md, "**Mode** | `defend`") {
+				t.Errorf("ribbon mode not canonicalized for %q; output:\n%s", tc.mode, md)
+			}
+			// Details: Defend section Mode cell renders the canonical label.
+			detailsCell := "| Mode | `" + tc.want + "` |"
+			if !strings.Contains(md, detailsCell) {
+				t.Errorf("missing details cell %q for %q; output:\n%s", detailsCell, tc.mode, md)
+			}
+			// The raw enforce label must not leak through either the ribbon
+			// or the details cell (digest body otherwise uses the word
+			// "enforcement" descriptively, so check the rendered cells only).
+			if strings.Contains(md, "**Mode** | `enforce") {
+				t.Errorf("ribbon leaked raw enforce label for %q; output:\n%s", tc.mode, md)
+			}
+			if strings.Contains(md, "| Mode | `enforce") {
+				t.Errorf("details leaked raw enforce label for %q; output:\n%s", tc.mode, md)
+			}
+		})
+	}
+}
+
 // Bug #6: also exercise the predicate directly so failures point at the source
 // of truth instead of routing through BuildDetectMarkdown.
 func TestIsBlockingDigestMode_LegacyEnforceAlias(t *testing.T) {
