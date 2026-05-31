@@ -614,6 +614,10 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if in.IoUringTLSHelloObserved > 0 {
 		fmt.Fprintf(b, "| **🚨 io_uring TLS ClientHello prefixes** | %d submissions matched TLS 1.x record signature (enhanced profile peek) |\n", in.IoUringTLSHelloObserved)
 	}
+	if len(in.IOUringTLSSNIs) > 0 {
+		fmt.Fprintf(b, "| **io_uring TLS SNI** | %d host(s) observed (no dst correlation): %s |\n",
+			len(in.IOUringTLSSNIs), strings.Join(in.IOUringTLSSNIs, ", "))
+	}
 	if in.IoUringRingbufReserveFailures > 0 {
 		fmt.Fprintf(b, "| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures)
 	}
