@@ -270,9 +270,16 @@ type defendMapSet struct {
 // next agent restart. Operators relying on DNS-backed domain rules should treat
 // the agent's lifetime as the freshness window for the allowlist and add literal
 // CIDRs / IPs for any destinations that need to survive DNS rotation. The
-// dns_cache map (populated by trace_dns.bpf.c at runtime) is consulted as a
-// fallback for reverse lookups in defend_policy.inc:dst_is_allowlisted, but the
-// primary LPM map is snapshot-only.
+// defend dns_cache map is consulted as an owner-fallback in
+// defend_policy.inc:dst_is_allowlisted, but the primary LPM map is
+// snapshot-only. SECURITY (dns-cache-trust): that defend dns_cache is seeded
+// ONLY from the agent's own resolver (seedDefendOwners / policy.ResolveOwners)
+// and refreshed by the DNS drift watcher — it is deliberately NOT fed by
+// trace_dns.bpf.c sniffed traffic (which writes the separate detection-side
+// dnsObjs.DnsCache). Feeding sniffed replies into enforcement would let a
+// hostile build step forge an allowlisted-FQDN→attacker-IP mapping and bypass
+// the allowlist; see the wiring note in agent_linux.go where SetBPFMaps
+// registers only the detection map.
 func loadDefendMapsForBackend(maps defendMapSet, compiled policy.CompileResult, pol *policy.Policy) (int, int, error) {
 	keyMode := uint32(0)
 	modeDefend := uint32(1)

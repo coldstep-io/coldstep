@@ -184,6 +184,21 @@ static __always_inline int cg_ipv6_is_link_local(struct bpf_sock_addr *ctx)
 	return (ctx->user_ip6[0] & bpf_htonl(0xffc00000)) == bpf_htonl(0xfe800000);
 }
 
+/*
+ * IPv4-mapped IPv6 (::ffff:0:0/96): the high 80 bits are zero and bytes
+ * 10-11 are 0xffff, so user_ip6[0]==0, user_ip6[1]==0, user_ip6[2]==
+ * htonl(0x0000ffff). The embedded IPv4 (user_ip6[3], already network byte
+ * order) is the real wire destination — a dual-stack socket connecting to
+ * an allowlisted IPv4 via ::ffff:a.b.c.d must be gated by the IPv4 allowlist,
+ * not the AAAA-only allowed_ipv6 trie (which would falsely deny it).
+ */
+static __always_inline int cg_ipv6_is_v4mapped(struct bpf_sock_addr *ctx)
+{
+	return ctx->user_ip6[0] == 0 &&
+	       ctx->user_ip6[1] == 0 &&
+	       ctx->user_ip6[2] == bpf_htonl(0x0000ffff);
+}
+
 static __always_inline void cg_bump_percpu_u32(void *map)
 {
 	__u32 key = 0;
@@ -288,6 +303,30 @@ static __always_inline int defend_cgroup_sock_addr_ipv6(struct bpf_sock_addr *ct
 		return 1;
 	if (cg_ipv6_is_link_local(ctx))
 		return 1;
+
+	/*
+	 * IPv4-mapped IPv6: gate the embedded IPv4 against the IPv4 allowlist /
+	 * ignored trie and emit an IPv4-family deny on miss. The wire traffic is
+	 * IPv4, so this keeps a dual-stack socket to an allowlisted IPv4 from
+	 * being falsely blocked while still denying non-allowlisted destinations.
+	 * Mirrors defend_cgroup_sock_addr_ipv4; does not bump the IPv6 observe
+	 * counter (the destination is not genuine IPv6 egress).
+	 */
+	if (cg_ipv6_is_v4mapped(ctx)) {
+		__be32 v4 = ctx->user_ip6[3]; /* network byte order */
+		__u8 addr4[4];
+
+		if (!cg_defense_enabled())
+			return 1;
+		if (cg_dst_in_ignored(v4))
+			return 1;
+		if (cg_dst_is_allowlisted(v4))
+			return 1;
+		__builtin_memcpy(addr4, &v4, sizeof(addr4));
+		cg_emit_deny_event_ipv4(protocol, addr4, dport, COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+		return 0;
+	}
+
 	cg_bump_percpu_u32(observe_map);
 
 	if (!cg_defense_enabled())
