@@ -75,11 +75,22 @@ type ktlsEntry struct {
 //     ktlsTrackerTTL. There is no background goroutine — the tracker lives
 //     as long as a single agent run and the entry count is bounded by the
 //     per-run KTLS setsockopt rate (single-digit to low-thousands).
+//
+//   - The wildcard (fd==0) answer is derived on demand from `by` rather than
+//     cached in a parallel per-pid map. An earlier design kept a `latest[pid]`
+//     entry holding the earliest Mark, but that conflated two clocks: the
+//     ordering reference (earliest markedAt) and TTL liveness (the wall-clock
+//     `at` of *some* offload). It stored the earliest mark's `at`, so the
+//     wildcard expired when the FIRST offload's TTL lapsed even while later
+//     offloads on the same pid were still active — and was never rebuilt from
+//     surviving `by` entries, silently dropping the override and over-stating
+//     SNI confidence on a still-encrypted socket. Deriving from `by` (bounded,
+//     under lock) keeps liveness = "any surviving offload" and ordering =
+//     "earliest surviving markedAt" without a desync-prone cache.
 type ktlsTracker struct {
-	mu     sync.Mutex
-	now    func() time.Time
-	by     map[ktlsKey]ktlsEntry
-	latest map[uint32]ktlsEntry // pid -> most recent offload (wildcard path)
+	mu  sync.Mutex
+	now func() time.Time
+	by  map[ktlsKey]ktlsEntry
 }
 
 // newKTLSTracker constructs a tracker with the wall-clock time source. Tests
@@ -91,9 +102,8 @@ func newKTLSTracker() *ktlsTracker {
 
 func newKTLSTrackerClock(now func() time.Time) *ktlsTracker {
 	return &ktlsTracker{
-		now:    now,
-		by:     make(map[ktlsKey]ktlsEntry),
-		latest: make(map[uint32]ktlsEntry),
+		now: now,
+		by:  make(map[ktlsKey]ktlsEntry),
 	}
 }
 
@@ -106,14 +116,9 @@ func newKTLSTrackerClock(now func() time.Time) *ktlsTracker {
 //
 // For the per-(pid, fd) entry the most recent Mark wins — that record is
 // keyed by fd, so the second offload genuinely supersedes the first. The
-// per-pid `latest` map is the wildcard fallback (for TLS events whose wire
-// format does not carry fd) and tracks the *earliest* surviving Mark for
-// the pid: when two fds on the same pid both offload, a pre-offload TLS
-// write captured between the two Marks must still gate against the
-// earlier offload's markedAt, not the later one — otherwise the
-// arrival-order ordering check (`tlsTimestampNs >= markedAt`) would be
-// evaluated against the wrong reference and the TLS event could be
-// misclassified as pre-offload plaintext.
+// wildcard (fd==0) fallback used by the TLS ring reader is derived from `by`
+// at query time (see IsKTLS), not cached here, so it stays correct across
+// eviction without a parallel per-pid map.
 func (t *ktlsTracker) Mark(pid, fd uint32, markedAtNs int64) {
 	if t == nil {
 		return
@@ -122,11 +127,7 @@ func (t *ktlsTracker) Mark(pid, fd uint32, markedAtNs int64) {
 	defer t.mu.Unlock()
 	now := t.now()
 	t.evictLocked(now)
-	entry := ktlsEntry{at: now, markedAt: markedAtNs}
-	t.by[ktlsKey{PID: pid, FD: fd}] = entry
-	if existing, ok := t.latest[pid]; !ok || markedAtNs < existing.markedAt {
-		t.latest[pid] = entry
-	}
+	t.by[ktlsKey{PID: pid, FD: fd}] = ktlsEntry{at: now, markedAt: markedAtNs}
 }
 
 // IsKTLS reports whether (pid, fd) has been Marked within ktlsTrackerTTL AND
@@ -151,10 +152,29 @@ func (t *ktlsTracker) IsKTLS(pid, fd uint32, tlsTimestampNs int64) bool {
 		}
 		return false
 	}
-	if e, ok := t.latest[pid]; ok && e.at.After(cutoff) {
-		return tlsTimestampNs >= e.markedAt
+	// Wildcard: liveness = any non-expired offload for this pid; ordering =
+	// the EARLIEST surviving markedAt so a plaintext write captured between
+	// two offloads on the same pid still gates against the earlier reference.
+	// Derived from `by` (bounded, lock held) so a later offload keeps the
+	// wildcard live after an earlier one's TTL lapses (the eviction-gap bug
+	// the old cached `latest[pid]` had).
+	var (
+		found    bool
+		earliest int64
+	)
+	for k, e := range t.by {
+		if k.PID != pid || !e.at.After(cutoff) {
+			continue
+		}
+		if !found || e.markedAt < earliest {
+			earliest = e.markedAt
+			found = true
+		}
 	}
-	return false
+	if !found {
+		return false
+	}
+	return tlsTimestampNs >= earliest
 }
 
 func (t *ktlsTracker) evictLocked(now time.Time) {
@@ -162,11 +182,6 @@ func (t *ktlsTracker) evictLocked(now time.Time) {
 	for k, e := range t.by {
 		if !e.at.After(cutoff) {
 			delete(t.by, k)
-		}
-	}
-	for pid, e := range t.latest {
-		if !e.at.After(cutoff) {
-			delete(t.latest, pid)
 		}
 	}
 }

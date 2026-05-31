@@ -169,6 +169,60 @@ func TestKTLSTracker_MultiFDPerPidEarliestMarkWins(t *testing.T) {
 	}
 }
 
+// TestKTLSTracker_WildcardSurvivesEarlierOffloadEviction is the regression
+// for the eviction-gap bug: when a pid has two offloads whose Marks straddle
+// the TTL boundary, the wildcard (fd==0) path must stay live as long as ANY
+// offload for that pid is within the window. The old cached latest[pid] held
+// the EARLIEST mark's wall-clock `at`, so the wildcard went blind when the
+// first offload expired — even though the second was still active — silently
+// dropping the KTLS override and over-stating SNI confidence on a still-
+// encrypted socket. Deriving the wildcard from `by` fixes it.
+func TestKTLSTracker_WildcardSurvivesEarlierOffloadEviction(t *testing.T) {
+	var now = time.Date(2026, 5, 19, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	tr := newKTLSTrackerClock(clock)
+
+	const pid uint32 = 5150
+	const fd1 uint32 = 3
+	const fd2 uint32 = 5
+	const firstMarkNs int64 = 1_000_000_000
+	const secondMarkNs int64 = 2_000_000_000
+	const tlsAfterNs int64 = 3_000_000_000 // after both Marks
+
+	// Offload A at t=0.
+	tr.Mark(pid, fd1, firstMarkNs)
+	// Offload B 10s later — still well inside the 60s TTL.
+	now = now.Add(10 * time.Second)
+	tr.Mark(pid, fd2, secondMarkNs)
+
+	// Advance past A's TTL but not B's: A expires at t0+60s, B at t0+70s.
+	// Land at t0+65s so only B survives.
+	now = now.Add(ktlsTrackerTTL - 5*time.Second) // 10s + 55s = 65s since t0
+
+	// A's per-(pid,fd) record must be gone; B's must remain.
+	if tr.IsKTLS(pid, fd1, tlsAfterNs) {
+		t.Fatalf("IsKTLS(%d, %d) exact = true after A's TTL lapsed; want false", pid, fd1)
+	}
+	if !tr.IsKTLS(pid, fd2, tlsAfterNs) {
+		t.Fatalf("IsKTLS(%d, %d) exact = false while B still in TTL; want true", pid, fd2)
+	}
+
+	// The wildcard must still flip — B keeps the pid live. The old code
+	// returned false here because latest[pid] was evicted with A.
+	if !tr.IsKTLS(pid, 0, tlsAfterNs) {
+		t.Fatalf("IsKTLS(%d, 0, %d) wildcard = false while a later offload (fd=%d) "+
+			"is still within TTL; want true (eviction-gap regression)",
+			pid, tlsAfterNs, fd2)
+	}
+
+	// Past B's TTL too: now the wildcard genuinely goes false.
+	now = now.Add(10 * time.Second) // t0+75s — both expired
+	if tr.IsKTLS(pid, 0, tlsAfterNs) {
+		t.Fatalf("IsKTLS(%d, 0, %d) wildcard = true after both offloads expired; want false",
+			pid, tlsAfterNs)
+	}
+}
+
 // TestKTLSTracker_WildcardIsolation guards the per-pid wildcard against
 // cross-pid bleed: marking pid=A must not make IsKTLS(pid=B, 0) return true.
 // Without this property the digest would falsely tag unrelated TLS events as
