@@ -601,6 +601,31 @@ type IOUringSendEvent struct {
 	Sig         string `json:"sig,omitempty"`
 }
 
+// EventTypeEgressBackstop marks a packet that reached the cgroup_skb egress
+// hook bound for a non-allowlisted, non-ignored, non-loopback IP in defend
+// mode — i.e. egress that bypassed the connect4/sendmsg4 address hooks (raw
+// socket, AF_PACKET, or post-connect redirect). Observe-only: the packet is
+// NOT dropped.
+const EventTypeEgressBackstop = "egress_backstop"
+
+// EgressBackstopEvent is one JSONL record for a cgroup_skb egress backstop
+// observation (sub-project A). cgroup_skb egress may run in softirq context,
+// so PID/Comm are best-effort and may be 0/empty for deferred or forwarded
+// sends; Dst, Proto, and AF are the reliable fields.
+type EgressBackstopEvent struct {
+	Type  string `json:"type"` // "egress_backstop"
+	TS    string `json:"ts"`
+	Seq   uint64 `json:"seq"`
+	PID   uint32 `json:"pid"`
+	Comm  string `json:"comm"`
+	AF    string `json:"af"`    // "ipv4" | "ipv6"
+	Proto string `json:"proto"` // "tcp" | "udp" | "icmp" | "raw" | "other"
+	Dst   string `json:"dst"`
+	Dport uint16 `json:"dport,omitempty"`
+	Note  string `json:"note"`
+	Sig   string `json:"sig,omitempty"`
+}
+
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
 type BPFAuditEvent struct {
 	Type     string `json:"type"` // "bpf_audit"

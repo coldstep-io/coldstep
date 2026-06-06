@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -458,5 +459,27 @@ func TestFSEvent_RoundTrip(t *testing.T) {
 	if got.Type != "fs_event" || got.Seq != 5 || got.PID != 10 || got.Comm != "bash" ||
 		got.Op != "create" || got.Path != "/tmp/test.txt" {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestEgressBackstopEvent_JSONShape(t *testing.T) {
+	ev := EgressBackstopEvent{
+		Type: EventTypeEgressBackstop, TS: "2026-06-06T00:00:00Z", Seq: 9,
+		PID: 4321, Comm: "rawsock", Dst: "203.0.113.7", Dport: 443,
+		Proto: "raw", AF: "ipv4",
+		Note: "egress to non-allowlisted IP bypassed connect4/sendmsg4",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		`"type":"egress_backstop"`, `"dst":"203.0.113.7"`,
+		`"dport":443`, `"proto":"raw"`, `"af":"ipv4"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("json %s missing %s", got, want)
+		}
 	}
 }
