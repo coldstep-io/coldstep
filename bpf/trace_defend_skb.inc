@@ -14,13 +14,6 @@
  * on failure the packet is allowed (observe-only fail-open).
  */
 
-#ifndef ETH_P_IP
-#define ETH_P_IP   0x0800
-#endif
-#ifndef ETH_P_IPV6
-#define ETH_P_IPV6 0x86DD
-#endif
-
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
 	__uint(max_entries, 1 << 16);
@@ -134,14 +127,26 @@ int defend_skb_egress(struct __sk_buff *skb)
 	if (!cg_defense_enabled())
 		return 1;
 
-	if (skb->protocol == bpf_htons(ETH_P_IP)) {
-		__u8 ihl_ver = 0, ipproto = 0;
+	/*
+	 * cgroup_skb/egress runs at ip_finish_output, BEFORE L2 encapsulation, so
+	 * skb->protocol (the L2 ethertype) is not reliably populated for
+	 * locally-generated packets — relying on it caused the hook to skip every
+	 * raw-socket packet in testing. Determine the IP version from the packet
+	 * itself: the high nibble of byte 0 is 4 (IPv4) or 6 (IPv6). The byte
+	 * doubles as the IPv4 version+IHL field.
+	 * AUDIT(5f): load return checked; failure => allow.
+	 */
+	__u8 vbyte = 0;
+
+	if (bpf_skb_load_bytes(skb, 0, &vbyte, 1))
+		return 1;
+
+	if ((vbyte >> 4) == 4) {
+		__u8 ipproto = 0;
 		__be32 daddr = 0;
 		__u8 dport[2] = {0, 0};
 
 		/* AUDIT(5f): every load return checked; failure => allow. */
-		if (bpf_skb_load_bytes(skb, 0, &ihl_ver, 1))
-			return 1;
 		if (bpf_skb_load_bytes(skb, 9, &ipproto, 1))
 			return 1;
 		if (bpf_skb_load_bytes(skb, 16, &daddr, 4))
@@ -149,27 +154,31 @@ int defend_skb_egress(struct __sk_buff *skb)
 
 		if (skb_v4_is_loopback(daddr))
 			return 1;
+		if (cg_dst_in_ignored(daddr))
+			return 1;
+		if (cg_dst_is_allowlisted(daddr))
+			return 1;
 
-		/*
-		 * TEMP DIAGNOSTIC (sub-project A evidence cycle — REVERT BEFORE MERGE):
-		 * emit BEFORE the ignored/allowlist filters so the integration test
-		 * reveals (a) whether cgroup_skb/egress fires for these packets at all
-		 * and (b) exactly what dst the hook reads. The emitted event's dst
-		 * distinguishes "hook never runs" (no event) from "filter wrongly
-		 * suppressed" (event with dst=1.1.1.1) from "offset bug" (event with
-		 * a wrong dst). dport is left 0 for the diagnostic.
-		 */
+		{
+			__u32 ihl = (vbyte & 0x0f);
+			__u32 l4 = ihl * 4;
+
+			if (ihl >= 5 && l4 <= 60)
+				(void)bpf_skb_load_bytes(skb, l4 + 2, dport, 2);
+		}
+
 		{
 			__u8 a16[16] = {};
 
 			__builtin_memcpy(a16, &daddr, 4);
-			if (!skb_backstop_recently_seen(a16))
-				skb_emit_backstop(skb, AF_INET, ipproto, a16, dport);
+			if (skb_backstop_recently_seen(a16))
+				return 1;
+			skb_emit_backstop(skb, AF_INET, ipproto, a16, dport);
 		}
 		return 1;
 	}
 
-	if (skb->protocol == bpf_htons(ETH_P_IPV6)) {
+	if ((vbyte >> 4) == 6) {
 		__u8 nexthdr = 0;
 		__u8 a16[16] = {};
 		__u32 a4[4];
