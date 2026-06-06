@@ -72,6 +72,9 @@ type runStats struct {
 	ioUringSendN                    int
 	ioUringTLSHelloN                int
 	ioUringRingbufReserveFailuresN  int
+	egressBackstopN                 int
+	egressBackstopReserveFailuresN  int
+	egressBackstopDsts              map[string]struct{}
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
 	quicCandidateN                  int
@@ -589,6 +592,51 @@ func (s *runStats) ioUringRingbufReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ioUringRingbufReserveFailuresN
+}
+
+func (s *runStats) addEgressBackstop(dst string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.egressBackstopN++
+	if dst == "" {
+		return
+	}
+	if s.egressBackstopDsts == nil {
+		s.egressBackstopDsts = make(map[string]struct{})
+	}
+	s.egressBackstopDsts[dst] = struct{}{}
+}
+
+func (s *runStats) egressBackstopCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.egressBackstopN
+}
+
+func (s *runStats) egressBackstopDstList() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.egressBackstopDsts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.egressBackstopDsts))
+	for d := range s.egressBackstopDsts {
+		out = append(out, d)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (s *runStats) setEgressBackstopReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.egressBackstopReserveFailuresN = n
+}
+
+func (s *runStats) egressBackstopReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.egressBackstopReserveFailuresN
 }
 
 func (s *runStats) ioUringSetupObserved() int {
