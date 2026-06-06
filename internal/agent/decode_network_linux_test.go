@@ -625,3 +625,29 @@ func TestDecodeEgressBackstopEvent_tooShort(t *testing.T) {
 		t.Fatal("expected ok=false for short input")
 	}
 }
+
+func TestEgressBackstopEventFromRaw_parses(t *testing.T) {
+	raw := make([]byte, egressBackstopEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1)
+	binary.LittleEndian.PutUint32(raw[8:12], 77)
+	copy(raw[12:28], []byte("curl\x00"))
+	raw[28] = 2 // AF_INET
+	raw[29] = 6 // TCP
+	copy(raw[32:36], []byte{198, 51, 100, 9})
+	binary.BigEndian.PutUint16(raw[48:50], 8443)
+
+	ev, emit := egressBackstopEventFromRaw(raw, "2026-06-06T00:00:00Z", 5)
+	if !emit {
+		t.Fatal("expected emit=true")
+	}
+	if ev.Type != "egress_backstop" || ev.AF != "ipv4" || ev.Proto != "tcp" ||
+		ev.Dst != "198.51.100.9" || ev.Dport != 8443 || ev.Seq != 5 {
+		t.Fatalf("ev=%+v", ev)
+	}
+}
+
+func TestEgressBackstopEventFromRaw_shortNoEmit(t *testing.T) {
+	if _, emit := egressBackstopEventFromRaw(make([]byte, egressBackstopEventWireSize-1), "t", 1); emit {
+		t.Fatal("expected emit=false for short record")
+	}
+}

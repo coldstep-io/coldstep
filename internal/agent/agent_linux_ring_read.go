@@ -1017,6 +1017,93 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 	}
 }
 
+// egressBackstopProtoName maps the raw IP-header protocol byte to a JSONL
+// proto string.
+func egressBackstopProtoName(p uint8) string {
+	switch p {
+	case 6:
+		return "tcp"
+	case 17:
+		return "udp"
+	case 1:
+		return "icmp"
+	case 58:
+		return "icmpv6"
+	case 255:
+		return "raw"
+	default:
+		return "other"
+	}
+}
+
+// egressBackstopEventFromRaw decodes a cgroup_skb egress backstop sample.
+// seq may be 0; the reader assigns the real sequence under jsonlMu on emit.
+func egressBackstopEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.EgressBackstopEvent, bool) {
+	_, pid, af, ipproto, daddr, dport, commb, ok := decodeEgressBackstopEvent(raw)
+	if !ok {
+		return telemetry.EgressBackstopEvent{}, false
+	}
+	var ip net.IP
+	afStr := "ipv4"
+	if af == 10 { // AF_INET6
+		afStr = "ipv6"
+		ip = net.IP(daddr[:16])
+	} else {
+		ip = net.IP(daddr[:4])
+	}
+	return telemetry.EgressBackstopEvent{
+		Type:  telemetry.EventTypeEgressBackstop,
+		TS:    ts,
+		Seq:   seq,
+		PID:   pid,
+		Comm:  telemetry.SanitizeField(nullTermStr(commb[:]), 16),
+		AF:    afStr,
+		Proto: egressBackstopProtoName(ipproto),
+		Dst:   ip.String(),
+		Dport: dport,
+		Note:  "egress to non-allowlisted IP reached cgroup_skb egress without a connect4/sendmsg4 decision (raw-socket or post-connect bypass)",
+	}, true
+}
+
+// readEgressBackstopRing drains skb_backstop_events (sub-project A). seq is
+// allocated under jsonlMu only on emit (matches every other ring reader).
+func readEgressBackstopRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (egress_backstop)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		ev, emit := egressBackstopEventFromRaw(record.RawSample, ts, 0)
+		if !emit {
+			continue
+		}
+		stats.addEgressBackstop(ev.Dst)
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			ev.Seq = seq.Next()
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("egress_backstop_jsonl")
+				slog.Warn("events jsonl (egress_backstop)", "err", werr)
+			}
+		}
+	}
+}
+
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
 	backoff := newRingReadRetryBackoff()
 	for {
