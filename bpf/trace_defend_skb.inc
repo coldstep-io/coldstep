@@ -149,26 +149,22 @@ int defend_skb_egress(struct __sk_buff *skb)
 
 		if (skb_v4_is_loopback(daddr))
 			return 1;
-		if (cg_dst_in_ignored(daddr))
-			return 1;
-		if (cg_dst_is_allowlisted(daddr))
-			return 1;
 
-		{
-			__u32 ihl = (ihl_ver & 0x0f);
-			__u32 l4 = ihl * 4;
-
-			if (ihl >= 5 && l4 <= 60)
-				(void)bpf_skb_load_bytes(skb, l4 + 2, dport, 2);
-		}
-
+		/*
+		 * TEMP DIAGNOSTIC (sub-project A evidence cycle — REVERT BEFORE MERGE):
+		 * emit BEFORE the ignored/allowlist filters so the integration test
+		 * reveals (a) whether cgroup_skb/egress fires for these packets at all
+		 * and (b) exactly what dst the hook reads. The emitted event's dst
+		 * distinguishes "hook never runs" (no event) from "filter wrongly
+		 * suppressed" (event with dst=1.1.1.1) from "offset bug" (event with
+		 * a wrong dst). dport is left 0 for the diagnostic.
+		 */
 		{
 			__u8 a16[16] = {};
 
 			__builtin_memcpy(a16, &daddr, 4);
-			if (skb_backstop_recently_seen(a16))
-				return 1;
-			skb_emit_backstop(skb, AF_INET, ipproto, a16, dport);
+			if (!skb_backstop_recently_seen(a16))
+				skb_emit_backstop(skb, AF_INET, ipproto, a16, dport);
 		}
 		return 1;
 	}
