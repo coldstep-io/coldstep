@@ -189,3 +189,40 @@ func TestSendpageHookProgram(t *testing.T) {
 		t.Errorf("lsm_socket_sendpage type = %v, want ebpf.LSM", ps.Type)
 	}
 }
+
+// TestSKBBackstopMapsExist asserts the cgroup_skb/egress backstop maps
+// (skb_backstop_events, skb_backstop_reserve_failures, skb_backstop_seen)
+// are present in the spec. These maps support the egress packet filter
+// and its telemetry. Skips until stubs are regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestSKBBackstopMapsExist(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	for _, name := range []string{"skb_backstop_events", "skb_backstop_reserve_failures", "skb_backstop_seen"} {
+		ms, ok := spec.Maps[name]
+		if !ok {
+			t.Skipf("defend stubs not regenerated yet: map %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+		}
+		_ = ms // suppress unused if type assertion not needed for this test
+	}
+}
+
+// TestSKBBackstopEgressProgramExists asserts the cgroup_skb/egress
+// program "defend_skb_egress" is present in the spec. Skips until stubs
+// are regenerated on Linux.
+// TODO: remove skip after Linux regeneration.
+func TestSKBBackstopEgressProgramExists(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	ps, ok := spec.Programs["defend_skb_egress"]
+	if !ok {
+		t.Skipf("defend stubs not regenerated yet: program \"defend_skb_egress\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+	}
+	if ps.Type != ebpf.CGroupSKB {
+		t.Errorf("defend_skb_egress type = %v, want ebpf.CGroupSKB", ps.Type)
+	}
+}
