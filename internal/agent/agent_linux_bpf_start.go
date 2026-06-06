@@ -166,32 +166,47 @@ func startKTLSTrace() (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk
 // SEND/SENDMSG submission. peekCfgFailed signals when that map update
 // failed — agent still attaches the program but the peek stays disabled in
 // BPF and the digest can flag the degraded capability.
-func startIoUringTrace(objs *traceconnect.TraceconnectObjects, enhancedPeek bool) (rd *ringbuf.Reader, lnk link.Link, peekCfgFailed bool, err error) {
+// startIoUringTrace attaches raw_tp/io_uring_submit_sqe and opens the
+// io_uring_events ringbuf. When enhancedPeek is set it also enables the BPF
+// ClientHello peek (io_uring_peek_cfg) and opens the dedicated
+// io_uring_tls_events ringbuf (P6 Phase 2.5) — tlsRd is nil on the standard
+// profile because no TLS payload events are produced there.
+func startIoUringTrace(objs *traceconnect.TraceconnectObjects, enhancedPeek bool) (rd *ringbuf.Reader, tlsRd *ringbuf.Reader, lnk link.Link, peekCfgFailed bool, err error) {
 	if objs == nil {
-		return nil, nil, false, fmt.Errorf("io_uring trace: traceconnect objects not loaded")
+		return nil, nil, nil, false, fmt.Errorf("io_uring trace: traceconnect objects not loaded")
 	}
 	if objs.TraceIoUringSubmitSqe == nil {
-		return nil, nil, false, fmt.Errorf("io_uring trace: program absent from collection")
+		return nil, nil, nil, false, fmt.Errorf("io_uring trace: program absent from collection")
 	}
 	lnk, err = link.AttachRawTracepoint(link.RawTracepointOptions{
 		Name:    "io_uring_submit_sqe",
 		Program: objs.TraceIoUringSubmitSqe,
 	})
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	rd, err = ringbuf.NewReader(objs.IoUringEvents)
 	if err != nil {
 		_ = lnk.Close()
-		return nil, nil, false, err
+		return nil, nil, nil, false, err
 	}
 	if enhancedPeek {
 		if uerr := objs.IoUringPeekCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); uerr != nil {
 			peekCfgFailed = true
 			slog.Warn("io_uring_peek_cfg bpf cfg", "err", uerr)
 		}
+		// Only open the TLS payload ringbuf when the peek is active; on the
+		// standard profile the BPF side never writes to it.
+		if !peekCfgFailed {
+			tlsRd, err = ringbuf.NewReader(objs.IoUringTlsEvents)
+			if err != nil {
+				_ = rd.Close()
+				_ = lnk.Close()
+				return nil, nil, nil, false, err
+			}
+		}
 	}
-	return rd, lnk, peekCfgFailed, nil
+	return rd, tlsRd, lnk, peekCfgFailed, nil
 }
 
 // startIPv6ObsTrace loads bpf/trace_ipv6_obs.bpf.c (the H7 standalone

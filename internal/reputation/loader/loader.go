@@ -75,19 +75,20 @@ func LoadFromEnv() []reputation.Enricher {
 // internal/reputation/virustotal/.
 type virusTotalEnricher struct {
 	apiKey string
+	// warnOnce guards the not-implemented warning so it fires at most once
+	// per enricher (one is constructed per process run) regardless of how
+	// many IPs are enriched. Per-instance rather than package-global so the
+	// guard is not shared across tests. The warning carries no IP — egress
+	// IPs must not leak into logs.
+	warnOnce sync.Once
 }
-
-// virusTotalStubWarnOnce guards the not-implemented warning so it fires
-// at most once per process regardless of how many IPs are enriched. The
-// warning carries no IP — egress IPs must not leak into logs.
-var virusTotalStubWarnOnce sync.Once
 
 func (v *virusTotalEnricher) Name() string { return "virustotal" }
 
 func (v *virusTotalEnricher) Enrich(_ context.Context, _ string) (*reputation.Result, error) {
 	// Stub: keys are accepted (so LoadFromEnv can report the backend as
 	// "configured") but no HTTP call is made yet. Treat as no-data.
-	virusTotalStubWarnOnce.Do(func() {
+	v.warnOnce.Do(func() {
 		slog.Warn("virustotal reputation backend not yet implemented; COLDSTEP_VIRUSTOTAL_API_KEY is set but no enrichment is performed")
 	})
 	return nil, nil

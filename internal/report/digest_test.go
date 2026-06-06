@@ -270,6 +270,68 @@ func TestBuildDetectMarkdown_IoUringTLSHelloRow(t *testing.T) {
 	})
 }
 
+func TestDigest_IOUringTLSReserveFailureRow(t *testing.T) {
+	t.Run("hidden when zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "io_uring_tls_events ringbuf reserve failures") {
+			t.Fatalf("row must be hidden when zero:\n%s", md)
+		}
+	})
+	t.Run("visible when non-zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                              []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+			ExecTotal:                        1,
+			TCPTotal:                         1,
+			IoUringTLSRingbufReserveFailures: 3,
+			MaxRowsPerSection:                50,
+		})
+		needle := "| **io_uring_tls_events ringbuf reserve failures** | 3 (matched ClientHello captures dropped before SNI parse) |"
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	})
+}
+
+func TestDigest_IOUringTLSSNIRow(t *testing.T) {
+	in := DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+		ExecTotal:         1,
+		TCPTotal:          1,
+		IoUringSendTotal:  4,
+		MaxRowsPerSection: 50,
+	}
+	in.IoUringTLSSNIs = []string{"example.com", "evil.test"}
+	md := BuildDetectMarkdown(in)
+	if !strings.Contains(md, "io_uring TLS SNI") {
+		t.Error("expected io_uring TLS SNI KPI row")
+	}
+	if !strings.Contains(md, "example.com") || !strings.Contains(md, "evil.test") {
+		t.Error("expected SNI hosts listed in the row")
+	}
+	if !strings.Contains(md, "| **io_uring TLS SNI** | 2 host(s) observed (no dst correlation): example.com, evil.test |") {
+		t.Error("expected full KPI row with count and joined SNIs")
+	}
+}
+
+func TestDigest_IOUringTLSSNIRow_HiddenWhenEmpty(t *testing.T) {
+	in := DigestInput{
+		BPF:               []telemetry.BPFStatus{{Name: "io_uring_submit_sqe", OK: true}},
+		ExecTotal:         1,
+		TCPTotal:          1,
+		IoUringSendTotal:  4,
+		MaxRowsPerSection: 50,
+	}
+	md := BuildDetectMarkdown(in)
+	if strings.Contains(md, "io_uring TLS SNI") {
+		t.Error("row must be hidden when no io_uring TLS SNIs")
+	}
+}
+
 func TestBuildDetectMarkdown_TopDestinations(t *testing.T) {
 	md := BuildDetectMarkdown(DigestInput{
 		TCPRows: []TCPDigestRow{{
