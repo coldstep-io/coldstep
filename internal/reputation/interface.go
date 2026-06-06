@@ -1,5 +1,5 @@
 // Package reputation defines the plug-in interface for IP/indicator
-// reputation enrichers (e.g. OTX, VirusTotal, PassiveDNS).
+// reputation enrichers (e.g. OTX).
 //
 // Enrichment is post-processing only: callers run it after events are
 // written to JSONL, never on the agent's hot path. Implementations must be
@@ -21,8 +21,8 @@ import (
 // backend. Implementations must be safe for concurrent use.
 type Enricher interface {
 	// Name returns a stable identifier for this enricher
-	// (e.g. "otx", "virustotal", "passivedns"). Used as the
-	// Result.Enricher field and as a deduplication key.
+	// (e.g. "otx"). Used as the Result.Enricher field and as a
+	// deduplication key.
 	Name() string
 
 	// Enrich queries reputation data for the given IPv4 address.
