@@ -560,8 +560,15 @@ func TestRedTeam_EgressBackstop_RawSocketBypass(t *testing.T) {
 	}
 
 	h := newRedteamHarness(t)
-	// Allow only loopback so that 203.0.113.7 is non-allowlisted and the
-	// cgroup_skb egress backstop will observe the raw-socket packet.
+	// Allow only loopback so the raw-socket destination is non-allowlisted and
+	// the cgroup_skb egress backstop observes it. The destination MUST be
+	// routable: cgroup_skb/egress only fires once the kernel builds an egress
+	// skb, which requires a route. RFC5737 TEST-NET addresses are unrouted on
+	// hosted runners (sendto -> ENETUNREACH, no packet, no hook), so we target
+	// a routable public anycast IP (1.1.1.1) that the default route covers. The
+	// crafted packet uses experimental protocol 253 (RFC 3692) and is harmless;
+	// we only need the kernel to route it through the egress hook.
+	const rawDst = "1.1.1.1"
 	h.applyDefendEnv(t, "localhost", "127.0.0.1/32")
 
 	cancel, errCh := startAgent(t, 20*time.Second)
@@ -571,35 +578,35 @@ func TestRedTeam_EgressBackstop_RawSocketBypass(t *testing.T) {
 		t.Fatal("agent did not become ready within 12s")
 	}
 
-	// Craft a minimal raw IPv4 packet destined for 203.0.113.7 using
-	// SOCK_RAW + IP_HDRINCL (root required). The payload is a 40-byte
-	// hand-crafted IP header with protocol 253 (experimental, RFC 3692).
-	// We send 3 times to maximise the chance that at least one copy
-	// reaches the cgroup_skb hook before the kernel drops it.
+	// Craft a minimal raw IPv4 packet via SOCK_RAW + IP_HDRINCL (root required).
+	// A raw socket bypasses the cgroup connect4/sendmsg4 hooks entirely, so the
+	// only layer that can observe it is the cgroup_skb egress backstop. Send a
+	// handful of times to ride over any transient routing/ARP delay.
 	rawScript := `
-import socket, struct, sys
+import socket, struct, sys, time
 s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
 s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-dst = socket.inet_aton("203.0.113.7")
+dst = socket.inet_aton("1.1.1.1")
 ihl_ver = (4 << 4) | 5
 pkt = struct.pack("!BBHHHBBH4s4s",
     ihl_ver, 0, 40, 0, 0, 64, 253, 0,
     socket.inet_aton("127.0.0.1"), dst)
-for _ in range(3):
+for _ in range(8):
     try:
-        s.sendto(pkt, ("203.0.113.7", 0))
+        s.sendto(pkt, ("1.1.1.1", 0))
     except OSError as e:
         sys.stderr.write("sendto: " + str(e) + "\n")
+    time.sleep(0.2)
 `
 	cmd := exec.Command("python3", "-c", rawScript)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Logf("raw-socket probe (non-fatal exit): %v\n%s", err, out)
 	}
 
-	line := pollJSONLForType(h.events, "egress_backstop", []string{`"dst":"203.0.113.7"`}, 6*time.Second)
+	line := pollJSONLForType(h.events, "egress_backstop", []string{`"dst":"` + rawDst + `"`}, 8*time.Second)
 	if line == nil {
 		dump, _ := os.ReadFile(h.events)
-		t.Fatalf("no egress_backstop JSONL row for 203.0.113.7 within 6s; events:\n%s", string(dump))
+		t.Fatalf("no egress_backstop JSONL row for %s within 8s; events:\n%s", rawDst, string(dump))
 	}
 }
 
