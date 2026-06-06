@@ -616,6 +616,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
 				stats.setIoUringRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringRingbufReserveFailures, "io_uring_ringbuf_reserve_failures"))
+				stats.setIoUringTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringTlsRingbufReserveFailures, "io_uring_tls_ringbuf_reserve_failures"))
 				stats.setIoUringTLSHelloObserved(readUint32PerCPUArraySum(syscallObjs.IoUringTlsHelloObserved, "io_uring_tls_hello_observed"))
 			}
 		}()

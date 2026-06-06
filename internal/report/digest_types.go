@@ -292,6 +292,10 @@ type DigestInput struct {
 	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
 	// io_uring_events channel — non-zero indicates io_uring telemetry pressure.
 	IoUringRingbufReserveFailures int
+	// IoUringTLSRingbufReserveFailures counts reserve failures on the dedicated
+	// io_uring_tls_events channel — non-zero means matched ClientHello captures
+	// were dropped before SNI parse (P6 Phase 2.5).
+	IoUringTLSRingbufReserveFailures int
 	// IoUringTLSHelloObserved counts io_uring SQE submissions whose user-buffer
 	// prefix matched the TLS ClientHello record signature (P6 Phase 2, enhanced
 	// profile only). Always zero outside COLDSTEP_DETECT_PROFILE=enhanced; when

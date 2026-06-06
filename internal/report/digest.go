@@ -621,6 +621,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if in.IoUringRingbufReserveFailures > 0 {
 		fmt.Fprintf(b, "| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures)
 	}
+	if in.IoUringTLSRingbufReserveFailures > 0 {
+		fmt.Fprintf(b, "| **io_uring_tls_events ringbuf reserve failures** | %d (matched ClientHello captures dropped before SNI parse) |\n", in.IoUringTLSRingbufReserveFailures)
+	}
 	if in.IPv6ConnectObserved > 0 {
 		label := "**⚠️ ipv6 connect6 observed (detect — no enforcement)**"
 		if ipv6DefendActive(in) {

@@ -982,6 +982,17 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 #define COLDSTEP_IO_KIOCB_CMD_DATA_OFFSET 8u
 #define COLDSTEP_IO_URING_TLS_PEEK_LEN 6u
 
+/*
+ * For IORING_OP_SENDMSG the cmd-union member is `struct user_msghdr __user
+ * *umsg`, not a direct payload pointer (that is the IORING_OP_SEND `.buf`
+ * case). The real send payload is umsg->msg_iov[0].iov_base. msg_iov sits at
+ * offset 16 in user_msghdr (void* msg_name @0, int msg_namelen @8 + 4 pad,
+ * struct iovec* msg_iov @16) and iov_base is the first field of struct iovec
+ * (offset 0). Both derefs are user pointers — read with bpf_probe_read_user.
+ * Layout pinned against bpf/vmlinux.h `struct user_msghdr` / `struct iovec`.
+ */
+#define COLDSTEP_USER_MSGHDR_MSG_IOV_OFFSET 16u
+
 SEC("raw_tp/io_uring_submit_sqe")
 int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -1014,16 +1025,46 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 						  COLDSTEP_IO_KIOCB_CMD_DATA_OFFSET);
 
 			/* AUDIT(5f): return checked — non-zero leaves buf_ptr=0
-			 * and the peek is skipped. */
+			 * and the peek is skipped. buf_ptr is the cmd-union member:
+			 * the user payload pointer for SEND, the user_msghdr pointer
+			 * for SENDMSG (resolved to the real payload below). */
 			if (bpf_probe_read_kernel(&buf_ptr, sizeof(buf_ptr),
 						  sqe_data) == 0 && buf_ptr) {
+				/*
+				 * Resolve buf_ptr to the actual send payload. SEND carries a
+				 * direct buffer pointer; SENDMSG carries a user_msghdr whose
+				 * msg_iov[0].iov_base is the payload (BG-2 — the prior code
+				 * peeked the msghdr struct itself and never matched a
+				 * ClientHello signature for SENDMSG).
+				 */
+				unsigned long payload_ptr = 0;
+
+				if (opcode == COLDSTEP_IORING_OP_SEND) {
+					payload_ptr = buf_ptr;
+				} else {
+					unsigned long iov_ptr = 0;
+
+					/* AUDIT(5f): both user reads checked; failure leaves
+					 * payload_ptr=0 so the peek is skipped. */
+					if (bpf_probe_read_user(&iov_ptr, sizeof(iov_ptr),
+								(void *)(buf_ptr + COLDSTEP_USER_MSGHDR_MSG_IOV_OFFSET)) == 0 &&
+					    iov_ptr) {
+						unsigned long iov_base = 0;
+
+						if (bpf_probe_read_user(&iov_base, sizeof(iov_base),
+									(void *)iov_ptr) == 0)
+							payload_ptr = iov_base;
+					}
+				}
+
 				unsigned char peek[COLDSTEP_IO_URING_TLS_PEEK_LEN];
 
 				/* AUDIT(5f): return checked — non-zero leaves
 				 * has_tls_hello=0. Constant peek length keeps
 				 * the verifier happy. */
-				if (bpf_probe_read_user(peek, sizeof(peek),
-							(void *)buf_ptr) == 0) {
+				if (payload_ptr &&
+				    bpf_probe_read_user(peek, sizeof(peek),
+							(void *)payload_ptr) == 0) {
 					if (peek[0] == 0x16 &&   /* ContentType: Handshake */
 					    peek[1] == 0x03 &&   /* LegacyRecordVersion major */
 					    peek[2] <= 0x04 &&   /* minor: SSLv3..TLS1.3 legacy */
@@ -1036,8 +1077,7 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 						 * the dedicated TLS ringbuf for userspace SNI parsing
 						 * (telemetry.ParseClientHelloSNI). Constant read length
 						 * keeps the verifier happy (same pattern as
-						 * tls_sniff_event). On short reads capture_len stays 0
-						 * and Go skips the event.
+						 * tls_sniff_event).
 						 */
 						struct io_uring_tls_event *tev =
 							bpf_ringbuf_reserve(&io_uring_tls_events,
@@ -1047,22 +1087,27 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 						} else {
 							tev->timestamp_ns = bpf_ktime_get_ns();
 							tev->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
-							__builtin_memset(tev->comm, 0, sizeof(tev->comm));
+							/* bpf_get_current_comm zero-pads; no memset needed. */
 							bpf_get_current_comm(&tev->comm, sizeof(tev->comm));
 							tev->op = opcode;
 							tev->_pad[0] = tev->_pad[1] = tev->_pad[2] = 0;
 							tev->capture_len = 0;
 							__builtin_memset(tev->_pad2, 0, sizeof(tev->_pad2));
-							__builtin_memset(tev->payload, 0, sizeof(tev->payload));
-							/* AUDIT(5f): return checked — failure leaves
-							 * capture_len=0 so Go skips. */
+							/*
+							 * AUDIT(5b/5f): submit only when the full payload
+							 * window was captured; a short/failed read discards
+							 * the slot in-kernel (BG-4) instead of waking
+							 * userspace with an empty record. capture_len is
+							 * therefore always the full window when submitted.
+							 */
 							if (bpf_probe_read_user(tev->payload,
 										sizeof(tev->payload),
-										(void *)buf_ptr) == 0) {
+										(void *)payload_ptr) == 0) {
 								tev->capture_len = sizeof(tev->payload);
+								bpf_ringbuf_submit(tev, 0);
+							} else {
+								bpf_ringbuf_discard(tev, 0);
 							}
-							/* AUDIT(5b): reserve paired with unconditional submit. */
-							bpf_ringbuf_submit(tev, 0);
 						}
 					}
 				}
