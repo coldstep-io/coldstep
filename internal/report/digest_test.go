@@ -1927,3 +1927,31 @@ func TestBuildDetectMarkdown_KTLSBucketHiddenWhenZero(t *testing.T) {
 		t.Fatalf("tech-details KTLS paragraph should be hidden when count is zero:\n%s", md)
 	}
 }
+
+func TestDigest_EgressBackstopRow(t *testing.T) {
+	t.Run("hidden when zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "cgroup_skb/egress", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "egress backstop") {
+			t.Fatalf("row must be hidden when zero:\n%s", md)
+		}
+	})
+	t.Run("visible when non-zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                 []telemetry.BPFStatus{{Name: "cgroup_skb/egress", OK: true}},
+			ExecTotal:           1,
+			TCPTotal:            1,
+			EgressBackstopCount: 4,
+			EgressBackstopDsts:  []string{"198.51.100.9", "203.0.113.7"},
+			MaxRowsPerSection:   50,
+		})
+		needle := "| **🚨 egress backstop (bypassed address hooks)** | 4 packet(s) to 2 non-allowlisted IP(s) reached cgroup_skb egress without a connect4/sendmsg4 decision: 198.51.100.9, 203.0.113.7 |"
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	})
+}
