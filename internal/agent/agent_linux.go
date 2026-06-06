@@ -224,6 +224,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	var denyRd ringReader
 	defer denyRd.Close()
+	var egressBackstopRd ringReader
+	defer egressBackstopRd.Close()
 	var lsmDenyRd ringReader
 	defer lsmDenyRd.Close()
 	var syscallObjs *traceconnect.TraceconnectObjects
@@ -292,6 +294,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		hasDefend = true
 		defer func() {
 			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
+			stats.setEgressBackstopReserveFailures(readUint32PerCPUArraySum(defendObjs.SkbBackstopReserveFailures, "skb_backstop_reserve_failures"))
 			if hasLSM {
 				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
 			}
@@ -455,6 +458,30 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("attach defend_sendmsg4: %w", err)
 		}
 		defer defendSendmsgLnk.Close()
+
+		// Sub-project A: cgroup_skb/egress observe-only backstop. Tolerate a
+		// missing program (defend stubs predating the section) and attach
+		// failure (very old kernels). Never fatal — observe-only.
+		if defendObjs.DefendSkbEgress != nil {
+			if rd, rerr := ringbuf.NewReader(defendObjs.SkbBackstopEvents); rerr != nil {
+				slog.Info("egress backstop ringbuf unavailable; continuing", "err", rerr)
+			} else {
+				skbLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
+					Path:    cgPath,
+					Attach:  ebpf.AttachCGroupInetEgress,
+					Program: defendObjs.DefendSkbEgress,
+				})
+				if attachErr != nil {
+					_ = rd.Close()
+					slog.Info("cgroup_skb/egress backstop hook unavailable; continuing", "err", attachErr)
+					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup_skb/egress", OK: false, Detail: bpfDetail(attachErr)})
+				} else {
+					defer skbLnk.Close()
+					egressBackstopRd.R = rd
+					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup_skb/egress", OK: true})
+				}
+			}
+		}
 
 		// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs
 		// (e.g. defend stubs generated before the IPv6 sections were
@@ -1006,6 +1033,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		ioUringRd.Close()
 		denyRd.Close()
 		lsmDenyRd.Close()
+		egressBackstopRd.Close()
 		dnsRd.Close()
 		bpfAuditRd.Close()
 		forkRd.Close()
@@ -1043,6 +1071,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if denyRd.R != nil {
+		readerCount++
+	}
+	if egressBackstopRd.R != nil {
 		readerCount++
 	}
 	if lsmDenyRd.R != nil {
@@ -1281,6 +1312,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache))
+		}()
+	}
+	if egressBackstopRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readEgressBackstopRing(runCtx, cfg, egressBackstopRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if lsmDenyRd.R != nil {
