@@ -162,13 +162,12 @@ int defend_skb_egress(struct __sk_buff *skb)
 				(void)bpf_skb_load_bytes(skb, l4 + 2, dport, 2);
 		}
 
-		if (skb_backstop_recently_seen((__u8 *)&daddr))
-			return 1;
-
 		{
 			__u8 a16[16] = {};
 
 			__builtin_memcpy(a16, &daddr, 4);
+			if (skb_backstop_recently_seen(a16))
+				return 1;
 			skb_emit_backstop(skb, AF_INET, ipproto, a16, dport);
 		}
 		return 1;
