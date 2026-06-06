@@ -578,22 +578,22 @@ func TestRedTeam_EgressBackstop_RawSocketBypass(t *testing.T) {
 		t.Fatal("agent did not become ready within 12s")
 	}
 
-	// Craft a minimal raw IPv4 packet via SOCK_RAW + IP_HDRINCL (root required).
-	// A raw socket bypasses the cgroup connect4/sendmsg4 hooks entirely, so the
-	// only layer that can observe it is the cgroup_skb egress backstop. Send a
-	// handful of times to ride over any transient routing/ARP delay.
+	// Send via a raw socket bound to an experimental IP protocol (253, RFC
+	// 3692) WITHOUT IP_HDRINCL, so the kernel builds a well-formed IP header
+	// (correct total-length + checksum). A hand-crafted IP_HDRINCL header whose
+	// total-length field disagrees with the buffer size is dropped in the
+	// output path before ip_finish_output, so cgroup_skb/egress never sees it —
+	// that was the prior failure. A raw socket still bypasses the cgroup
+	// connect4/sendmsg4 hooks (no connect(), not a UDP datagram socket), so the
+	// only layer that can observe the egress is the cgroup_skb backstop. Send a
+	// handful of times to ride over transient routing/ARP warm-up.
 	rawScript := `
-import socket, struct, sys, time
-s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
-s.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
-dst = socket.inet_aton("1.1.1.1")
-ihl_ver = (4 << 4) | 5
-pkt = struct.pack("!BBHHHBBH4s4s",
-    ihl_ver, 0, 40, 0, 0, 64, 253, 0,
-    socket.inet_aton("127.0.0.1"), dst)
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, 253)
+payload = b"\xde\xad\xbe\xef\xde\xad\xbe\xef"
 for _ in range(8):
     try:
-        s.sendto(pkt, ("1.1.1.1", 0))
+        s.sendto(payload, ("1.1.1.1", 0))
     except OSError as e:
         sys.stderr.write("sendto: " + str(e) + "\n")
     time.sleep(0.2)
