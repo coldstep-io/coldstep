@@ -1023,6 +1023,9 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 // server_name — the lightweight io_uring_send event already recorded the
 // has_tls_hello signal, so a parse miss is not a silent drop. Dst is always
 // "unknown": the io_uring submission path does not expose the destination.
+// seq may be 0 when the caller assigns the real sequence number later (the
+// reader allocates it under jsonlMu only after emit is known, so parse misses
+// do not burn JSONL sequence numbers).
 func ioUringTLSEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.IOUringTLSEvent, bool) {
 	_, pid, op, payload, commb, ok := decodeIOUringTLSEvent(raw)
 	if !ok {
@@ -1066,23 +1069,25 @@ func readIoUringTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Read
 		}
 		backoff.reset()
 
+		// Decode + parse outside jsonlMu and only allocate a sequence number
+		// once emit is known — parse misses must not burn seq values, and the
+		// stats update must not run under the JSONL lock (matches every other
+		// ring reader in this file).
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		jsonlMu.Lock()
-		n := seq.Next()
-		ev, emit := ioUringTLSEventFromRaw(record.RawSample, ts, n)
+		ev, emit := ioUringTLSEventFromRaw(record.RawSample, ts, 0)
 		if !emit {
-			jsonlMu.Unlock()
 			continue
 		}
 		stats.addIoUringTLSSNI(ev.SNI)
-		var werr error
 		if cfg.EventsLogPath != "" {
-			werr = telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
-		}
-		jsonlMu.Unlock()
-		if werr != nil {
-			stats.addDropped("io_uring_tls_jsonl")
-			slog.Warn("events jsonl (io_uring_tls)", "err", werr)
+			jsonlMu.Lock()
+			ev.Seq = seq.Next()
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("io_uring_tls_jsonl")
+				slog.Warn("events jsonl (io_uring_tls)", "err", werr)
+			}
 		}
 	}
 }
