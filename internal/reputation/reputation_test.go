@@ -277,37 +277,25 @@ func TestLoadFromEnv_Table(t *testing.T) {
 		{
 			name:      "all empty",
 			env:       map[string]string{},
-			wantNames: []string{"otx", "virustotal", "passivedns"},
-			wantNoOp:  map[string]bool{"otx": true, "virustotal": true, "passivedns": true},
+			wantNames: []string{"otx"},
+			wantNoOp:  map[string]bool{"otx": true},
 		},
 		{
-			name:      "otx only",
+			name:      "otx configured",
 			env:       map[string]string{loader.EnvOTXAPIKey: "abc"},
-			wantNames: []string{"otx", "virustotal", "passivedns"},
-			wantNoOp:  map[string]bool{"otx": false, "virustotal": true, "passivedns": true},
-		},
-		{
-			name: "all three",
-			env: map[string]string{
-				loader.EnvOTXAPIKey:        "abc",
-				loader.EnvVirusTotalAPIKey: "def",
-				loader.EnvPassiveDNSServer: "https://pdns.example/",
-			},
-			wantNames: []string{"otx", "virustotal", "passivedns"},
-			wantNoOp:  map[string]bool{"otx": false, "virustotal": false, "passivedns": false},
+			wantNames: []string{"otx"},
+			wantNoOp:  map[string]bool{"otx": false},
 		},
 		{
 			name:      "whitespace-only treated as empty",
 			env:       map[string]string{loader.EnvOTXAPIKey: "   "},
-			wantNames: []string{"otx", "virustotal", "passivedns"},
-			wantNoOp:  map[string]bool{"otx": true, "virustotal": true, "passivedns": true},
+			wantNames: []string{"otx"},
+			wantNoOp:  map[string]bool{"otx": true},
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			for _, k := range []string{loader.EnvOTXAPIKey, loader.EnvVirusTotalAPIKey, loader.EnvPassiveDNSServer} {
-				t.Setenv(k, "")
-			}
+			t.Setenv(loader.EnvOTXAPIKey, "")
 			for k, v := range tc.env {
 				t.Setenv(k, v)
 			}
