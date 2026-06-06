@@ -3,6 +3,7 @@ package telemetry
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -431,6 +432,23 @@ func TestMetaEventCoverage_OmitEmpty(t *testing.T) {
 	}
 	if !bytes.Contains(b, []byte(`"tls_sni_full":"none"`)) {
 		t.Fatalf("missing tls_sni_full in %s", b)
+	}
+}
+
+func TestIOUringTLSEvent_JSONShape(t *testing.T) {
+	ev := IOUringTLSEvent{
+		Type: EventTypeIOUringTLS, TS: "2026-05-31T00:00:00Z", Seq: 7,
+		PID: 1234, Comm: "curl", Op: "SEND", SNI: "example.com", Dst: "unknown",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{`"type":"io_uring_tls"`, `"sni":"example.com"`, `"dst":"unknown"`, `"op":"SEND"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("json %s missing %s", got, want)
+		}
 	}
 }
 

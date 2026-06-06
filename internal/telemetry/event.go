@@ -601,6 +601,29 @@ type IOUringSendEvent struct {
 	Sig         string `json:"sig,omitempty"`
 }
 
+// EventTypeIOUringTLS marks an io_uring SEND/SENDMSG whose payload parsed as a
+// TLS ClientHello with an extractable SNI. Destination is not resolvable from
+// the io_uring submission path, so Dst is always "unknown" this phase.
+const EventTypeIOUringTLS = "io_uring_tls"
+
+// IOUringTLSEvent is one JSONL record for an io_uring SEND/SENDMSG submission
+// whose user-buffer contained a TLS ClientHello with a parseable SNI. It is a
+// higher-fidelity companion to IOUringSendEvent (HasTLSHello=true) — the SNI
+// field carries the extracted server name so downstream consumers do not need
+// to re-parse the raw buffer. Dst is always "unknown" in this phase because
+// the io_uring submission path does not expose the destination address.
+type IOUringTLSEvent struct {
+	Type string `json:"type"` // "io_uring_tls"
+	TS   string `json:"ts"`
+	Seq  uint64 `json:"seq"`
+	PID  uint32 `json:"pid"`
+	Comm string `json:"comm"`
+	Op   string `json:"op"` // "SEND" | "SENDMSG"
+	SNI  string `json:"sni"`
+	Dst  string `json:"dst"`
+	Sig  string `json:"sig,omitempty"`
+}
+
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.
 type BPFAuditEvent struct {
 	Type     string `json:"type"` // "bpf_audit"

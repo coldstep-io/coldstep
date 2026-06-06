@@ -575,6 +575,96 @@ func TestDecodeIOUringSendEvent_tooShort(t *testing.T) {
 	}
 }
 
+func TestDecodeIOUringTLSEvent_roundTrip(t *testing.T) {
+	// Wire layout: ts(8) pid(4) comm(16) op(1) _pad(3) capture_len(2) payload(256) _pad2(6).
+	raw := make([]byte, ioUringTLSEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1715000000002)
+	binary.LittleEndian.PutUint32(raw[8:12], 4242)
+	copy(raw[12:28], []byte("curl\x00"))
+	raw[28] = 26 // IORING_OP_SEND
+	binary.LittleEndian.PutUint16(raw[32:34], 5)
+	copy(raw[34:39], []byte{0x16, 0x03, 0x01, 0x00, 0x2f})
+
+	ts, pid, op, payload, comm, ok := decodeIOUringTLSEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if ts != 1715000000002 || pid != 4242 || op != 26 {
+		t.Fatalf("got ts=%d pid=%d op=%d", ts, pid, op)
+	}
+	if len(payload) != 5 || payload[0] != 0x16 || payload[4] != 0x2f {
+		t.Fatalf("payload %v", payload)
+	}
+	if got := string(bytes.TrimRight(comm[:], "\x00")); got != "curl" {
+		t.Fatalf("comm %q", got)
+	}
+}
+
+func TestDecodeIOUringTLSEvent_capLenClamped(t *testing.T) {
+	// A corrupt capture_len larger than the payload window must clamp, not panic.
+	raw := make([]byte, ioUringTLSEventWireSize)
+	binary.LittleEndian.PutUint16(raw[32:34], 0xFFFF)
+	_, _, _, payload, _, ok := decodeIOUringTLSEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if len(payload) != ioUringTLSPayloadMax {
+		t.Fatalf("payload len = %d, want clamp to %d", len(payload), ioUringTLSPayloadMax)
+	}
+}
+
+func TestDecodeIOUringTLSEvent_tooShort(t *testing.T) {
+	_, _, _, _, _, ok := decodeIOUringTLSEvent(make([]byte, ioUringTLSEventWireSize-1))
+	if ok {
+		t.Fatal("expected ok=false for short input")
+	}
+}
+
+func packIOUringTLSWire(t *testing.T, op uint8, payload []byte) []byte {
+	t.Helper()
+	if len(payload) > ioUringTLSPayloadMax {
+		t.Fatalf("test payload %d exceeds payload window %d", len(payload), ioUringTLSPayloadMax)
+	}
+	raw := make([]byte, ioUringTLSEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1715000000010)
+	binary.LittleEndian.PutUint32(raw[8:12], 7777)
+	copy(raw[12:28], []byte("node\x00"))
+	raw[28] = op
+	binary.LittleEndian.PutUint16(raw[32:34], uint16(len(payload)))
+	copy(raw[34:], payload)
+	return raw
+}
+
+func TestIoUringTLSEventFromRaw_parsesSNI(t *testing.T) {
+	hello := buildSyntheticClientHello(t, "a.test")
+	raw := packIOUringTLSWire(t, 26, hello) // IORING_OP_SEND
+
+	ev, emit := ioUringTLSEventFromRaw(raw, "2026-05-31T00:00:00Z", 3)
+	if !emit {
+		t.Fatal("expected emit=true for a valid ClientHello with SNI")
+	}
+	if ev.Type != "io_uring_tls" || ev.SNI != "a.test" || ev.Dst != "unknown" || ev.Op != "SEND" {
+		t.Fatalf("event = %+v", ev)
+	}
+	if ev.Seq != 3 {
+		t.Fatalf("seq = %d, want 3", ev.Seq)
+	}
+}
+
+func TestIoUringTLSEventFromRaw_noSNINoEmit(t *testing.T) {
+	// A bare TLS record prefix without a parseable ClientHello/SNI must not emit.
+	raw := packIOUringTLSWire(t, 26, []byte{0x16, 0x03, 0x01, 0x00, 0x05})
+	if _, emit := ioUringTLSEventFromRaw(raw, "t", 1); emit {
+		t.Fatal("expected emit=false when no SNI parses")
+	}
+}
+
+func TestIoUringTLSEventFromRaw_shortRecordNoEmit(t *testing.T) {
+	if _, emit := ioUringTLSEventFromRaw(make([]byte, ioUringTLSEventWireSize-1), "t", 1); emit {
+		t.Fatal("expected emit=false for short wire record")
+	}
+}
+
 func TestIOUringOpName_allMappedAndUnknown(t *testing.T) {
 	cases := []struct {
 		op   uint8
