@@ -233,6 +233,24 @@ func decodeIOUringSendEvent(raw []byte) (ts uint64, pid uint32, fd uint32, daddr
 	return ts, pid, fd, daddr, dport, op, hasTLSHello, comm, true
 }
 
+// decodeEgressBackstopEvent parses egress_backstop_event (56 bytes, see
+// bpf/egress_backstop_event.h). daddr is the raw 16-byte address (IPv4 in the
+// first 4 bytes when af==AF_INET); the caller renders it by af. dport is
+// network byte order on the wire and returned host-order.
+func decodeEgressBackstopEvent(raw []byte) (ts uint64, pid uint32, af uint8, ipproto uint8, daddr [16]byte, dport uint16, comm [16]byte, ok bool) {
+	if len(raw) < egressBackstopEventWireSize {
+		return 0, 0, 0, 0, [16]byte{}, 0, [16]byte{}, false
+	}
+	ts = binary.LittleEndian.Uint64(raw[0:8])
+	pid = binary.LittleEndian.Uint32(raw[8:12])
+	copy(comm[:], raw[12:28])
+	af = raw[28]
+	ipproto = raw[29]
+	copy(daddr[:], raw[32:48])
+	dport = binary.BigEndian.Uint16(raw[48:50])
+	return ts, pid, af, ipproto, daddr, dport, comm, true
+}
+
 // ioUringOpName maps the raw IORING_OP_ byte to the JSONL op string. Values
 // from include/uapi/linux/io_uring.h (`enum io_uring_op`, stable since 5.1).
 func ioUringOpName(op uint8) string {

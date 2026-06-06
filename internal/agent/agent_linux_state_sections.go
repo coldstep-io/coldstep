@@ -163,6 +163,8 @@ const (
 	tcpStateEventWireSize = 48
 	// io_uring_send_event: 8(ts)+4(pid)+4(fd)+4(daddr)+2(dport)+1(op)+1(_pad)+16(comm) → 40
 	ioUringSendEventWireSize = 40
+	// egress_backstop_event (sub-project A): 8(ts)+4(pid)+16(comm)+1(af)+1(ipproto)+2(_pad)+16(daddr)+2(dport)+6(_pad2) → 56
+	egressBackstopEventWireSize = 56
 	// trace_dns.bpf.c dns_sniff_event: __u32 len + __u8 is_tcp + __u8 _pad[3] + data[DNS_SNIFF_MAX]
 	dnsSniffMaxPayload          = 4096                   // DNS_SNIFF_MAX in trace_dns.bpf.c
 	dnsSniffEventWireSizeLegacy = 4 + dnsSniffMaxPayload // pre-is_tcp layout (__u32 len + data[])
