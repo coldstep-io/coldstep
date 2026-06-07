@@ -1094,6 +1094,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if ioUringRd.R != nil {
 		readerCount++
 	}
+	if ioUringTLSRd.R != nil {
+		readerCount++
+	}
 	if denyRd.R != nil {
 		readerCount++
 	}
