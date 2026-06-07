@@ -98,6 +98,36 @@ func TestDefendSpecStripsIOUringLSMWithoutLSM(t *testing.T) {
 	}
 }
 
+// TestDefendSpecExposesSelfDefenseProgram asserts the compiled BPF object
+// contains sub-project B's lsm/bpf self-defense program with the expected
+// SectionName, plus its six self_* maps. Pure spec parse — no kernel attach.
+func TestDefendSpecExposesSelfDefenseProgram(t *testing.T) {
+	spec, err := LoadDefend()
+	if err != nil {
+		t.Fatalf("LoadDefend: %v", err)
+	}
+	prog, ok := spec.Programs["coldstep_bpf_self_defense"]
+	if !ok {
+		t.Fatalf("coldstep_bpf_self_defense program missing from CollectionSpec")
+	}
+	if got := prog.SectionName; got != "lsm/bpf" {
+		t.Fatalf("coldstep_bpf_self_defense SectionName=%q want %q", got, "lsm/bpf")
+	}
+	for _, name := range []string{
+		"self_prog_ids",
+		"self_map_ids",
+		"self_pin_prefix",
+		"self_defense_cfg",
+		"bpf_self_defense_events",
+		"bpf_self_defense_reserve_failures",
+		"self_defense_seen",
+	} {
+		if _, present := spec.Maps[name]; !present {
+			t.Fatalf("self-defense map %q missing from CollectionSpec", name)
+		}
+	}
+}
+
 // TestStripAllLSM verifies the shared helper used by both the wantLSM=false
 // initial path and the wantLSM=true post-load fallback removes every LSM
 // program + LSM-only map while leaving cgroup and shared sections intact.
@@ -113,6 +143,7 @@ func TestStripAllLSM(t *testing.T) {
 		"lsm_socket_sendmsg",
 		"lsm_socket_sendpage",
 		"lsm_io_uring_cmd",
+		"coldstep_bpf_self_defense",
 	}
 	for _, name := range mustBeGone {
 		if _, present := spec.Programs[name]; present {
@@ -126,6 +157,13 @@ func TestStripAllLSM(t *testing.T) {
 		"lsm_allowed_ipv4",
 		"lsm_ignored_ipv4_lpm",
 		"sendpage_observed",
+		"self_prog_ids",
+		"self_map_ids",
+		"self_pin_prefix",
+		"self_defense_cfg",
+		"bpf_self_defense_events",
+		"bpf_self_defense_reserve_failures",
+		"self_defense_seen",
 	}
 	for _, name := range mustBeGoneMaps {
 		if _, present := spec.Maps[name]; present {
