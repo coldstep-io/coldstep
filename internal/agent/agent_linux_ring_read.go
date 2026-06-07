@@ -1104,6 +1104,80 @@ func readEgressBackstopRing(ctx context.Context, cfg config.Config, rd *ringbuf.
 	}
 }
 
+// bpfSelfDefenseKindName maps the wire target_kind byte to a JSONL string.
+func bpfSelfDefenseKindName(k uint8) string {
+	switch k {
+	case 1:
+		return "prog"
+	case 2:
+		return "map"
+	case 3:
+		return "pin"
+	default:
+		return "other"
+	}
+}
+
+// bpfSelfDefenseEventFromRaw decodes a denied self-object tamper attempt
+// (sub-project B). seq may be 0; the reader assigns the real sequence under
+// jsonlMu on emit.
+func bpfSelfDefenseEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.BpfSelfDefenseEvent, bool) {
+	_, commb, tgid, targetID, cmd, kind, ok := decodeBpfSelfDefenseEvent(raw)
+	if !ok {
+		return telemetry.BpfSelfDefenseEvent{}, false
+	}
+	return telemetry.BpfSelfDefenseEvent{
+		Type:       telemetry.EventTypeBpfSelfDefense,
+		TS:         ts,
+		Seq:        seq,
+		TGID:       tgid,
+		Comm:       telemetry.SanitizeField(nullTermStr(commb[:]), 16),
+		Cmd:        cmd,
+		TargetKind: bpfSelfDefenseKindName(kind),
+		TargetID:   targetID,
+		Action:     "denied",
+	}, true
+}
+
+// readBpfSelfDefenseRing drains bpf_self_defense_events (sub-project B). seq is
+// allocated under jsonlMu only on emit (matches every other ring reader).
+func readBpfSelfDefenseRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	backoff := newRingReadRetryBackoff()
+	for {
+		record, err := rd.Read()
+		if err != nil {
+			if errors.Is(err, ringbuf.ErrClosed) {
+				return nil
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			delay := backoff.sleep()
+			slog.Warn("ringbuf read (bpf_self_defense)", "err", err, "backoff", delay)
+			continue
+		}
+		backoff.reset()
+
+		ts := time.Now().UTC().Format(time.RFC3339Nano)
+		ev, emit := bpfSelfDefenseEventFromRaw(record.RawSample, ts, 0)
+		if !emit {
+			continue
+		}
+		stats.addBpfSelfDefense()
+		if cfg.EventsLogPath != "" {
+			jsonlMu.Lock()
+			ev.Seq = seq.Next()
+			werr := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
+			jsonlMu.Unlock()
+			if werr != nil {
+				stats.addDropped("bpf_self_defense_jsonl")
+				slog.Warn("events jsonl (bpf_self_defense)", "err", werr)
+			}
+		}
+	}
+}
+
 // ioUringTLSEventFromRaw decodes a captured io_uring ClientHello and parses its
 // SNI via the same parser the syscall TLS sniffer uses (telemetry.ParseClientHelloSNI).
 // Returns emit=false when the payload does not parse as a ClientHello with a

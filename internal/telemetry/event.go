@@ -662,6 +662,30 @@ type BPFAuditEvent struct {
 	Sig      string `json:"sig,omitempty"`
 }
 
+// EventTypeBpfSelfDefense marks a denied attempt by a non-agent task to obtain
+// a handle to one of coldstep's own BPF objects (sub-project B). The lsm/bpf
+// hook returned -EPERM, so the tamper attempt failed — this record is the
+// audit trail, not a breach. Only emitted in defend mode on kernels with
+// CONFIG_BPF_LSM.
+const EventTypeBpfSelfDefense = "bpf_self_defense"
+
+// BpfSelfDefenseEvent is one JSONL record for a denied bpf() control-plane op
+// against a coldstep object. TargetKind is "prog" | "map" | "pin"; TargetID is
+// the prog/map id for the by-id paths (0 for pin-path opens). Cmd is the raw
+// bpf() command number. Action is always "denied".
+type BpfSelfDefenseEvent struct {
+	Type       string `json:"type"` // "bpf_self_defense"
+	TS         string `json:"ts"`
+	Seq        uint64 `json:"seq"`
+	TGID       uint32 `json:"tgid"`
+	Comm       string `json:"comm"`
+	Cmd        int32  `json:"cmd"`
+	TargetKind string `json:"target_kind"`         // "prog" | "map" | "pin"
+	TargetID   uint32 `json:"target_id,omitempty"` // prog/map id; 0 for pin
+	Action     string `json:"action"`              // "denied"
+	Sig        string `json:"sig,omitempty"`
+}
+
 // BPFTamperEvent is one JSONL record for a detected BPF map or program tampering event.
 type BPFTamperEvent struct {
 	Type     string `json:"type"` // "bpf_tamper"
