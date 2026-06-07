@@ -209,10 +209,10 @@ func TestSKBBackstopMapsExist(t *testing.T) {
 	}
 }
 
-// TestSKBBackstopEgressProgramExists asserts the cgroup_skb/egress
-// program "defend_skb_egress" is present in the spec. Skips until stubs
-// are regenerated on Linux.
-// TODO: remove skip after Linux regeneration.
+// TestSKBBackstopEgressProgramExists asserts the egress backstop program
+// "defend_skb_egress" is present as a tc/clsact (SchedCLS) program — it is
+// attached via TCX at the egress qdisc (cgroup_skb/egress was tried first but
+// is never invoked for locally-generated egress).
 func TestSKBBackstopEgressProgramExists(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -220,9 +220,9 @@ func TestSKBBackstopEgressProgramExists(t *testing.T) {
 	}
 	ps, ok := spec.Programs["defend_skb_egress"]
 	if !ok {
-		t.Skipf("defend stubs not regenerated yet: program \"defend_skb_egress\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+		t.Fatalf("BPF program \"defend_skb_egress\" not found in CollectionSpec")
 	}
-	if ps.Type != ebpf.CGroupSKB {
-		t.Errorf("defend_skb_egress type = %v, want ebpf.CGroupSKB", ps.Type)
+	if ps.Type != ebpf.SchedCLS {
+		t.Errorf("defend_skb_egress type = %v, want ebpf.SchedCLS", ps.Type)
 	}
 }

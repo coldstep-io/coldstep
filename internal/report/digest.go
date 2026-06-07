@@ -618,7 +618,7 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 		fmt.Fprintf(b, "| **io_uring_events ringbuf reserve failures** | %d |\n", in.IoUringRingbufReserveFailures)
 	}
 	if in.EgressBackstopCount > 0 {
-		fmt.Fprintf(b, "| **🚨 egress backstop (bypassed address hooks)** | %d packet(s) to %d non-allowlisted IP(s) reached cgroup_skb egress without a connect4/sendmsg4 decision: %s |\n",
+		fmt.Fprintf(b, "| **🚨 egress backstop (bypassed address hooks)** | %d packet(s) to %d non-allowlisted IP(s) reached the egress qdisc without a connect4/sendmsg4 decision: %s |\n",
 			in.EgressBackstopCount, len(in.EgressBackstopDsts), strings.Join(in.EgressBackstopDsts, ", "))
 	}
 	if in.IPv6ConnectObserved > 0 {
