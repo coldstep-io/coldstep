@@ -39,6 +39,11 @@ type Aggregate struct {
 	UDPSends int
 	HTTPReqs int
 
+	// Process / filesystem activity (enhanced-profile event streams).
+	Execs     int
+	ProcForks int
+	FSEvents  int
+
 	Denies []Deny
 
 	TLSFull     int
@@ -48,6 +53,18 @@ type Aggregate struct {
 
 	QUICCandidates int
 	IPv6Events     int
+
+	// Coverage / bypass-class and defend self-protection signals. Each is a
+	// JSONL event count; non-zero surfaces a coverage or defend row so the
+	// pure-markdown report does not silently lose the agent-digest KPIs.
+	KTLSOffload          int // ktls_offload — kernel-TLS hides the SNI
+	TCPStateEvents       int // tcp_state — kernel-confirmed handshake transitions
+	IoUringSend          int // io_uring_send — async send bypassing syscall arms
+	IoUringTLS           int // io_uring_tls — TLS ClientHello over io_uring
+	BPFAudit             int // bpf_audit — bpf() syscall observations
+	BPFTamper            int // bpf_tamper — BPF map/prog tamper detected
+	BpfSelfDefenseDenied int // bpf_self_defense — denied tamper of coldstep objects
+	EgressBackstop       int // egress_backstop — egress that bypassed address hooks
 
 	// Dests maps a destination label (FQDN when known, else dst host) to the
 	// number of egress events seen for it.
@@ -123,10 +140,32 @@ func Parse(r io.Reader) (*Aggregate, error) {
 			a.countDest(line)
 		case "http":
 			a.HTTPReqs++
+		case "exec":
+			a.Execs++
+		case "proc_fork":
+			a.ProcForks++
+		case "fs_event":
+			a.FSEvents++
 		case "quic_candidate":
 			a.QUICCandidates++
 		case "tls":
 			a.countTLS(line)
+		case "ktls_offload":
+			a.KTLSOffload++
+		case "tcp_state":
+			a.TCPStateEvents++
+		case "io_uring_send":
+			a.IoUringSend++
+		case "io_uring_tls":
+			a.IoUringTLS++
+		case "bpf_audit":
+			a.BPFAudit++
+		case "bpf_tamper":
+			a.BPFTamper++
+		case "bpf_self_defense":
+			a.BpfSelfDefenseDenied++
+		case "egress_backstop":
+			a.EgressBackstop++
 		case "deny":
 			a.countDeny(line)
 		}
@@ -219,8 +258,14 @@ func (a *Aggregate) modeLabel() string {
 }
 
 func (a *Aggregate) verdict() string {
+	if a.BPFTamper > 0 {
+		return fmt.Sprintf("🚨 BPF tamper detected (%d) — telemetry integrity compromised", a.BPFTamper)
+	}
 	if len(a.Denies) > 0 {
 		return fmt.Sprintf("🚨 %d egress blocked", len(a.Denies))
+	}
+	if a.EgressBackstop > 0 {
+		return fmt.Sprintf("⚠️ %d egress reached the backstop (bypassed address hooks)", a.EgressBackstop)
 	}
 	return "✅ no anomalies (IPv4 TCP/UDP in scope)"
 }
@@ -236,8 +281,12 @@ func (a *Aggregate) RenderSimple() string {
 	fmt.Fprintf(&b, "| udp sends | %d |\n", a.UDPSends)
 	fmt.Fprintf(&b, "| unique destinations | %d |\n", len(a.Dests))
 	fmt.Fprintf(&b, "| denied | %d |\n", len(a.Denies))
+	fmt.Fprintf(&b, "| exec / fork / fs | %d / %d / %d |\n", a.Execs, a.ProcForks, a.FSEvents)
 	fmt.Fprintf(&b, "| TLS SNI (full/partial) | %d / %d |\n", a.TLSFull, a.TLSPartial)
-	fmt.Fprintf(&b, "| coverage gaps | IPv6 events %d · QUIC candidates %d |\n", a.IPv6Events, a.QUICCandidates)
+	fmt.Fprintf(&b, "| coverage gaps | IPv6 events %d · QUIC candidates %d · io_uring %d |\n", a.IPv6Events, a.QUICCandidates, a.IoUringSend+a.IoUringTLS)
+	if a.BpfSelfDefenseDenied > 0 || a.EgressBackstop > 0 {
+		fmt.Fprintf(&b, "| defend self-protection | self-defense denials %d · egress backstop %d |\n", a.BpfSelfDefenseDenied, a.EgressBackstop)
+	}
 
 	if top := a.topDests(3); len(top) > 0 {
 		parts := make([]string, len(top))
@@ -286,6 +335,13 @@ func (a *Aggregate) RenderDetailed() string {
 		}
 	}
 
+	fmt.Fprintln(&b, "\n## Process & filesystem")
+	fmt.Fprintln(&b, "\n| stream | count |")
+	fmt.Fprintln(&b, "|---|---|")
+	fmt.Fprintf(&b, "| exec | %d |\n", a.Execs)
+	fmt.Fprintf(&b, "| proc_fork | %d |\n", a.ProcForks)
+	fmt.Fprintf(&b, "| fs_event | %d |\n", a.FSEvents)
+
 	fmt.Fprintln(&b, "\n## TLS SNI confidence")
 	fmt.Fprintln(&b, "\n| level | count |")
 	fmt.Fprintln(&b, "|---|---|")
@@ -293,6 +349,22 @@ func (a *Aggregate) RenderDetailed() string {
 	fmt.Fprintf(&b, "| partial | %d |\n", a.TLSPartial)
 	fmt.Fprintf(&b, "| inferred | %d |\n", a.TLSInferred)
 	fmt.Fprintf(&b, "| unknown | %d |\n", a.TLSUnknown)
+	if a.KTLSOffload > 0 {
+		fmt.Fprintf(&b, "\n%d socket(s) used kernel-TLS offload — the SNI is structurally hidden from userspace for those.\n", a.KTLSOffload)
+	}
+
+	fmt.Fprintln(&b, "\n## Coverage & defend signals")
+	fmt.Fprintln(&b, "\n| signal | count | meaning |")
+	fmt.Fprintln(&b, "|---|---|---|")
+	fmt.Fprintf(&b, "| IPv6 egress | %d | non-loopback IPv6 egress events |\n", a.IPv6Events)
+	fmt.Fprintf(&b, "| QUIC/HTTP3 candidates | %d | UDP/443 flows, payload not inspectable |\n", a.QUICCandidates)
+	fmt.Fprintf(&b, "| io_uring send | %d | async sends bypassing syscall arms |\n", a.IoUringSend)
+	fmt.Fprintf(&b, "| io_uring TLS | %d | TLS ClientHello observed over io_uring |\n", a.IoUringTLS)
+	fmt.Fprintf(&b, "| egress backstop | %d | egress that bypassed connect4/sendmsg4 (raw socket / post-connect) |\n", a.EgressBackstop)
+	fmt.Fprintf(&b, "| BPF self-defense denials | %d | denied tamper of coldstep's own BPF objects |\n", a.BpfSelfDefenseDenied)
+	fmt.Fprintf(&b, "| BPF audit | %d | bpf() syscall observations |\n", a.BPFAudit)
+	fmt.Fprintf(&b, "| BPF tamper | %d | detected BPF map/prog tamper (anti-blindness) |\n", a.BPFTamper)
+	fmt.Fprintf(&b, "| TCP state transitions | %d | kernel-confirmed handshakes |\n", a.TCPStateEvents)
 
 	fmt.Fprintln(&b, "\n## Integrity")
 	fmt.Fprintf(&b, "\nparse errors: %d\n", a.ParseErrors)
