@@ -61,3 +61,32 @@ func TestStopStrictRequiredTypes(t *testing.T) {
 		t.Fatalf("missing = %v want [exec]", missing)
 	}
 }
+
+func TestRunDiff_NewDomainGate(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	cur := filepath.Join(dir, "cur.jsonl")
+	base := filepath.Join(dir, "base.jsonl")
+	summary := filepath.Join(dir, "summary.md")
+	if err := os.WriteFile(cur, []byte(`{"type":"tcp","fqdn":"evil.example.com","dst":"1.2.3.4","dport":443}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write cur: %v", err)
+	}
+	if err := os.WriteFile(base, []byte(`{"type":"tcp","fqdn":"github.com","dst":"140.82.112.3","dport":443}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write base: %v", err)
+	}
+
+	// Without the gate: writes marker, returns nil.
+	if err := runDiff([]string{"--current=" + cur, "--baseline=" + base, "--summary=" + summary, "--marker=test-diff"}); err != nil {
+		t.Fatalf("runDiff: %v", err)
+	}
+	raw, _ := os.ReadFile(summary)
+	if !strings.Contains(string(raw), "test-diff.result=changed") || !strings.Contains(string(raw), "test-diff.new_domains=1") {
+		t.Fatalf("summary missing markers:\n%s", raw)
+	}
+
+	// With the gate: new domain (evil.example.com) → error.
+	err := runDiff([]string{"--current=" + cur, "--baseline=" + base, "--summary=" + summary, "--fail-on-new-domain"})
+	if err == nil {
+		t.Fatal("expected fail-on-new-domain error")
+	}
+}
