@@ -115,6 +115,8 @@ func main() {
 			fatal(err)
 		}
 		fatal(runStop(cfg))
+	case "diff":
+		fatal(runDiff(os.Args[2:]))
 	default:
 		fatal(fmt.Errorf("unknown command %q", os.Args[1]))
 	}

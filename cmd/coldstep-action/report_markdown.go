@@ -1,12 +1,16 @@
 package main
 
 import (
+	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
 	"github.com/coldstep-io/coldstep/internal/report/markdown"
+	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
 // writeDetailedMarkdownReport reads the JSONL event stream (the source of truth)
@@ -40,4 +44,92 @@ func writeDetailedMarkdownReport(baseDir string) *markdown.Aggregate {
 		fmt.Fprintf(os.Stderr, "coldstep: write %s: %v\n", outPath, werr)
 	}
 	return agg
+}
+
+// parseAggregateFile parses a JSONL event stream into a markdown.Aggregate.
+func parseAggregateFile(path string) (*markdown.Aggregate, error) {
+	f, err := os.Open(path) // #nosec G304 -- workspace-validated path (safepath.Workspace) //nolint:gosec
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	return markdown.Parse(f)
+}
+
+// runDiff implements `coldstep-action diff` — the baseline destination-domain
+// diff that replaces `coldstep-report diff`. It reads two JSONL streams
+// directly (no report model), writes a compact marker block to the job
+// summary, and, with --fail-on-new-domain, exits non-zero when current
+// introduces destination domains absent from baseline (P1-2 supply-chain
+// learning-mode-poisoning gate).
+func runDiff(args []string) error {
+	fs := flag.NewFlagSet("diff", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	ws := getenvDefault("GITHUB_WORKSPACE", ".")
+	current := fs.String("current", filepath.Join(ws, ".coldstep-events.jsonl"), "")
+	baseline := fs.String("baseline", "", "")
+	summary := fs.String("summary", os.Getenv("GITHUB_STEP_SUMMARY"), "")
+	marker := fs.String("marker", "coldstep-prev-diff", "")
+	failOnNewDomain := fs.Bool("fail-on-new-domain", false, "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*summary) == "" {
+		return fmt.Errorf("diff: summary path is required")
+	}
+	if strings.TrimSpace(*baseline) == "" {
+		return fmt.Errorf("diff: baseline path is required")
+	}
+
+	currentPath, err := safepath.Workspace(*current, "current")
+	if err != nil {
+		return err
+	}
+	baselinePath, err := safepath.Workspace(*baseline, "baseline")
+	if err != nil {
+		return err
+	}
+	summaryPath, err := safepath.Workspace(*summary, "GITHUB_STEP_SUMMARY")
+	if err != nil {
+		return err
+	}
+
+	cur, err := parseAggregateFile(currentPath)
+	if err != nil {
+		return fmt.Errorf("load current events: %w", err)
+	}
+	base, err := parseAggregateFile(baselinePath)
+	if err != nil {
+		return fmt.Errorf("load baseline events: %w", err)
+	}
+
+	added, removed := markdown.DiffDomains(cur, base)
+	result := "no-change"
+	if len(added) > 0 || len(removed) > 0 {
+		result = "changed"
+	}
+
+	block := fmt.Sprintf(
+		"\n#### Previous-run traffic diff (compact)\n\n- %s.result=%s\n- %s.new_domains=%d\n- %s.gone_domains=%d\n",
+		*marker, result, *marker, len(added), *marker, len(removed),
+	)
+	f, err := os.OpenFile(summaryPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644) // #nosec G304 -- workspace-validated //nolint:gosec
+	if err != nil {
+		return err
+	}
+	if _, werr := f.WriteString(block); werr != nil {
+		_ = f.Close()
+		return werr
+	}
+	if cerr := f.Close(); cerr != nil {
+		return cerr
+	}
+
+	if *failOnNewDomain && len(added) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"::error title=Coldstep new destination domains::%d domain(s) present in current but absent from baseline (P1-2): %s\n",
+			len(added), strings.Join(added, ", "))
+		return fmt.Errorf("diff: %d new destination domain(s) not present in baseline", len(added))
+	}
+	return nil
 }
