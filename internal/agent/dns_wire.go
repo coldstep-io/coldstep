@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/binary"
+	"strings"
 )
 
 const (
@@ -135,13 +136,9 @@ func readDNSNameSafe(packet []byte, offset int, visited map[int]struct{}, depth 
 	return "", 0, false
 }
 
+// joinDNSLabels joins DNS labels with dots. strings.Join allocates the result
+// buffer once (vs one intermediate string per label in the old += loop) and
+// returns "" for an empty slice, so no length guard is needed.
 func joinDNSLabels(labels []string) string {
-	if len(labels) == 0 {
-		return ""
-	}
-	s := labels[0]
-	for i := 1; i < len(labels); i++ {
-		s += "." + labels[i]
-	}
-	return s
+	return strings.Join(labels, ".")
 }
