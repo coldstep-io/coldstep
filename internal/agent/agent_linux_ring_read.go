@@ -1036,7 +1036,7 @@ func egressBackstopProtoName(p uint8) string {
 	}
 }
 
-// egressBackstopEventFromRaw decodes a cgroup_skb egress backstop sample.
+// egressBackstopEventFromRaw decodes a tc/clsact egress backstop sample.
 // seq may be 0; the reader assigns the real sequence under jsonlMu on emit.
 func egressBackstopEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.EgressBackstopEvent, bool) {
 	_, pid, af, ipproto, daddr, dport, commb, ok := decodeEgressBackstopEvent(raw)
@@ -1061,7 +1061,7 @@ func egressBackstopEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.Eg
 		Proto: egressBackstopProtoName(ipproto),
 		Dst:   ip.String(),
 		Dport: dport,
-		Note:  "egress to non-allowlisted IP reached cgroup_skb egress without a connect4/sendmsg4 decision (raw-socket or post-connect bypass)",
+		Note:  "egress to non-allowlisted IP reached the egress qdisc without a connect4/sendmsg4 decision (raw-socket or post-connect bypass)",
 	}, true
 }
 

@@ -1949,7 +1949,7 @@ func TestDigest_EgressBackstopRow(t *testing.T) {
 			EgressBackstopDsts:  []string{"198.51.100.9", "203.0.113.7"},
 			MaxRowsPerSection:   50,
 		})
-		needle := "| **🚨 egress backstop (bypassed address hooks)** | 4 packet(s) to 2 non-allowlisted IP(s) reached cgroup_skb egress without a connect4/sendmsg4 decision: 198.51.100.9, 203.0.113.7 |"
+		needle := "| **🚨 egress backstop (bypassed address hooks)** | 4 packet(s) to 2 non-allowlisted IP(s) reached the egress qdisc without a connect4/sendmsg4 decision: 198.51.100.9, 203.0.113.7 |"
 		if !strings.Contains(md, needle) {
 			t.Fatalf("missing %q in:\n%s", needle, md)
 		}

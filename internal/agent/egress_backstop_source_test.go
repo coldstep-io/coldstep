@@ -38,15 +38,20 @@ func TestEgressBackstopSourceWiring(t *testing.T) {
 		t.Fatalf("read skb inc: %v", err)
 	}
 	st := string(src)
-	if !strings.Contains(st, `SEC("cgroup_skb/egress")`) {
-		t.Error("missing cgroup_skb/egress program")
+	if !strings.Contains(st, `SEC("tcx/egress")`) {
+		t.Error("egress backstop must be a tcx/egress (tc/clsact) program — cgroup_skb/egress is never invoked for locally-generated egress")
+	}
+	// Observe-only: the program must never drop. For tc the pass action is
+	// TC_ACT_OK; TC_ACT_SHOT (drop) must not appear.
+	if strings.Contains(st, "TC_ACT_SHOT") {
+		t.Error("egress backstop must be observe-only — found TC_ACT_SHOT (drop)")
 	}
 	// The raw 4-byte cmd-union cast bug must not reappear in the dedup call.
 	if strings.Contains(st, "skb_backstop_recently_seen((__u8 *)&daddr)") {
 		t.Error("v4 dedup must use a 16-byte array, not an OOB cast of &daddr")
 	}
 	// Reuse the address-based allowlist helpers + bounded packet reads.
-	for _, want := range []string{"cg_dst_in_ignored(", "cg_dst_is_allowlisted(", "bpf_skb_load_bytes("} {
+	for _, want := range []string{"cg_dst_in_ignored(", "cg_dst_is_allowlisted(", "bpf_skb_load_bytes_relative(", "BPF_HDR_START_NET"} {
 		if !strings.Contains(st, want) {
 			t.Errorf("missing expected call %q", want)
 		}
