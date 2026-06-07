@@ -384,7 +384,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 							bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "lsm/bpf (self-defense)", OK: false, Detail: bpfDetail(sdErr)})
 						} else {
 							defer sdLnk.Close()
-							progN, mapN := armBpfSelfDefense(&defendObjs, uint32(os.Getpid()))
+							progN, mapN := armBpfSelfDefense(&defendObjs, uint32(os.Getpid())) // #nosec G115 -- pid is always a small positive int; uint32 round-trip is intentional //nolint:gosec
 							if sdRd, rerr := ringbuf.NewReader(defendObjs.BpfSelfDefenseEvents); rerr != nil {
 								slog.Info("bpf self-defense ringbuf unavailable; continuing", "err", rerr)
 							} else {
@@ -1086,6 +1086,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		denyRd.Close()
 		lsmDenyRd.Close()
 		egressBackstopRd.Close()
+		selfDefenseRd.Close()
 		dnsRd.Close()
 		bpfAuditRd.Close()
 		forkRd.Close()

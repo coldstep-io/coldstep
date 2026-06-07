@@ -262,7 +262,7 @@ func decodeBpfSelfDefenseEvent(raw []byte) (ts uint64, comm [16]byte, tgid, targ
 	copy(comm[:], raw[8:24])
 	tgid = binary.LittleEndian.Uint32(raw[24:28])
 	targetID = binary.LittleEndian.Uint32(raw[28:32])
-	cmd = int32(binary.LittleEndian.Uint32(raw[32:36]))
+	cmd = int32(binary.LittleEndian.Uint32(raw[32:36])) // #nosec G115 -- bpf cmd enum reinterpret of the BPF-side __s32; round-trip is intentional //nolint:gosec
 	kind = raw[36]
 	return ts, comm, tgid, targetID, cmd, kind, true
 }
