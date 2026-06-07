@@ -40,6 +40,7 @@ func buildDroppedEventsMap(stats *runStats, defendState *defendState) map[string
 	add("io_uring", stats.ioUringRingbufReserveFailures())
 	add("io_uring_tls", stats.ioUringTLSRingbufReserveFailures())
 	add("egress_backstop", stats.egressBackstopReserveFailures())
+	add("bpf_self_defense", stats.bpfSelfDefenseReserveFailures())
 	if defendState != nil {
 		add("deny", defendState.snapshot().denyReserveFailures)
 	}
@@ -259,6 +260,7 @@ func buildDigestInput(
 		FSReaderErrors:                   fsSnap.readErrors,
 		EgressBackstopCount:              stats.egressBackstopCount(),
 		EgressBackstopDsts:               stats.egressBackstopDstList(),
+		BpfSelfDefenseCount:              stats.bpfSelfDefenseCount(),
 	}
 	if procTreeGate {
 		in.ProcForkTotal = stats.procForkTotal()

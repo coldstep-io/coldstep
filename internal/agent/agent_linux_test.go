@@ -1526,3 +1526,16 @@ func TestRunStats_EgressBackstop(t *testing.T) {
 		t.Fatalf("reserveFailures=%d want 2", got)
 	}
 }
+
+func TestRunStats_BpfSelfDefense(t *testing.T) {
+	s := newRunStats()
+	s.addBpfSelfDefense()
+	s.addBpfSelfDefense()
+	s.setBpfSelfDefenseReserveFailures(5)
+	if got := s.bpfSelfDefenseCount(); got != 2 {
+		t.Fatalf("count=%d want 2", got)
+	}
+	if got := s.bpfSelfDefenseReserveFailures(); got != 5 {
+		t.Fatalf("reserveFailures=%d want 5", got)
+	}
+}
