@@ -300,6 +300,11 @@ type DigestInput struct {
 	// EgressBackstopDsts lists the distinct non-allowlisted destination IPs
 	// observed at the egress backstop, sorted. Empty when none.
 	EgressBackstopDsts []string
+	// BpfSelfDefenseCount is the number of denied attempts by a non-agent task
+	// to obtain a handle to a coldstep BPF object (sub-project B). Non-zero is
+	// the self-defense hook working — an informational row, not a coverage gap.
+	// Zero hides the digest row.
+	BpfSelfDefenseCount int
 	// IoUringTLSRingbufReserveFailures counts reserve failures on the dedicated
 	// io_uring_tls_events channel — non-zero means matched ClientHello captures
 	// were dropped before SNI parse (P6 Phase 2.5).

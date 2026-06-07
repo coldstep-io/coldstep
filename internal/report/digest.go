@@ -628,6 +628,9 @@ func writeFullKPITable(b *strings.Builder, in DigestInput) {
 	if in.IoUringTLSRingbufReserveFailures > 0 {
 		fmt.Fprintf(b, "| **io_uring_tls_events ringbuf reserve failures** | %d (matched ClientHello captures dropped before SNI parse) |\n", in.IoUringTLSRingbufReserveFailures)
 	}
+	if in.BpfSelfDefenseCount > 0 {
+		fmt.Fprintf(b, "| **🛡️ BPF self-defense** | %d tamper attempt(s) on coldstep's own BPF objects denied (prog/map GET_FD_BY_ID or pin open by a non-agent task) |\n", in.BpfSelfDefenseCount)
+	}
 	if in.IPv6ConnectObserved > 0 {
 		label := "**⚠️ ipv6 connect6 observed (detect — no enforcement)**"
 		if ipv6DefendActive(in) {

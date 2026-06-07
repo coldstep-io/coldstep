@@ -231,6 +231,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer egressBackstopRd.Close()
 	var lsmDenyRd ringReader
 	defer lsmDenyRd.Close()
+	var selfDefenseRd ringReader
+	defer selfDefenseRd.Close()
 	var syscallObjs *traceconnect.TraceconnectObjects
 	var syscallLnk link.Link
 	var defendObjs defend.DefendObjects
@@ -298,6 +300,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		defer func() {
 			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
 			stats.setEgressBackstopReserveFailures(readUint32PerCPUArraySum(defendObjs.SkbBackstopReserveFailures, "skb_backstop_reserve_failures"))
+			stats.setBpfSelfDefenseReserveFailures(readUint32PerCPUArraySum(defendObjs.BpfSelfDefenseReserveFailures, "bpf_self_defense_reserve_failures"))
 			if hasLSM {
 				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
 			}
@@ -368,6 +371,31 @@ func Run(ctx context.Context, cfg config.Config) error {
 						}
 					} else {
 						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
+					}
+
+					// Sub-project B: lsm/bpf self-defense. Attach the hook, arm
+					// it (record coldstep's own object ids + enabled=1), and
+					// open its ringbuf. Best-effort defense-in-depth — never
+					// fatal. Inert until armed; armBpfSelfDefense flips enabled
+					// only after the protected-id sets are populated.
+					if defendObjs.ColdstepBpfSelfDefense != nil {
+						if sdLnk, sdErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.ColdstepBpfSelfDefense}); sdErr != nil {
+							slog.Info("lsm/bpf self-defense attach failed; monitor tamper protection inactive", "err", sdErr)
+							bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "lsm/bpf (self-defense)", OK: false, Detail: bpfDetail(sdErr)})
+						} else {
+							defer sdLnk.Close()
+							progN, mapN := armBpfSelfDefense(&defendObjs, uint32(os.Getpid())) // #nosec G115 -- pid is always a small positive int; uint32 round-trip is intentional //nolint:gosec
+							if sdRd, rerr := ringbuf.NewReader(defendObjs.BpfSelfDefenseEvents); rerr != nil {
+								slog.Info("bpf self-defense ringbuf unavailable; continuing", "err", rerr)
+							} else {
+								selfDefenseRd.R = sdRd
+							}
+							bpfSt = append(bpfSt, telemetry.BPFStatus{
+								Name:   "lsm/bpf (self-defense)",
+								OK:     true,
+								Detail: fmt.Sprintf("protecting %d prog(s) + %d map(s)", progN, mapN),
+							})
+						}
 					}
 
 					// H15: lsm/io_uring_cmd is best-effort defense-in-depth on
@@ -1058,6 +1086,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		denyRd.Close()
 		lsmDenyRd.Close()
 		egressBackstopRd.Close()
+		selfDefenseRd.Close()
 		dnsRd.Close()
 		bpfAuditRd.Close()
 		forkRd.Close()
@@ -1104,6 +1133,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if lsmDenyRd.R != nil {
+		readerCount++
+	}
+	if selfDefenseRd.R != nil {
 		readerCount++
 	}
 	if dnsRd.R != nil {
@@ -1360,6 +1392,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readDenyRing(runCtx, cfg, lsmDenyRd.R, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache))
+		}()
+	}
+	if selfDefenseRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readBpfSelfDefenseRing(runCtx, cfg, selfDefenseRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if dnsRd.R != nil {

@@ -76,6 +76,11 @@ type runStats struct {
 	egressBackstopN                   int
 	egressBackstopReserveFailuresN    int
 	egressBackstopDsts                map[string]struct{}
+	// bpfSelfDefenseN counts denied attempts by a non-agent task to grab a
+	// handle to a coldstep BPF object (sub-project B). reserveFailures is the
+	// ringbuf-reserve drop counter snapshotted at shutdown.
+	bpfSelfDefenseN                int
+	bpfSelfDefenseReserveFailuresN int
 	// ioUringTLSSNISet collects distinct SNI hostnames parsed from io_uring
 	// ClientHello captures (P6 Phase 2.5). Rendered as the "io_uring TLS SNI"
 	// digest KPI row. nil until the first SNI is observed.
@@ -672,6 +677,30 @@ func (s *runStats) egressBackstopReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.egressBackstopReserveFailuresN
+}
+
+func (s *runStats) addBpfSelfDefense() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bpfSelfDefenseN++
+}
+
+func (s *runStats) bpfSelfDefenseCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bpfSelfDefenseN
+}
+
+func (s *runStats) setBpfSelfDefenseReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bpfSelfDefenseReserveFailuresN = n
+}
+
+func (s *runStats) bpfSelfDefenseReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bpfSelfDefenseReserveFailuresN
 }
 
 func (s *runStats) setIoUringTLSRingbufReserveFailures(n int) {

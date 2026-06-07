@@ -741,3 +741,55 @@ func TestEgressBackstopEventFromRaw_shortNoEmit(t *testing.T) {
 		t.Fatal("expected emit=false for short record")
 	}
 }
+
+func TestDecodeBpfSelfDefenseEvent(t *testing.T) {
+	raw := make([]byte, bpfSelfDefenseEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1717000000002)
+	copy(raw[8:24], []byte("attacker\x00"))
+	binary.LittleEndian.PutUint32(raw[24:28], 9001)
+	binary.LittleEndian.PutUint32(raw[28:32], 42)
+	binary.LittleEndian.PutUint32(raw[32:36], 14) // BPF_PROG_GET_FD_BY_ID
+	raw[36] = 1                                   // KIND_PROG
+
+	ts, comm, tgid, targetID, cmd, kind, ok := decodeBpfSelfDefenseEvent(raw)
+	if !ok {
+		t.Fatal("expected ok=true")
+	}
+	if ts != 1717000000002 || tgid != 9001 || targetID != 42 || cmd != 14 || kind != 1 {
+		t.Fatalf("ts=%d tgid=%d id=%d cmd=%d kind=%d", ts, tgid, targetID, cmd, kind)
+	}
+	if got := string(bytes.TrimRight(comm[:], "\x00")); got != "attacker" {
+		t.Fatalf("comm %q", got)
+	}
+}
+
+func TestDecodeBpfSelfDefenseEvent_tooShort(t *testing.T) {
+	if _, _, _, _, _, _, ok := decodeBpfSelfDefenseEvent(make([]byte, bpfSelfDefenseEventWireSize-1)); ok {
+		t.Fatal("expected ok=false for short input")
+	}
+}
+
+func TestBpfSelfDefenseEventFromRaw_parses(t *testing.T) {
+	raw := make([]byte, bpfSelfDefenseEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 7)
+	copy(raw[8:24], []byte("evil\x00"))
+	binary.LittleEndian.PutUint32(raw[24:28], 1234)
+	binary.LittleEndian.PutUint32(raw[28:32], 99)
+	binary.LittleEndian.PutUint32(raw[32:36], 13) // BPF_MAP_GET_FD_BY_ID
+	raw[36] = 2                                   // KIND_MAP
+
+	ev, emit := bpfSelfDefenseEventFromRaw(raw, "2026-06-07T00:00:00Z", 8)
+	if !emit {
+		t.Fatal("expected emit=true")
+	}
+	if ev.Type != "bpf_self_defense" || ev.TargetKind != "map" || ev.TargetID != 99 ||
+		ev.Cmd != 13 || ev.TGID != 1234 || ev.Comm != "evil" || ev.Action != "denied" || ev.Seq != 8 {
+		t.Fatalf("ev=%+v", ev)
+	}
+}
+
+func TestBpfSelfDefenseEventFromRaw_shortNoEmit(t *testing.T) {
+	if _, emit := bpfSelfDefenseEventFromRaw(make([]byte, bpfSelfDefenseEventWireSize-1), "t", 1); emit {
+		t.Fatal("expected emit=false for short record")
+	}
+}

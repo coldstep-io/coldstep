@@ -251,6 +251,22 @@ func decodeEgressBackstopEvent(raw []byte) (ts uint64, pid uint32, af uint8, ipp
 	return ts, pid, af, ipproto, daddr, dport, comm, true
 }
 
+// decodeBpfSelfDefenseEvent parses bpf_self_defense_event (40 bytes, see
+// bpf/bpf_self_defense_event.h). Layout: ts(8) comm(16) tgid(4) target_id(4)
+// cmd(4, signed) target_kind(1) _pad(3). All multi-byte fields little-endian.
+func decodeBpfSelfDefenseEvent(raw []byte) (ts uint64, comm [16]byte, tgid, targetID uint32, cmd int32, kind uint8, ok bool) {
+	if len(raw) < bpfSelfDefenseEventWireSize {
+		return 0, [16]byte{}, 0, 0, 0, 0, false
+	}
+	ts = binary.LittleEndian.Uint64(raw[0:8])
+	copy(comm[:], raw[8:24])
+	tgid = binary.LittleEndian.Uint32(raw[24:28])
+	targetID = binary.LittleEndian.Uint32(raw[28:32])
+	cmd = int32(binary.LittleEndian.Uint32(raw[32:36])) // #nosec G115 -- bpf cmd enum reinterpret of the BPF-side __s32; round-trip is intentional //nolint:gosec
+	kind = raw[36]
+	return ts, comm, tgid, targetID, cmd, kind, true
+}
+
 // decodeIOUringTLSEvent parses io_uring_tls_event (296 bytes, see
 // bpf/trace_connect_obs.h). Layout: ts(8) pid(4) comm(16) op(1) _pad(3)
 // capture_len(2, LE) payload(256) _pad2(6). capture_len is clamped to the

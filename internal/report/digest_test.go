@@ -2017,3 +2017,30 @@ func TestDigest_EgressBackstopRow(t *testing.T) {
 		}
 	})
 }
+
+func TestBuildDetectMarkdown_BpfSelfDefenseRow(t *testing.T) {
+	t.Run("hidden when zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:               []telemetry.BPFStatus{{Name: "lsm/bpf (self-defense)", OK: true}},
+			ExecTotal:         1,
+			TCPTotal:          1,
+			MaxRowsPerSection: 50,
+		})
+		if strings.Contains(md, "BPF self-defense") {
+			t.Fatalf("row must be hidden when zero:\n%s", md)
+		}
+	})
+	t.Run("visible when non-zero", func(t *testing.T) {
+		md := BuildDetectMarkdown(DigestInput{
+			BPF:                 []telemetry.BPFStatus{{Name: "lsm/bpf (self-defense)", OK: true}},
+			ExecTotal:           1,
+			TCPTotal:            1,
+			BpfSelfDefenseCount: 2,
+			MaxRowsPerSection:   50,
+		})
+		needle := "| **🛡️ BPF self-defense** | 2 tamper attempt(s) on coldstep's own BPF objects denied (prog/map GET_FD_BY_ID or pin open by a non-agent task) |"
+		if !strings.Contains(md, needle) {
+			t.Fatalf("missing %q in:\n%s", needle, md)
+		}
+	})
+}

@@ -479,6 +479,33 @@ func TestFSEvent_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestBpfSelfDefenseEvent_JSONShape(t *testing.T) {
+	ev := BpfSelfDefenseEvent{
+		Type: EventTypeBpfSelfDefense, TS: "2026-06-07T00:00:00Z", Seq: 3,
+		TGID: 9001, Comm: "attacker", Cmd: 14, TargetKind: "prog",
+		TargetID: 42, Action: "denied",
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	got := string(b)
+	for _, want := range []string{
+		`"type":"bpf_self_defense"`, `"tgid":9001`, `"comm":"attacker"`,
+		`"cmd":14`, `"target_kind":"prog"`, `"target_id":42`, `"action":"denied"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("json %s missing %s", got, want)
+		}
+	}
+	// target_id omitempty: a pin event (id 0) must omit the field.
+	pin := BpfSelfDefenseEvent{Type: EventTypeBpfSelfDefense, TargetKind: "pin", Action: "denied"}
+	pb, _ := json.Marshal(pin)
+	if strings.Contains(string(pb), `"target_id"`) {
+		t.Errorf("pin event must omit target_id: %s", pb)
+	}
+}
+
 func TestEgressBackstopEvent_JSONShape(t *testing.T) {
 	ev := EgressBackstopEvent{
 		Type: EventTypeEgressBackstop, TS: "2026-06-06T00:00:00Z", Seq: 9,
