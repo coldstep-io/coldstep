@@ -1,7 +1,6 @@
 package model
 
 import (
-	"encoding/json"
 	"time"
 )
 
@@ -17,8 +16,6 @@ type Report struct {
 	Diff             DiffPayload           `json:"diff"`
 	IPClassification []ClassifiedIndicator `json:"ip_classification"`
 	CapabilityEval   CapabilityEval        `json:"capability_eval"`
-	OTX              json.RawMessage       `json:"otx"`
-	RDNS             json.RawMessage       `json:"rdns"`
 	// ObservationHours is the wall-clock span from the meta event (or
 	// earliest observed event) to the last event in the JSONL stream.
 	// Surfaces in build-model output so post-run gates can reject
@@ -115,14 +112,13 @@ type DiffChanged struct {
 }
 
 type ClassifiedIndicator struct {
-	Indicator  string   `json:"indicator"`
-	Kind       string   `json:"kind"`
-	Verdict    string   `json:"verdict"`
-	Confidence string   `json:"confidence"`
-	RDNS       []string `json:"rdns,omitempty"`
-	ASN        string   `json:"asn,omitempty"`
-	Severity   string   `json:"severity"`
-	FirstSeen  string   `json:"first_seen,omitempty"`
+	Indicator  string `json:"indicator"`
+	Kind       string `json:"kind"`
+	Verdict    string `json:"verdict"`
+	Confidence string `json:"confidence"`
+	ASN        string `json:"asn,omitempty"`
+	Severity   string `json:"severity"`
+	FirstSeen  string `json:"first_seen,omitempty"`
 }
 
 type CapabilityEval struct {

@@ -83,15 +83,6 @@ func renderSummary(args []string) error {
 	sortRows(unidentified)
 	sortRows(blocked)
 
-	maliciousCount := 0
-	if rawOTX, ok := m["otx"]; ok {
-		if otx, ok := mapFromAny(rawOTX); ok {
-			if summary, ok := mapFromAny(otx["summary"]); ok {
-				maliciousCount = intFromAny(summary["malicious"])
-			}
-		}
-	}
-
 	f, err := os.OpenFile(outPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
@@ -103,9 +94,9 @@ func renderSummary(args []string) error {
 
 	sb.WriteString("\n## Coldstep — egress baseline\n\n")
 
-	if len(unidentified) > 0 || maliciousCount > 0 {
-		fmt.Fprintf(&sb, "> [!WARNING]\n> %d unidentified / %d malicious destinations observed. Review before enabling defend mode.\n\n",
-			len(unidentified), maliciousCount)
+	if len(unidentified) > 0 {
+		fmt.Fprintf(&sb, "> [!WARNING]\n> %d unidentified destination(s) observed. Review before enabling defend mode.\n\n",
+			len(unidentified))
 	}
 
 	// P1-2 / 4b: surface suspicious-domain heuristics. Counts come from
@@ -427,4 +418,78 @@ func countSuspiciousReasons(rows []map[string]any) (highEntropy, rare, portAnoma
 		}
 	}
 	return
+}
+
+// gatherModelIndicators collects distinct destination indicators from the
+// report model (egress sankey, diff buckets, ip_classification) for the
+// render-ip-summary fallback table.
+func gatherModelIndicators(m map[string]any) []string {
+	seen := map[string]struct{}{}
+	out := []string{}
+	add := func(ind string) {
+		ind = strings.TrimSpace(ind)
+		if ind == "" {
+			return
+		}
+		if _, ok := seen[ind]; ok {
+			return
+		}
+		seen[ind] = struct{}{}
+		out = append(out, ind)
+	}
+
+	if sankey, ok := sliceFromAny(m["egress_sankey"]); ok {
+		for _, raw := range sankey {
+			row, ok := mapFromAny(raw)
+			if !ok {
+				continue
+			}
+			if inds, ok := sliceFromAny(row["indicators"]); ok {
+				for _, rawInd := range inds {
+					if s, ok := stringFromAny(rawInd); ok {
+						add(s)
+					}
+				}
+			}
+		}
+	}
+	if diff, ok := mapFromAny(m["diff"]); ok {
+		for _, bucket := range []string{"traffic_new", "traffic_gone", "traffic_changed"} {
+			rows, ok := sliceFromAny(diff[bucket])
+			if !ok {
+				continue
+			}
+			for _, raw := range rows {
+				row, ok := mapFromAny(raw)
+				if !ok {
+					continue
+				}
+				if inds, ok := sliceFromAny(row["indicators"]); ok {
+					for _, rawInd := range inds {
+						if s, ok := stringFromAny(rawInd); ok {
+							add(s)
+						}
+					}
+				}
+			}
+		}
+	}
+	if classes, ok := sliceFromAny(m["ip_classification"]); ok {
+		for _, raw := range classes {
+			row, ok := mapFromAny(raw)
+			if !ok {
+				continue
+			}
+			if s, ok := stringFromAny(row["ip"]); ok {
+				add(s)
+			}
+			if s, ok := stringFromAny(row["indicator"]); ok {
+				add(s)
+			}
+			if s, ok := stringFromAny(row["fqdn"]); ok {
+				add(s)
+			}
+		}
+	}
+	return out
 }

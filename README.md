@@ -100,8 +100,8 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 
 The **post** step merges **`.coldstep-detect.md`** into the **Actions Summary** tab by default (`report: job-summary`). Full **detect-report** workflows set **`report: none`** so the Summary is not dominated by the long shutdown digest:
 
-- **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`coldstep-report build-model`), enriches (rDNS + OTX), writes Tier-1 BLUF and Tier-2 **`coldstep-detect-report.html`** (downloadable artifact).
-- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same `coldstep-report build-model` pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, rDNS + OTX, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends IP/FQDN/rDNS matrix to the Job Summary.
+- **`coldstep-demo-detect.yml`** (`uses: ./`): builds the full **`report-model.json`** (`coldstep-report build-model`), writes Tier-1 BLUF and Tier-2 **`coldstep-detect-report.html`** (downloadable artifact).
+- **`coldstep-detect-demo-dev.yml`** (runs on **`push` to `dev`** and **`workflow_dispatch`**): same `coldstep-report build-model` pipeline as **`coldstep-demo-detect.yml`** (baseline diff rebuild when available, Tier-1 BLUF, Tier-2 **`coldstep-detect-report.html`** artifact **`coldstep-detect-report-html-<runner>`**), then appends the IP/FQDN matrix to the Job Summary.
 
 Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
@@ -133,20 +133,6 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
 | `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
 | `ignored-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
-
-### Optional threat intel (AlienVault OTX)
-
-Detect workflows that build the **report model** can enrich indicators with **AlienVault OTX**. Add a repository or organization secret named **`OTX_API_KEY`**. If the secret is **missing or empty**, enrichment is **skipped** (no outbound calls to OTX; jobs still succeed).
-
-Enrichment walks indicators present in the report model when **`OTX_API_KEY`** is set (`coldstep-report otx-enrich`).
-
-### Pluggable reputation enrichment (OTX)
-
-The post-processing step exposes a stable plug-in interface (`internal/reputation`) so additional reputation backends can be wired in without modifying core coldstep code. Enrichment is **opt-in** and runs only after JSONL is on disk — never on the agent's hot path. Configure backends via env on the post-run report step:
-
-- `COLDSTEP_OTX_API_KEY` — AlienVault OTX (new pluggable path; coexists with the legacy `OTX_API_KEY` flow above).
-
-When the env var is empty, the loader installs a no-op enricher for that slot so the registry shape stays stable. Combined results land in the report model under `reputation_results` plus a `reputation` summary block.
 
 ---
 

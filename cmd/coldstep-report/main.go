@@ -8,7 +8,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		exitf("usage: coldstep-report <build-model|assert-integrity|render-summary|render-html|diff|rdns-enrich|otx-enrich|render-ip-summary>")
+		exitf("usage: coldstep-report <build-model|assert-integrity|render-summary|render-html|diff|render-ip-summary>")
 	}
 	switch os.Args[1] {
 	case "build-model":
@@ -21,10 +21,6 @@ func main() {
 		exitIf(renderHTML(os.Args[2:]))
 	case "diff":
 		exitIf(diffSummary(os.Args[2:]))
-	case "rdns-enrich":
-		exitIf(rdnsEnrich(os.Args[2:]))
-	case "otx-enrich":
-		exitIf(otxEnrich(os.Args[2:]))
 	case "render-ip-summary":
 		exitIf(renderIPSummary(os.Args[2:]))
 	default:
