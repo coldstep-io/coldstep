@@ -129,3 +129,61 @@ func TestRenderDetailed_EmptyDenies(t *testing.T) {
 		t.Errorf("clean run must not show alert verdict")
 	}
 }
+
+// richJSONL exercises every event class the Phase-2 parity port added, so the
+// detailed report is provably lossless vs the agent digest's signal set.
+const richJSONL = `{"type":"exec","comm":"sh"}
+{"type":"proc_fork"}
+{"type":"fs_event","op":"open","path":"/etc/passwd"}
+{"type":"ktls_offload"}
+{"type":"tcp_state","new_state":"established"}
+{"type":"io_uring_send"}
+{"type":"io_uring_tls","sni":"evil.example"}
+{"type":"bpf_audit","cmd":5}
+{"type":"bpf_tamper","asset":"map:defend_cfg"}
+{"type":"bpf_self_defense","target_kind":"map","action":"denied"}
+{"type":"egress_backstop","dst":"9.9.9.9"}
+`
+
+func TestParse_RichSignalCounts(t *testing.T) {
+	a, err := Parse(strings.NewReader(richJSONL))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	checks := map[string]int{
+		"Execs": a.Execs, "ProcForks": a.ProcForks, "FSEvents": a.FSEvents,
+		"KTLSOffload": a.KTLSOffload, "TCPStateEvents": a.TCPStateEvents,
+		"IoUringSend": a.IoUringSend, "IoUringTLS": a.IoUringTLS,
+		"BPFAudit": a.BPFAudit, "BPFTamper": a.BPFTamper,
+		"BpfSelfDefenseDenied": a.BpfSelfDefenseDenied, "EgressBackstop": a.EgressBackstop,
+	}
+	for name, got := range checks {
+		if got != 1 {
+			t.Errorf("%s = %d, want 1", name, got)
+		}
+	}
+}
+
+func TestRenderDetailed_SurfacesRichSignals(t *testing.T) {
+	a, err := Parse(strings.NewReader(richJSONL))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	out := a.RenderDetailed()
+	for _, want := range []string{
+		"## Process & filesystem", "## Coverage & defend signals",
+		"BPF self-defense denials", "egress backstop", "io_uring send",
+		"BPF tamper",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detailed report missing %q:\n%s", want, out)
+		}
+	}
+	// bpf_tamper must drive the headline verdict (anti-blindness).
+	if !strings.Contains(out, "BPF tamper detected") {
+		t.Errorf("tamper must drive verdict:\n%s", out)
+	}
+	if strings.Contains(out, "<") {
+		t.Errorf("detailed report contains '<' (HTML not allowed):\n%s", out)
+	}
+}
