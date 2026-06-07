@@ -39,6 +39,7 @@ func buildDroppedEventsMap(stats *runStats, defendState *defendState) map[string
 	add("tcp_state", stats.tcpStateRingbufReserveFailures())
 	add("io_uring", stats.ioUringRingbufReserveFailures())
 	add("io_uring_tls", stats.ioUringTLSRingbufReserveFailures())
+	add("egress_backstop", stats.egressBackstopReserveFailures())
 	if defendState != nil {
 		add("deny", defendState.snapshot().denyReserveFailures)
 	}
