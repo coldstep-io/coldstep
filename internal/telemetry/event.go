@@ -601,6 +601,31 @@ type IOUringSendEvent struct {
 	Sig         string `json:"sig,omitempty"`
 }
 
+// EventTypeEgressBackstop marks a packet that reached the tc/clsact egress
+// qdisc bound for a non-allowlisted, non-ignored, non-loopback IP in defend
+// mode — i.e. egress that bypassed the connect4/sendmsg4 address hooks (raw
+// socket, AF_PACKET, or post-connect redirect). Observe-only: the packet is
+// NOT dropped.
+const EventTypeEgressBackstop = "egress_backstop"
+
+// EgressBackstopEvent is one JSONL record for a tc/clsact egress backstop
+// observation (sub-project A). tc egress runs in packet/softirq context, so
+// PID/Comm are not available and are always 0/empty; Dst, Proto, and AF are
+// the reliable fields.
+type EgressBackstopEvent struct {
+	Type  string `json:"type"` // "egress_backstop"
+	TS    string `json:"ts"`
+	Seq   uint64 `json:"seq"`
+	PID   uint32 `json:"pid"`
+	Comm  string `json:"comm"`
+	AF    string `json:"af"`    // "ipv4" | "ipv6"
+	Proto string `json:"proto"` // "tcp" | "udp" | "icmp" | "raw" | "other"
+	Dst   string `json:"dst"`
+	Dport uint16 `json:"dport,omitempty"`
+	Note  string `json:"note"`
+	Sig   string `json:"sig,omitempty"`
+}
+
 // EventTypeIOUringTLS marks an io_uring SEND/SENDMSG whose payload parsed as a
 // TLS ClientHello with an extractable SNI. Destination is not resolvable from
 // the io_uring submission path, so Dst is always "unknown" this phase.

@@ -1508,3 +1508,21 @@ func TestUDPEvent_PossibleQUIC_PortPredicate(t *testing.T) {
 		}
 	}
 }
+
+func TestRunStats_EgressBackstop(t *testing.T) {
+	s := newRunStats()
+	s.addEgressBackstop("203.0.113.7")
+	s.addEgressBackstop("203.0.113.7") // dup dst
+	s.addEgressBackstop("198.51.100.9")
+	s.setEgressBackstopReserveFailures(2)
+	if got := s.egressBackstopCount(); got != 3 {
+		t.Fatalf("count=%d want 3", got)
+	}
+	dsts := s.egressBackstopDstList()
+	if len(dsts) != 2 || dsts[0] != "198.51.100.9" || dsts[1] != "203.0.113.7" {
+		t.Fatalf("dsts=%v want sorted distinct", dsts)
+	}
+	if got := s.egressBackstopReserveFailures(); got != 2 {
+		t.Fatalf("reserveFailures=%d want 2", got)
+	}
+}
