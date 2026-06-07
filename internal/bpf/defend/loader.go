@@ -267,6 +267,22 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		// lsm_socket_sendpage section and sendpage_observed map.
 		detachProgramIfPresent(coll, "lsm_socket_sendpage", &obj.LsmSocketSendpage)
 		detachMapIfPresent(coll, "sendpage_observed", &obj.SendpageObserved)
+
+		// Sub-project B: lsm/bpf self-defense (deny tamper of coldstep's own
+		// BPF objects). Optional (tolerate absence on stubs predating the
+		// section). The program ships inert — self_defense_cfg.enabled stays 0
+		// until the agent has populated self_prog_ids / self_map_ids, so a
+		// present-but-unconfigured program is a safe no-op (returns 0/allow on
+		// every bpf() call). Same gate as the other LSM hooks: only reached
+		// when CONFIG_BPF_LSM is present and the LSM section did not fall back.
+		detachProgramIfPresent(coll, "coldstep_bpf_self_defense", &obj.ColdstepBpfSelfDefense)
+		detachMapIfPresent(coll, "self_prog_ids", &obj.SelfProgIds)
+		detachMapIfPresent(coll, "self_map_ids", &obj.SelfMapIds)
+		detachMapIfPresent(coll, "self_pin_prefix", &obj.SelfPinPrefix)
+		detachMapIfPresent(coll, "self_defense_cfg", &obj.SelfDefenseCfg)
+		detachMapIfPresent(coll, "bpf_self_defense_events", &obj.BpfSelfDefenseEvents)
+		detachMapIfPresent(coll, "bpf_self_defense_reserve_failures", &obj.BpfSelfDefenseReserveFailures)
+		detachMapIfPresent(coll, "self_defense_seen", &obj.SelfDefenseSeen)
 	}
 
 	success = true
@@ -293,6 +309,18 @@ func stripAllLSM(spec *ebpf.CollectionSpec) {
 	// sendpage_observed lives in the LSM section; strip it when LSM is
 	// disabled so we don't pin a per-cpu counter nobody reads.
 	delete(spec.Maps, "sendpage_observed")
+	// Sub-project B: lsm/bpf self-defense program + its maps. Strip together
+	// when CONFIG_BPF_LSM is absent so prog_load does not reject the section
+	// and no maps are left dangling. delete() on a missing key is a no-op, so
+	// this is safe against stubs predating the section.
+	delete(spec.Programs, "coldstep_bpf_self_defense")
+	delete(spec.Maps, "self_prog_ids")
+	delete(spec.Maps, "self_map_ids")
+	delete(spec.Maps, "self_pin_prefix")
+	delete(spec.Maps, "self_defense_cfg")
+	delete(spec.Maps, "bpf_self_defense_events")
+	delete(spec.Maps, "bpf_self_defense_reserve_failures")
+	delete(spec.Maps, "self_defense_seen")
 }
 
 // HaveIOUringLSM reports whether the running kernel exposes the

@@ -31,6 +31,7 @@
 #include "dns_cache.h"
 #include "deny_event.h"
 #include "egress_backstop_event.h"
+#include "bpf_self_defense_event.h"
 
 char LICENSE[] SEC("license") = "Dual BSD/GPL";
 
@@ -80,5 +81,6 @@ _Static_assert(sizeof(struct deny_event) == 46,
 
 #include "trace_defend_cgroup.inc"
 #include "trace_defend_skb.inc"
+#include "trace_lsm_bpf_self_defense.inc"
 #include "trace_lsm_defend_lsm.inc"
 #include "trace_lsm_defend_iouring.inc"
