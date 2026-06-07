@@ -187,3 +187,30 @@ func TestRenderDetailed_SurfacesRichSignals(t *testing.T) {
 		t.Errorf("detailed report contains '<' (HTML not allowed):\n%s", out)
 	}
 }
+
+func TestParse_MetaSignals(t *testing.T) {
+	meta := `{"type":"meta","agent_version":"v9.9","kernel_release":"6.6.0","detect_profile":"enhanced","allowlist_ip_count":3,"allowlist_entry_count":2,"runner_has_ipv6":true,"runner_env":"dind","dropped_events":{"udp":5},"events_file_sha256":"abc123","bpf":[{"name":"connect4","ok":true},{"name":"lsm/socket_sendpage","ok":false}]}` + "\n"
+	a, err := Parse(strings.NewReader(meta))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !a.MetaSeen || a.AllowlistIPs != 3 || a.RunnerEnv != "dind" || a.EventsSHA256 != "abc123" {
+		t.Fatalf("meta not parsed: %+v", a)
+	}
+	if d := a.degradedBPF(); len(d) != 1 || d[0] != "lsm/socket_sendpage" {
+		t.Fatalf("degradedBPF = %v want [lsm/socket_sendpage]", d)
+	}
+	out := a.RenderDetailed()
+	for _, want := range []string{"agent v9.9", "Docker-in-Docker", "## BPF health", "failed to attach", "dropped events", "events_sha256: `abc123`"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("detailed missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "<") {
+		t.Errorf("HTML in report:\n%s", out)
+	}
+	sim := a.RenderSimple()
+	if !strings.Contains(sim, "BPF hooks degraded") || !strings.Contains(sim, "Docker-in-Docker") {
+		t.Errorf("simple missing degraded/dind:\n%s", sim)
+	}
+}
