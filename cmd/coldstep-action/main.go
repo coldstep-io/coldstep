@@ -117,6 +117,8 @@ func main() {
 		fatal(runStop(cfg))
 	case "diff":
 		fatal(runDiff(os.Args[2:]))
+	case "assert-integrity":
+		fatal(runAssertIntegrity(os.Args[2:]))
 	default:
 		fatal(fmt.Errorf("unknown command %q", os.Args[1]))
 	}
