@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"strings"
@@ -226,6 +227,8 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	var denyRd ringReader
 	defer denyRd.Close()
+	var egressBackstopRd ringReader
+	defer egressBackstopRd.Close()
 	var lsmDenyRd ringReader
 	defer lsmDenyRd.Close()
 	var syscallObjs *traceconnect.TraceconnectObjects
@@ -294,6 +297,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		hasDefend = true
 		defer func() {
 			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
+			stats.setEgressBackstopReserveFailures(readUint32PerCPUArraySum(defendObjs.SkbBackstopReserveFailures, "skb_backstop_reserve_failures"))
 			if hasLSM {
 				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
 			}
@@ -457,6 +461,48 @@ func Run(ctx context.Context, cfg config.Config) error {
 			return fmt.Errorf("attach defend_sendmsg4: %w", err)
 		}
 		defer defendSendmsgLnk.Close()
+
+		// Sub-project A: tc/clsact egress backstop (observe-only). Attaches the
+		// defend_skb_egress tc program to every non-loopback, up interface via
+		// TCX (kernel 6.6+). cgroup_skb/egress was tried first but is never
+		// invoked for locally-generated egress in this deployment; tc/clsact at
+		// the qdisc layer sees all egress including raw sockets. Best-effort —
+		// never fatal; the backstop is inactive if no interface attaches.
+		if defendObjs.DefendSkbEgress != nil {
+			if rd, rerr := ringbuf.NewReader(defendObjs.SkbBackstopEvents); rerr != nil {
+				slog.Info("egress backstop ringbuf unavailable; continuing", "err", rerr)
+			} else {
+				attached := 0
+				ifaces, ierr := net.Interfaces()
+				if ierr != nil {
+					slog.Info("egress backstop: net.Interfaces failed; continuing", "err", ierr)
+				}
+				for _, iface := range ifaces {
+					if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+						continue
+					}
+					tcxLnk, attachErr := link.AttachTCX(link.TCXOptions{
+						Interface: iface.Index,
+						Program:   defendObjs.DefendSkbEgress,
+						Attach:    ebpf.AttachTCXEgress,
+					})
+					if attachErr != nil {
+						slog.Info("egress backstop tcx attach failed; continuing", "iface", iface.Name, "err", attachErr)
+						continue
+					}
+					defer tcxLnk.Close()
+					attached++
+				}
+				if attached > 0 {
+					egressBackstopRd.R = rd
+					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tcx/egress (backstop)", OK: true, Detail: fmt.Sprintf("%d interface(s)", attached)})
+				} else {
+					_ = rd.Close()
+					slog.Info("egress backstop: no non-loopback interface attached; backstop inactive")
+					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tcx/egress (backstop)", OK: false, Detail: "no non-loopback interface attached"})
+				}
+			}
+		}
 
 		// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs
 		// (e.g. defend stubs generated before the IPv6 sections were
@@ -1011,6 +1057,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		ioUringTLSRd.Close()
 		denyRd.Close()
 		lsmDenyRd.Close()
+		egressBackstopRd.Close()
 		dnsRd.Close()
 		bpfAuditRd.Close()
 		forkRd.Close()
@@ -1048,6 +1095,9 @@ func Run(ctx context.Context, cfg config.Config) error {
 		readerCount++
 	}
 	if denyRd.R != nil {
+		readerCount++
+	}
+	if egressBackstopRd.R != nil {
 		readerCount++
 	}
 	if lsmDenyRd.R != nil {
@@ -1293,6 +1343,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache))
+		}()
+	}
+	if egressBackstopRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readEgressBackstopRing(runCtx, cfg, egressBackstopRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if lsmDenyRd.R != nil {

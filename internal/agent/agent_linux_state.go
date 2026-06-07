@@ -73,6 +73,9 @@ type runStats struct {
 	ioUringTLSHelloN                  int
 	ioUringRingbufReserveFailuresN    int
 	ioUringTLSRingbufReserveFailuresN int
+	egressBackstopN                   int
+	egressBackstopReserveFailuresN    int
+	egressBackstopDsts                map[string]struct{}
 	// ioUringTLSSNISet collects distinct SNI hostnames parsed from io_uring
 	// ClientHello captures (P6 Phase 2.5). Rendered as the "io_uring TLS SNI"
 	// digest KPI row. nil until the first SNI is observed.
@@ -624,6 +627,51 @@ func (s *runStats) ioUringRingbufReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.ioUringRingbufReserveFailuresN
+}
+
+func (s *runStats) addEgressBackstop(dst string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.egressBackstopN++
+	if dst == "" {
+		return
+	}
+	if s.egressBackstopDsts == nil {
+		s.egressBackstopDsts = make(map[string]struct{})
+	}
+	s.egressBackstopDsts[dst] = struct{}{}
+}
+
+func (s *runStats) egressBackstopCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.egressBackstopN
+}
+
+func (s *runStats) egressBackstopDstList() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.egressBackstopDsts) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.egressBackstopDsts))
+	for d := range s.egressBackstopDsts {
+		out = append(out, d)
+	}
+	slices.Sort(out)
+	return out
+}
+
+func (s *runStats) setEgressBackstopReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.egressBackstopReserveFailuresN = n
+}
+
+func (s *runStats) egressBackstopReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.egressBackstopReserveFailuresN
 }
 
 func (s *runStats) setIoUringTLSRingbufReserveFailures(n int) {

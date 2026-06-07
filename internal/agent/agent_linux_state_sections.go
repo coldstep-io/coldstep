@@ -163,6 +163,8 @@ const (
 	tcpStateEventWireSize = 48
 	// io_uring_send_event: 8(ts)+4(pid)+4(fd)+4(daddr)+2(dport)+1(op)+1(_pad)+16(comm) → 40
 	ioUringSendEventWireSize = 40
+	// egress_backstop_event (sub-project A): 8(ts)+4(pid)+16(comm)+1(af)+1(ipproto)+2(_pad)+16(daddr)+2(dport)+6(_pad2) → 56
+	egressBackstopEventWireSize = 56
 	// io_uring_tls_event (P6 Phase 2.5): 8(ts)+4(pid)+16(comm)+1(op)+3(_pad)+2(capture_len)+256(payload)+6(_pad2) → 296
 	ioUringTLSEventWireSize = 296
 	ioUringTLSPayloadMax    = 256

@@ -209,6 +209,17 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		return LoadResult{}, err
 	}
 
+	// Sub-project A: tc/clsact egress backstop (observe-only). The program is
+	// attached via TCX per-interface by the agent; here we just lift the program
+	// + its maps out of the collection into obj. Optional (tolerate absence on
+	// stubs predating the section) — the backstop is observe-only, never an
+	// enforcement primitive, so a missing one degrades to "no backstop" rather
+	// than failing defend startup.
+	detachProgramIfPresent(coll, "defend_skb_egress", &obj.DefendSkbEgress)
+	detachMapIfPresent(coll, "skb_backstop_events", &obj.SkbBackstopEvents)
+	detachMapIfPresent(coll, "skb_backstop_reserve_failures", &obj.SkbBackstopReserveFailures)
+	detachMapIfPresent(coll, "skb_backstop_seen", &obj.SkbBackstopSeen)
+
 	// LSM section: present only when wantLSM was requested AND the fallback
 	// reload did not strip it. After a fallback, every LSM program/map was
 	// removed from the spec before NewCollection, so detachProgram would

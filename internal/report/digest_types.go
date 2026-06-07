@@ -292,6 +292,14 @@ type DigestInput struct {
 	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
 	// io_uring_events channel — non-zero indicates io_uring telemetry pressure.
 	IoUringRingbufReserveFailures int
+	// EgressBackstopCount is the number of packets that reached the tc/clsact
+	// egress qdisc bound for a non-allowlisted IP in defend mode (sub-project
+	// A) — egress that bypassed the connect4/sendmsg4 address hooks. Zero hides
+	// the digest row.
+	EgressBackstopCount int
+	// EgressBackstopDsts lists the distinct non-allowlisted destination IPs
+	// observed at the egress backstop, sorted. Empty when none.
+	EgressBackstopDsts []string
 	// IoUringTLSRingbufReserveFailures counts reserve failures on the dedicated
 	// io_uring_tls_events channel — non-zero means matched ClientHello captures
 	// were dropped before SNI parse (P6 Phase 2.5).

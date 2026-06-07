@@ -539,6 +539,141 @@ func TestRedTeam_DefendLoopbackAllowlistedPasses(t *testing.T) {
 	}
 }
 
+// ---- Attack path A-T12a: defend — cgroup_skb egress backstop, raw-socket bypass ---
+
+// TestRedTeam_EgressBackstop_RawSocketBypass verifies that a raw-socket send
+// to a non-allowlisted, non-loopback IPv4 destination produces an
+// "egress_backstop" JSONL row in defend mode. Raw sockets bypass the
+// connect4/sendmsg4 cgroup hooks (no connect syscall is issued), so the
+// cgroup_skb/egress backstop program is the only observation point.
+//
+// 203.0.113.0/24 is TEST-NET-3 (RFC 5737) — a globally non-routable
+// documentation prefix; packets will be silently dropped by the network
+// stack, which is the safe choice for a red-team test.
+func TestRedTeam_EgressBackstop_RawSocketBypass(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed:", err)
+	}
+
+	h := newRedteamHarness(t)
+	// Allow only loopback so the raw-socket destination is non-allowlisted and
+	// the cgroup_skb egress backstop observes it. The destination MUST be
+	// routable: cgroup_skb/egress only fires once the kernel builds an egress
+	// skb, which requires a route. RFC5737 TEST-NET addresses are unrouted on
+	// hosted runners (sendto -> ENETUNREACH, no packet, no hook), so we target
+	// a routable public anycast IP (1.1.1.1) that the default route covers. The
+	// crafted packet uses experimental protocol 253 (RFC 3692) and is harmless;
+	// we only need the kernel to route it through the egress hook.
+	const rawDst = "1.1.1.1"
+	h.applyDefendEnv(t, "localhost", "127.0.0.1/32")
+
+	cancel, errCh := startAgent(t, 20*time.Second)
+	defer stopAgent(t, cancel, errCh)
+
+	if !waitForReady(h.ready, 12*time.Second) {
+		t.Fatal("agent did not become ready within 12s")
+	}
+
+	// Send via a raw socket bound to an experimental IP protocol (253, RFC
+	// 3692) WITHOUT IP_HDRINCL, so the kernel builds a well-formed IP header
+	// (correct total-length + checksum). A hand-crafted IP_HDRINCL header whose
+	// total-length field disagrees with the buffer size is dropped in the
+	// output path before ip_finish_output, so cgroup_skb/egress never sees it —
+	// that was the prior failure. A raw socket still bypasses the cgroup
+	// connect4/sendmsg4 hooks (no connect(), not a UDP datagram socket), so the
+	// only layer that can observe the egress is the cgroup_skb backstop. Send a
+	// handful of times to ride over transient routing/ARP warm-up.
+	rawScript := `
+import socket, sys, time
+s = socket.socket(socket.AF_INET, socket.SOCK_RAW, 253)
+payload = b"\xde\xad\xbe\xef\xde\xad\xbe\xef"
+for _ in range(8):
+    try:
+        s.sendto(payload, ("1.1.1.1", 0))
+    except OSError as e:
+        sys.stderr.write("sendto: " + str(e) + "\n")
+    time.sleep(0.2)
+`
+	cmd := exec.Command("python3", "-c", rawScript)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Logf("raw-socket probe (non-fatal exit): %v\n%s", err, out)
+	}
+
+	line := pollJSONLForType(h.events, "egress_backstop", []string{`"dst":"` + rawDst + `"`}, 8*time.Second)
+	if line == nil {
+		dump, _ := os.ReadFile(h.events)
+		t.Fatalf("no egress_backstop JSONL row for %s within 8s; events:\n%s", rawDst, string(dump))
+	}
+}
+
+// ---- Attack path A-T12b: defend — cgroup_skb egress backstop, no false positive ---
+
+// TestRedTeam_EgressBackstop_NoFalsePositiveOnAllowlisted verifies that a
+// normal TCP connect to an allowlisted loopback address does NOT produce an
+// "egress_backstop" JSONL row. The cgroup_skb/egress backstop should remain
+// silent for traffic that passes through the connect4 hook's allow path.
+//
+// Note: 127.0.0.0/8 is excluded from egress_backstop observation by the BPF
+// program itself (skb_v4_is_loopback short-circuit in trace_defend_skb.inc),
+// so this test also validates that the backstop BPF-level bypass is working.
+func TestRedTeam_EgressBackstop_NoFalsePositiveOnAllowlisted(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+
+	// Start a local TCP listener on 127.0.0.1 so the dial can succeed.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen 127.0.0.1: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+
+	h := newRedteamHarness(t)
+	// Allow loopback; any connect to 127.0.0.1 is allowlisted and must not
+	// trigger the backstop.
+	h.applyDefendEnv(t, "localhost", "127.0.0.1/32")
+
+	cancel, errCh := startAgent(t, 20*time.Second)
+	defer stopAgent(t, cancel, errCh)
+
+	if !waitForReady(h.ready, 12*time.Second) {
+		t.Fatal("agent did not become ready within 12s")
+	}
+
+	// Perform several allowlisted loopback TCP connects.
+	for i := 0; i < 3; i++ {
+		conn, derr := net.DialTimeout("tcp", ln.Addr().String(), 2*time.Second)
+		if derr != nil {
+			t.Fatalf("loopback dial #%d (allowlisted): %v", i, derr)
+		}
+		_ = conn.Close()
+	}
+
+	// Wait a window long enough for any spurious backstop event to surface.
+	time.Sleep(1500 * time.Millisecond)
+
+	data, _ := os.ReadFile(h.events)
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if bytes.Contains(line, []byte(`"type":"egress_backstop"`)) {
+			t.Fatalf("unexpected egress_backstop event for allowlisted loopback traffic:\n%s", line)
+		}
+	}
+}
+
 // ---- Attack path 12: defend — allowlisted domain's IPs pass ---------
 
 // Domain-based allowlisting is best-effort (see SECURITY.md → "DNS

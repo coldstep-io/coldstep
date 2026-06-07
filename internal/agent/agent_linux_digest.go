@@ -256,6 +256,8 @@ func buildDigestInput(
 		TruncatedFS:                      fsN > maxRows,
 		FSDegradedHook:                   fsGate && hookDegraded(bpfSt, "raw_tp/sys_enter (fs)"),
 		FSReaderErrors:                   fsSnap.readErrors,
+		EgressBackstopCount:              stats.egressBackstopCount(),
+		EgressBackstopDsts:               stats.egressBackstopDstList(),
 	}
 	if procTreeGate {
 		in.ProcForkTotal = stats.procForkTotal()
