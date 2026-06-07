@@ -614,8 +614,9 @@ for _ in range(8):
 
 // TestRedTeam_EgressBackstop_NoFalsePositiveOnAllowlisted verifies that a
 // normal TCP connect to an allowlisted loopback address does NOT produce an
-// "egress_backstop" JSONL row. The cgroup_skb/egress backstop should remain
-// silent for traffic that passes through the connect4 hook's allow path.
+// "egress_backstop" JSONL row for that destination. The tc/clsact egress
+// backstop must remain silent for the loopback dst (it observes all interface
+// egress, so ambient non-allowlisted traffic to other IPs is expected).
 //
 // Note: 127.0.0.0/8 is excluded from egress_backstop observation by the BPF
 // program itself (skb_v4_is_loopback short-circuit in trace_defend_skb.inc),
@@ -666,10 +667,20 @@ func TestRedTeam_EgressBackstop_NoFalsePositiveOnAllowlisted(t *testing.T) {
 	// Wait a window long enough for any spurious backstop event to surface.
 	time.Sleep(1500 * time.Millisecond)
 
+	// The backstop is a tc/clsact egress program, so it observes ALL interface
+	// egress — including the runner's own ambient background traffic to
+	// non-allowlisted (e.g. cloud) IPs, which it legitimately flags. The
+	// no-false-positive property under test is specifically that it must NOT
+	// fire for the allowlisted LOOPBACK destination this test generates
+	// (127.0.0.0/8 is short-circuited in skb_v4_is_loopback). Ambient events to
+	// other IPs are expected and correct; fail only on a loopback-dst event.
 	data, _ := os.ReadFile(h.events)
 	for _, line := range bytes.Split(data, []byte("\n")) {
-		if bytes.Contains(line, []byte(`"type":"egress_backstop"`)) {
-			t.Fatalf("unexpected egress_backstop event for allowlisted loopback traffic:\n%s", line)
+		if !bytes.Contains(line, []byte(`"type":"egress_backstop"`)) {
+			continue
+		}
+		if bytes.Contains(line, []byte(`"dst":"127.`)) {
+			t.Fatalf("unexpected egress_backstop event for allowlisted loopback dst:\n%s", line)
 		}
 	}
 }
