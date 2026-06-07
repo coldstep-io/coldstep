@@ -118,6 +118,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// below at the load-attach sites.
 	var hasDefend bool
 	var ioUringRd ringReader
+	var ioUringTLSRd ringReader
 
 	defer func() {
 		sum := stats.snapshotSummary(kernel, bpfSt)
@@ -220,6 +221,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	defer tlsRd.Close()
 	defer tcpStateRd.Close()
 	defer ioUringRd.Close()
+	defer ioUringTLSRd.Close()
 	var tcpStateLnk link.Link
 	var ioUringLnk link.Link
 
@@ -660,6 +662,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
 				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
 				stats.setIoUringRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringRingbufReserveFailures, "io_uring_ringbuf_reserve_failures"))
+				stats.setIoUringTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringTlsRingbufReserveFailures, "io_uring_tls_ringbuf_reserve_failures"))
 				stats.setIoUringTLSHelloObserved(readUint32PerCPUArraySum(syscallObjs.IoUringTlsHelloObserved, "io_uring_tls_hello_observed"))
 			}
 		}()
@@ -704,7 +707,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// on each submission (Phase 2). Standard profile leaves the map at
 		// zero so the peek path stays cold.
 		enhancedIoUringPeek := strings.EqualFold(strings.TrimSpace(cfg.DetectProfile), "enhanced")
-		if rd, lnk, peekFailed, ioErr := startIoUringTrace(syscallObjs, enhancedIoUringPeek); ioErr != nil {
+		if rd, tlsRd, lnk, peekFailed, ioErr := startIoUringTrace(syscallObjs, enhancedIoUringPeek); ioErr != nil {
 			slog.Info("io_uring submit_sqe tracing disabled", "err", ioErr)
 			bpfSt = append(bpfSt, telemetry.BPFStatus{
 				Name:   "raw_tp/io_uring_submit_sqe",
@@ -714,6 +717,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		} else {
 			ioUringLnk = lnk
 			ioUringRd.R = rd
+			ioUringTLSRd.R = tlsRd
 			ioStatus := telemetry.BPFStatus{Name: "raw_tp/io_uring_submit_sqe", OK: true}
 			if peekFailed {
 				ioStatus.OK = false
@@ -1050,6 +1054,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		tlsRd.Close()
 		tcpStateRd.Close()
 		ioUringRd.Close()
+		ioUringTLSRd.Close()
 		denyRd.Close()
 		lsmDenyRd.Close()
 		egressBackstopRd.Close()
@@ -1324,6 +1329,13 @@ func Run(ctx context.Context, cfg config.Config) error {
 		go func() {
 			defer wg.Done()
 			sendReaderErr(readIoUringRing(runCtx, cfg, ioUringRd.R, stats, &seq, &jsonlMu, signer))
+		}()
+	}
+	if ioUringTLSRd.R != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			sendReaderErr(readIoUringTLSRing(runCtx, cfg, ioUringTLSRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if denyRd.R != nil {

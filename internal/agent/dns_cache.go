@@ -96,16 +96,24 @@ func (c *DNSCache) purgeExpiredLocked(nowUnix int64) {
 }
 
 func (c *DNSCache) trimLocked(now time.Time) {
-	for len(c.entries) > c.maxEntries {
-		c.purgeExpiredLocked(now.Unix())
-		if len(c.entries) <= c.maxEntries {
+	if len(c.entries) <= c.maxEntries {
+		return
+	}
+	// Drop expired entries first (single full scan).
+	c.purgeExpiredLocked(now.Unix())
+	if len(c.entries) <= c.maxEntries {
+		return
+	}
+	// Still over cap: evict the exact excess in one pass instead of one
+	// delete per full loop iteration (was O(n^2) when many entries are live).
+	excess := len(c.entries) - c.maxEntries
+	for k := range c.entries {
+		if excess == 0 {
 			break
 		}
-		for k := range c.entries {
-			delete(c.entries, k)
-			c.deleteBPFMapsLocked(k)
-			break
-		}
+		delete(c.entries, k)
+		c.deleteBPFMapsLocked(k)
+		excess--
 	}
 }
 

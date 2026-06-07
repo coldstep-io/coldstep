@@ -304,6 +304,30 @@ struct io_uring_send_event {
 _Static_assert(sizeof(struct io_uring_send_event) == 40,
 	       "io_uring_send_event wire size must match ioUringSendEventWireSize=40 in agent_linux.go");
 
+/*
+ * P6 Phase 2.5: io_uring TLS ClientHello capture. Written only when the
+ * 6-byte ClientHello signature matched AND io_uring_peek_cfg is enabled
+ * (enhanced profile). Separate from io_uring_send_event so routine sends
+ * keep the lean 40-byte slot. payload[] mirrors tls_sniff_event: BPF copies
+ * raw bytes, Go (telemetry.ParseClientHelloSNI) extracts the hostname — no
+ * in-BPF extension walk.
+ *
+ * Layout (alignment-of-8 from the leading __u64): 8 + 4 + 16 + 1 + 3 + 2 +
+ * 256 + 6 = 296. The explicit _pad2[6] tail makes sizeof deterministic.
+ */
+struct io_uring_tls_event {
+	__u64 timestamp_ns;
+	__u32 pid;
+	__u8 comm[16];
+	__u8 op;
+	__u8 _pad[3];
+	__u16 capture_len; /* <= TLS_PAYLOAD_MAX */
+	__u8 payload[TLS_PAYLOAD_MAX];
+	__u8 _pad2[6];
+};
+_Static_assert(sizeof(struct io_uring_tls_event) == 296,
+	       "io_uring_tls_event wire size must match ioUringTLSEventWireSize=296 in agent_linux_decode.go");
+
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
 {

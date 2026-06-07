@@ -126,6 +126,7 @@ func TestTraceconnectMapShapes(t *testing.T) {
 			"io_uring_setup_observed",
 			"tcp_state_ringbuf_reserve_failures",
 			"io_uring_ringbuf_reserve_failures",
+			"io_uring_tls_ringbuf_reserve_failures",
 			"io_uring_tls_hello_observed",
 		}
 		for _, name := range names {

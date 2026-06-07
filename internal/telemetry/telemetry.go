@@ -171,6 +171,10 @@ type Summary struct {
 	// IoUringRingbufReserveFailures counts ringbuf reserve failures on the
 	// io_uring_events channel (telemetry pressure on the io_uring probe).
 	IoUringRingbufReserveFailures int `json:"io_uring_ringbuf_reserve_failures,omitempty"`
+	// IoUringTLSRingbufReserveFailures counts ringbuf reserve failures on the
+	// dedicated io_uring_tls_events channel (P6 Phase 2.5, enhanced profile).
+	// Non-zero means matched ClientHello captures were dropped before SNI parse.
+	IoUringTLSRingbufReserveFailures int `json:"io_uring_tls_ringbuf_reserve_failures,omitempty"`
 	// IoUringTLSHelloObserved counts io_uring SQE submissions whose user
 	// buffer prefix matched the TLS ClientHello record signature (P6 Phase 2,
 	// enhanced profile only). Always 0 outside COLDSTEP_DETECT_PROFILE=enhanced.

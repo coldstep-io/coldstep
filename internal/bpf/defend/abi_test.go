@@ -73,10 +73,11 @@ func TestDenyReserveFailuresMapsArePerCPUArray(t *testing.T) {
 
 // TestIPv6ObserveMapsArePerCPUArray asserts the P0-1 Phase 1 observe-only
 // counter maps (ipv6_connect_observed, ipv6_sendmsg_observed) have the
-// PERCPU_ARRAY shape userspace expects to sum. Maps are added in
-// bpf/trace_defend_cgroup.inc; the test skips itself until the defend
-// stubs have been regenerated on Linux to include them.
-// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+// PERCPU_ARRAY shape userspace expects to sum. Maps are defined in
+// bpf/trace_defend_cgroup.inc. The defend package cannot compile without its
+// generated bindings (LoadDefend lives in *_bpfel.go), and CI regenerates them
+// via build-agent-linux.sh before running tests, so a missing map is a real
+// regression — fail hard rather than skip.
 func TestIPv6ObserveMapsArePerCPUArray(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -85,7 +86,7 @@ func TestIPv6ObserveMapsArePerCPUArray(t *testing.T) {
 	for _, name := range []string{"ipv6_connect_observed", "ipv6_sendmsg_observed"} {
 		ms, ok := spec.Maps[name]
 		if !ok {
-			t.Skipf("defend stubs not regenerated yet: map %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+			t.Fatalf("BPF map %q not found in CollectionSpec", name)
 		}
 		if ms.Type != ebpf.PerCPUArray {
 			t.Errorf("%s type = %v, want ebpf.PerCPUArray", name, ms.Type)
@@ -99,8 +100,6 @@ func TestIPv6ObserveMapsArePerCPUArray(t *testing.T) {
 
 // TestIPv6ObservePrograms asserts the cgroup/connect6 + cgroup/sendmsg6
 // programs are present in the spec with the CGroupSockAddr program type.
-// Skips until the stubs are regenerated on Linux.
-// TODO: remove skip after Linux regeneration.
 func TestIPv6ObservePrograms(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -109,7 +108,7 @@ func TestIPv6ObservePrograms(t *testing.T) {
 	for _, name := range []string{"defend_cgroup_connect6", "defend_cgroup_sendmsg6"} {
 		ps, ok := spec.Programs[name]
 		if !ok {
-			t.Skipf("defend stubs not regenerated yet: program %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
+			t.Fatalf("BPF program %q not found in CollectionSpec", name)
 		}
 		if ps.Type != ebpf.CGroupSockAddr {
 			t.Errorf("%s type = %v, want ebpf.CGroupSockAddr", name, ps.Type)
@@ -123,8 +122,6 @@ func TestIPv6ObservePrograms(t *testing.T) {
 // (4-byte prefixlen + 16-byte address), value size 1 byte, max_entries
 // matching policy.MaxAllowedDefendIPv6Keys. Drift on any of these results
 // in silent EINVAL on Update at agent start, surfacing as defend-bypass.
-// Skips until stubs are regenerated on Linux.
-// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
 func TestAllowedIPv6MapShape(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -132,7 +129,7 @@ func TestAllowedIPv6MapShape(t *testing.T) {
 	}
 	ms, ok := spec.Maps["allowed_ipv6"]
 	if !ok {
-		t.Skipf("defend stubs not regenerated yet: map \"allowed_ipv6\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+		t.Fatalf("BPF map \"allowed_ipv6\" not found in CollectionSpec")
 	}
 	if ms.Type != ebpf.LPMTrie {
 		t.Errorf("allowed_ipv6 type = %v, want ebpf.LPMTrie", ms.Type)
@@ -151,9 +148,7 @@ func TestAllowedIPv6MapShape(t *testing.T) {
 
 // TestSendpageObserveMapIsPerCPUArray asserts the sendpage_observed counter
 // map (kernel-5.15 sendfile/splice gap) has the PERCPU_ARRAY shape userspace
-// expects to sum. Added in bpf/trace_lsm_defend_lsm.inc; the test skips
-// itself until the defend stubs have been regenerated on Linux to include it.
-// TODO: remove skip after Linux regeneration of internal/bpf/defend/*_bpfel.go.
+// expects to sum. Added in bpf/trace_lsm_defend_lsm.inc.
 func TestSendpageObserveMapIsPerCPUArray(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -161,7 +156,7 @@ func TestSendpageObserveMapIsPerCPUArray(t *testing.T) {
 	}
 	ms, ok := spec.Maps["sendpage_observed"]
 	if !ok {
-		t.Skipf("defend stubs not regenerated yet: map \"sendpage_observed\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+		t.Fatalf("BPF map \"sendpage_observed\" not found in CollectionSpec")
 	}
 	if ms.Type != ebpf.PerCPUArray {
 		t.Errorf("sendpage_observed type = %v, want ebpf.PerCPUArray", ms.Type)
@@ -173,9 +168,7 @@ func TestSendpageObserveMapIsPerCPUArray(t *testing.T) {
 }
 
 // TestSendpageHookProgram asserts the lsm/socket_sendpage program is
-// present in the spec with the LSM program type. Skips until stubs are
-// regenerated on Linux.
-// TODO: remove skip after Linux regeneration.
+// present in the spec with the LSM program type.
 func TestSendpageHookProgram(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -183,7 +176,7 @@ func TestSendpageHookProgram(t *testing.T) {
 	}
 	ps, ok := spec.Programs["lsm_socket_sendpage"]
 	if !ok {
-		t.Skipf("defend stubs not regenerated yet: program \"lsm_socket_sendpage\" absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux")
+		t.Fatalf("BPF program \"lsm_socket_sendpage\" not found in CollectionSpec")
 	}
 	if ps.Type != ebpf.LSM {
 		t.Errorf("lsm_socket_sendpage type = %v, want ebpf.LSM", ps.Type)

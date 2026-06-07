@@ -145,12 +145,13 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 	}
 
-	// P0-1 Phase 1: IPv6 observe-only programs. Detach when present in the
-	// generated spec; tolerate absence so kernels (or generated stubs)
-	// without these sections still load the IPv4 path.
-	// TODO: remove the missing-program tolerance once defend objects are
-	// regenerated on Linux and the cgroup/connect6 + cgroup/sendmsg6
-	// sections are guaranteed in the embedded ELF.
+	// IPv6 enforcement programs (H14, v0.4.0): cgroup/connect6 and
+	// cgroup/sendmsg6 are always compiled into the embedded ELF by
+	// bpf/trace_defend_cgroup.inc — the single combined source
+	// bpf/trace_defend_all.bpf.c unconditionally includes them. A missing
+	// program means the embedded spec is stale or corrupted, which would
+	// silently skip IPv6 enforcement and create a defend bypass. Require
+	// them via detachProgram (fail-closed), exactly like the IPv4 path above.
 	cgIPv6Programs := []struct {
 		name string
 		dst  **ebpf.Program
@@ -159,7 +160,9 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		{"defend_cgroup_sendmsg6", &obj.DefendCgroupSendmsg6},
 	}
 	for _, p := range cgIPv6Programs {
-		detachProgramIfPresent(coll, p.name, p.dst)
+		if err := detachProgram(coll, p.name, p.dst); err != nil {
+			return LoadResult{}, err
+		}
 	}
 
 	cgAndSharedMaps := []struct {
@@ -196,16 +199,15 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		detachMapIfPresent(coll, m.name, m.dst)
 	}
 
-	// P2-1 Phase 2: IPv6 allowlist LPM trie. Optional in older generated
-	// stubs (same regeneration window as the connect6/sendmsg6 enforcement
-	// path). When absent, defend mode still loads but cgroup/connect6 and
-	// cgroup/sendmsg6 fall back to Phase 1 observe-only behaviour because
-	// the bpf2go binding's defend_cgroup_connect6 program reference will
-	// also be missing.
-	// TODO: remove the missing-map tolerance once defend objects are
-	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
-	// allowed_ipv6 map.
-	detachMapIfPresent(coll, "allowed_ipv6", &obj.AllowedIpv6)
+	// IPv6 enforcement allowlist trie (H14, v0.4.0): allowed_ipv6 is always
+	// compiled into the embedded ELF by bpf/trace_defend_cgroup.inc. A
+	// missing map means the embedded spec is stale or corrupted; tolerating
+	// its absence while the connect6/sendmsg6 programs are present would
+	// silently allow all IPv6 traffic through defend mode. Require it via
+	// detachMap (fail-closed), matching the IPv4 allowed_ipv4 path above.
+	if err := detachMap(coll, "allowed_ipv6", &obj.AllowedIpv6); err != nil {
+		return LoadResult{}, err
+	}
 
 	// Sub-project A: tc/clsact egress backstop (observe-only). The program is
 	// attached via TCX per-interface by the agent; here we just lift the program
