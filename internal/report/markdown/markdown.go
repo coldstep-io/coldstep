@@ -74,8 +74,28 @@ type Aggregate struct {
 	// comment) for tamper-evidence.
 	EventsSHA256 string
 
+	// Fields below are populated from the shutdown `meta` event (last JSONL
+	// line), which carries the agent's self-reported run context + health.
+	AgentVersion     string
+	KernelRelease    string
+	DetectProfile    string
+	AllowlistIPs     int
+	AllowlistEntries int
+	RunnerHasIPv6    bool
+	RunnerEnv        string // "dind" / "unknown" / "" — DinD = inner-container blind spot
+	BPF              []BPFStatus
+	DroppedEvents    map[string]uint64
+	MetaSeen         bool
+
 	ParseErrors int
 	TotalEvents int
+}
+
+// BPFStatus is the report-local view of a BPF attach outcome from the meta
+// event (decoupled from internal/telemetry to keep this package dependency-light).
+type BPFStatus struct {
+	Name string `json:"name"`
+	OK   bool   `json:"ok"`
 }
 
 // minimal per-type shapes — only the fields the reports consume. Decoupled
@@ -126,6 +146,8 @@ func Parse(r io.Reader) (*Aggregate, error) {
 		}
 		a.TotalEvents++
 		switch t.Type {
+		case "meta":
+			a.countMeta(line)
 		case "tcp", "tcp6":
 			a.TCPConns++
 			if t.Type == "tcp6" {
@@ -189,6 +211,52 @@ func (a *Aggregate) countDest(line []byte) {
 		return
 	}
 	a.Dests[key]++
+}
+
+type metaLine struct {
+	BPF              []BPFStatus       `json:"bpf"`
+	AllowlistIPs     int               `json:"allowlist_ip_count"`
+	AllowlistEntries int               `json:"allowlist_entry_count"`
+	RunnerHasIPv6    bool              `json:"runner_has_ipv6"`
+	RunnerEnv        string            `json:"runner_env"`
+	DroppedEvents    map[string]uint64 `json:"dropped_events"`
+	EventsSHA256     string            `json:"events_file_sha256"`
+	DetectProfile    string            `json:"detect_profile"`
+	AgentVersion     string            `json:"agent_version"`
+	KernelRelease    string            `json:"kernel_release"`
+}
+
+func (a *Aggregate) countMeta(line []byte) {
+	var m metaLine
+	if json.Unmarshal(line, &m) != nil {
+		return
+	}
+	a.MetaSeen = true
+	a.BPF = m.BPF
+	a.AllowlistIPs = m.AllowlistIPs
+	a.AllowlistEntries = m.AllowlistEntries
+	a.RunnerHasIPv6 = m.RunnerHasIPv6
+	a.RunnerEnv = m.RunnerEnv
+	a.DroppedEvents = m.DroppedEvents
+	a.DetectProfile = m.DetectProfile
+	a.AgentVersion = m.AgentVersion
+	a.KernelRelease = m.KernelRelease
+	if m.EventsSHA256 != "" {
+		a.EventsSHA256 = m.EventsSHA256
+	}
+}
+
+// degradedBPF returns the names of BPF hooks that failed to attach (ok=false),
+// sorted, for the coverage-honesty section.
+func (a *Aggregate) degradedBPF() []string {
+	var out []string
+	for _, s := range a.BPF {
+		if !s.OK {
+			out = append(out, s.Name)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func (a *Aggregate) countTLS(line []byte) {
@@ -287,6 +355,12 @@ func (a *Aggregate) RenderSimple() string {
 	if a.BpfSelfDefenseDenied > 0 || a.EgressBackstop > 0 {
 		fmt.Fprintf(&b, "| defend self-protection | self-defense denials %d · egress backstop %d |\n", a.BpfSelfDefenseDenied, a.EgressBackstop)
 	}
+	if degraded := a.degradedBPF(); len(degraded) > 0 {
+		fmt.Fprintf(&b, "| 🚨 BPF hooks degraded | %d not attached: %s |\n", len(degraded), strings.Join(degraded, ", "))
+	}
+	if a.RunnerEnv == "dind" {
+		fmt.Fprintln(&b, "| ⚠️ Docker-in-Docker | inner-container traffic not observable |")
+	}
 
 	if top := a.topDests(3); len(top) > 0 {
 		parts := make([]string, len(top))
@@ -304,6 +378,17 @@ func (a *Aggregate) RenderDetailed() string {
 	var b strings.Builder
 	fmt.Fprintln(&b, "# coldstep detailed report")
 	fmt.Fprintf(&b, "\n## Verdict\n\n%s · mode %s · %d events\n", a.verdict(), a.modeLabel(), a.TotalEvents)
+	if a.MetaSeen {
+		fmt.Fprintf(&b, "\nagent %s · kernel %s · profile %s · allowlist %d IP(s) / %d entr(ies)\n",
+			dashIfEmpty(a.AgentVersion), dashIfEmpty(a.KernelRelease), dashIfEmpty(a.DetectProfile),
+			a.AllowlistIPs, a.AllowlistEntries)
+	}
+	if a.RunnerEnv == "dind" {
+		fmt.Fprintln(&b, "\n⚠️ Docker-in-Docker detected: traffic from inner containers is not observable from the outer runner cgroup namespace.")
+	}
+	if a.RunnerHasIPv6 && a.modeLabel() != "defend" && a.IPv6Events == 0 {
+		fmt.Fprintln(&b, "\n⚠️ Runner has IPv6 connectivity but no IPv6 egress was observed in detect mode — IPv6 paths are not enforced.")
+	}
 
 	fmt.Fprintln(&b, "\n## Coverage scope")
 	fmt.Fprintln(&b, "\n| class | status |")
@@ -366,8 +451,29 @@ func (a *Aggregate) RenderDetailed() string {
 	fmt.Fprintf(&b, "| BPF tamper | %d | detected BPF map/prog tamper (anti-blindness) |\n", a.BPFTamper)
 	fmt.Fprintf(&b, "| TCP state transitions | %d | kernel-confirmed handshakes |\n", a.TCPStateEvents)
 
+	fmt.Fprintln(&b, "\n## BPF health")
+	if degraded := a.degradedBPF(); len(degraded) > 0 {
+		fmt.Fprintf(&b, "\n🚨 %d hook(s) failed to attach (coverage gap): %s\n", len(degraded), strings.Join(degraded, ", "))
+	} else if a.MetaSeen {
+		fmt.Fprintf(&b, "\n✅ all %d reported BPF hook(s) attached.\n", len(a.BPF))
+	} else {
+		fmt.Fprintln(&b, "\n_no meta event — BPF health unavailable_")
+	}
+
 	fmt.Fprintln(&b, "\n## Integrity")
 	fmt.Fprintf(&b, "\nparse errors: %d\n", a.ParseErrors)
+	if len(a.DroppedEvents) > 0 {
+		keys := make([]string, 0, len(a.DroppedEvents))
+		for k := range a.DroppedEvents {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		parts := make([]string, len(keys))
+		for i, k := range keys {
+			parts[i] = fmt.Sprintf("%s=%d", k, a.DroppedEvents[k])
+		}
+		fmt.Fprintf(&b, "\ndropped events (ringbuf pressure): %s\n", strings.Join(parts, " · "))
+	}
 	if a.EventsSHA256 != "" {
 		fmt.Fprintf(&b, "\nevents_sha256: `%s`\n", a.EventsSHA256)
 	}
