@@ -18,23 +18,26 @@ import (
 // missing or partial event stream never fails the post-job step. The agent's
 // .coldstep-detect.md remains the job-summary source until a later phase swaps
 // it for markdown.Aggregate.RenderSimple.
-func writeDetailedMarkdownReport(baseDir string) {
+// Returns the parsed Aggregate (or nil when no event stream is present) so the
+// caller can reuse it for the --strict required-type gate without re-parsing.
+func writeDetailedMarkdownReport(baseDir string) *markdown.Aggregate {
 	eventsPath := filepath.Join(baseDir, ".coldstep-events.jsonl")
 	f, err := os.Open(eventsPath) // #nosec G304 -- baseDir is GITHUB_WORKSPACE (trusted env), fixed filename //nolint:gosec
 	if err != nil {
 		// No event stream (e.g. agent never started) — nothing to render.
-		return
+		return nil
 	}
 	defer f.Close()
 
 	agg, err := markdown.Parse(f)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "coldstep: parse events for markdown report: %v\n", err)
-		return
+		return nil
 	}
 
 	outPath := filepath.Join(baseDir, ".coldstep-report.md")
 	if werr := atomicwrite.Bytes(outPath, []byte(agg.RenderDetailed()), 0o644); werr != nil {
 		fmt.Fprintf(os.Stderr, "coldstep: write %s: %v\n", outPath, werr)
 	}
+	return agg
 }

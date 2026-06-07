@@ -89,6 +89,11 @@ type stopConfig struct {
 	FailOnError bool
 	Report      string
 	GithubToken string
+	// Strict enables the anti-blindness required-event-type gate (replaces the
+	// coldstep-report assert-integrity step): a non-zero exit when expected
+	// JSONL event types are missing. DetectProfile selects the required set.
+	Strict        bool
+	DetectProfile string
 }
 
 func main() {
@@ -148,6 +153,8 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
 	fs.StringVar(&cfg.Report, "report", "job-summary", "")
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
+	fs.BoolVar(&cfg.Strict, "strict", false, "")
+	fs.StringVar(&cfg.DetectProfile, "detect-profile", getenvDefault("COLDSTEP_DETECT_PROFILE", ""), "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -418,7 +425,7 @@ func runStop(cfg stopConfig) error {
 	// for artifact upload. Best-effort — never fails the job; the agent's
 	// .coldstep-detect.md remains the job-summary source until later phases swap
 	// it for the markdown generator's simple report.
-	writeDetailedMarkdownReport(baseDir)
+	reportAgg := writeDetailedMarkdownReport(baseDir)
 
 	body := ""
 	if raw, err := os.ReadFile(detectLog); err == nil {
@@ -483,6 +490,18 @@ func runStop(cfg stopConfig) error {
 			if err := postPRComment(token, sanitizeDigestForMarkdown(body)); err != nil {
 				fmt.Fprintf(os.Stderr, "coldstep: report pr-comment: %v\n", err)
 			}
+		}
+	}
+
+	// Anti-blindness gate (--strict): replaces coldstep-report assert-integrity.
+	// Run last so the report is still posted/attached before a missing-type
+	// failure aborts the step.
+	if cfg.Strict {
+		if reportAgg == nil {
+			return errors.New("strict: no .coldstep-events.jsonl to evaluate required event types")
+		}
+		if missing := reportAgg.MissingRequiredTypes(cfg.DetectProfile); len(missing) > 0 {
+			return fmt.Errorf("strict: missing required event type(s): %s", strings.Join(missing, ", "))
 		}
 	}
 	return nil
