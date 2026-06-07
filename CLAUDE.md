@@ -69,7 +69,7 @@ Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`
 
 - **`cmd/coldstep`** (`bin/coldstep run`) — privileged BPF agent. `main` is one line: dispatch to `internal/agent.Main`. Linux-only build (`agent_linux.go`); a non-Linux stub returns an error so the binary still compiles cross-platform.
 - **`cmd/coldstep-action`** (`bin/coldstep-action start|stop`) — the action's runtime helper. `start` parses inputs from flags / `INPUT_*` env, sanitizes allowlists, computes effective config, and spawns `bin/coldstep run` as a `sudo` child. `stop` flushes the digest, optionally merges it into `$GITHUB_STEP_SUMMARY`, and optionally posts a PR comment via the GitHub REST API (bounded by `httpNotifyClient`'s 60s timeout — do not remove).
-- **`cmd/coldstep-report`** — post-run report pipeline invoked by demo workflows: `build-model`, `assert-integrity`, `render-summary`, `render-html`, `diff`, `rdns-enrich`, `otx-enrich`, `render-ip-summary`. Reads `.coldstep-events.jsonl`, produces a normalized model under `internal/report/model`, then renders / enriches.
+- **`cmd/coldstep-report`** — post-run report pipeline invoked by demo workflows: `build-model`, `assert-integrity`, `render-summary`, `render-html`, `diff`, `render-ip-summary`. Reads `.coldstep-events.jsonl`, produces a normalized model under `internal/report/model`, then renders.
 
 ### Composite lifecycle (`action.yml`)
 
@@ -107,10 +107,6 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 ### Report model + integrity gates
 
 `internal/report/model/` defines the on-disk JSON model that `coldstep-report build-model` produces from JSONL. `internal/report/integrity/` scores it: `RequiredTypesForDetectProfile("enhanced")` expands required event types from `{meta, exec, tcp}` to `{meta, exec, tcp, udp, http, tls, proc_fork, fs_event}`. Detect workflows in CI run `assert-integrity` as an anti-blindness gate.
-
-### Reputation enrichment interface (`internal/reputation/`)
-
-Plug-in surface for IP reputation backends. The public types — `reputation.Enricher`, `reputation.Result`, `reputation.Register`, `reputation.Registered`, `reputation.EnrichAll` — are considered stable once shipped; external integrators may build their own enrichers against them. The concrete backend lives in `internal/reputation/otx`; the env-driven assembly lives in `internal/reputation/loader` (kept in a subpackage to avoid an import cycle with the backend). Enrichment is **post-processing only** — `coldstep-report rdns-enrich` and `otx-enrich` invoke `loader.LoadFromEnv()` and then `reputation.EnrichAll(ctx, ip)`, never the agent's hot path. The OTX backend is opt-in: `COLDSTEP_OTX_API_KEY`. When the env var is empty the loader returns a `NoOpEnricher` for that slot so the registry shape stays stable.
 
 ### Artifacts written to `$GITHUB_WORKSPACE`
 

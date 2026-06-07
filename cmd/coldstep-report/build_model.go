@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"math"
@@ -103,8 +102,6 @@ func buildModel(args []string) error {
 		Diff:                   model.BuildDiff(events, baseEvents),
 		IPClassification:       []model.ClassifiedIndicator{}, // populated in Plan 3
 		CapabilityEval:         integrity.EvaluateForDetectProfile(events, prof),
-		OTX:                    json.RawMessage(`null`),
-		RDNS:                   json.RawMessage(`null`),
 		ObservationHours:       roundTo(observationHours, 4),
 		ShortObservationWindow: short,
 		MinObservationHours:    *minObs,

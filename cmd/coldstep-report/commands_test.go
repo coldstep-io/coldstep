@@ -169,50 +169,6 @@ func TestRenderIPSummaryIncludesHeading(t *testing.T) {
 	}
 }
 
-func TestRDNSEnrichWritesDNSLookupsKey(t *testing.T) {
-	tmp := t.TempDir()
-	in := writeModelMapFixture(t, tmp, map[string]any{
-		"egress_sankey": []any{
-			map[string]any{"indicators": []any{"127.0.0.1"}},
-		},
-	})
-	t.Setenv("COLDSTEP_RDNS_WALL_BUDGET_MS", "10")
-	if err := rdnsEnrich([]string{"--in=" + in}); err != nil {
-		t.Fatalf("rdnsEnrich: %v", err)
-	}
-	m, err := readModelMap(in)
-	if err != nil {
-		t.Fatalf("read model: %v", err)
-	}
-	if _, ok := m["dns_lookups"]; !ok {
-		t.Fatalf("dns_lookups key missing after enrichment: %#v", m)
-	}
-}
-
-func TestOTXEnrichWithoutKeyMarksSkipped(t *testing.T) {
-	tmp := t.TempDir()
-	in := writeModelMapFixture(t, tmp, map[string]any{
-		"egress_sankey": []any{
-			map[string]any{"indicators": []any{"1.1.1.1", "example.com"}},
-		},
-	})
-	t.Setenv("OTX_API_KEY", "")
-	if err := otxEnrich([]string{"--in=" + in}); err != nil {
-		t.Fatalf("otxEnrich: %v", err)
-	}
-	m, err := readModelMap(in)
-	if err != nil {
-		t.Fatalf("read model: %v", err)
-	}
-	otx, ok := m["otx"].(map[string]any)
-	if !ok {
-		t.Fatalf("otx block missing or wrong type: %#v", m["otx"])
-	}
-	if skipped, ok := otx["skipped"].(bool); !ok || !skipped {
-		t.Fatalf("expected skipped=true, got %#v", otx["skipped"])
-	}
-}
-
 func writeModelMapFixture(t *testing.T, dir string, payload map[string]any) string {
 	t.Helper()
 	in := filepath.Join(dir, "model.json")

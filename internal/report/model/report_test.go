@@ -29,7 +29,7 @@ func TestEmptyReportMarshalsAllRequiredKeys(t *testing.T) {
 		"schema_version", "produced_by", "generated_at",
 		"run", "capability_matrix", "events_by_type",
 		"timeline", "egress_sankey", "diff",
-		"ip_classification", "capability_eval", "otx", "rdns",
+		"ip_classification", "capability_eval",
 	}
 	for _, k := range required {
 		if _, ok := asMap[k]; !ok {
