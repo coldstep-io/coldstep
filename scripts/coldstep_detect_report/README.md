@@ -8,10 +8,8 @@ Two-tier report driven by a single `report-model.json` (schema **v2.1**). Built 
 
 1. `coldstep-report build-model` — current JSONL only (`diff` may be `unavailable` until baseline exists).
 2. **Previous-run diff** — downloads baseline artifact, runs `coldstep-report diff`, then rebuilds `.coldstep-report-model.json` with `COLDSTEP_REPORT_BASELINE_JSONL` when the diff path succeeds.
-3. `coldstep-report rdns-enrich` — in-place PTR enrichment on `.coldstep-report-model.json`.
-4. `coldstep-report otx-enrich` — in-place AlienVault OTX enrichment (requires `OTX_API_KEY`).
-5. `coldstep-report render-summary` — Tier-1 **BLUF only** (capabilities headline, baseline-diff headline, OTX headline, artifact pointer). Runs **after** enrich so OTX lines reflect the enriched model.
-6. `coldstep-report render-html` — Tier-2 self-contained HTML (`coldstep-detect-report.html`).
+3. `coldstep-report render-summary` — Tier-1 **BLUF only** (capabilities headline, baseline-diff headline, artifact pointer).
+4. `coldstep-report render-html` — Tier-2 self-contained HTML (`coldstep-detect-report.html`).
 
 | Surface | What renders it | Where you see it |
 |---|---|---|
@@ -35,11 +33,9 @@ Two-tier report driven by a single `report-model.json` (schema **v2.1**). Built 
 | `capability_matrix` | `[{id, label, status, evidence_count}]` | `status` is `"pass"` / `"warn"` / `"fail"`. |
 | `events_by_type` | `[{type, count}]` sorted descending by `count` | Excludes the `meta` envelope event. |
 | `timeline` | `[{bucket, type, count}]` | `bucket` is a 1-second UTC bin, ISO-8601 with `Z` suffix. |
-| `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the OTX-eligible indicator list for the edge. |
+| `egress_sankey` | `[{source, target, value, indicators}]` | `source` is host, `target` is policy decision. `indicators` is the indicator list for the edge. |
 | `diff` | `{status, reason?, traffic_new[], traffic_gone[], traffic_changed[]}` | `status` is `"ok"` or `"unavailable"`. Each entry carries `indicators: list[str]` (schema v2). |
-| `otx` | `null` \| `{skipped, ...}` \| full block | Populated by `coldstep-report otx-enrich`. `null` until enrichment runs; `{"skipped": "no_api_key" \| ...}` when enrichment short-circuits. |
-| `dns_lookups` | `{ip: hostname}` map, optional | Populated by `coldstep-report rdns-enrich`. Best-effort PTR. |
-| `ip_classification` | `[{...}]` | Embedded IP/FQDN/rDNS classification rows. |
+| `ip_classification` | `[{...}]` | Embedded IP/FQDN classification rows. |
 
 ## Local rendering (no GitHub needed)
 
@@ -92,27 +88,6 @@ The Go renderer fills exactly three placeholders:
 **Don't touch unless you've read the rationale:**
 - The `<script id="coldstep-report-model" type="application/json">` block — the type and id are what the inline reader looks up.
 - The vendor `<script src="…d3…">` and `<script src="…plot…">` tags — `crossorigin="anonymous"` is required for SRI `integrity=` to be honoured.
-
-## OTX threat-intel enrichment
-
-`coldstep-report otx-enrich` runs **between** the diff-step model rebuild and the HTML render. It reads the model in place, dedupes IPv4/FQDN indicators, looks up each against AlienVault OTX's `general` endpoint, and writes the enriched model back to disk.
-
-| Env var | Default | Notes |
-|---|---|---|
-| `OTX_API_KEY` | _(none)_ | Repo secret. Missing or empty → `model.otx = {"skipped": "no_api_key"}`, exit 0. |
-| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Path to the JSON model. Read and overwritten in place. |
-| `COLDSTEP_OTX_WALL_BUDGET_MS` | `30000` | Hard wall-clock cap. When exhausted, records `partial_results: true`. |
-
-**Failure modes are observational, not fatal.** Every error path returns exit 0. Malicious indicators surface as `::warning::` annotations — they never fail the job.
-
-## Reverse-DNS enrichment (rDNS)
-
-`coldstep-report rdns-enrich` runs **before** OTX enrichment so renderers can label IPv4 indicators with their PTR hostname (e.g. `8.8.8.8 (dns.google)`). Best-effort: missing PTR / timeout silently omits the entry; never fails the job.
-
-| Env var | Default | Notes |
-|---|---|---|
-| `COLDSTEP_REPORT_MODEL_IN` | _(required)_ | Same model file as OTX. Read + overwritten in place. |
-| `COLDSTEP_RDNS_WALL_BUDGET_MS` | `5000` | Whole-batch wall budget. Per-call timeout is fixed at 1 s. |
 
 ## Why two tiers?
 

@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+
+- **Reputation / threat-intel enrichment subsystem (OTX + rDNS).** Removed `internal/reputation/*` (the pluggable `Enricher` interface, registry, loader, and the AlienVault OTX backend), `internal/report/enrich/*` (the Source pipeline), and the `coldstep-report` `otx-enrich` / `rdns-enrich` subcommands. The report model drops its `otx` and `rdns` slots and the `ClassifiedIndicator.rdns` field. The `OTX_API_KEY` / `COLDSTEP_OTX_API_KEY` secrets and the CI enrichment steps are no longer used. This slims the post-run report pipeline to build/diff/render only; detect reports no longer perform any outbound threat-intel lookups.
+
 ---
 
 ## [v0.4.1] — 2026-05-30

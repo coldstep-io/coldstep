@@ -402,35 +402,6 @@ jobs:
           # Re-build the report model now that the baseline JSONL is on disk.
           ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
 
-      - name: Enrich report model with reverse DNS
-        if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_RDNS_WALL_BUDGET_MS: '5000'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            ./bin/coldstep-report rdns-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
-          else
-            echo "::warning::report model missing, skipping rDNS enrichment"
-          fi
-
-      - name: Enrich report model with OTX threat-intel
-        if: always()
-        env:
-          OTX_API_KEY: ${{ secrets.OTX_API_KEY }}
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_OTX_WALL_BUDGET_MS: '30000'
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            ./bin/coldstep-report otx-enrich --in "${COLDSTEP_REPORT_MODEL_IN}"
-          else
-            echo "::warning::report model missing, skipping OTX enrichment"
-          fi
-
       - name: Render IP classification summary
         if: always()
         env:

@@ -23,7 +23,6 @@ This repository uses a **two-tier** reporting model (see `README.md` in this fol
 4. **Pulse bullets (3–6 lines)** — Short quantitative lines with **stable labels** that mirror Tier-2 HTML `<h2>` nouns:
    - Capabilities (pass/warn/fail counts)
    - Baseline diff (ok + counts, or unavailable + reason code)
-   - Threat intel / OTX (skipped vs summary counts + optional highest-severity pulse)
 5. **Artifact pointer** — Italic line naming the **ZIP artifact** and **`coldstep-detect-report.html`** (or neutral wording for non-detect workflows).
 
 ## What never belongs in Tier-1
