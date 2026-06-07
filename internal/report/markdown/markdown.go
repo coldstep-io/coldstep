@@ -74,6 +74,11 @@ type Aggregate struct {
 	// integrity gate (replaces the model-based integrity.CheckRequiredTypes).
 	seen map[string]struct{}
 
+	// domains is the set of destination FQDNs / SNIs observed (bare IPs
+	// excluded), for the baseline diff gate (replaces model.BuildDiff's
+	// domain set). Populated from net fqdn + tls sni.
+	domains map[string]struct{}
+
 	// EventsSHA256, when set, is rendered as a plain line (never an HTML
 	// comment) for tamper-evidence.
 	EventsSHA256 string
@@ -135,7 +140,7 @@ type denyLine struct {
 // lines are counted in ParseErrors and skipped — a single bad line never aborts
 // the report (defence-in-depth against a build step appending garbage).
 func Parse(r io.Reader) (*Aggregate, error) {
-	a := &Aggregate{Dests: make(map[string]int), seen: make(map[string]struct{})}
+	a := &Aggregate{Dests: make(map[string]int), seen: make(map[string]struct{}), domains: make(map[string]struct{})}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -216,6 +221,9 @@ func (a *Aggregate) countDest(line []byte) {
 		return
 	}
 	a.Dests[key]++
+	if n.FQDN != "" && !isBareIPv4(n.FQDN) {
+		a.domains[strings.ToLower(n.FQDN)] = struct{}{}
+	}
 }
 
 type metaLine struct {
@@ -269,6 +277,9 @@ func (a *Aggregate) countTLS(line []byte) {
 	if json.Unmarshal(line, &tl) != nil {
 		return
 	}
+	if tl.SNI != "" && !isBareIPv4(tl.SNI) {
+		a.domains[strings.ToLower(tl.SNI)] = struct{}{}
+	}
 	switch tl.Confidence {
 	case "full":
 		a.TLSFull++
@@ -297,6 +308,57 @@ func (a *Aggregate) countDeny(line []byte) {
 		Reason:     d.Reason,
 		HookFamily: d.HookFamily,
 	})
+}
+
+// Domains returns the sorted set of destination FQDNs / SNIs observed (bare
+// IPs excluded). Used by the baseline diff gate.
+func (a *Aggregate) Domains() []string {
+	out := make([]string, 0, len(a.domains))
+	for d := range a.domains {
+		out = append(out, d)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// DiffDomains returns the destination domains added in current vs baseline and
+// those gone (in baseline, absent from current), each sorted. Replaces the
+// model-based baseline diff; bare IPs are excluded so dial-time IP rotation
+// does not create churn (the P1-2 supply-chain gate keys on `added`).
+func DiffDomains(current, baseline *Aggregate) (added, removed []string) {
+	for d := range current.domains {
+		if _, ok := baseline.domains[d]; !ok {
+			added = append(added, d)
+		}
+	}
+	for d := range baseline.domains {
+		if _, ok := current.domains[d]; !ok {
+			removed = append(removed, d)
+		}
+	}
+	sort.Strings(added)
+	sort.Strings(removed)
+	return added, removed
+}
+
+// isBareIPv4 reports whether host is an IPv4 dotted-quad (four all-digit
+// labels) — such destinations are excluded from the domain diff.
+func isBareIPv4(host string) bool {
+	labels := strings.Split(host, ".")
+	if len(labels) != 4 {
+		return false
+	}
+	for _, l := range labels {
+		if l == "" {
+			return false
+		}
+		for _, r := range l {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // RequiredTypes returns the JSONL event types an integrity-strict run expects.
