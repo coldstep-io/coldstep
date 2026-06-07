@@ -214,3 +214,20 @@ func TestParse_MetaSignals(t *testing.T) {
 		t.Errorf("simple missing degraded/dind:\n%s", sim)
 	}
 }
+
+func TestMissingRequiredTypes(t *testing.T) {
+	// Standard profile: meta+exec+tcp required.
+	a, _ := Parse(strings.NewReader(`{"type":"meta"}` + "\n" + `{"type":"tcp"}` + "\n"))
+	if got := a.MissingRequiredTypes(""); len(got) != 1 || got[0] != "exec" {
+		t.Fatalf("standard missing = %v want [exec]", got)
+	}
+	full := `{"type":"meta"}` + "\n" + `{"type":"exec"}` + "\n" + `{"type":"tcp"}` + "\n"
+	b, _ := Parse(strings.NewReader(full))
+	if got := b.MissingRequiredTypes(""); len(got) != 0 {
+		t.Fatalf("standard complete missing = %v want none", got)
+	}
+	// Enhanced widens the required set.
+	if got := b.MissingRequiredTypes("enhanced"); len(got) == 0 {
+		t.Fatalf("enhanced should report missing udp/http/tls/proc_fork/fs_event")
+	}
+}

@@ -45,3 +45,19 @@ func TestWriteDetailedMarkdownReport_NoEventsNoFile(t *testing.T) {
 		t.Fatalf("expected no report file when events are absent, stat err=%v", err)
 	}
 }
+
+func TestStopStrictRequiredTypes(t *testing.T) {
+	dir := t.TempDir()
+	// Only meta+tcp present — exec missing under the standard profile.
+	jsonl := `{"type":"meta"}` + "\n" + `{"type":"tcp","dst":"1.2.3.4","dport":443}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".coldstep-events.jsonl"), []byte(jsonl), 0o644); err != nil {
+		t.Fatalf("write events: %v", err)
+	}
+	agg := writeDetailedMarkdownReport(dir)
+	if agg == nil {
+		t.Fatal("expected aggregate")
+	}
+	if missing := agg.MissingRequiredTypes(""); len(missing) != 1 || missing[0] != "exec" {
+		t.Fatalf("missing = %v want [exec]", missing)
+	}
+}

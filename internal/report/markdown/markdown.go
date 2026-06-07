@@ -70,6 +70,10 @@ type Aggregate struct {
 	// number of egress events seen for it.
 	Dests map[string]int
 
+	// seen is the set of JSONL event types observed, for the required-type
+	// integrity gate (replaces the model-based integrity.CheckRequiredTypes).
+	seen map[string]struct{}
+
 	// EventsSHA256, when set, is rendered as a plain line (never an HTML
 	// comment) for tamper-evidence.
 	EventsSHA256 string
@@ -131,7 +135,7 @@ type denyLine struct {
 // lines are counted in ParseErrors and skipped — a single bad line never aborts
 // the report (defence-in-depth against a build step appending garbage).
 func Parse(r io.Reader) (*Aggregate, error) {
-	a := &Aggregate{Dests: make(map[string]int)}
+	a := &Aggregate{Dests: make(map[string]int), seen: make(map[string]struct{})}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
@@ -145,6 +149,7 @@ func Parse(r io.Reader) (*Aggregate, error) {
 			continue
 		}
 		a.TotalEvents++
+		a.seen[t.Type] = struct{}{}
 		switch t.Type {
 		case "meta":
 			a.countMeta(line)
@@ -292,6 +297,29 @@ func (a *Aggregate) countDeny(line []byte) {
 		Reason:     d.Reason,
 		HookFamily: d.HookFamily,
 	})
+}
+
+// RequiredTypes returns the JSONL event types an integrity-strict run expects.
+// "enhanced" widens the set to the observe-only egress/process/fs signals.
+// Ported from internal/report/integrity (drops the model dependency).
+func RequiredTypes(detectProfile string) []string {
+	if strings.EqualFold(strings.TrimSpace(detectProfile), "enhanced") {
+		return []string{"meta", "exec", "tcp", "udp", "http", "tls", "proc_fork", "fs_event"}
+	}
+	return []string{"meta", "exec", "tcp"}
+}
+
+// MissingRequiredTypes returns the required event types absent from the stream,
+// sorted. Empty result means the anti-blindness required-type gate passes.
+func (a *Aggregate) MissingRequiredTypes(detectProfile string) []string {
+	var missing []string
+	for _, req := range RequiredTypes(detectProfile) {
+		if _, ok := a.seen[req]; !ok {
+			missing = append(missing, req)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 type destCount struct {
