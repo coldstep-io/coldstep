@@ -109,8 +109,16 @@ static __always_inline void skb_emit_backstop(struct __sk_buff *skb, __u8 af,
 		return;
 	}
 	ev->timestamp_ns = bpf_ktime_get_ns();
-	ev->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
-	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
+	/*
+	 * cgroup_skb/egress runs in packet/softirq context with no reliable
+	 * "current" task — bpf_get_current_pid_tgid / bpf_get_current_comm are
+	 * not available to this program type (the verifier rejects them outright
+	 * on kernels that gate the helpers by prog type, e.g. 6.6). Leave pid=0
+	 * and comm empty; the egress_backstop_event doc already declares pid/comm
+	 * best-effort, and dst/proto/af carry the signal.
+	 */
+	ev->pid = 0;
+	__builtin_memset(ev->comm, 0, sizeof(ev->comm));
 	ev->af = af;
 	ev->ipproto = ipproto;
 	ev->_pad[0] = ev->_pad[1] = 0;
