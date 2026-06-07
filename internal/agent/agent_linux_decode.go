@@ -251,6 +251,28 @@ func decodeEgressBackstopEvent(raw []byte) (ts uint64, pid uint32, af uint8, ipp
 	return ts, pid, af, ipproto, daddr, dport, comm, true
 }
 
+// decodeIOUringTLSEvent parses io_uring_tls_event (296 bytes, see
+// bpf/trace_connect_obs.h). Layout: ts(8) pid(4) comm(16) op(1) _pad(3)
+// capture_len(2, LE) payload(256) _pad2(6). capture_len is clamped to the
+// payload window so a corrupt length can never slice out of bounds; payload
+// is a sub-slice of raw (caller must not retain it past the ringbuf record).
+func decodeIOUringTLSEvent(raw []byte) (ts uint64, pid uint32, op uint8, payload []byte, comm [16]byte, ok bool) {
+	if len(raw) < ioUringTLSEventWireSize {
+		return 0, 0, 0, nil, [16]byte{}, false
+	}
+	ts = binary.LittleEndian.Uint64(raw[0:8])
+	pid = binary.LittleEndian.Uint32(raw[8:12])
+	copy(comm[:], raw[12:28])
+	op = raw[28]
+	capLen := int(binary.LittleEndian.Uint16(raw[32:34]))
+	if capLen > ioUringTLSPayloadMax {
+		capLen = ioUringTLSPayloadMax
+	}
+	const payloadOff = 34
+	payload = raw[payloadOff : payloadOff+capLen]
+	return ts, pid, op, payload, comm, true
+}
+
 // ioUringOpName maps the raw IORING_OP_ byte to the JSONL op string. Values
 // from include/uapi/linux/io_uring.h (`enum io_uring_op`, stable since 5.1).
 func ioUringOpName(op uint8) string {

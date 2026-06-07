@@ -42,39 +42,44 @@ type runStats struct {
 	// Confidence was forced from full/partial/unknown to unknown by the P4
 	// KTLS override in readTLSRing. Surfaced in the digest as the
 	// `(N ktls-offloaded)` annotation on the TLS SNI KPI cell.
-	tlsConfidenceUnknownKTLSN       int
-	procForkN                       int
-	fsN                             int
-	ktlsN                           int
-	ktlsRingbufReserveFailuresN     int
-	connect4TupleUpdateFailuresN    int
-	udpRingbufReserveFailuresN      int
-	dnsRingbufReserveFailuresN      int
-	connectRingbufReserveFailuresN  int
-	httpRingbufReserveFailuresN     int
-	tlsRingbufReserveFailuresN      int
-	execRingbufReserveFailuresN     int
-	forkRingbufReserveFailuresN     int
-	fsRingbufReserveFailuresN       int
-	udpSendmsgMultiIovecObservedN   int
-	sendmmsgMultiMessageN           int
-	sendmmsgUnobservedExtraN        int
-	tlsWritevMultiIovecObservedN    int
-	sendfileObservedN               int
-	spliceObservedN                 int
-	sendmmsgFirstOnlyN              int
-	ipv6ConnectObservedN            uint32
-	ipv6SendmsgObservedN            uint32
-	ipv6EventCountN                 int
-	ipv6RingbufReserveFailuresN     int
-	sendpageObservedN               uint32
-	ioUringSetupObservedN           int
-	ioUringSendN                    int
-	ioUringTLSHelloN                int
-	ioUringRingbufReserveFailuresN  int
-	egressBackstopN                 int
-	egressBackstopReserveFailuresN  int
-	egressBackstopDsts              map[string]struct{}
+	tlsConfidenceUnknownKTLSN         int
+	procForkN                         int
+	fsN                               int
+	ktlsN                             int
+	ktlsRingbufReserveFailuresN       int
+	connect4TupleUpdateFailuresN      int
+	udpRingbufReserveFailuresN        int
+	dnsRingbufReserveFailuresN        int
+	connectRingbufReserveFailuresN    int
+	httpRingbufReserveFailuresN       int
+	tlsRingbufReserveFailuresN        int
+	execRingbufReserveFailuresN       int
+	forkRingbufReserveFailuresN       int
+	fsRingbufReserveFailuresN         int
+	udpSendmsgMultiIovecObservedN     int
+	sendmmsgMultiMessageN             int
+	sendmmsgUnobservedExtraN          int
+	tlsWritevMultiIovecObservedN      int
+	sendfileObservedN                 int
+	spliceObservedN                   int
+	sendmmsgFirstOnlyN                int
+	ipv6ConnectObservedN              uint32
+	ipv6SendmsgObservedN              uint32
+	ipv6EventCountN                   int
+	ipv6RingbufReserveFailuresN       int
+	sendpageObservedN                 uint32
+	ioUringSetupObservedN             int
+	ioUringSendN                      int
+	ioUringTLSHelloN                  int
+	ioUringRingbufReserveFailuresN    int
+	ioUringTLSRingbufReserveFailuresN int
+	egressBackstopN                   int
+	egressBackstopReserveFailuresN    int
+	egressBackstopDsts                map[string]struct{}
+	// ioUringTLSSNISet collects distinct SNI hostnames parsed from io_uring
+	// ClientHello captures (P6 Phase 2.5). Rendered as the "io_uring TLS SNI"
+	// digest KPI row. nil until the first SNI is observed.
+	ioUringTLSSNISet                map[string]struct{}
 	tcpDNSResponsesObservedN        int
 	tcpDNSSkippedShortReadN         int
 	quicCandidateN                  int
@@ -570,6 +575,36 @@ func (s *runStats) ioUringSendTotal() int {
 	return s.ioUringSendN
 }
 
+// addIoUringTLSSNI records a distinct SNI hostname parsed from an io_uring
+// ClientHello capture (P6 Phase 2.5). Idempotent per hostname.
+func (s *runStats) addIoUringTLSSNI(sni string) {
+	if sni == "" {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ioUringTLSSNISet == nil {
+		s.ioUringTLSSNISet = make(map[string]struct{})
+	}
+	s.ioUringTLSSNISet[sni] = struct{}{}
+}
+
+// ioUringTLSSNIList returns the distinct io_uring TLS SNIs, sorted. Empty when
+// none were observed (the digest row is then hidden).
+func (s *runStats) ioUringTLSSNIList() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.ioUringTLSSNISet) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(s.ioUringTLSSNISet))
+	for sni := range s.ioUringTLSSNISet {
+		out = append(out, sni)
+	}
+	slices.Sort(out)
+	return out
+}
+
 func (s *runStats) ioUringTLSHelloObserved() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -637,6 +672,18 @@ func (s *runStats) egressBackstopReserveFailures() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.egressBackstopReserveFailuresN
+}
+
+func (s *runStats) setIoUringTLSRingbufReserveFailures(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ioUringTLSRingbufReserveFailuresN = n
+}
+
+func (s *runStats) ioUringTLSRingbufReserveFailures() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.ioUringTLSRingbufReserveFailuresN
 }
 
 func (s *runStats) ioUringSetupObserved() int {
@@ -816,63 +863,64 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 		s.bpfAuditRingbufReserveFailuresN,
 	)
 	return telemetry.Summary{
-		Version:                        2,
-		SchemaVersion:                  telemetry.SchemaVersion,
-		ExecEvents:                     s.execN,
-		TCPEvents:                      s.tcpN,
-		UDPEvents:                      s.udpN,
-		HTTPEvents:                     s.httpN,
-		TLSEvents:                      s.tlsN,
-		KTLSOffloadEvents:              s.ktlsN,
-		KTLSRingbufReserveFailures:     s.ktlsRingbufReserveFailuresN,
-		TLSConfidenceFull:              s.tlsConfidenceFullN,
-		TLSConfidencePartial:           s.tlsConfidencePartialN,
-		TLSConfidenceInferred:          s.tlsConfidenceInferredN,
-		TLSConfidenceUnknown:           s.tlsConfidenceUnknownN,
-		ProcForkEvents:                 s.procForkN,
-		Connect4TupleUpdateFailures:    s.connect4TupleUpdateFailuresN,
-		UDPRingbufReserveFailures:      s.udpRingbufReserveFailuresN,
-		DNSRingbufReserveFailures:      s.dnsRingbufReserveFailuresN,
-		ConnectRingbufReserveFailures:  s.connectRingbufReserveFailuresN,
-		HTTPRingbufReserveFailures:     s.httpRingbufReserveFailuresN,
-		TLSRingbufReserveFailures:      s.tlsRingbufReserveFailuresN,
-		ExecRingbufReserveFailures:     s.execRingbufReserveFailuresN,
-		ForkRingbufReserveFailures:     s.forkRingbufReserveFailuresN,
-		FSRingbufReserveFailures:       s.fsRingbufReserveFailuresN,
-		RingbufReserveFailuresTotal:    rbTotal,
-		UDPSendmsgMultiIovecObserved:   s.udpSendmsgMultiIovecObservedN,
-		SendmmsgMultiMessage:           s.sendmmsgMultiMessageN,
-		SendmmsgUnobservedExtra:        s.sendmmsgUnobservedExtraN,
-		TLSWritevMultiIovecObserved:    s.tlsWritevMultiIovecObservedN,
-		SendfileObserved:               s.sendfileObservedN,
-		SpliceObserved:                 s.spliceObservedN,
-		SendmmsgFirstOnly:              s.sendmmsgFirstOnlyN,
-		IPv6ConnectObserved:            s.ipv6ConnectObservedN,
-		IPv6SendmsgObserved:            s.ipv6SendmsgObservedN,
-		IPv6Events:                     s.ipv6EventCountN,
-		IPv6RingbufReserveFailures:     s.ipv6RingbufReserveFailuresN,
-		SendpageObserved:               s.sendpageObservedN,
-		IoUringSetupObserved:           s.ioUringSetupObservedN,
-		IoUringSendTotal:               s.ioUringSendN,
-		IoUringRingbufReserveFailures:  s.ioUringRingbufReserveFailuresN,
-		IoUringTLSHelloObserved:        s.ioUringTLSHelloN,
-		TCPDNSResponsesObserved:        s.tcpDNSResponsesObservedN,
-		TCPDNSSkippedShortRead:         s.tcpDNSSkippedShortReadN,
-		TCPStateTotal:                  s.tcpStateN,
-		TCPStateConfirmed:              s.tcpStateConfirmed,
-		TCPStateRefused:                s.tcpStateRefused,
-		TCPStateRingbufReserveFailures: s.tcpStateRingbufReserveFailuresN,
-		QuicObserved:                   s.quicObservedN,
-		DNSDriftObservations:           s.dnsDriftN,
-		BPFAuditEvents:                 s.bpfAuditN,
-		BPFHeartbeatFailures:           s.bpfHeartbeatFailures,
-		BPFMapIntegrityFailures:        s.bpfMapIntegrityFailuresN,
-		BPFDNSCacheUpdateFailures:      s.bpfDNSCacheUpdateFailuresN,
-		BPFAuditRingbufReserveFailures: s.bpfAuditRingbufReserveFailuresN,
-		DroppedCounts:                  dropped,
-		PolicyCounts:                   pc,
-		KernelRelease:                  kernel,
-		BPF:                            bpf,
+		Version:                          2,
+		SchemaVersion:                    telemetry.SchemaVersion,
+		ExecEvents:                       s.execN,
+		TCPEvents:                        s.tcpN,
+		UDPEvents:                        s.udpN,
+		HTTPEvents:                       s.httpN,
+		TLSEvents:                        s.tlsN,
+		KTLSOffloadEvents:                s.ktlsN,
+		KTLSRingbufReserveFailures:       s.ktlsRingbufReserveFailuresN,
+		TLSConfidenceFull:                s.tlsConfidenceFullN,
+		TLSConfidencePartial:             s.tlsConfidencePartialN,
+		TLSConfidenceInferred:            s.tlsConfidenceInferredN,
+		TLSConfidenceUnknown:             s.tlsConfidenceUnknownN,
+		ProcForkEvents:                   s.procForkN,
+		Connect4TupleUpdateFailures:      s.connect4TupleUpdateFailuresN,
+		UDPRingbufReserveFailures:        s.udpRingbufReserveFailuresN,
+		DNSRingbufReserveFailures:        s.dnsRingbufReserveFailuresN,
+		ConnectRingbufReserveFailures:    s.connectRingbufReserveFailuresN,
+		HTTPRingbufReserveFailures:       s.httpRingbufReserveFailuresN,
+		TLSRingbufReserveFailures:        s.tlsRingbufReserveFailuresN,
+		ExecRingbufReserveFailures:       s.execRingbufReserveFailuresN,
+		ForkRingbufReserveFailures:       s.forkRingbufReserveFailuresN,
+		FSRingbufReserveFailures:         s.fsRingbufReserveFailuresN,
+		RingbufReserveFailuresTotal:      rbTotal,
+		UDPSendmsgMultiIovecObserved:     s.udpSendmsgMultiIovecObservedN,
+		SendmmsgMultiMessage:             s.sendmmsgMultiMessageN,
+		SendmmsgUnobservedExtra:          s.sendmmsgUnobservedExtraN,
+		TLSWritevMultiIovecObserved:      s.tlsWritevMultiIovecObservedN,
+		SendfileObserved:                 s.sendfileObservedN,
+		SpliceObserved:                   s.spliceObservedN,
+		SendmmsgFirstOnly:                s.sendmmsgFirstOnlyN,
+		IPv6ConnectObserved:              s.ipv6ConnectObservedN,
+		IPv6SendmsgObserved:              s.ipv6SendmsgObservedN,
+		IPv6Events:                       s.ipv6EventCountN,
+		IPv6RingbufReserveFailures:       s.ipv6RingbufReserveFailuresN,
+		SendpageObserved:                 s.sendpageObservedN,
+		IoUringSetupObserved:             s.ioUringSetupObservedN,
+		IoUringSendTotal:                 s.ioUringSendN,
+		IoUringRingbufReserveFailures:    s.ioUringRingbufReserveFailuresN,
+		IoUringTLSRingbufReserveFailures: s.ioUringTLSRingbufReserveFailuresN,
+		IoUringTLSHelloObserved:          s.ioUringTLSHelloN,
+		TCPDNSResponsesObserved:          s.tcpDNSResponsesObservedN,
+		TCPDNSSkippedShortRead:           s.tcpDNSSkippedShortReadN,
+		TCPStateTotal:                    s.tcpStateN,
+		TCPStateConfirmed:                s.tcpStateConfirmed,
+		TCPStateRefused:                  s.tcpStateRefused,
+		TCPStateRingbufReserveFailures:   s.tcpStateRingbufReserveFailuresN,
+		QuicObserved:                     s.quicObservedN,
+		DNSDriftObservations:             s.dnsDriftN,
+		BPFAuditEvents:                   s.bpfAuditN,
+		BPFHeartbeatFailures:             s.bpfHeartbeatFailures,
+		BPFMapIntegrityFailures:          s.bpfMapIntegrityFailuresN,
+		BPFDNSCacheUpdateFailures:        s.bpfDNSCacheUpdateFailuresN,
+		BPFAuditRingbufReserveFailures:   s.bpfAuditRingbufReserveFailuresN,
+		DroppedCounts:                    dropped,
+		PolicyCounts:                     pc,
+		KernelRelease:                    kernel,
+		BPF:                              bpf,
 	}
 }
 
