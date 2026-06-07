@@ -413,6 +413,13 @@ func runStop(cfg stopConfig) error {
 		}
 	}
 
+	// Report-binary elimination (Phase 1): render the pure-markdown detailed
+	// report from the JSONL source of truth and write it to .coldstep-report.md
+	// for artifact upload. Best-effort — never fails the job; the agent's
+	// .coldstep-detect.md remains the job-summary source until later phases swap
+	// it for the markdown generator's simple report.
+	writeDetailedMarkdownReport(baseDir)
+
 	body := ""
 	if raw, err := os.ReadFile(detectLog); err == nil {
 		body = string(raw)
