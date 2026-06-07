@@ -71,6 +71,8 @@ AGENTS.md
 /design/
 /knowledge/
 /.worktrees/
+# Local scratch: scan artifacts + WSL repro scripts (near-missed git add -A once).
+/scripts/scratch/
 # Soft alias junction (mklink /J elon knowledge) — same vault, local-only.
 /elon/
 # Ignore stray copies under .github only.
