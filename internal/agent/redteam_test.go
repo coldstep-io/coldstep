@@ -325,28 +325,91 @@ func TestRedTeam_ExecComm(t *testing.T) {
 
 // ---- Attack path 6: detect — IPv6 TCP connect (requires H7) ----------
 
-// H7 (IPv6 connect telemetry) is not merged on this branch; coldstep's
-// JSONL stream remains IPv4-only per SECURITY.md "Defend hooks". When H7
-// lands and emits "type":"tcp6", this test should drop the skip.
-func TestRedTeam_IPv6TCPConnect_RequiresH7(t *testing.T) {
-	t.Skip("H7 not merged: coldstep does not emit \"type\":\"tcp6\" yet (see SECURITY.md: IPv6 is unsupported)")
+// H7 detect-mode IPv6 observe (cgroup/connect6 + sendmsg6, emits "tcp6"/"udp6")
+// shipped in v0.3.0. This asserts a real "tcp6" event, gated on the runner
+// actually having IPv6 egress — GitHub-hosted Azure runners generally lack it,
+// so this legitimately skips there (a capability gate, not a feature gap).
+func TestRedTeam_IPv6TCPConnectLogged(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+
+	const v6dst = "2606:4700:4700::1111" // Cloudflare DNS over IPv6
+	if probe, derr := net.DialTimeout("tcp6", "["+v6dst+"]:443", 2*time.Second); derr != nil {
+		t.Skipf("no IPv6 egress on this runner: %v", derr)
+	} else {
+		_ = probe.Close()
+	}
+
+	h := newRedteamHarness(t)
+	h.applyDetectEnv(t)
+
+	cancel, errCh := startAgent(t, 12*time.Second)
+	defer stopAgent(t, cancel, errCh)
+	if !waitForReady(h.ready, 10*time.Second) {
+		t.Fatal("agent did not become ready within 10s")
+	}
+
+	conn, derr := net.DialTimeout("tcp6", "["+v6dst+"]:443", 3*time.Second)
+	if derr != nil {
+		t.Skipf("IPv6 egress became unavailable mid-test: %v", derr)
+	}
+	_ = conn.Close()
+
+	line := pollJSONLForType(h.events, "tcp6", []string{`"dst":"` + v6dst + `"`}, 6*time.Second)
+	if line == nil {
+		dump, _ := os.ReadFile(h.events)
+		t.Fatalf("no tcp6 JSONL row for %s within 6s; events:\n%s", v6dst, string(dump))
+	}
 }
 
 // ---- Attack path 7: detect — QUIC heuristic (requires H19) -----------
 
-// H19 (UDP heuristic flagging traffic to :443 as possible QUIC) is not
-// merged; coldstep currently only counts io_uring_setup as a syscall-hook
-// bypass signal and emits UDP events without a possible_quic flag.
-func TestRedTeam_QUICHeuristic_RequiresH19(t *testing.T) {
-	t.Skip("H19 not merged: udp JSONL has no \"possible_quic\" field yet")
+// H19 (UDP/443 flagged as possible QUIC) shipped in v0.4.0: readUDPRing sets
+// possible_quic=true on the udp JSONL event for dport 443. Assert it on a real
+// UDP send to :443.
+func TestRedTeam_QUICHeuristicUDP443(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+	if _, err := exec.LookPath("python3"); err != nil {
+		t.Skip("python3 not installed:", err)
+	}
+
+	h := newRedteamHarness(t)
+	h.applyDetectEnv(t)
+
+	cancel, errCh := startAgent(t, 10*time.Second)
+	defer stopAgent(t, cancel, errCh)
+
+	time.Sleep(450 * time.Millisecond)
+
+	cmd := exec.Command("python3", "-c", "import socket;s=socket.socket(socket.AF_INET,socket.SOCK_DGRAM);s.sendto(b'q',('1.1.1.1',443));s.close()")
+	if err := cmd.Run(); err != nil {
+		t.Logf("udp/443 probe (non-fatal exit): %v", err)
+	}
+
+	line := pollJSONLForType(h.events, "udp", []string{`"dst":"1.1.1.1"`, `"dport":443`, `"possible_quic":true`}, 5*time.Second)
+	if line == nil {
+		dump, _ := os.ReadFile(h.events)
+		t.Fatalf("no udp JSONL row with possible_quic for 1.1.1.1:443 within 5s; events:\n%s", string(dump))
+	}
 }
 
 // ---- Attack path 8: detect — io_uring SEND SQE (requires H8/io_uring) -
 
-// io_uring_setup_observed is already a telemetry counter; an SQE-level
-// JSONL "io_uring_send" event is the H8 follow-up and is not merged.
-func TestRedTeam_IoUringSend_RequiresH8(t *testing.T) {
-	t.Skip("H8 not merged: io_uring SEND SQEs are not surfaced as JSONL events; only io_uring_setup_observed is counted in telemetry")
+// io_uring SEND/SENDMSG submissions ARE surfaced as "io_uring_send" JSONL
+// events (P6 Phase 1, merged) — not a feature gap. Exercising it end-to-end
+// needs (a) the raw_tp/io_uring_submit_sqe tracepoint, absent on some runner
+// kernels (the hosted Azure image reports "no such file or directory"), and
+// (b) generating io_uring SEND traffic, which requires liburing / raw
+// io_uring_setup+enter not wired into this integration harness. The decode +
+// reader paths are covered by unit tests (decode_network_linux_test.go). This
+// is a capability-gated skip, NOT a "not merged" stub.
+func TestRedTeam_IoUringSend_RequiresIoUringHarness(t *testing.T) {
+	t.Skip("requires the io_uring tracepoint + an in-harness io_uring traffic generator; feature is merged (see io_uring_send unit tests)")
 }
 
 // ---- Attack path 9: defend — non-allowlisted TCP blocked -------------
