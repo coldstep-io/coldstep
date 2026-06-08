@@ -65,6 +65,30 @@ func TestParse_Counts(t *testing.T) {
 	}
 }
 
+// A defend run where everything was allowlisted produces zero deny events.
+// Mode must still come from the meta line, not be inferred as detect.
+func TestParse_DefendModeFromMeta_NoDenies(t *testing.T) {
+	jsonl := `{"type":"meta","ts":"t0","mode":"defend"}
+{"type":"tcp","dst":"140.82.112.3","dport":443,"fqdn":"github.com"}
+`
+	a, err := Parse(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(a.Denies) != 0 {
+		t.Fatalf("Denies=%d want 0", len(a.Denies))
+	}
+	if a.Mode != "defend" {
+		t.Errorf("Mode=%q want defend (from meta, no deny events)", a.Mode)
+	}
+	if got := a.modeLabel(); got != "defend" {
+		t.Errorf("modeLabel=%q want defend", got)
+	}
+	if !strings.Contains(a.RenderSimple(), "defend") {
+		t.Error("RenderSimple should label the run defend")
+	}
+}
+
 func TestTopDests_Stable(t *testing.T) {
 	a := parseSample(t)
 	top := a.topDests(2)
@@ -258,5 +282,21 @@ func TestRenders_SanitizeInjectedCells(t *testing.T) {
 	det := a.RenderDetailed()
 	if !strings.Contains(det, "evil·x.example.com") {
 		t.Errorf("expected sanitized dest (pipe->middot) in detailed:\n%s", det)
+	}
+}
+
+// TestRenders_NeutralizeLinkBrackets ensures a hostile SNI/FQDN cannot smuggle a
+// Markdown link/image into the Job Summary or report via `[text](url)` syntax.
+func TestRenders_NeutralizeLinkBrackets(t *testing.T) {
+	jsonl := `{"type":"tls","sni":"[click](http://evil.example)","confidence":"full","dst":"1.2.3.4"}` + "\n" +
+		`{"type":"tcp","fqdn":"[click](http://evil.example)","dst":"1.2.3.4","dport":443}` + "\n"
+	a, err := Parse(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for name, out := range map[string]string{"detailed": a.RenderDetailed(), "simple": a.RenderSimple()} {
+		if strings.Contains(out, "[click]") || strings.Contains(out, "](http://evil.example)") {
+			t.Errorf("%s: raw link brackets survived — link injection possible:\n%s", name, out)
+		}
 	}
 }

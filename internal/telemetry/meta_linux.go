@@ -12,7 +12,8 @@ import (
 
 // BuildMeta constructs the opening JSONL record (call once per agent run).
 // detectProfile is COLDSTEP_DETECT_PROFILE: standard or enhanced (empty treated as standard upstream).
-func BuildMeta(agentVer string, bpf []BPFStatus, detectProfile string) (MetaEvent, error) {
+// mode is the run mode ("detect" / "defend"); empty is omitted from the JSON.
+func BuildMeta(agentVer string, bpf []BPFStatus, detectProfile, mode string) (MetaEvent, error) {
 	var uts unix.Utsname
 	if err := unix.Uname(&uts); err != nil {
 		return MetaEvent{}, err
@@ -46,5 +47,6 @@ func BuildMeta(agentVer string, bpf []BPFStatus, detectProfile string) (MetaEven
 		GitHub:        gh,
 		BPF:           bpf,
 		DetectProfile: dp,
+		Mode:          strings.TrimSpace(mode),
 	}, nil
 }

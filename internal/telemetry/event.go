@@ -46,6 +46,12 @@ type MetaEvent struct {
 	BPF           []BPFStatus     `json:"bpf"`
 	Capabilities  map[string]bool `json:"capabilities,omitempty"`
 	DetectProfile string          `json:"detect_profile,omitempty"` // "standard" | "enhanced" (from COLDSTEP_DETECT_PROFILE)
+	// Mode is the run mode the agent enforced: "detect" or "defend". It lets the
+	// report label a defend run correctly even when nothing was blocked (zero
+	// deny events) — without it the report can only infer mode from deny lines
+	// and silently mislabels a clean defend run as detect. Omitted on legacy
+	// artifacts written before this field existed.
+	Mode string `json:"mode,omitempty"`
 	// AllowlistIPCount snapshots the number of unique IPv4 addresses produced by
 	// compiling the domain allowlist (P1-1 6a). Zero when not in defend mode.
 	AllowlistIPCount int `json:"allowlist_ip_count,omitempty"`
