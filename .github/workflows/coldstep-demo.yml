@@ -5,9 +5,9 @@
 # after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
 # Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Both jobs pass `release-path`. Report tooling is built from source via
-# `build-coldstep-report-linux.sh`; the trailing "Render HTML report" step also demos the consumer pattern
-# (download `coldstep-report-linux-amd64` from the same release — issue #219) and uploads an HTML artifact.
+# (`supply-chain-attest.yml`). Both jobs pass `release-path`. The detect job builds `coldstep-action`
+# from source for the baseline `diff`, then uploads the pure-markdown `.coldstep-report.md` artifact
+# (the report binary + HTML render were removed when reporting moved into coldstep-action).
 
 name: coldstep-demo
 
