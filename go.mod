@@ -1,6 +1,6 @@
 module github.com/coldstep-io/coldstep
 
-go 1.25.10
+go 1.25.11
 
 require (
 	github.com/cilium/ebpf v0.21.0
