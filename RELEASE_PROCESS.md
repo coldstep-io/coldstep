@@ -61,7 +61,7 @@ If **Upload Linux agent** hits **immutable Release** / **HTTP 422**, the workflo
 
 ## 5. Confirm GitHub Release
 
-- **Releases → `vX.Y.Z`** should list **`coldstep-linux-amd64`** (when upload succeeded) and, from **v0.4.1** onward, **`coldstep-report-linux-amd64`** (issue **#219** — consumer report CLI). The agent asset is the hard requirement; the report asset is best-effort under immutable-release rejection (see workflow logs for `::warning title=Missing coldstep-report-linux-amd64`).
+- **Releases → `vX.Y.Z`** should list **`coldstep-linux-amd64`** (when upload succeeded) — the only published binary asset. The **`coldstep-report-linux-amd64`** asset (issue **#219**) was **retired** when the report binary was folded into `coldstep-action`; already-published assets on prior tags remain (immutable) but new tags no longer ship it.
 - Optional notes: paste the **`CHANGELOG.md`** section for that version.
 - For a **pre-release** (soak / validation first): on the Release, check **Set as pre-release**; clear it when promoting to **Latest**.
 
@@ -72,7 +72,6 @@ If **Upload Linux agent** hits **immutable Release** / **HTTP 422**, the workflo
 ## 7. Consumer sanity check
 
 - `gh release download vX.Y.Z --repo coldstep-io/coldstep --pattern 'coldstep-linux-amd64' --dir /tmp`
-- From **v0.4.1** onward also verify the report binary is present: `gh release download vX.Y.Z --repo coldstep-io/coldstep --pattern 'coldstep-report-linux-amd64' --dir /tmp` (issue **#219**).
 - Demo workflows use **`gh release download "${COLDSTEP_AGENT_VERSION}"`** — version **must match** the tag that has the asset.
 
 ---
