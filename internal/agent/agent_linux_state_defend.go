@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -50,7 +49,6 @@ type defendState struct {
 	mapIntegrityFailures   int
 	expectedEntries        int
 	expectedIgnoredEntries int
-	firstDenyRowV          *report.DenyDigestRow
 	denyDedup              map[denyDedupKey]denyDedupEntry
 }
 
@@ -62,7 +60,6 @@ type defendSnapshot struct {
 	denyCorroborated     int
 	denyReserveFailures  int
 	mapIntegrityFailures int
-	firstDeny            *report.DenyDigestRow
 }
 
 type defendBackendConfig struct {
@@ -221,30 +218,16 @@ func (s *defendState) denyCorroborated() int {
 	return s.denyCorroboratedN
 }
 
-func (s *defendState) noteDeny(row report.DenyDigestRow) {
+func (s *defendState) noteDeny() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.denyCountN++
-	if s.firstDenyRowV == nil {
-		cp := row
-		s.firstDenyRowV = &cp
-	}
 }
 
 func (s *defendState) denyCount() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.denyCountN
-}
-
-func (s *defendState) firstDeny() *report.DenyDigestRow {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.firstDenyRowV == nil {
-		return nil
-	}
-	cp := *s.firstDenyRowV
-	return &cp
 }
 
 func (s *defendState) snapshot() defendSnapshot {
@@ -258,10 +241,6 @@ func (s *defendState) snapshot() defendSnapshot {
 		denyCorroborated:     s.denyCorroboratedN,
 		denyReserveFailures:  s.denyReserveFailuresN,
 		mapIntegrityFailures: s.mapIntegrityFailures,
-	}
-	if s.firstDenyRowV != nil {
-		cp := *s.firstDenyRowV
-		out.firstDeny = &cp
 	}
 	return out
 }
