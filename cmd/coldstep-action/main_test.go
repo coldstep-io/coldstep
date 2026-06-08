@@ -229,16 +229,6 @@ func TestParseStartFlags_AllowFile(t *testing.T) {
 	}
 }
 
-func TestParseStartFlags_BootstrapAllowlist(t *testing.T) {
-	cfg, err := parseStartFlags([]string{"--bootstrap-allowlist", "true"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.BootstrapAllowlist != "true" {
-		t.Errorf("got %q", cfg.BootstrapAllowlist)
-	}
-}
-
 func TestParseStopFlags_Defaults(t *testing.T) {
 	cfg, err := parseStopFlags([]string{})
 	if err != nil {

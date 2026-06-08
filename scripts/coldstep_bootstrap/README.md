@@ -1,15 +1,18 @@
-# Coldstep bootstrap allowlist packs (optional)
+# Coldstep starter allowlist packs (reference)
 
-These UTF-8 text files ship **inside the composite action** (`GITHUB_ACTION_PATH/scripts/coldstep_bootstrap/`). They are merged **only** when **`bootstrap-allowlist: true`** on the **`start`** step (`action.yml`). Default is **`false`** — consumers opt in explicitly.
+These UTF-8 text files are **reference starter lists**. The `bootstrap-allowlist`
+input that merged them automatically was **removed** in the allowlist
+consolidation — there is now one model: put everything in `allow` / `allow-file`.
+
+To use a pack, **copy the lines you want into your own `allow-file`** (in your
+repo / workspace). Same line / `#` comment rules as any `allow-file`.
 
 ## Files
 
-| File | Merged into |
-| ---- | ----------- |
-| **`allowlist-domains-v1.txt`** | **`allowed-domains`** (after inline + workspace files) |
-| **`allowlist-ips-v1.txt`** | **`allowed-ips`** (after inline + workspace files) |
-
-Same line / `#` comment rules as **`coldstep-action`** workspace allowlist files.
+| File | Copy entries into |
+| ---- | ----------------- |
+| **`allowlist-domains-v1.txt`** | your `allow` / `allow-file` (domains) |
+| **`allowlist-ips-v1.txt`** | your `allow` / `allow-file` (IPv4 / CIDR) |
 
 ## Versioning
 

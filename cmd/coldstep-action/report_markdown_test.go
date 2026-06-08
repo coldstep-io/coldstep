@@ -110,3 +110,13 @@ func TestRunAssertIntegrity(t *testing.T) {
 		t.Fatalf("expected pass, got %v", err)
 	}
 }
+
+func TestWarnRemovedAllowlistInputs_NoPanic(t *testing.T) {
+	t.Setenv("INPUT_IGNORED-NETS", "10.0.0.0/8")
+	t.Setenv("INPUT_BOOTSTRAP-ALLOWLIST", "true")
+	warnRemovedAllowlistInputs() // emits ::warning to stderr; must not panic
+	// Unset case: no env → still no panic.
+	t.Setenv("INPUT_IGNORED-NETS", "")
+	t.Setenv("INPUT_BOOTSTRAP-ALLOWLIST", "")
+	warnRemovedAllowlistInputs()
+}

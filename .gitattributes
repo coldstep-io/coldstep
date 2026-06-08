@@ -14,3 +14,7 @@ action.yml text eol=lf
 .cursor/hooks.json text eol=lf
 go.mod text eol=lf
 go.sum text eol=lf
+# esbuild bundles are committed LF; the "dist matches src" CI gate rebuilds on
+# Linux (LF), so a Windows CRLF checkin would falsely fail it. Pin LF.
+dist/**/*.js text eol=lf
+dist/**/*.map text eol=lf

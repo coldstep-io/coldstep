@@ -132,7 +132,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode. |
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for stricter **report-model** integrity (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-report build-model`). |
 | `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
-| `ignored-nets` / `no-default-ignored-nets` | Optional RFC1918-style ignore merges for policy and defend bypass (see `action.yml`). |
+| `no-default-ignored-nets` | Drop the implicit 10.0.0.0/8 + 172.16.0.0/12 ignores. Add your own ignores as `!CIDR` entries in `allow` / `allow-file`. |
 
 ---
 
@@ -187,7 +187,7 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 
 1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with a single **`uses:`** block before your build steps (node24 `pre` starts the agent; `post` flushes the digest at job end) — see **[QUICK_START](QUICK_START.md)**.
 2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
-3. Prefer **`allowed-*-file`** for long lists; **`bootstrap-allowlist: true`** only if you explicitly want vendored bootstrap packs merged (**default off**).
+3. Prefer **`allow-file`** for long lists (one entry per line; `!CIDR` to ignore a net). Reference starter packs live in **`scripts/coldstep_bootstrap/`** — copy the lines you want into your own `allow-file`.
 
 ---
 
