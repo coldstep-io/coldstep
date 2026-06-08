@@ -231,3 +231,32 @@ func TestMissingRequiredTypes(t *testing.T) {
 		t.Fatalf("enhanced should report missing udp/http/tls/proc_fork/fs_event")
 	}
 }
+
+// TestRenders_SanitizeInjectedCells guards against Markdown table injection from
+// attacker-influenced JSONL fields (process comm, destination FQDN/SNI, deny
+// reason): a `|`, backtick, newline, or `<` must not survive into a table cell.
+func TestRenders_SanitizeInjectedCells(t *testing.T) {
+	jsonl := strings.Join([]string{
+		`{"type":"tcp","fqdn":"evil|x.example.com","dst":"1.2.3.4","dport":443}`,
+		`{"type":"deny","comm":"sh|` + "`" + `id` + "`" + `","protocol":"tcp","dst":"a|b.com","dport":80,"reason":"x|y","hook_family":"cgroup","mode":"defend"}`,
+	}, "\n") + "\n"
+	a, err := Parse(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for name, out := range map[string]string{"detailed": a.RenderDetailed(), "simple": a.RenderSimple()} {
+		// No raw pipe from data should appear beyond the table delimiters. The
+		// injected `evil|x` / `sh|`+backtick must be neutralized: no backtick-id,
+		// and the dest/comm pipes replaced by the middot.
+		if strings.Contains(out, "evil|x.example.com") {
+			t.Errorf("%s: raw injected pipe survived in dest:\n%s", name, out)
+		}
+		if strings.Contains(out, "`id`") {
+			t.Errorf("%s: raw backtick survived in comm:\n%s", name, out)
+		}
+	}
+	det := a.RenderDetailed()
+	if !strings.Contains(det, "evil·x.example.com") {
+		t.Errorf("expected sanitized dest (pipe->middot) in detailed:\n%s", det)
+	}
+}
