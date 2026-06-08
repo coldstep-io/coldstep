@@ -255,14 +255,6 @@ function readFileTokensSafe(filePaths: string, baseDir: string): string[] {
   return tokens;
 }
 
-function readSingleFileSafe(filePath: string): string[] {
-  try {
-    return splitTokens(fs.readFileSync(filePath, 'utf8'));
-  } catch {
-    return [];
-  }
-}
-
 // IPv4 literal or CIDR: x.x.x.x or x.x.x.x/nn
 const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
 
@@ -309,34 +301,37 @@ export interface AllowlistResult {
 }
 
 export function resolveAllowlist(baseDir: string): AllowlistResult {
-  const actionPath = actionRootPath();
-
   const tokens = [
     ...splitTokens(core.getInput('allow')),
     ...readFileTokensSafe(core.getInput('allow-file'), baseDir),
   ];
   const parsed = classifyTokens(tokens);
 
-  if (inputBoolDefault('bootstrap-allowlist', false)) {
-    const bsDir = path.join(actionPath, 'scripts', 'coldstep_bootstrap');
-    const bsDomains = readSingleFileSafe(path.join(bsDir, 'allowlist-domains-v1.txt'));
-    parsed.allowedDomains.push(...bsDomains);
-    parsed.allowedHosts.push(...bsDomains);
-    const bsIPs = readSingleFileSafe(path.join(bsDir, 'allowlist-ips-v1.txt'));
-    parsed.allowedIPs.push(...bsIPs);
-  }
-
-  const ignoredNetsTokens = [
-    ...splitTokens(core.getInput('ignored-nets')),
-    ...readFileTokensSafe(core.getInput('ignored-nets-file'), baseDir),
-  ];
-
+  // Ignored nets come solely from `!CIDR` entries in allow / allow-file
+  // (classifyTokens routed them into parsed.ignoredNets). The ignored-nets,
+  // ignored-nets-file, and bootstrap-allowlist inputs were removed.
   return {
     allowedIPs: mergeUnique(parsed.allowedIPs),
-    ignoredNets: mergeUnique(parsed.ignoredNets, ignoredNetsTokens),
+    ignoredNets: mergeUnique(parsed.ignoredNets),
     allowedHosts: mergeUnique(parsed.allowedHosts),
     allowedDomains: mergeUnique(parsed.allowedDomains),
   };
+}
+
+// warnRemovedAllowlistInputs emits a warning when a consumer still sets an
+// input removed in the allowlist consolidation (ignored-nets, ignored-nets-file,
+// bootstrap-allowlist), turning a silent breakage into an actionable message.
+export function warnRemovedAllowlistInputs(): void {
+  const removed: Array<[string, string]> = [
+    ['ignored-nets', 'put `!CIDR` entries in `allow`'],
+    ['ignored-nets-file', 'put `!CIDR` lines in an `allow-file`'],
+    ['bootstrap-allowlist', 'copy the reference packs into your own `allow-file`'],
+  ];
+  for (const [name, repl] of removed) {
+    if (core.getInput(name).trim() !== '') {
+      core.warning(`coldstep: input \`${name}\` was removed in the allowlist consolidation; ${repl}`);
+    }
+  }
 }
 
 // --- Feature-gate resolution (detect-profile only) ---
