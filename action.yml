@@ -45,10 +45,10 @@ inputs:
 
   detect-profile:
     description: >-
-      Detect mode only: standard (default) or enhanced. Enhanced merges default feature gates
-      (proc_tree=1, tls_sni=1, fs_events=1) when each key is unset in feature-gates,
-      and sets COLDSTEP_DETECT_PROFILE for the agent. Use the same value when running
-      coldstep-report build-model (COLDSTEP_DETECT_PROFILE) so integrity scoring matches the run.
+      Detect mode only: standard (default) or enhanced. Enhanced enables the
+      proc_tree / tls_sni / fs_events streams and sets COLDSTEP_DETECT_PROFILE for
+      the agent. Use the same value when running coldstep-action assert-integrity
+      (or stop --strict) so the required-event-type gate matches the run.
     required: false
     default: standard
 
