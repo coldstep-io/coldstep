@@ -128,7 +128,7 @@ When CI fails on BPF verifier or generated-stub drift, run `bash scripts/agent-l
 
 ## Conventions
 
-- **Go version:** `go 1.25.10` pinned in `go.mod`; CI uses `setup-go` with `go-version-file: go.mod`. Don't bump the minor in code without updating workflows.
+- **Go version:** `go 1.25.11` pinned in `go.mod`; CI uses `setup-go` with `go-version-file: go.mod`. Don't bump the minor in code without updating workflows.
 - **`gofmt` is required** on every tracked `.go` file in the working tree.
 - **Encoding:** repo is UTF-8 / LF. `.editorconfig` requires tabs for Go, 2-space spaces for YAML/TS/JSON. `scripts/check-encoding.sh` blocks U+FFFD bytes (`EF BF BD`) and a specific mojibake sequence — common cause is shell quoting damage from PowerShell `gh pr edit --body "…"`; use `--body-file` and templates under `.github/pr-bodies/` instead.
 - **No vendored guard code.** Implementation is clean-room.
