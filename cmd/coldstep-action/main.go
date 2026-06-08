@@ -440,9 +440,17 @@ func runStop(cfg stopConfig) error {
 	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)
 
 	if reportJobSummary {
-		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(body) != "" {
-			safe := sanitizeDigestForMarkdown(body)
-			block := "## Coldstep - digest (exec / network / defend)\n\n" + safe
+		// Job summary now comes from the pure-markdown generator's simple report
+		// (rendered from the JSONL source of truth), not the agent's
+		// .coldstep-detect.md digest. Fall back to the legacy digest body only
+		// when no event stream was parsed (e.g. agent never started).
+		block := ""
+		if reportAgg != nil {
+			block = reportAgg.RenderSimple()
+		} else if strings.TrimSpace(body) != "" {
+			block = "## Coldstep - digest (exec / network / defend)\n\n" + sanitizeDigestForMarkdown(body)
+		}
+		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(block) != "" {
 			if !strings.HasSuffix(block, "\n") {
 				block += "\n"
 			}
