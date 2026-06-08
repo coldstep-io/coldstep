@@ -117,39 +117,20 @@ jobs:
           report: none
           fail-on-error: 'false'
 
-      - name: Build report model
-        env:
-          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
-          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-        run: ./bin/coldstep-report build-model
-
       - name: Apply Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.fail_on_blindness == true
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: ./bin/coldstep-report assert-integrity
-
-      - name: Render step summary
-        if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: ./bin/coldstep-report render-summary
-
-      - name: Render HTML report
-        if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_REPORT_HTML_OUT: ${{ github.workspace }}/coldstep-redteam-report.html
-        run: ./bin/coldstep-report render-html
+        run: ./bin/coldstep-action assert-integrity --in "${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
 
       - name: Upload Redteam Report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
         with:
           name: coldstep-redteam-report
-          path: ${{ github.workspace }}/coldstep-redteam-report.html
+          path: ${{ github.workspace }}/.coldstep-report.md
           retention-days: 7
           overwrite: true
+          include-hidden-files: true
+          if-no-files-found: warn
 
   # H20 — red-team validation integration tests.
   # Asserts coldstep surfaces the 12 v0.4.0 security-review attack paths as
