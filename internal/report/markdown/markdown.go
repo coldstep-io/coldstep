@@ -455,7 +455,7 @@ func (a *Aggregate) RenderSimple() string {
 	if top := a.topDests(3); len(top) > 0 {
 		parts := make([]string, len(top))
 		for i, d := range top {
-			parts[i] = fmt.Sprintf("%s (%d)", d.name, d.count)
+			parts[i] = fmt.Sprintf("%s (%d)", mdCell(d.name), d.count)
 		}
 		fmt.Fprintf(&b, "\nTop destinations: %s\n", strings.Join(parts, " · "))
 	}
@@ -470,7 +470,7 @@ func (a *Aggregate) RenderDetailed() string {
 	fmt.Fprintf(&b, "\n## Verdict\n\n%s · mode %s · %d events\n", a.verdict(), a.modeLabel(), a.TotalEvents)
 	if a.MetaSeen {
 		fmt.Fprintf(&b, "\nagent %s · kernel %s · profile %s · allowlist %d IP(s) / %d entr(ies)\n",
-			dashIfEmpty(a.AgentVersion), dashIfEmpty(a.KernelRelease), dashIfEmpty(a.DetectProfile),
+			mdCell(dashIfEmpty(a.AgentVersion)), mdCell(dashIfEmpty(a.KernelRelease)), mdCell(dashIfEmpty(a.DetectProfile)),
 			a.AllowlistIPs, a.AllowlistEntries)
 	}
 	if a.RunnerEnv == "dind" {
@@ -494,7 +494,7 @@ func (a *Aggregate) RenderDetailed() string {
 		fmt.Fprintln(&b, "\n| destination | egress events |")
 		fmt.Fprintln(&b, "|---|---|")
 		for _, d := range a.topDests(100) {
-			fmt.Fprintf(&b, "| %s | %d |\n", d.name, d.count)
+			fmt.Fprintf(&b, "| %s | %d |\n", mdCell(d.name), d.count)
 		}
 	}
 
@@ -506,7 +506,7 @@ func (a *Aggregate) RenderDetailed() string {
 		fmt.Fprintln(&b, "|---|---|---|---|---|---|")
 		for _, d := range a.Denies {
 			fmt.Fprintf(&b, "| %s | %s | %s | %d | %s | %s |\n",
-				d.Comm, d.Protocol, d.Dst, d.Dport, d.Reason, dashIfEmpty(d.HookFamily))
+				mdCell(d.Comm), mdCell(d.Protocol), mdCell(d.Dst), d.Dport, mdCell(d.Reason), mdCell(dashIfEmpty(d.HookFamily)))
 		}
 	}
 
@@ -589,4 +589,19 @@ func dashIfEmpty(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// mdCell sanitizes a string for safe interpolation into a Markdown table cell.
+// JSONL string fields (process comm, destination FQDN/SNI, deny reason) are
+// influenced by observed traffic and process state, so a raw `|`, backtick,
+// newline, or `<` would break the table or inject content into the Job Summary
+// / report artifact. Mirrors the old digest's sanitizeCell (lost when the
+// report pipeline was rewritten).
+func mdCell(s string) string {
+	s = strings.ReplaceAll(s, "\r", "")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.ReplaceAll(s, "|", "·")
+	s = strings.ReplaceAll(s, "`", "'")
+	s = strings.ReplaceAll(s, "<", "‹")
+	return strings.TrimSpace(s)
 }
