@@ -257,10 +257,11 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The action now downloads only the coldstep agent binary from releases; the report tool
-      # used by detect-mode steps below is pure Go and can be built locally without the BPF toolchain.
-      - name: Build coldstep-report
-        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-report ./cmd/coldstep-report
+      # The action downloads only the coldstep agent binary from releases; the
+      # report + integrity tooling used by detect-mode steps below now lives in
+      # coldstep-action (pure Go), built locally without the BPF toolchain.
+      - name: Build coldstep-action
+        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-action ./cmd/coldstep-action
 
       - name: Start Coldstep (detect mode)
         uses: ./
@@ -310,18 +311,11 @@ jobs:
           report: none
           fail-on-error: 'false'
 
-      - name: Build report model
-        env:
-          COLDSTEP_REPORT_CURRENT_JSONL: ${{ github.workspace }}/.coldstep-events.jsonl
-          COLDSTEP_REPORT_MODEL_OUT: ${{ github.workspace }}/.coldstep-report-model.json
-          COLDSTEP_DETECT_PROFILE: enhanced
-        run: ./bin/coldstep-report build-model
-
       - name: Apply Anti-Blindness Gating
         if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
         env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: ./bin/coldstep-report assert-integrity
+          COLDSTEP_DETECT_PROFILE: enhanced
+        run: ./bin/coldstep-action assert-integrity --in "${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
 
 
 
@@ -395,30 +389,20 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          if ! ./bin/coldstep-report diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "coldstep-report diff failed"
+          if ! ./bin/coldstep-action diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
+            fail_diff_unavailable "coldstep-action diff failed"
           fi
 
-          # Re-build the report model now that the baseline JSONL is on disk.
-          ./bin/coldstep-report build-model --current "${current_file}" --baseline "${baseline_file}" --out "${GITHUB_WORKSPACE}/.coldstep-report-model.json"
-
-      - name: Render IP classification summary
+      - name: Upload detailed markdown report
         if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: |
-          set -euo pipefail
-          if [[ -f "${COLDSTEP_REPORT_MODEL_IN}" ]]; then
-            ./bin/coldstep-report render-ip-summary --in "${COLDSTEP_REPORT_MODEL_IN}"
-          else
-            echo "::warning::report model missing, skipping IP classification summary"
-          fi
-
-      - name: Render detect summary
-        if: always()
-        env:
-          COLDSTEP_REPORT_MODEL_IN: ${{ github.workspace }}/.coldstep-report-model.json
-        run: ./bin/coldstep-report render-summary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        with:
+          name: coldstep-detect-report-md-ubuntu-latest
+          path: ${{ github.workspace }}/.coldstep-report.md
+          retention-days: 14
+          include-hidden-files: true
+          overwrite: true
+          if-no-files-found: warn
       - name: Persist detect JSONL baseline artifact
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
