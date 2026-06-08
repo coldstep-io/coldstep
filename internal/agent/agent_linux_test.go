@@ -42,24 +42,6 @@ func fillTestDenyRawV4(tgid, tid uint32, comm string, proto, reason uint8, ip ne
 	return raw
 }
 
-// stableRingDropKinds lists every stats.addDropped kind used on ring/decode/jsonl paths in agent_linux_*.go (readers + decoders).
-func stableRingDropKinds() []string {
-	return []string{
-		"exec_decode", "exec_jsonl",
-		"proc_fork_decode", "proc_fork_jsonl",
-		"fs_decode", "fs_jsonl", "fs_cap",
-		"tcp_decode", "tcp_jsonl",
-		"tcp_result_decode", "tcp_result_jsonl",
-		"tcp_state_decode", "tcp_state_jsonl",
-		"tls_decode", "tls_jsonl",
-		"tls_sni_parse",
-		"udp_decode", "udp_jsonl",
-		"http_decode", "http_jsonl",
-		"http_prefix_parse",
-		"dns_decode",
-	}
-}
-
 func TestRun_DefendAllowlistStartFailures(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
