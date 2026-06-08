@@ -4,9 +4,6 @@ package agent
 
 import (
 	"encoding/binary"
-
-	"github.com/coldstep-io/coldstep/internal/report"
-	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
 type execEvent struct {
@@ -339,17 +336,5 @@ func denyReasonLabel(reason uint8) string {
 		return "dst_not_allowlisted"
 	default:
 		return "unknown"
-	}
-}
-
-func denyDigestRowFromEvent(ev telemetry.DenyEvent) report.DenyDigestRow {
-	return report.DenyDigestRow{
-		TS:       ev.TS,
-		PID:      ev.PID,
-		Comm:     ev.Comm,
-		Protocol: ev.Protocol,
-		Dst:      ev.Dst,
-		Dport:    ev.Dport,
-		Reason:   ev.Reason,
 	}
 }

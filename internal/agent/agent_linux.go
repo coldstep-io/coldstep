@@ -38,8 +38,6 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
-	"github.com/coldstep-io/coldstep/internal/proctree"
-	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -65,9 +63,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// pre-offload ClientHello sniff is reclassified as Confidence=unknown
 	// with confidence_reason="ktls" before it lands in JSONL.
 	ktlsTr := newKTLSTracker()
-	maxRows := report.DefaultMaxRowsPerSection
-	rows := newRowBuffer(maxRows)
-	sectionState := newNetworkSectionState()
 	defendState := newDefendState()
 	canary := newCanaryState()
 	var seq telemetry.SeqGen
@@ -75,10 +70,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	procTreeGate := config.FeatureGateEnabled(cfg.FeatureGates, "proc_tree")
 	tlsSNIGate := config.FeatureGateEnabled(cfg.FeatureGates, "tls_sni")
 	fsGate := config.FeatureGateEnabled(cfg.FeatureGates, "fs_events")
-	var forkBuf *forkEdgeBuffer
-	var forkState *forkSectionState
-	var fsRowBuf *fsRowBuffer
-	var fsSt *fsSectionState
 	signer, err := telemetry.NewSigner(cfg.SigningKey)
 	if err != nil {
 		return fmt.Errorf("setup telemetry signer: %w", err)
@@ -102,11 +93,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 		{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: "not loaded"},
 	}
 
-	detectDest := cfg.StepSummaryPath
-	if cfg.DetectLogPath != "" {
-		detectDest = cfg.DetectLogPath
-	}
-
 	// defendCompiled holds the resolved allowlist (IPv4 set + unresolved domain
 	// list). It is populated by compileDefendAllowlist below; declared up here
 	// so the shutdown digest defer can surface IP count + unresolved domains.
@@ -125,33 +111,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 		sum.CompatWarnings = compatWarnings
 		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum, signer); err != nil {
 			slog.Warn("telemetry summary", "err", err)
-		}
-		if detectDest != "" {
-			execRows, tcpRows, udpRows, httpRows, tlsRows := rows.snapshot()
-			seqLast := seq.Last()
-			var forkEdges []proctree.Edge
-			forkTrunc := false
-			forkSnap := forkSectionSnapshot{}
-			if forkBuf != nil {
-				forkEdges, forkTrunc = forkBuf.snapshot()
-			}
-			if forkState != nil {
-				forkSnap = forkState.snapshot()
-			}
-			var fsDigestRows []report.FSDigestRow
-			fsSnap := fsSectionSnapshot{}
-			if fsRowBuf != nil {
-				fsDigestRows = fsRowBuf.snapshot()
-			}
-			if fsSt != nil {
-				fsSnap = fsSt.snapshot()
-			}
-			in := buildDigestInput(cfg, stats, bpfSt, execRows, tcpRows, udpRows, httpRows, tlsRows, cfg.EventsLogPath, seqLast, maxRows, sectionState.snapshot(), defendState.snapshot(), forkEdges, forkTrunc, forkSnap, procTreeGate, tlsSNIGate, fsDigestRows, fsSnap, fsGate, canary.snapshot())
-			in.PolicyCounts = sum.PolicyCounts
-			in.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
-			if err := report.WriteDetectDigest(detectDest, in); err != nil {
-				slog.Warn("detect digest", "err", err)
-			}
 		}
 		// H2: emit a shutdown MetaEvent line carrying per-channel ringbuf
 		// reserve-failure counts under `dropped_events`. The startup meta is
@@ -824,8 +783,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var forkObjs *tracefork.TraceforkObjects
 	var forkLnk link.Link
 	if procTreeGate {
-		forkBuf = newForkEdgeBuffer(5000)
-		forkState = newForkSectionState()
 		objs := new(tracefork.TraceforkObjects)
 		if err := tracefork.LoadTraceforkObjects(objs, nil); err != nil {
 			slog.Info("sched_process_fork tracing disabled", "err", err)
@@ -878,8 +835,6 @@ func Run(ctx context.Context, cfg config.Config) error {
 	var fsObjs *tracefs.TracefsObjects
 	var fsLnk link.Link
 	if fsGate {
-		fsRowBuf = newFSRowBuffer(maxRows)
-		fsSt = newFSSectionState()
 		objs := new(tracefs.TracefsObjects)
 		if err := tracefs.LoadTracefsObjects(objs, nil); err != nil {
 			slog.Info("fs tracing disabled", "err", err)
@@ -1099,10 +1054,10 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	// Each reader goroutine sends one error on exit; buffer must fit all sends before wg.Wait returns.
 	readerCount := 1
-	if forkRd.R != nil && forkBuf != nil && forkState != nil {
+	if forkRd.R != nil {
 		readerCount++
 	}
-	if fsRd.R != nil && fsRowBuf != nil && fsSt != nil {
+	if fsRd.R != nil {
 		readerCount++
 	}
 	if connRd.R != nil {
@@ -1177,22 +1132,22 @@ func Run(ctx context.Context, cfg config.Config) error {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		sendReaderErr(readExecRing(runCtx, cfg, execRd.R, stats, rows, &seq, &jsonlMu, signer))
+		sendReaderErr(readExecRing(runCtx, cfg, execRd.R, stats, &seq, &jsonlMu, signer))
 	}()
 
-	if forkRd.R != nil && forkBuf != nil && forkState != nil {
+	if forkRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readForkRing(runCtx, cfg, forkRd.R, stats, forkBuf, forkState, &seq, &jsonlMu, signer))
+			sendReaderErr(readForkRing(runCtx, cfg, forkRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 
-	if fsRd.R != nil && fsRowBuf != nil && fsSt != nil {
+	if fsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readFSRing(runCtx, cfg, fsRd.R, stats, fsRowBuf, fsSt, &seq, &jsonlMu, signer))
+			sendReaderErr(readFSRing(runCtx, cfg, fsRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 
@@ -1200,7 +1155,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, canary, signer))
+			sendReaderErr(readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, &seq, &jsonlMu, canary, signer))
 		}()
 	}
 
@@ -1335,28 +1290,28 @@ func Run(ctx context.Context, cfg config.Config) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, rows, &seq, &jsonlMu, sectionState, signer))
+			sendReaderErr(readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if httpRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer))
+			sendReaderErr(readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if tlsRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, rows, &seq, &jsonlMu, sectionState, signer, ktlsTr))
+			sendReaderErr(readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, &seq, &jsonlMu, signer, ktlsTr))
 		}()
 	}
 	if tcpStateRd.R != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, sectionState, signer))
+			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer))
 		}()
 	}
 	if ioUringRd.R != nil {

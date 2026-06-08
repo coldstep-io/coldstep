@@ -23,7 +23,6 @@ import (
 
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
-	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -43,75 +42,6 @@ func fillTestDenyRawV4(tgid, tid uint32, comm string, proto, reason uint8, ip ne
 	return raw
 }
 
-func TestRun_BuildsDigestInputWithUDPHTTPSectionState(t *testing.T) {
-	stats := newRunStats()
-	stats.addExec()
-	stats.addTCP(policy.ClassAllowed)
-	stats.addUDP(policy.ClassMonitor)
-	stats.addUDP(policy.ClassMonitor)
-	stats.addHTTP(policy.ClassNotListed)
-	stats.addDropped("udp_decode")
-	stats.addDropped("udp_decode")
-	stats.addDropped("http_jsonl")
-
-	state := newNetworkSectionState()
-	state.addUDPReaderError()
-	state.addUDPDecodeError()
-	state.addHTTPReaderError()
-	state.addHTTPDecodeError()
-	state.addHTTPDecodeError()
-
-	in := buildDigestInput(
-		config.Config{Mode: config.ModeDetect},
-		stats,
-		[]telemetry.BPFStatus{
-			{Name: "sched_process_exec", OK: true},
-			{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: "disabled"},
-		},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		".coldstep-events.jsonl",
-		4,
-		120,
-		state.snapshot(),
-		defendSnapshot{},
-		nil,
-		false,
-		forkSectionSnapshot{},
-		false,
-		false,
-		nil,
-		fsSectionSnapshot{},
-		false,
-		canarySnapshot{},
-	)
-
-	if !in.UDPDegradedHook {
-		t.Fatal("expected UDPDegradedHook=true when raw_tp hook is degraded")
-	}
-	if !in.HTTPDegradedHook {
-		t.Fatal("expected HTTPDegradedHook=true when raw_tp hook is degraded")
-	}
-	if !in.TLSDegradedHook {
-		t.Fatal("expected TLSDegradedHook=true when raw_tp hook is degraded")
-	}
-	if in.UDPReaderErrors != 2 {
-		t.Fatalf("UDPReaderErrors=%d want 2 (reader+decode)", in.UDPReaderErrors)
-	}
-	if in.HTTPReaderErrors != 3 {
-		t.Fatalf("HTTPReaderErrors=%d want 3 (reader+decode)", in.HTTPReaderErrors)
-	}
-	if in.UDPTotal != 2 || in.HTTPTotal != 1 {
-		t.Fatalf("totals udp=%d http=%d", in.UDPTotal, in.HTTPTotal)
-	}
-	if in.DroppedCounts["udp_decode"] != 2 || in.DroppedCounts["http_jsonl"] != 1 {
-		t.Fatalf("DroppedCounts not propagated: %+v", in.DroppedCounts)
-	}
-}
-
 // stableRingDropKinds lists every stats.addDropped kind used on ring/decode/jsonl paths in agent_linux_*.go (readers + decoders).
 func stableRingDropKinds() []string {
 	return []string{
@@ -127,187 +57,6 @@ func stableRingDropKinds() []string {
 		"http_decode", "http_jsonl",
 		"http_prefix_parse",
 		"dns_decode",
-	}
-}
-
-func TestRun_DroppedKinds_PropagateToDigestInput(t *testing.T) {
-	stats := newRunStats()
-	for _, k := range stableRingDropKinds() {
-		stats.addDropped(k)
-	}
-
-	in := buildDigestInput(
-		config.Config{Mode: config.ModeDetect},
-		stats,
-		[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		"",
-		1,
-		120,
-		networkSectionSnapshot{},
-		defendSnapshot{},
-		nil,
-		false,
-		forkSectionSnapshot{},
-		false,
-		false,
-		nil,
-		fsSectionSnapshot{},
-		false,
-		canarySnapshot{},
-	)
-
-	for _, k := range stableRingDropKinds() {
-		if in.DroppedCounts[k] != 1 {
-			t.Fatalf("drop kind %s: want count 1, got %+v", k, in.DroppedCounts)
-		}
-	}
-}
-
-func TestRun_BuildsDigestInputWithHealthyHookAndZeroSeq(t *testing.T) {
-	stats := newRunStats()
-	stats.addUDP(policy.ClassMonitor)
-	stats.addHTTP(policy.ClassMonitor)
-
-	in := buildDigestInput(
-		config.Config{Mode: config.ModeDetect},
-		stats,
-		[]telemetry.BPFStatus{
-			{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: true},
-		},
-		nil, nil, nil, nil, nil,
-		"",
-		0,
-		120,
-		networkSectionSnapshot{},
-		defendSnapshot{},
-		nil,
-		false,
-		forkSectionSnapshot{},
-		false,
-		false,
-		nil,
-		fsSectionSnapshot{},
-		false,
-		canarySnapshot{},
-	)
-
-	if in.UDPDegradedHook || in.HTTPDegradedHook || in.TLSDegradedHook {
-		t.Fatal("expected degraded flags false when hook is healthy")
-	}
-	if in.SeqFirst != 0 || in.SeqLast != 0 {
-		t.Fatalf("expected zero seq range when seqLast is zero, got first=%d last=%d", in.SeqFirst, in.SeqLast)
-	}
-}
-
-func TestRun_BuildsDigestInputMissingHookDefaultsDegraded(t *testing.T) {
-	stats := newRunStats()
-	in := buildDigestInput(
-		config.Config{Mode: config.ModeDetect},
-		stats,
-		[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
-		nil, nil, nil, nil, nil,
-		"",
-		1,
-		120,
-		networkSectionSnapshot{},
-		defendSnapshot{},
-		nil,
-		false,
-		forkSectionSnapshot{},
-		false,
-		false,
-		nil,
-		fsSectionSnapshot{},
-		false,
-		canarySnapshot{},
-	)
-	if !in.UDPDegradedHook || !in.HTTPDegradedHook || !in.TLSDegradedHook {
-		t.Fatal("expected degraded flags true when raw_tp hook status is missing")
-	}
-}
-
-func TestRun_DefendBackendMetadataReflectsActualBackend(t *testing.T) {
-	t.Parallel()
-
-	cases := []struct {
-		name         string
-		cfg          defendBackendConfig
-		lsmAttachErr error
-		wantBackend  string
-		wantMode     string
-	}{
-		{
-			name: "lsm_backend",
-			cfg: defendBackendConfig{
-				modeDefend: true,
-				haveLSM:    true,
-			},
-			wantBackend: defendBackendLSM,
-			wantMode:    defendModeLSM,
-		},
-		{
-			name: "cgroup_fallback_after_lsm_attach_error",
-			cfg: defendBackendConfig{
-				modeDefend: true,
-				haveLSM:    true,
-			},
-			lsmAttachErr: errors.New("lsm attach failed"),
-			wantBackend:  defendBackendCgroup,
-			wantMode:     defendModeCgroup,
-		},
-		{
-			name: "cgroup_backend_when_lsm_unavailable",
-			cfg: defendBackendConfig{
-				modeDefend: true,
-				haveLSM:    false,
-			},
-			wantBackend: defendBackendCgroup,
-			wantMode:    defendModeCgroup,
-		},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			outcome := chooseDefendBackend(tc.cfg, tc.lsmAttachErr)
-			if outcome.backend != tc.wantBackend {
-				t.Fatalf("backend=%q want %q", outcome.backend, tc.wantBackend)
-			}
-
-			stats := newRunStats()
-			state := newDefendState()
-			state.setModeAndAllowlist(defendModeForBackend(outcome.backend), 1, 0)
-
-			in := buildDigestInput(
-				config.Config{Mode: config.ModeDefend},
-				stats,
-				[]telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}},
-				nil, nil, nil, nil, nil,
-				"",
-				0,
-				120,
-				networkSectionSnapshot{},
-				state.snapshot(),
-				nil,
-				false,
-				forkSectionSnapshot{},
-				false,
-				false,
-				nil,
-				fsSectionSnapshot{},
-				false,
-				canarySnapshot{},
-			)
-
-			if in.DefendMode != tc.wantMode {
-				t.Fatalf("DefendMode=%q want %q", in.DefendMode, tc.wantMode)
-			}
-		})
 	}
 }
 
@@ -402,13 +151,6 @@ func TestRun_DefendDenyEventEmission(t *testing.T) {
 	}
 	if state.denyCount() != 1 {
 		t.Fatalf("denyCount=%d want 1", state.denyCount())
-	}
-	first := state.firstDeny()
-	if first == nil {
-		t.Fatal("expected first deny row to be recorded")
-	}
-	if first.Protocol != "tcp" || first.Dst != "1.2.3.4" || first.Dport != 443 || first.Reason != "dst_not_allowlisted" {
-		t.Fatalf("unexpected first deny row: %+v", *first)
 	}
 }
 
@@ -750,48 +492,6 @@ func TestRun_DetectModeUnchangedForDefendAllowlistCompile(t *testing.T) {
 	}
 }
 
-func TestRun_DenyMappings(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		proto    uint8
-		reason   uint8
-		wantProt string
-		wantWhy  string
-	}{
-		{proto: denyProtoTCP, reason: denyReasonDstNotAllowlisted, wantProt: "tcp", wantWhy: "dst_not_allowlisted"},
-		{proto: denyProtoUDP, reason: denyReasonDstNotAllowlisted, wantProt: "udp", wantWhy: "dst_not_allowlisted"},
-		{proto: 99, reason: 77, wantProt: "unknown", wantWhy: "unknown"},
-	}
-	for _, tc := range cases {
-		gotProt := denyProtocolLabel(tc.proto)
-		gotWhy := denyReasonLabel(tc.reason)
-		if gotProt != tc.wantProt || gotWhy != tc.wantWhy {
-			t.Fatalf("proto=%d reason=%d got=(%s,%s) want=(%s,%s)", tc.proto, tc.reason, gotProt, gotWhy, tc.wantProt, tc.wantWhy)
-		}
-	}
-
-	row := denyDigestRowFromEvent(telemetry.DenyEvent{
-		TS:       "2026-04-10T00:00:00Z",
-		PID:      123,
-		Comm:     "curl",
-		Protocol: "tcp",
-		Dst:      "8.8.8.8",
-		Dport:    53,
-		Reason:   "dst_not_allowlisted",
-	})
-	if row != (report.DenyDigestRow{
-		TS:       "2026-04-10T00:00:00Z",
-		PID:      123,
-		Comm:     "curl",
-		Protocol: "tcp",
-		Dst:      "8.8.8.8",
-		Dport:    53,
-		Reason:   "dst_not_allowlisted",
-	}) {
-		t.Fatalf("unexpected deny digest row: %+v", row)
-	}
-}
-
 func TestPreferRunError_DefendDenyWinsOverGeneric(t *testing.T) {
 	generic := fmt.Errorf("boom")
 	deny := newDefendDenyError(telemetry.DenyEvent{
@@ -958,51 +658,6 @@ func TestCapabilityEnabled_RequiresGateAndHealthyHook(t *testing.T) {
 func TestCapabilityEnabled_MissingHookIsDisabled(t *testing.T) {
 	if capabilityEnabled(true, []telemetry.BPFStatus{{Name: "sched_process_exec", OK: true}}, "sched_process_fork") {
 		t.Fatal("expected capability disabled when hook status is missing")
-	}
-}
-
-func TestRun_BuildsDigestInputWithFSSectionState(t *testing.T) {
-	stats := newRunStats()
-	stats.addFS()
-	stats.addFS()
-
-	in := buildDigestInput(
-		config.Config{Mode: config.ModeDetect},
-		stats,
-		[]telemetry.BPFStatus{
-			{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: "disabled"},
-		},
-		nil, nil, nil, nil, nil,
-		"",
-		0,
-		120,
-		networkSectionSnapshot{},
-		defendSnapshot{},
-		nil,
-		false,
-		forkSectionSnapshot{},
-		false,
-		false,
-		[]report.FSDigestRow{{TS: "t", PID: 1, Comm: "bash", Op: "create", Path: "/tmp/x"}},
-		fsSectionSnapshot{readErrors: 1},
-		true,
-		canarySnapshot{},
-	)
-
-	if !in.FSGate {
-		t.Fatal("FSGate should be true")
-	}
-	if in.FSTotal != 2 {
-		t.Fatalf("FSTotal=%d want 2", in.FSTotal)
-	}
-	if !in.FSDegradedHook {
-		t.Fatal("FSDegradedHook should be true when fs hook is degraded")
-	}
-	if in.FSReaderErrors != 1 {
-		t.Fatalf("FSReaderErrors=%d want 1", in.FSReaderErrors)
-	}
-	if len(in.FSRows) != 1 || in.FSRows[0].Path != "/tmp/x" {
-		t.Fatalf("FSRows unexpected: %+v", in.FSRows)
 	}
 }
 

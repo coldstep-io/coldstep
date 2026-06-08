@@ -3,13 +3,10 @@
 // State held by a single agent.Run invocation, split across three files:
 //
 //   - agent_linux_state.go (this file): runStats (cumulative per-run counters),
-//     newRunStats, the lock-protected accessors, snapshotSummary, and rowBuffer
-//     + trimRing (kept here because the row buffer feeds dropped-event
-//     accounting back into runStats).
-//   - agent_linux_state_sections.go: per-section state structs that don't
-//     touch runStats directly — fork/fs/network sections, the BPF wire-format
-//     constants, the ring-read retry backoff, the integrity canary, and the
-//     small fixed-cap row/edge buffers consumed by them.
+//     newRunStats, the lock-protected accessors, snapshotSummary, and the
+//     generic trimRing helper.
+//   - agent_linux_state_sections.go: the BPF wire-format size constants, the
+//     ring-read retry backoff, and the integrity canary.
 //   - agent_linux_state_defend.go: defend state, backend selection
 //     (LSM vs cgroup), and the typed defend deny error used to fail-fast.
 
@@ -23,7 +20,6 @@ import (
 	"time"
 
 	"github.com/coldstep-io/coldstep/internal/policy"
-	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -1040,20 +1036,6 @@ func (s *runStats) snapshotPolicyCounts() map[string]int {
 	return pc
 }
 
-type rowBuffer struct {
-	mu   sync.Mutex
-	max  int
-	exec []report.ExecDigestRow
-	tcp  []report.TCPDigestRow
-	udp  []report.UDPDigestRow
-	http []report.HTTPDigestRow
-	tls  []report.TLSDigestRow
-}
-
-func newRowBuffer(max int) *rowBuffer {
-	return &rowBuffer{max: max}
-}
-
 // trimRing trims s to at most max entries (drops oldest); returns the number of dropped entries
 // so callers can record the drop in stats (e.g. runStats.addDropped("<kind>_ring_trim")).
 func trimRing[T any](s *[]T, max int) int {
@@ -1064,70 +1046,4 @@ func trimRing[T any](s *[]T, max int) int {
 	*s = (*s)[droppedN:]
 	slog.Debug("telemetry row buffer trimmed (ring full)", "dropped", droppedN, "retained", max)
 	return droppedN
-}
-
-func (b *rowBuffer) addExec(r report.ExecDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.exec = append(b.exec, r)
-	dropped := trimRing(&b.exec, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("exec_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addTCP(r report.TCPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.tcp = append(b.tcp, r)
-	dropped := trimRing(&b.tcp, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("tcp_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addUDP(r report.UDPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.udp = append(b.udp, r)
-	dropped := trimRing(&b.udp, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("udp_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addHTTP(r report.HTTPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.http = append(b.http, r)
-	dropped := trimRing(&b.http, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("http_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addTLS(r report.TLSDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.tls = append(b.tls, r)
-	dropped := trimRing(&b.tls, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("tls_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) snapshot() (exec []report.ExecDigestRow, tcp []report.TCPDigestRow, udp []report.UDPDigestRow, http []report.HTTPDigestRow, tls []report.TLSDigestRow) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return slices.Clone(b.exec), slices.Clone(b.tcp), slices.Clone(b.udp), slices.Clone(b.http), slices.Clone(b.tls)
 }
