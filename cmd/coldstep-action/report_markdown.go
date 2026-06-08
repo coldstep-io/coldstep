@@ -46,6 +46,25 @@ func writeDetailedMarkdownReport(baseDir string) *markdown.Aggregate {
 	return agg
 }
 
+// warnRemovedAllowlistInputs emits a one-line GitHub Actions warning when a
+// consumer still sets an input removed in the allowlist consolidation
+// (ignored-nets, ignored-nets-file, bootstrap-allowlist). GitHub exposes any
+// `with:` key as INPUT_<NAME> (spaces->_, uppercased; dashes preserved), so a
+// non-empty value is detectable even though the input is no longer declared.
+// Turns a silent breakage into an actionable message.
+func warnRemovedAllowlistInputs() {
+	for _, r := range []struct{ env, replacement string }{
+		{"INPUT_IGNORED-NETS", "put `!CIDR` entries in `allow`"},
+		{"INPUT_IGNORED-NETS-FILE", "put `!CIDR` lines in an `allow-file`"},
+		{"INPUT_BOOTSTRAP-ALLOWLIST", "copy the reference packs into your own `allow-file`"},
+	} {
+		if strings.TrimSpace(os.Getenv(r.env)) != "" {
+			name := strings.ToLower(strings.TrimPrefix(r.env, "INPUT_"))
+			fmt.Fprintf(os.Stderr, "::warning title=Coldstep removed input::`%s` was removed in the allowlist consolidation; %s\n", name, r.replacement)
+		}
+	}
+}
+
 // parseAggregateFile parses a JSONL event stream into a markdown.Aggregate.
 func parseAggregateFile(path string) (*markdown.Aggregate, error) {
 	f, err := os.Open(path) // #nosec G304 -- workspace-validated path (safepath.Workspace) //nolint:gosec

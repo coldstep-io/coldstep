@@ -61,38 +61,6 @@ func TestResolvePathUnderWorkspace_RejectsEscape(t *testing.T) {
 	}
 }
 
-func TestTruthyInput(t *testing.T) {
-	for _, s := range []string{"true", "TRUE", "1", "yes"} {
-		if !truthyInput(s) {
-			t.Errorf("expected true for %q", s)
-		}
-	}
-	for _, s := range []string{"", "false", "0", "no", "banana"} {
-		if truthyInput(s) {
-			t.Errorf("expected false for %q", s)
-		}
-	}
-}
-
-func TestReadBootstrapTokens(t *testing.T) {
-	dir := t.TempDir()
-	p := filepath.Join(dir, "boot.txt")
-	if err := os.WriteFile(p, []byte("# h\nx.example.com\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	got, err := readBootstrapTokens(p)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 1 || got[0] != "x.example.com" {
-		t.Errorf("got %v", got)
-	}
-	got2, err := readBootstrapTokens(filepath.Join(dir, "missing.txt"))
-	if err != nil || got2 != nil {
-		t.Errorf("missing file: got %v err %v", got2, err)
-	}
-}
-
 func TestRejectDefendWildcards(t *testing.T) {
 	t.Parallel()
 
@@ -146,5 +114,21 @@ func TestResolvePathUnderWorkspace_AllowsNested(t *testing.T) {
 	}
 	if filepath.Base(p) != "f.txt" {
 		t.Errorf("got %q", p)
+	}
+}
+
+// TestClassifyAllowTokens_IgnoreRouting is the SP-1 invariant: a leading `!`
+// CIDR in the allow list routes to ignoredNets (the only ignore mechanism after
+// removing the ignored-nets input), while plain entries classify normally.
+func TestClassifyAllowTokens_IgnoreRouting(t *testing.T) {
+	c := classifyAllowTokens([]string{"example.com", "1.2.3.4", "!10.0.0.0/8", "!172.16.0.0/12"})
+	if len(c.ignoredNets) != 2 || c.ignoredNets[0] != "10.0.0.0/8" || c.ignoredNets[1] != "172.16.0.0/12" {
+		t.Fatalf("ignoredNets = %v want [10.0.0.0/8 172.16.0.0/12]", c.ignoredNets)
+	}
+	if len(c.ips) != 1 || c.ips[0] != "1.2.3.4" {
+		t.Fatalf("ips = %v want [1.2.3.4]", c.ips)
+	}
+	if len(c.domains) != 1 || c.domains[0] != "example.com" {
+		t.Fatalf("domains = %v want [example.com]", c.domains)
 	}
 }
