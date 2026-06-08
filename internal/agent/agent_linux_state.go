@@ -3,27 +3,22 @@
 // State held by a single agent.Run invocation, split across three files:
 //
 //   - agent_linux_state.go (this file): runStats (cumulative per-run counters),
-//     newRunStats, the lock-protected accessors, snapshotSummary, and rowBuffer
-//     + trimRing (kept here because the row buffer feeds dropped-event
-//     accounting back into runStats).
-//   - agent_linux_state_sections.go: per-section state structs that don't
-//     touch runStats directly — fork/fs/network sections, the BPF wire-format
-//     constants, the ring-read retry backoff, the integrity canary, and the
-//     small fixed-cap row/edge buffers consumed by them.
+//     newRunStats, the lock-protected accessors, snapshotSummary, and the
+//     generic trimRing helper.
+//   - agent_linux_state_sections.go: the BPF wire-format size constants, the
+//     ring-read retry backoff, and the integrity canary.
 //   - agent_linux_state_defend.go: defend state, backend selection
 //     (LSM vs cgroup), and the typed defend deny error used to fail-fast.
 
 package agent
 
 import (
-	"log/slog"
 	"slices"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/coldstep-io/coldstep/internal/policy"
-	"github.com/coldstep-io/coldstep/internal/report"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
@@ -146,16 +141,6 @@ func (s *runStats) addDropped(kind string) {
 	s.droppedCounts[kind]++
 }
 
-func (s *runStats) snapshotDroppedCounts() map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make(map[string]int, len(s.droppedCounts))
-	for k, v := range s.droppedCounts {
-		out[k] = v
-	}
-	return out
-}
-
 func (s *runStats) addExec() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -166,12 +151,6 @@ func (s *runStats) addProcFork() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.procForkN++
-}
-
-func (s *runStats) procForkTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.procForkN
 }
 
 func (s *runStats) addFS() {
@@ -189,22 +168,10 @@ func (s *runStats) setRunnerEnv(env string) {
 	s.runnerEnv = env
 }
 
-func (s *runStats) snapshotRunnerEnv() string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.runnerEnv
-}
-
 func (s *runStats) addKTLS() {
 	s.mu.Lock()
 	s.ktlsN++
 	s.mu.Unlock()
-}
-
-func (s *runStats) ktlsTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ktlsN
 }
 
 func (s *runStats) setKTLSRingbufReserveFailures(n int) {
@@ -241,16 +208,6 @@ func (s *runStats) addTCPResult(bucket string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tcpResultCounts[bucket]++
-}
-
-func (s *runStats) snapshotTCPResultCounts() map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make(map[string]int, len(s.tcpResultCounts))
-	for k, v := range s.tcpResultCounts {
-		out[k] = v
-	}
-	return out
 }
 
 func (s *runStats) addUDP(cl policy.Class) {
@@ -291,22 +248,10 @@ func (s *runStats) addTLS(cl policy.Class, conf telemetry.TLSConfidence, ktlsOve
 // partial, inferred, unknown) for digest reporting. unknownKTLS is the subset
 // of unknown attributed to the P4 KTLS override; the digest renders it as a
 // sub-bucket inside the unknown count.
-func (s *runStats) tlsConfidenceCounts() (full, partial, inferred, unknown, unknownKTLS int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tlsConfidenceFullN, s.tlsConfidencePartialN, s.tlsConfidenceInferredN, s.tlsConfidenceUnknownN, s.tlsConfidenceUnknownKTLSN
-}
-
 func (s *runStats) setConnect4TupleUpdateFailures(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.connect4TupleUpdateFailuresN = n
-}
-
-func (s *runStats) connect4TupleUpdateFailures() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.connect4TupleUpdateFailuresN
 }
 
 func (s *runStats) setUDPRingbufReserveFailures(n int) {
@@ -411,22 +356,10 @@ func (s *runStats) setUDPSendmsgMultiIovecObserved(n int) {
 	s.udpSendmsgMultiIovecObservedN = n
 }
 
-func (s *runStats) udpSendmsgMultiIovecObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.udpSendmsgMultiIovecObservedN
-}
-
 func (s *runStats) setSendmmsgMultiMessage(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sendmmsgMultiMessageN = n
-}
-
-func (s *runStats) sendmmsgMultiMessage() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sendmmsgMultiMessageN
 }
 
 func (s *runStats) setSendmmsgUnobservedExtra(n int) {
@@ -435,22 +368,10 @@ func (s *runStats) setSendmmsgUnobservedExtra(n int) {
 	s.sendmmsgUnobservedExtraN = n
 }
 
-func (s *runStats) sendmmsgUnobservedExtra() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sendmmsgUnobservedExtraN
-}
-
 func (s *runStats) setTLSWritevMultiIovecObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tlsWritevMultiIovecObservedN = n
-}
-
-func (s *runStats) tlsWritevMultiIovecObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tlsWritevMultiIovecObservedN
 }
 
 // setPartialEgressObserved records the BG-01 per-syscall partial-observe
@@ -463,24 +384,6 @@ func (s *runStats) setPartialEgressObserved(sendfile, splice, sendmmsg int) {
 	s.sendfileObservedN = sendfile
 	s.spliceObservedN = splice
 	s.sendmmsgFirstOnlyN = sendmmsg
-}
-
-func (s *runStats) sendfileObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sendfileObservedN
-}
-
-func (s *runStats) spliceObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.spliceObservedN
-}
-
-func (s *runStats) sendmmsgFirstOnly() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sendmmsgFirstOnlyN
 }
 
 // setIPv6ConnectObserved / setIPv6SendmsgObserved record the P0-1 Phase 1
@@ -496,22 +399,10 @@ func (s *runStats) setIPv6ConnectObserved(n uint32) {
 	s.ipv6ConnectObservedN = n
 }
 
-func (s *runStats) ipv6ConnectObserved() uint32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ipv6ConnectObservedN
-}
-
 func (s *runStats) setIPv6SendmsgObserved(n uint32) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ipv6SendmsgObservedN = n
-}
-
-func (s *runStats) ipv6SendmsgObserved() uint32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ipv6SendmsgObservedN
 }
 
 // addIPv6Event bumps the per-event counter populated by readIPv6ObsRing
@@ -526,22 +417,10 @@ func (s *runStats) addIPv6Event() {
 	s.ipv6EventCountN++
 }
 
-func (s *runStats) ipv6EventCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ipv6EventCountN
-}
-
 func (s *runStats) setIPv6RingbufReserveFailures(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ipv6RingbufReserveFailuresN = n
-}
-
-func (s *runStats) ipv6RingbufReserveFailures() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ipv6RingbufReserveFailuresN
 }
 
 // setSendpageObserved records the lsm/socket_sendpage observe counter
@@ -556,12 +435,6 @@ func (s *runStats) setSendpageObserved(n uint32) {
 	s.sendpageObservedN = n
 }
 
-func (s *runStats) sendpageObserved() uint32 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.sendpageObservedN
-}
-
 func (s *runStats) setIoUringSetupObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -572,12 +445,6 @@ func (s *runStats) addIoUringSend() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.ioUringSendN++
-}
-
-func (s *runStats) ioUringSendTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ioUringSendN
 }
 
 // addIoUringTLSSNI records a distinct SNI hostname parsed from an io_uring
@@ -596,26 +463,6 @@ func (s *runStats) addIoUringTLSSNI(sni string) {
 
 // ioUringTLSSNIList returns the distinct io_uring TLS SNIs, sorted. Empty when
 // none were observed (the digest row is then hidden).
-func (s *runStats) ioUringTLSSNIList() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.ioUringTLSSNISet) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(s.ioUringTLSSNISet))
-	for sni := range s.ioUringTLSSNISet {
-		out = append(out, sni)
-	}
-	slices.Sort(out)
-	return out
-}
-
-func (s *runStats) ioUringTLSHelloObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ioUringTLSHelloN
-}
-
 func (s *runStats) setIoUringTLSHelloObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -715,34 +562,16 @@ func (s *runStats) ioUringTLSRingbufReserveFailures() int {
 	return s.ioUringTLSRingbufReserveFailuresN
 }
 
-func (s *runStats) ioUringSetupObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.ioUringSetupObservedN
-}
-
 func (s *runStats) setTCPDNSResponsesObserved(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tcpDNSResponsesObservedN = n
 }
 
-func (s *runStats) tcpDNSResponsesObserved() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tcpDNSResponsesObservedN
-}
-
 func (s *runStats) setTCPDNSSkippedShortRead(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tcpDNSSkippedShortReadN = n
-}
-
-func (s *runStats) tcpDNSSkippedShortRead() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tcpDNSSkippedShortReadN
 }
 
 // addQUICCandidate bumps the per-run counter for UDP/443 non-loopback egress
@@ -752,12 +581,6 @@ func (s *runStats) addQUICCandidate() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.quicCandidateN++
-}
-
-func (s *runStats) quicCandidateTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.quicCandidateN
 }
 
 // addQUICObserved increments the per-run total of UDPEvent records whose
@@ -783,12 +606,6 @@ func (s *runStats) addBPFHeartbeatFailure() {
 	s.bpfHeartbeatFailures++
 }
 
-func (s *runStats) bpfHeartbeatFailureCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bpfHeartbeatFailures
-}
-
 func (s *runStats) addBPFAudit() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -811,12 +628,6 @@ func (s *runStats) addTCPState(confirmed, refused bool) {
 	}
 }
 
-func (s *runStats) tcpStateTotals() (total, confirmed, refused int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.tcpStateN, s.tcpStateConfirmed, s.tcpStateRefused
-}
-
 func (s *runStats) setTCPStateRingbufReserveFailures(n int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -835,22 +646,10 @@ func (s *runStats) setBPFAuditRingbufReserveFailures(n int) {
 	s.bpfAuditRingbufReserveFailuresN = n
 }
 
-func (s *runStats) bpfAuditTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bpfAuditN
-}
-
 func (s *runStats) addBPFMapIntegrityFailure() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bpfMapIntegrityFailuresN++
-}
-
-func (s *runStats) bpfMapIntegrityFailures() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.bpfMapIntegrityFailuresN
 }
 
 // addDNSCacheUpdateFailure bumps the per-run counter for failed BPF
@@ -953,12 +752,6 @@ func (s *runStats) snapshotSummary(kernel string, bpf []telemetry.BPFStatus) tel
 	}
 }
 
-func (s *runStats) counts() (execN, tcpN, udpN, httpN, tlsN, fsN int) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.execN, s.tcpN, s.udpN, s.httpN, s.tlsN, s.fsN
-}
-
 // setAllowlistCompileSnapshot records a one-shot snapshot of the resolved
 // allowlist at agent startup. Inputs are copied so the caller can free the
 // originals. Used by the shutdown digest to surface unresolved domains, the
@@ -976,15 +769,6 @@ func (s *runStats) setAllowlistCompileSnapshot(t time.Time, ipCount int, domains
 }
 
 // allowlistSnapshot returns a copy of the recorded compile-time snapshot.
-func (s *runStats) allowlistSnapshot() (compileTime time.Time, ipCount int, domains, unresolved, wildcardRisk []string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.allowlistCompileTime, s.allowlistIPCount,
-		slices.Clone(s.allowlistDomains),
-		slices.Clone(s.allowlistUnresolvedDomains),
-		slices.Clone(s.allowlistWildcardRiskDomains)
-}
-
 // addDNSDrift bumps the H16 drift-observation counter. Called by the
 // background re-resolution goroutine's onDrift closure.
 func (s *runStats) addDNSDrift() {
@@ -995,12 +779,6 @@ func (s *runStats) addDNSDrift() {
 
 // dnsDriftTotal returns the count of distinct drift observations during the
 // run. Zero when DNS was stable or re-resolution never fired.
-func (s *runStats) dnsDriftTotal() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.dnsDriftN
-}
-
 // incDomainCount bumps the per-FQDN observation counter (P1-1 6e). No-op for
 // empty domain.
 func (s *runStats) incDomainCount(domain string) {
@@ -1016,118 +794,6 @@ func (s *runStats) incDomainCount(domain string) {
 }
 
 // snapshotDomainCounts returns a copy of the per-FQDN observation counters.
-func (s *runStats) snapshotDomainCounts() map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if len(s.dstDomainCounts) == 0 {
-		return nil
-	}
-	out := make(map[string]int, len(s.dstDomainCounts))
-	for k, v := range s.dstDomainCounts {
-		out[k] = v
-	}
-	return out
-}
-
 // snapshotPolicyCounts returns a copy of policy classification counters for digests.
-func (s *runStats) snapshotPolicyCounts() map[string]int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pc := make(map[string]int, len(s.policyCounts))
-	for k, v := range s.policyCounts {
-		pc[k] = v
-	}
-	return pc
-}
-
-type rowBuffer struct {
-	mu   sync.Mutex
-	max  int
-	exec []report.ExecDigestRow
-	tcp  []report.TCPDigestRow
-	udp  []report.UDPDigestRow
-	http []report.HTTPDigestRow
-	tls  []report.TLSDigestRow
-}
-
-func newRowBuffer(max int) *rowBuffer {
-	return &rowBuffer{max: max}
-}
-
 // trimRing trims s to at most max entries (drops oldest); returns the number of dropped entries
 // so callers can record the drop in stats (e.g. runStats.addDropped("<kind>_ring_trim")).
-func trimRing[T any](s *[]T, max int) int {
-	if max <= 0 || len(*s) <= max {
-		return 0
-	}
-	droppedN := len(*s) - max
-	*s = (*s)[droppedN:]
-	slog.Debug("telemetry row buffer trimmed (ring full)", "dropped", droppedN, "retained", max)
-	return droppedN
-}
-
-func (b *rowBuffer) addExec(r report.ExecDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.exec = append(b.exec, r)
-	dropped := trimRing(&b.exec, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("exec_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addTCP(r report.TCPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.tcp = append(b.tcp, r)
-	dropped := trimRing(&b.tcp, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("tcp_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addUDP(r report.UDPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.udp = append(b.udp, r)
-	dropped := trimRing(&b.udp, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("udp_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addHTTP(r report.HTTPDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.http = append(b.http, r)
-	dropped := trimRing(&b.http, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("http_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) addTLS(r report.TLSDigestRow, stats *runStats) {
-	b.mu.Lock()
-	b.tls = append(b.tls, r)
-	dropped := trimRing(&b.tls, b.max)
-	b.mu.Unlock()
-	if dropped > 0 && stats != nil {
-		for i := 0; i < dropped; i++ {
-			stats.addDropped("tls_ring_trim")
-		}
-	}
-}
-
-func (b *rowBuffer) snapshot() (exec []report.ExecDigestRow, tcp []report.TCPDigestRow, udp []report.UDPDigestRow, http []report.HTTPDigestRow, tls []report.TLSDigestRow) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return slices.Clone(b.exec), slices.Clone(b.tcp), slices.Clone(b.udp), slices.Clone(b.http), slices.Clone(b.tls)
-}

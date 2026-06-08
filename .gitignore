@@ -11,6 +11,11 @@ coverage
 # Local Windows tooling binaries (not published)
 *.exe
 
+# Stray root-built Go binaries (a `go build` without -o bin/ drops these in the
+# repo root; the real outputs live under /bin/, already ignored above).
+/coldstep
+/coldstep-action
+
 # Generated BPF: scripts/build-agent-linux.sh (host bpftool → vmlinux.h) and bpf2go outputs.
 bpf/vmlinux.h
 internal/bpf/**/*.o

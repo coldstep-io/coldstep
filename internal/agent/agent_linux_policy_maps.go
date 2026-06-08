@@ -569,7 +569,7 @@ func appendDenyFromRaw(cfg config.Config, raw []byte, seq *telemetry.SeqGen, jso
 		}
 	}
 	if state != nil {
-		state.noteDeny(denyDigestRowFromEvent(deny))
+		state.noteDeny()
 	}
 	return deny, nil
 }
