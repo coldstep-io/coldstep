@@ -10,6 +10,7 @@ import {
   resolveAllowlist,
   resolveFeatureGates,
   resolveFailOnError,
+  warnRemovedAllowlistInputs,
 } from './shared';
 
 function tailUtf8File(filePath: string, maxChars: number): string {
@@ -302,6 +303,7 @@ export async function startAgent(): Promise<void> {
     binPath = await ensureColdstepBinary();
   }
 
+  warnRemovedAllowlistInputs();
   const allowlist = resolveAllowlist(baseDir);
   const noDefaultIgnoredNets = inputBoolDefault('no-default-ignored-nets', false);
 

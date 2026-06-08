@@ -20187,13 +20187,6 @@ function readFileTokensSafe(filePaths, baseDir) {
   }
   return tokens;
 }
-function readSingleFileSafe(filePath) {
-  try {
-    return splitTokens(fs3.readFileSync(filePath, "utf8"));
-  } catch {
-    return [];
-  }
-}
 var IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
 function classifyTokens(tokens) {
   const allowedIPs = [];
@@ -20221,30 +20214,29 @@ function mergeUnique(...arrays) {
   return [...new Set(arrays.flat().filter(Boolean))].join(",");
 }
 function resolveAllowlist(baseDir) {
-  const actionPath = actionRootPath();
   const tokens = [
     ...splitTokens(getInput("allow")),
     ...readFileTokensSafe(getInput("allow-file"), baseDir)
   ];
   const parsed = classifyTokens(tokens);
-  if (inputBoolDefault("bootstrap-allowlist", false)) {
-    const bsDir = path.join(actionPath, "scripts", "coldstep_bootstrap");
-    const bsDomains = readSingleFileSafe(path.join(bsDir, "allowlist-domains-v1.txt"));
-    parsed.allowedDomains.push(...bsDomains);
-    parsed.allowedHosts.push(...bsDomains);
-    const bsIPs = readSingleFileSafe(path.join(bsDir, "allowlist-ips-v1.txt"));
-    parsed.allowedIPs.push(...bsIPs);
-  }
-  const ignoredNetsTokens = [
-    ...splitTokens(getInput("ignored-nets")),
-    ...readFileTokensSafe(getInput("ignored-nets-file"), baseDir)
-  ];
   return {
     allowedIPs: mergeUnique(parsed.allowedIPs),
-    ignoredNets: mergeUnique(parsed.ignoredNets, ignoredNetsTokens),
+    ignoredNets: mergeUnique(parsed.ignoredNets),
     allowedHosts: mergeUnique(parsed.allowedHosts),
     allowedDomains: mergeUnique(parsed.allowedDomains)
   };
+}
+function warnRemovedAllowlistInputs() {
+  const removed = [
+    ["ignored-nets", "put `!CIDR` entries in `allow`"],
+    ["ignored-nets-file", "put `!CIDR` lines in an `allow-file`"],
+    ["bootstrap-allowlist", "copy the reference packs into your own `allow-file`"]
+  ];
+  for (const [name, repl] of removed) {
+    if (getInput(name).trim() !== "") {
+      warning(`coldstep: input \`${name}\` was removed in the allowlist consolidation; ${repl}`);
+    }
+  }
 }
 function resolveFeatureGates() {
   const detectProfile = (getInput("detect-profile") || "standard").trim().toLowerCase();
@@ -20519,6 +20511,7 @@ async function startAgent() {
   } else {
     binPath = await ensureColdstepBinary();
   }
+  warnRemovedAllowlistInputs();
   const allowlist = resolveAllowlist(baseDir);
   const noDefaultIgnoredNets = inputBoolDefault("no-default-ignored-nets", false);
   const childEnv = {

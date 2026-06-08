@@ -5,7 +5,7 @@
 //
 //   - start: stages the agent binary (either prebuilt via --release-path or
 //     compiled by scripts/build-agent-linux.sh), resolves the merged
-//     allow / ignored-nets policy from inline + file inputs, then re-execs
+//     allow policy (incl. !CIDR ignores) from inline + file inputs, then re-execs
 //     the agent under `sudo -E` so it can attach BPF programs. When
 //     --fail-on-error is set, start blocks until the agent writes a healthy
 //     .coldstep-ready.json (or returns an explicit not-ready / timeout /
@@ -70,8 +70,6 @@ type startConfig struct {
 	Mode                 string
 	Allow                string
 	AllowFile            string
-	IgnoredNets          string
-	IgnoredNetsFile      string
 	NoDefaultIgnoredNets bool
 	LogLevel             string
 	DetectProfile        string
@@ -82,7 +80,6 @@ type startConfig struct {
 	IoUringDisable       bool
 	SigningKey           string
 	Report               string
-	BootstrapAllowlist   string
 }
 
 type stopConfig struct {
@@ -131,8 +128,6 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.StringVar(&cfg.Mode, "mode", "detect", "")
 	fs.StringVar(&cfg.Allow, "allow", "", "")
 	fs.StringVar(&cfg.AllowFile, "allow-file", "", "")
-	fs.StringVar(&cfg.IgnoredNets, "ignored-nets", "", "")
-	fs.StringVar(&cfg.IgnoredNetsFile, "ignored-nets-file", "", "")
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
 	fs.StringVar(&cfg.DetectProfile, "detect-profile", "standard", "")
@@ -143,7 +138,6 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.BoolVar(&cfg.IoUringDisable, "io-uring-disable", true, "")
 	fs.StringVar(&cfg.SigningKey, "signing-key", "", "")
 	fs.StringVar(&cfg.Report, "report", "job-summary", "")
-	fs.StringVar(&cfg.BootstrapAllowlist, "bootstrap-allowlist", "false", "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -285,26 +279,11 @@ func runStart(cfg startConfig) error {
 	}
 	allow := classifyAllowTokens(splitAllowInlineTokens(allowMerged))
 
-	ignoredMerged, err := mergeInlineAndAllowlistFiles(baseDir, cfg.IgnoredNets, cfg.IgnoredNetsFile)
-	if err != nil {
-		return err
-	}
-	allow.ignoredNets = append(allow.ignoredNets, splitAllowInlineTokens(ignoredMerged)...)
-
-	if truthyInput(cfg.BootstrapAllowlist) {
-		bsDir := filepath.Join(actionPath, "scripts", "coldstep_bootstrap")
-		bsDomains, err := readBootstrapTokens(filepath.Join(bsDir, "allowlist-domains-v1.txt"))
-		if err != nil {
-			return err
-		}
-		bsIPs, err := readBootstrapTokens(filepath.Join(bsDir, "allowlist-ips-v1.txt"))
-		if err != nil {
-			return err
-		}
-		allow.domains = append(allow.domains, bsDomains...)
-		allow.hosts = append(allow.hosts, bsDomains...)
-		allow.ips = append(allow.ips, bsIPs...)
-	}
+	// Ignored nets come solely from `!CIDR` entries in allow / allow-file —
+	// classifyAllowTokens already routed those into allow.ignoredNets above.
+	// The removed ignored-nets / ignored-nets-file / bootstrap-allowlist inputs
+	// are warned about (not silently dropped) when a consumer still sets them.
+	warnRemovedAllowlistInputs()
 
 	if mode == "defend" {
 		if err := rejectDefendWildcards(allow); err != nil {

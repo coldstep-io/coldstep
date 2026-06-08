@@ -69,11 +69,6 @@ func classifyAllowTokens(tokens []string) classifiedAllow {
 	return c
 }
 
-func truthyInput(s string) bool {
-	v := strings.TrimSpace(strings.ToLower(s))
-	return v == "true" || v == "1" || v == "yes"
-}
-
 // mergeInlineAndAllowlistFiles concatenates comma-separated workspace-relative (or absolute-under-workspace)
 // file paths in filesCSV, reads each text file, parses allowlist tokens (see parseAllowlistFileBody),
 // and joins them with inline using comma separation. Empty filesCSV returns inline unchanged.
@@ -150,19 +145,6 @@ func parseAllowlistFileBody(data []byte) []string {
 		out = append(out, splitTrimNonEmpty(line, lineSep)...)
 	}
 	return out
-}
-
-// readBootstrapTokens parses the vendored allowlist file at bootstrapPath.
-// Returns nil if the file is missing — older bundles may omit the directory.
-func readBootstrapTokens(bootstrapPath string) ([]string, error) {
-	body, err := os.ReadFile(bootstrapPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	return parseAllowlistFileBody(body), nil
 }
 
 func resolvePathUnderWorkspace(workspaceAbs, userPath string) (string, error) {

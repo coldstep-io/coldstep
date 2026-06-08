@@ -21,10 +21,13 @@ inputs:
 
   allow:
     description: >-
-      Comma- or newline-separated egress allowlist. Accepts plain domains (example.com), wildcard domains (*.example.com),
-      IPv4 literals (1.2.3.4), and CIDRs (10.0.0.0/8). Prefix a CIDR with ! to ignore that net (e.g. !192.168.0.0/16).
-      Entries are auto-classified: IP/CIDR → allowed-ips, domain/wildcard → allowed-hosts + allowed-domains.
-      Merged with allow-file and the legacy per-type inputs. In defend mode each
+      Comma- or newline-separated egress allowlist — the single list source.
+      Accepts plain domains (example.com), wildcard domains (*.example.com),
+      IPv4 literals (1.2.3.4), and CIDRs (10.0.0.0/8). Prefix a CIDR with ! to
+      ignore that net (e.g. !192.168.0.0/16) — this is the only ignore mechanism
+      (see no-default-ignored-nets for the implicit RFC1918 ignores). Entries are
+      auto-classified: IP/CIDR → allowed-ips, !CIDR → ignored nets, domain/wildcard
+      → allowed-hosts + allowed-domains. Merged with allow-file. In defend mode each
       domain is resolved for both A and AAAA records; matching IPv4 and IPv6
       addresses populate the BPF allowlists. IPv6 literals are not accepted as
       input today — use AAAA-bearing hostnames instead. Wildcard entries
@@ -89,31 +92,10 @@ inputs:
     required: false
     default: ${{ github.token }}
 
-  ignored-nets:
-    description: >-
-      Comma- or whitespace-separated IPv4 CIDRs merged with implicit 10.0.0.0/8 and 172.16.0.0/12 ignores,
-      unless no-default-ignored-nets is true. Maximum 128 merged CIDRs. Also accepts entries via allow
-      input prefixed with ! (e.g. !10.0.0.0/8). Merged with ignored-nets-file.
-    required: false
-    default: ''
-
-  ignored-nets-file:
-    description: >-
-      Optional comma-separated workspace text files for additional ignored CIDRs (same line/comment rules as allow-file).
-    required: false
-    default: ''
-
-  bootstrap-allowlist:
-    description: >-
-      Default false. When true, merge vendored bootstrap packs from scripts/coldstep_bootstrap/
-      (allowlist-domains-v1.txt and allowlist-ips-v1.txt) into the allowlist. Opt-in only —
-      review upgrades when pinning coldstep-io/coldstep tags.
-    required: false
-    default: 'false'
-
   no-default-ignored-nets:
     description: >-
-      When true, do not merge implicit 10.0.0.0/8 and 172.16.0.0/12; only ignored-nets is used (may be empty).
+      When true, do not merge the implicit 10.0.0.0/8 and 172.16.0.0/12 ignores;
+      only the !CIDR entries from allow / allow-file are used (may be empty).
     required: false
     default: 'false'
 
