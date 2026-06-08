@@ -237,6 +237,7 @@ type metaLine struct {
 	DetectProfile    string            `json:"detect_profile"`
 	AgentVersion     string            `json:"agent_version"`
 	KernelRelease    string            `json:"kernel_release"`
+	Mode             string            `json:"mode"`
 }
 
 func (a *Aggregate) countMeta(line []byte) {
@@ -245,6 +246,13 @@ func (a *Aggregate) countMeta(line []byte) {
 		return
 	}
 	a.MetaSeen = true
+	// Meta is the authoritative mode source: it lets a defend run with zero
+	// deny events still label as defend (deny events alone cannot prove a
+	// defend run happened). Legacy artifacts omit it and fall back to the
+	// deny-derived mode set in countDeny.
+	if m.Mode != "" {
+		a.Mode = m.Mode
+	}
 	a.BPF = m.BPF
 	a.AllowlistIPs = m.AllowlistIPs
 	a.AllowlistEntries = m.AllowlistEntries
