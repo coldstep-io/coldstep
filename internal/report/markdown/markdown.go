@@ -602,14 +602,18 @@ func dashIfEmpty(s string) string {
 // mdCell sanitizes a string for safe interpolation into a Markdown table cell.
 // JSONL string fields (process comm, destination FQDN/SNI, deny reason) are
 // influenced by observed traffic and process state, so a raw `|`, backtick,
-// newline, or `<` would break the table or inject content into the Job Summary
-// / report artifact. Mirrors the old digest's sanitizeCell (lost when the
-// report pipeline was rewritten).
+// newline, `<`, or link brackets would break the table or inject content into
+// the Job Summary / report artifact. The `[`/`]` substitution neutralizes
+// Markdown link/image syntax (e.g. a hostile SNI `[x](http://evil)` would
+// otherwise render as a clickable link). Mirrors the old digest's sanitizeCell
+// (lost when the report pipeline was rewritten).
 func mdCell(s string) string {
 	s = strings.ReplaceAll(s, "\r", "")
 	s = strings.ReplaceAll(s, "\n", " ")
 	s = strings.ReplaceAll(s, "|", "·")
 	s = strings.ReplaceAll(s, "`", "'")
 	s = strings.ReplaceAll(s, "<", "‹")
+	s = strings.ReplaceAll(s, "[", "［")
+	s = strings.ReplaceAll(s, "]", "］")
 	return strings.TrimSpace(s)
 }

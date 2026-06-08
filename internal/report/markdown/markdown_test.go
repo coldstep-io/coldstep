@@ -284,3 +284,19 @@ func TestRenders_SanitizeInjectedCells(t *testing.T) {
 		t.Errorf("expected sanitized dest (pipe->middot) in detailed:\n%s", det)
 	}
 }
+
+// TestRenders_NeutralizeLinkBrackets ensures a hostile SNI/FQDN cannot smuggle a
+// Markdown link/image into the Job Summary or report via `[text](url)` syntax.
+func TestRenders_NeutralizeLinkBrackets(t *testing.T) {
+	jsonl := `{"type":"tls","sni":"[click](http://evil.example)","confidence":"full","dst":"1.2.3.4"}` + "\n" +
+		`{"type":"tcp","fqdn":"[click](http://evil.example)","dst":"1.2.3.4","dport":443}` + "\n"
+	a, err := Parse(strings.NewReader(jsonl))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	for name, out := range map[string]string{"detailed": a.RenderDetailed(), "simple": a.RenderSimple()} {
+		if strings.Contains(out, "[click]") || strings.Contains(out, "](http://evil.example)") {
+			t.Errorf("%s: raw link brackets survived — link injection possible:\n%s", name, out)
+		}
+	}
+}
