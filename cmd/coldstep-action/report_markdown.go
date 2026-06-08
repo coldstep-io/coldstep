@@ -133,3 +133,34 @@ func runDiff(args []string) error {
 	}
 	return nil
 }
+
+// runAssertIntegrity implements `coldstep-action assert-integrity` — the
+// anti-blindness required-event-type gate as a standalone subcommand (1:1
+// replacement for `coldstep-report assert-integrity`, JSONL-direct, no report
+// model). Exits non-zero when expected event types are absent. The detect
+// profile selects the required set (standard vs enhanced).
+func runAssertIntegrity(args []string) error {
+	fs := flag.NewFlagSet("assert-integrity", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	ws := getenvDefault("GITHUB_WORKSPACE", ".")
+	in := fs.String("in", filepath.Join(ws, ".coldstep-events.jsonl"), "")
+	profile := fs.String("detect-profile", getenvDefault("COLDSTEP_DETECT_PROFILE", ""), "")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	inPath, err := safepath.Workspace(*in, "in")
+	if err != nil {
+		return err
+	}
+	agg, err := parseAggregateFile(inPath)
+	if err != nil {
+		return fmt.Errorf("load events: %w", err)
+	}
+	if missing := agg.MissingRequiredTypes(*profile); len(missing) > 0 {
+		fmt.Fprintf(os.Stderr,
+			"::error title=Coldstep integrity gate::missing required event type(s): %s\n",
+			strings.Join(missing, ", "))
+		return fmt.Errorf("assert-integrity: missing required event type(s): %s", strings.Join(missing, ", "))
+	}
+	return nil
+}

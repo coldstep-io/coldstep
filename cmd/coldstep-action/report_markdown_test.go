@@ -90,3 +90,23 @@ func TestRunDiff_NewDomainGate(t *testing.T) {
 		t.Fatal("expected fail-on-new-domain error")
 	}
 }
+
+func TestRunAssertIntegrity(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	in := filepath.Join(dir, ".coldstep-events.jsonl")
+	// meta+tcp but no exec → standard profile fails.
+	if err := os.WriteFile(in, []byte(`{"type":"meta"}`+"\n"+`{"type":"tcp"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := runAssertIntegrity([]string{"--in=" + in}); err == nil {
+		t.Fatal("expected failure on missing exec")
+	}
+	// add exec → passes.
+	if err := os.WriteFile(in, []byte(`{"type":"meta"}`+"\n"+`{"type":"tcp"}`+"\n"+`{"type":"exec"}`+"\n"), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if err := runAssertIntegrity([]string{"--in=" + in}); err != nil {
+		t.Fatalf("expected pass, got %v", err)
+	}
+}
