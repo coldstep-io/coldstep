@@ -60,10 +60,6 @@ func TestRun_DetectWritesSummary(t *testing.T) {
 	if err := os.WriteFile(summary, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	detectLog := filepath.Join(dir, ".coldstep-detect.md")
-	if err := os.WriteFile(detectLog, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Setenv("GITHUB_WORKSPACE", dir)
 	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
@@ -98,12 +94,14 @@ func TestRun_DetectWritesSummary(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	b, err := os.ReadFile(detectLog)
+	// The agent writes data only (JSONL); report rendering moved to userspace
+	// (coldstep-action). Assert the exec event landed in the event stream.
+	b, err := os.ReadFile(filepath.Join(dir, ".coldstep-events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(b, []byte("coldstep — detect")) || !bytes.Contains(b, []byte("| **exec** |")) {
-		t.Fatalf("expected coldstep detect heading with exec row, got:\n%s", string(b))
+	if !bytes.Contains(b, []byte(`"type":"exec"`)) {
+		t.Fatalf("expected an exec event in the JSONL stream, got:\n%s", string(b))
 	}
 }
 
@@ -113,17 +111,12 @@ func TestRun_TCPConnectLogged(t *testing.T) {
 	}
 	skipIfUnsupportedSyscallBPFKernel(t)
 	dir := t.TempDir()
-	detect := filepath.Join(dir, "detect.md")
-	if err := os.WriteFile(detect, []byte(""), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	t.Setenv("GITHUB_WORKSPACE", dir)
 	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
 	t.Setenv("COLDSTEP_ALLOWED_IPS", "")
 	t.Setenv("CI_GUARD_MODE", "detect")
 	t.Setenv("GITHUB_STEP_SUMMARY", "")
-	t.Setenv("COLDSTEP_DETECT_LOG", detect)
 
 	cfg, err := config.LoadFromEnv()
 	if err != nil {
@@ -150,18 +143,16 @@ func TestRun_TCPConnectLogged(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	b, err := os.ReadFile(detect)
+	// Agent writes data only — assert the tcp event in the JSONL stream.
+	b, err := os.ReadFile(filepath.Join(dir, ".coldstep-events.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(b, []byte("**tcp**")) {
-		t.Fatalf("expected **tcp** in detect log, got:\n%s", string(b))
+	if !bytes.Contains(b, []byte(`"type":"tcp"`)) {
+		t.Fatalf("expected a tcp event in the JSONL stream, got:\n%s", string(b))
 	}
-	if !bytes.Contains(b, []byte("1.1.1.1")) && !bytes.Contains(b, []byte(":443`")) {
-		t.Fatalf("expected TCP remote with 1.1.1.1:443 in detect log, got:\n%s", string(b))
-	}
-	if !bytes.Contains(b, []byte("monitor")) {
-		t.Fatalf("expected policy monitor in detect log, got:\n%s", string(b))
+	if !bytes.Contains(b, []byte("1.1.1.1")) {
+		t.Fatalf("expected 1.1.1.1 in the JSONL stream, got:\n%s", string(b))
 	}
 }
 
