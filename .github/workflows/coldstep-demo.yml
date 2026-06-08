@@ -303,7 +303,6 @@ jobs:
           retention-days: 14
           include-hidden-files: true
           if-no-files-found: warn
-          if-no-files-found: warn
 
       - name: List workspace Coldstep artifacts
         if: always()
