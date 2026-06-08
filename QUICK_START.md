@@ -26,32 +26,29 @@ Recommended workflow:
 1. **Collect ≥ 3 builds.** Run detect across at least three different PRs or branches (preferably touching different parts of the codebase). One short run on one branch is the easiest poisoning target.
 2. **Diff against a baseline.** Before promoting domains to `allow:`, compare the new JSONL against a known-good baseline:
    ```bash
-   coldstep-report diff \
+   coldstep-action diff \
      --baseline baseline.jsonl \
      --current  .coldstep-events.jsonl \
      --summary  diff-summary.md \
      --fail-on-new-domain
    ```
-   `--fail-on-new-domain` exits non-zero when any FQDN appears in the current run but not the baseline. Wire it into CI on PRs that touch `.github/coldstep/egress-allow.txt`.
-3. **Reject short windows.** Use `coldstep-report build-model --min-observation-hours 24` (or set `COLDSTEP_MIN_OBS_HOURS=24`) so a run that observed less than 24 hours of wall-clock traffic flags `short_observation_window=true` in the model — `coldstep-report assert-integrity` then hard-fails. Tune the threshold to whatever observation period your team actually trusts.
-4. **Require a second-engineer review.** Newly observed domains in the diff output get a separate human approval before they land in the `allow:` list. Treat the diff as a code review, not as an automated step that closes itself.
+   `--fail-on-new-domain` exits non-zero when any destination FQDN appears in the current run but not the baseline. Wire it into CI on PRs that touch `.github/coldstep/egress-allow.txt`.
+3. **Require a second-engineer review.** Newly observed domains in the diff output get a separate human approval before they land in the `allow:` list. Treat the diff as a code review, not as an automated step that closes itself.
 
-`build-model` additionally flags **suspicious domains** in the report model (`suspicious_domains` field): high-entropy subdomains (Shannon entropy > 3.5 bits/char on labels longer than 8 chars), domains observed only once across the entire run, and HTTP/TLS observations on non-standard ports. `render-summary` surfaces a `[!WARNING]` block when any are present so reviewers see them before approving the diff.
+> **Note (report pipeline change):** the older `coldstep-report build-model` model — including the `suspicious_domains` / `risk_hint` heuristics (high-entropy/DGA labels, single-observation, port anomalies) and the `--min-observation-hours` window gate — was removed when reporting was consolidated into a single pure-markdown path. The surviving programmatic gates are `coldstep-action diff --fail-on-new-domain` (baseline new-domain) and `coldstep-action assert-integrity` (required event types). The manual-review discipline below still applies; the entropy/window heuristics are a candidate to reintroduce in the markdown generator if needed.
 
-### Building a safe allowlist (H17 learning-mode poisoning protections)
+### Building a safe allowlist (manual review discipline)
 
-Even with the workflow above, **two specific shapes of destination warrant manual review** before they land in `allow:` — and `coldstep-report` now tags them on each flagged entry via `suspicious_domains[].risk_hint`:
+The baseline diff catches **new** domains, but a human should still review newly observed destinations before promoting them to `allow:`. Two shapes warrant extra scrutiny:
 
-| `risk_hint` | What it means | Why to review by hand |
-| :----------- | :------------- | :-------------------- |
-| **`suspicious-dga`** | The leftmost DNS label is ≥ 12 chars of high-entropy text (Shannon ≥ 3.5 bits/char) **or** a 16+-char lowercase hex string (DGA / hash-style). | DGA-shaped labels are characteristic of malware C2 and ephemeral exfil endpoints. Even one observation is enough to want a human to confirm whether the host is a legitimate object-store / CDN URL or attacker infrastructure. |
-| **`single-observation`** | The domain was seen exactly once across the entire JSONL stream (`observation_count == 1`). | Attackers who briefly poisoned a learning run leave exactly this fingerprint. Compare against a longer-window baseline before promoting. |
+- **DGA-shaped hosts** — a leftmost label that is long, high-entropy, or hash-like is characteristic of malware C2 / ephemeral exfil. Confirm it is a legitimate object-store / CDN URL.
+- **Single-observation domains** — a host seen exactly once is the fingerprint of a briefly-poisoned learning run. Compare against a longer-window baseline before promoting.
 
-`assert-integrity` does **not** fail on either hint — it emits a `::warning title=Coldstep learning-mode reviewer hints (H17)::…` annotation listing each flagged entry so reviewers see them in the GitHub Actions UI. The hard gates are still `--min-observation-hours` and `diff --fail-on-new-domain`. Recommended bar before promoting any new domain:
+Recommended bar before promoting any new domain:
 
-- **≥ 24h observation window** (`coldstep-report build-model --min-observation-hours 24`). Shorter windows are inherently easier to poison.
-- **Baseline diff with `--fail-on-new-domain`** on the PR that edits `allow:` / `allow-file`. This is the only step that catches a domain a single human reviewer might wave through.
-- **Manual review of every `risk_hint` entry.** `suspicious-dga` and `single-observation` rows are reviewer-driven by design — there is no automated way to tell good ephemeral URLs from bad ones.
+- **Baseline diff with `--fail-on-new-domain`** on the PR that edits `allow:` / `allow-file` — the one step that catches a domain a single reviewer might wave through.
+- **Collect several builds** across different PRs before trusting the observed set; one short run on one branch is the easiest poisoning target.
+- **Manual review of DGA-shaped / single-observation hosts** — reviewer-driven by design.
 
 ---
 
@@ -209,17 +206,14 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 
 ## Where to look after a run
 
-- **Summary tab:** digest from `.coldstep-detect.md` (when enabled).
-- **Workspace:** `.coldstep-events.jsonl`, `.coldstep-telemetry.json`.
+- **Summary tab:** the pure-markdown simple report (written by the action's stop step from `.coldstep-events.jsonl`).
+- **Workspace:** `.coldstep-events.jsonl`, `.coldstep-telemetry.json`, and `.coldstep-report.md` (detailed markdown report, uploaded as an artifact by the demo/CI workflows).
 
 Start with default **detect**, then set **`detect-profile: enhanced`** when you need `proc_tree` / `tls_sni` / `fs_events` streams.
 
-### Report pipelines (maintainers)
+### Report pipeline (maintainers)
 
-| Workflow | Summary surface | Artifact notes |
-| -------- | ---------------- | -------------- |
-| **`coldstep-demo-detect.yml`** | Tier-1 BLUF (`coldstep-report render-summary`) | Tier-2 **`coldstep-detect-report.html`** artifact |
-| **`coldstep-detect-demo-dev.yml`** | Tier-1 BLUF + IP classification markdown | JSONL baseline + same Tier-2 **`coldstep-detect-report-html-<runner>`** artifact as **`coldstep-demo-detect`** |
+Reporting is one pure-markdown path in `coldstep-action` (no separate `coldstep-report` binary, no HTML): `stop` renders the simple report to the Job Summary and the detailed report to `.coldstep-report.md`; `diff` and `assert-integrity` are the baseline / anti-blindness gates. Demo/CI workflows upload `.coldstep-report.md` as the downloadable artifact.
 
 Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
 
