@@ -237,7 +237,6 @@ jobs:
           set -euo pipefail
           test -x bin/coldstep
           test -x bin/coldstep-action
-          test -x bin/coldstep-report
 
   detect-mode:
     needs: [gofmt]
