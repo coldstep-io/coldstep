@@ -118,7 +118,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		// so consumers can see silent event loss without parsing the digest.
 		// Map is nil (and omitted) when every counter is zero.
 		if cfg.EventsLogPath != "" {
-			if shutdownMeta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile); err != nil {
+			if shutdownMeta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile, string(cfg.Mode)); err != nil {
 				slog.Warn("build shutdown meta", "err", err)
 			} else {
 				shutdownMeta.DroppedEvents = buildDroppedEventsMap(stats, defendState)
@@ -980,7 +980,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	}
 
 	if cfg.EventsLogPath != "" {
-		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile)
+		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile, string(cfg.Mode))
 		if err != nil {
 			slog.Warn("build meta", "err", err)
 		} else {
