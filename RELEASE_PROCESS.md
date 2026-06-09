@@ -33,7 +33,7 @@ Repo-local bug-hunting playbooks (`docs/bug_hunting/*.md`, gitignored with `/doc
 Confirm bug-hunting and bug-fix readiness explicitly before creating a release tag:
 
 - **No open release-blocking regressions:** no unresolved P0/P1 bugs for detect mode, defend (blocking) mode, CI entry workflow, or release packaging.
-- **Evidence artifacts present:** latest successful CI run has downloadable detect / defend artifacts (`.coldstep-events.jsonl`, `.coldstep-detect.md`, `.coldstep-telemetry.json`) for forensic replay.
+- **Evidence artifacts present:** latest successful CI run has downloadable detect / defend artifacts (`.coldstep-events.jsonl`, `.coldstep-report.md`, `.coldstep-telemetry.json`) for forensic replay.
 - **Critical-path regressions checked:** if release PR touched critical paths (`internal/agent/`, `internal/bpf/`, `bpf/`, `.github/workflows/`, report scripts), ensure critical-path heavy checks passed (`go test -shuffle`, `govulncheck`).
 - **Deep-debug policy acknowledged:** if issue history includes flakiness, verifier/load instability, or cross-layer failures, run the **`coldstep-deep-debug`** workflow (**`workflow_dispatch`**) before tagging and attach/report outcome from the uploaded artifact.
 - **Known-risk owner assigned:** any accepted non-blocking risk has a documented owner and follow-up issue with target milestone.
@@ -61,7 +61,7 @@ If **Upload Linux agent** hits **immutable Release** / **HTTP 422**, the workflo
 
 ## 5. Confirm GitHub Release
 
-- **Releases → `vX.Y.Z`** should list **`coldstep-linux-amd64`** (when upload succeeded) — the only published binary asset. The **`coldstep-report-linux-amd64`** asset (issue **#219**) was **retired** when the report binary was folded into `coldstep-action`; already-published assets on prior tags remain (immutable) but new tags no longer ship it.
+- **Releases → `vX.Y.Z`** should list **`coldstep-linux-amd64`** (when upload succeeded) — the single published binary asset, now the **combined** `coldstep` binary (agent + `start`/`stop`/`diff`/`assert-integrity` subcommands). The **`coldstep-report-linux-amd64`** asset (issue **#219**) was retired earlier; the separate `coldstep-action` binary was folded into this combined binary, so new tags ship one artifact.
 - Optional notes: paste the **`CHANGELOG.md`** section for that version.
 - For a **pre-release** (soak / validation first): on the Release, check **Set as pre-release**; clear it when promoting to **Latest**.
 
