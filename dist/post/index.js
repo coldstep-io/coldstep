@@ -19100,6 +19100,11 @@ var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/d
 function actionRootPath() {
   return path.resolve(__dirname, "..", "..");
 }
+function cachedColdstepBinaryPath() {
+  const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
+  const binPath = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION, "coldstep");
+  return fs3.existsSync(binPath) ? binPath : null;
+}
 function agentStatusPath() {
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   return path.join(baseDir, ".coldstep-ready.json");
@@ -19448,7 +19453,7 @@ async function finalizeDigestAndNotifications(_reportJobSummary, _reportPRSummar
   const token = (getInput("github-token") || process.env.GITHUB_TOKEN || "").trim();
   const detectProfile = (getInput("detect-profile") || "standard").trim();
   try {
-    const bin = await ensureColdstepBinary();
+    const bin = cachedColdstepBinaryPath() ?? await ensureColdstepBinary();
     const args = ["stop", "--report", report, "--detect-profile", detectProfile];
     if (token) args.push("--github-token", token);
     (0, import_child_process.execFileSync)(bin, args, { stdio: "inherit" });

@@ -29,6 +29,18 @@ export function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
 }
 
+// cachedColdstepBinaryPath returns the path to the already-downloaded agent
+// binary if it is present in the per-version cache, else null. The start step
+// downloads + SHA-256-verifies it (ensureColdstepBinary); the stop step uses
+// this to render the report WITHOUT a fresh GitHub Releases API round-trip, so a
+// transient API failure / unauthenticated rate-limit at the post step cannot
+// drop the report. Falls back to ensureColdstepBinary only on a cache miss.
+export function cachedColdstepBinaryPath(): string | null {
+  const cacheRoot = process.env.RUNNER_TEMP || os.tmpdir();
+  const binPath = path.join(cacheRoot, 'coldstep-action', COLDSTEP_BINARY_VERSION, 'coldstep');
+  return fs.existsSync(binPath) ? binPath : null;
+}
+
 export function agentStatusPath(): string {
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
   return path.join(baseDir, '.coldstep-ready.json');
