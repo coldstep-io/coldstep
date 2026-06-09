@@ -2,7 +2,7 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
 
-**Pin workflows to** **`coldstep-io/coldstep@v0.4.1`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`coldstep-io/coldstep@v0.5.0`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
@@ -36,7 +36,7 @@ Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode
 
 ## Add it to a workflow
 
-**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.4.1`** (or a newer tag you publish), not **`@main`**.
+**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.5.0`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 jobs:
@@ -44,14 +44,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.4.1
+      - uses: coldstep-io/coldstep@v0.5.0
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.4.1`** (or a newer tag).
+The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.5.0`** (or a newer tag).
 
 ---
 

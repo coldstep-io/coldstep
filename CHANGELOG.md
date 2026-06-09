@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-08
+
 ### Changed (BREAKING)
 
 - **Single combined `coldstep` binary.** The agent (`cmd/coldstep`) and the composite action helper (the former `cmd/coldstep-action`, now `internal/actioncli`) are merged into one binary that dispatches `run | validate | start | stop | diff | assert-integrity`. The Release ships one artifact and consumers download that prebuilt build (they no longer compile source on the runner). `scripts/build-agent-linux.sh` builds one binary; CI/supply-chain reference `bin/coldstep <subcommand>`.
@@ -222,6 +224,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[v0.5.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.0
+[v0.4.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.0
 [v0.3.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.3.0
 [v0.2.9]: https://github.com/coldstep-io/coldstep/releases/tag/v0.2.9
