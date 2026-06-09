@@ -945,16 +945,21 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
  *	TRACE_EVENT(io_uring_submit_sqe,
  *		    TP_PROTO(struct io_kiocb *req, bool force_nonblock))
  *
- * Filter to socket-class submission opcodes — IORING_OP_SENDMSG (9) and
- * IORING_OP_SEND (26) — values from include/uapi/linux/io_uring.h
- * (`enum io_uring_op`, stable since 5.1). Both are unambiguously network
- * sends so we can emit the event without resolving the SQE's fd back to a
- * socket. IORING_OP_WRITE (23) and IORING_OP_WRITEV (2) are deliberately
- * out of scope: their fd may be a regular file, and the generic
- * `req->fd` / `req->cqe.fd` field that would let us distinguish socket
- * vs file writes only appears on kernels whose vmlinux BTF carries
- * `struct io_cqe` (post-5.15). Adding them without fd resolution would
- * flood the ringbuf on routine file I/O.
+ * Filter to write-class submission opcodes — IORING_OP_SENDMSG (9),
+ * IORING_OP_SEND (26), IORING_OP_WRITE (23), IORING_OP_WRITEV (2) — values
+ * from include/uapi/linux/io_uring.h (`enum io_uring_op`, stable since 5.1).
+ * SEND/SENDMSG are unambiguously network sends so we emit unconditionally.
+ *
+ * ORDER 2 (Phase 3.3): WRITE/WRITEV are now in scope. Their fd may be a
+ * regular file, so we resolve req->file back to a socket and only emit when
+ * the fd is an AF_INET socket (iouring_resolve_inet_peer below, which gates
+ * on S_ISSOCK before trusting file->private_data and then on skc_family ==
+ * AF_INET). A non-socket fd — routine file I/O — bails with no event, so the
+ * write-class opcodes do not flood the ringbuf. The same walk fills the
+ * event's connected-peer dst for every opcode (best-effort; SEND/SENDMSG
+ * whose walk fails still emit with an empty dst). Native-IPv6 io_uring writes
+ * are not surfaced here (the walk gates on AF_INET, matching the IPv4 focus
+ * of the LSM/cgroup egress paths).
  *
  * Phase 2 (this revision): when COLDSTEP_DETECT_PROFILE=enhanced, do an
  * additional best-effort bounded read of the SQE's user-space buffer to
@@ -971,6 +976,13 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
  */
 #define COLDSTEP_IORING_OP_SENDMSG 9
 #define COLDSTEP_IORING_OP_SEND    26
+#define COLDSTEP_IORING_OP_WRITEV  2
+#define COLDSTEP_IORING_OP_WRITE   23
+
+/* S_IFMT / S_IFSOCK from <linux/stat.h>; used to confirm an io_uring fd is a
+ * socket before trusting file->private_data as a struct socket*. */
+#define COLDSTEP_S_IFMT   0170000u
+#define COLDSTEP_S_IFSOCK 0140000u
 
 /*
  * Offset of cmd.data[0] inside io_kiocb. file* (or cmd.file) occupies the
@@ -994,34 +1006,50 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
 #define COLDSTEP_USER_MSGHDR_MSG_IOV_OFFSET 16u
 
 /*
- * ORDER 1 (BG-5): resolve the io_uring submission's fd + connected IPv4 peer
- * from req->file's socket, mirroring the proven walk in
+ * ORDER 1 (BG-5) / ORDER 2 (Phase 3.3): resolve the io_uring submission's
+ * connected IPv4 peer from req->file's socket, mirroring the proven walk in
  * trace_lsm_defend_iouring.inc (file->private_data as struct socket* -> sk ->
- * skc_family/skc_daddr/skc_dport). Best-effort: any failed read or non-AF_INET
- * socket leaves the corresponding field at 0; the TLS event still emits with
- * the SNI, just without (or with partial) dst. Fills tev->fd/daddr/dport.
+ * skc_family/skc_daddr/skc_dport).
+ *
+ * Returns 1 and fills out_daddr (4 bytes, network order) + out_dport (2 bytes,
+ * network order) when req->file is an AF_INET socket; returns 0 otherwise
+ * (non-socket fd such as a regular file, a non-AF_INET socket, or any failed
+ * read) leaving the outputs untouched. Callers that emit only for socket fds
+ * (WRITE/WRITEV) gate on the return value; SEND/SENDMSG ignore it and emit
+ * best-effort with whatever dst was filled.
+ *
+ * The S_ISSOCK gate on file->f_inode->i_mode is what makes the WRITE/WRITEV
+ * path safe: a regular file's private_data is unrelated memory, so we must
+ * confirm the fd is a socket before dereferencing it as struct socket*.
  */
-static __always_inline void iouring_tls_resolve_peer(struct io_kiocb *req,
-						     struct io_uring_tls_event *tev)
+static __always_inline int iouring_resolve_inet_peer(struct io_kiocb *req,
+						     void *out_daddr, void *out_dport)
 {
 	struct file *file = NULL;
 	if (bpf_core_read(&file, sizeof(file), &req->file) || !file)
-		return;
+		return 0;
+	struct inode *inode = NULL;
+	if (bpf_core_read(&inode, sizeof(inode), &file->f_inode) || !inode)
+		return 0;
+	__u16 imode = 0;
+	if (bpf_core_read(&imode, sizeof(imode), &inode->i_mode))
+		return 0;
+	if ((imode & COLDSTEP_S_IFMT) != COLDSTEP_S_IFSOCK) /* !S_ISSOCK */
+		return 0;
 	void *priv = NULL;
 	if (bpf_probe_read_kernel(&priv, sizeof(priv), &file->private_data) || !priv)
-		return;
+		return 0;
 	struct socket *sock = (struct socket *)priv;
 	struct sock *sk = NULL;
 	if (bpf_probe_read_kernel(&sk, sizeof(sk), &sock->sk) || !sk)
-		return;
+		return 0;
 	__u16 fam = 0;
 	if (bpf_probe_read_kernel(&fam, sizeof(fam), &sk->__sk_common.skc_family) ||
 	    fam != AF_INET)
-		return;
-	bpf_probe_read_kernel(&tev->daddr, sizeof(tev->daddr),
-			      &sk->__sk_common.skc_daddr);
-	bpf_probe_read_kernel(&tev->dport, sizeof(tev->dport),
-			      &sk->__sk_common.skc_dport);
+		return 0;
+	bpf_probe_read_kernel(out_daddr, 4, &sk->__sk_common.skc_daddr);
+	bpf_probe_read_kernel(out_dport, 2, &sk->__sk_common.skc_dport);
+	return 1;
 }
 
 SEC("raw_tp/io_uring_submit_sqe")
@@ -1041,11 +1069,29 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 		return 0;
 
 	if (opcode != COLDSTEP_IORING_OP_SENDMSG &&
-	    opcode != COLDSTEP_IORING_OP_SEND)
+	    opcode != COLDSTEP_IORING_OP_SEND &&
+	    opcode != COLDSTEP_IORING_OP_WRITE &&
+	    opcode != COLDSTEP_IORING_OP_WRITEV)
+		return 0;
+
+	/* ORDER 2: resolve the connected IPv4 peer from req->file's socket once,
+	 * reused by both the TLS-capture event and the io_uring_send event below.
+	 * For WRITE/WRITEV the fd may be a regular file — only emit when the walk
+	 * confirms an AF_INET socket, so routine file I/O does not flood. */
+	__u8 r_daddr[4] = {};
+	__u8 r_dport[2] = {};
+	int is_inet_sock = iouring_resolve_inet_peer(req, r_daddr, r_dport);
+	if ((opcode == COLDSTEP_IORING_OP_WRITE ||
+	     opcode == COLDSTEP_IORING_OP_WRITEV) &&
+	    !is_inet_sock)
 		return 0;
 
 	__u8 has_tls_hello = 0;
-	{
+	/* The user-buffer ClientHello peek is SEND/SENDMSG-only: its SQE payload
+	 * resolution (direct buf vs user_msghdr iov) is specific to io_sr_msg.
+	 * WRITE/WRITEV still emit an io_uring_send event with the resolved dst. */
+	if (opcode == COLDSTEP_IORING_OP_SENDMSG ||
+	    opcode == COLDSTEP_IORING_OP_SEND) {
 		__u32 key0 = 0;
 		/* AUDIT(5a): null checked — `!en` short-circuits before `*en`. */
 		__u8 *en = bpf_map_lookup_elem(&io_uring_peek_cfg, &key0);
@@ -1127,8 +1173,10 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 							tev->daddr = 0;
 							tev->dport = 0;
 							__builtin_memset(tev->_pad2, 0, sizeof(tev->_pad2));
-							/* ORDER 1: resolve connected peer dst (best-effort). */
-							iouring_tls_resolve_peer(req, tev);
+							/* ORDER 1/2: connected peer dst from the single
+							 * walk above (zeroed if the walk found no socket). */
+							__builtin_memcpy(&tev->daddr, r_daddr, 4);
+							__builtin_memcpy(&tev->dport, r_dport, 2);
 							/*
 							 * AUDIT(5b/5f): submit only when the full payload
 							 * window was captured; a short/failed read discards
@@ -1163,8 +1211,12 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 	ev->timestamp_ns = bpf_ktime_get_ns();
 	ev->pid = (__u32)(bpf_get_current_pid_tgid() >> 32);
 	ev->fd = 0;
-	__builtin_memset(ev->daddr, 0, sizeof(ev->daddr));
-	__builtin_memset(ev->dport, 0, sizeof(ev->dport));
+	/* ORDER 2: connected IPv4 peer from the req->file socket walk. Zero when
+	 * the walk found no AF_INET socket (SEND/SENDMSG only — WRITE/WRITEV with
+	 * an unresolved peer already returned above), which userspace renders as
+	 * an empty dst_ip rather than 0.0.0.0. */
+	__builtin_memcpy(ev->daddr, r_daddr, sizeof(ev->daddr));
+	__builtin_memcpy(ev->dport, r_dport, sizeof(ev->dport));
 	ev->op = opcode;
 	ev->has_tls_hello = has_tls_hello;
 	bpf_get_current_comm(&ev->comm, sizeof(ev->comm));
