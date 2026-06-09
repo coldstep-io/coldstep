@@ -255,9 +255,15 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The combined coldstep binary (agent + report/integrity subcommands) is
-      # produced by the start step below (build-agent-linux.sh); the diff /
-      # assert-integrity steps invoke `bin/coldstep <subcommand>`.
+      # Build the combined coldstep binary from source and feed it to the action
+      # via release-path. The merged binary carries the agent plus the report /
+      # diff / assert-integrity subcommands; the download path (ensureColdstepBinary)
+      # can only serve a release that already ships the combined binary, so until
+      # the first such tag exists CI must build it here. The post-check steps below
+      # then invoke `./bin/coldstep <subcommand>`.
+      - name: Build combined coldstep (from source)
+        run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
+
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
@@ -265,6 +271,7 @@ jobs:
           mode: detect
           detect-profile: enhanced
           allow: theclouddj.com, *.ubuntu.com
+          release-path: bin/coldstep
 
       - name: Install runtime probes
         run: |
