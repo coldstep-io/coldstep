@@ -650,40 +650,26 @@ func readHTTPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, po
 }
 
 func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats *runStats) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (dns)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-		pkt, isTCP, ok := decodeDNSSniffSample(record.RawSample)
+	return runRingReader(ctx, "dns", rd, func(raw []byte) {
+		pkt, isTCP, ok := decodeDNSSniffSample(raw)
 		if !ok || len(pkt) < 12 {
 			stats.addDropped("dns_decode")
-			continue
+			return
 		}
 		if isTCP {
 			// Strip RFC 1035 TCP framing 2-byte length prefix before the DNS header.
 			if len(pkt) < 14 {
 				stats.addDropped("dns_decode_tcp_short")
-				continue
+				return
 			}
 			pkt = pkt[2:]
 		}
 		if len(pkt) < 12 {
 			stats.addDropped("dns_decode")
-			continue
+			return
 		}
 		cache.AddFromPacket(pkt)
-	}
+	})
 }
 
 // readKTLSRing drains setsockopt(SOL_TLS, TLS_TX|TLS_RX) ringbuf events from
@@ -693,22 +679,7 @@ func readDNSRing(ctx context.Context, rd *ringbuf.Reader, cache *DNSCache, stats
 // for the digest KPI; appended to JSONL when EventsLogPath is set.
 func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer, ktlsTr *ktlsTracker) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (ktls)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
+	return runRingReader(ctx, "ktls", rd, func(raw []byte) {
 		// Capture the userspace ringbuf arrival time as close to rd.Read() as
 		// possible. The ktlsTracker uses this as `markedAt` so a later
 		// IsKTLS query from readTLSRing only flips confidence when the TLS
@@ -716,11 +687,11 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		// earlier tlsTimestampNs are preserved (Bug-1 fix).
 		recvAtNs := time.Now().UnixNano()
 
-		tgid, tid, fd, commb, dirByte, ok := decodeKTLSEvent(record.RawSample)
+		tgid, tid, fd, commb, dirByte, ok := decodeKTLSEvent(raw)
 		if !ok {
 			stats.addDropped("ktls_decode")
-			slog.Warn("decode ktls", "len", len(record.RawSample))
-			continue
+			slog.Warn("decode ktls", "len", len(raw))
+			return
 		}
 		stats.addKTLS()
 		// P4: record (pid, fd, markedAt) so any TLS event for the same pid
@@ -754,7 +725,7 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				slog.Warn("events jsonl (ktls)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 // readTCPStateRing drains the tcp_state_events ringbuf (P3-2b). The BPF
@@ -766,27 +737,12 @@ func readKTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 // with the preceding `tcp` connect_event when reliable attribution is needed.
 func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 	stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (tcp_state)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
-		timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, commb, ok := decodeTCPStateEvent(record.RawSample)
+	return runRingReader(ctx, "tcp_state", rd, func(raw []byte) {
+		timestampNS, pid, saddr, daddr, sport, dport, oldState, newState, commb, ok := decodeTCPStateEvent(raw)
 		if !ok {
 			stats.addDropped("tcp_state_decode")
-			slog.Warn("decode tcp_state", "len", len(record.RawSample))
-			continue
+			slog.Warn("decode tcp_state", "len", len(raw))
+			return
 		}
 
 		oldStr := telemetry.TCPStateName(oldState)
@@ -796,7 +752,7 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 
 		dstIP := net.IP(daddr[:]).To4()
 		if dstIP == nil {
-			continue
+			return
 		}
 		srcIP := net.IP(saddr[:]).To4()
 		comm := telemetry.SanitizeField(nullTermStr(commb[:]), 16)
@@ -831,7 +787,7 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 				slog.Warn("events jsonl (tcp_state)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 // readIoUringRing drains io_uring_events from the BPF ringbuf into JSONL and
