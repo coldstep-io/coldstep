@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **io_uring WRITE/WRITEV egress visibility (ORDER 2 / Phase 3.3).** `IORING_OP_WRITE` (23) and `IORING_OP_WRITEV` (2) submissions are now surfaced as `io_uring_send` events when their fd resolves to an AF_INET socket. The fd is walked `req->file` → socket → `sk` with an `S_ISSOCK` guard before `file->private_data` is trusted, so routine file I/O bails with no event (no ringbuf flood). The connected-peer dst (`dst_ip`/`dst_port`) is populated from that same walk for every write-class opcode, reusing the ORDER 1 resolver. Native-IPv6 io_uring writes are not surfaced (the walk gates on AF_INET, matching the IPv4 focus of the LSM/cgroup egress paths).
+
+### Changed
+
+- **Internal: ring-reader scaffolding dedup complete.** All 17 enrichment ringbuf readers (connect/tls/udp/http and the rest) now share the `runRingReader` loop extracted in 0.5.1; `readDenyRing` stays separate by design (burst-drain + `SetDeadline` protocol). No behavior change.
+
 ## [0.5.1] — 2026-06-09
 
 ### Added
