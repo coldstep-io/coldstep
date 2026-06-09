@@ -2,77 +2,10 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
-	"fmt"
 	"strings"
 	"testing"
 	"time"
 )
-
-func TestSanitizeDigestForMarkdown_BOM(t *testing.T) {
-	// BOM must be stripped
-	input := "\uFEFF## heading"
-	out := sanitizeDigestForMarkdown(input)
-	if strings.Contains(out, "\uFEFF") {
-		t.Error("BOM not stripped")
-	}
-	if !strings.Contains(out, "## heading") {
-		t.Errorf("content lost after BOM strip: %q", out)
-	}
-}
-
-func TestSanitizeDigestForMarkdown_BackslashFirst(t *testing.T) {
-	// Backslash must be escaped before backtick/tilde (order-sensitive)
-	// If \` is in input, we must get \\` not \\`` which would be wrong
-	input := "\\`test"
-	out := sanitizeDigestForMarkdown(input)
-	// Original backslash escapes first; then ` is a single backtick (not 3), so no fence escaping
-	if !strings.Contains(out, "\\\\`") {
-		t.Errorf("backslash-first rule violated: got %q", out)
-	}
-}
-
-func TestSanitizeDigestForMarkdown_FenceBreakout(t *testing.T) {
-	// Triple backticks and tildes must be escaped to prevent fence breakout
-	cases := []struct {
-		input    string
-		mustHave string
-	}{
-		{"```code```", "\\`\\`\\`"},
-		{"~~~block~~~", "\\~\\~\\~"},
-	}
-	for _, c := range cases {
-		out := sanitizeDigestForMarkdown(c.input)
-		if !strings.Contains(out, c.mustHave) {
-			t.Errorf("fence breakout not prevented for %q: got %q", c.input, out)
-		}
-	}
-}
-
-func TestSanitizeDigestForMarkdown_HTMLEntity(t *testing.T) {
-	input := "<script>alert(1)</script>"
-	out := sanitizeDigestForMarkdown(input)
-	if strings.Contains(out, "<script>") {
-		t.Errorf("HTML not escaped: got %q", out)
-	}
-	if !strings.Contains(out, "&lt;") {
-		t.Errorf("expected &lt; in output: got %q", out)
-	}
-}
-
-func TestSanitizeDigestForMarkdown_LineLengthCap(t *testing.T) {
-	// Lines over 4096 chars must be truncated
-	line := strings.Repeat("x", 5000)
-	out := sanitizeDigestForMarkdown(line)
-	parts := strings.Split(out, "\n")
-	if len(parts[0]) > 4096+len(" ...(truncated)") {
-		t.Errorf("line not capped at 4096: len=%d", len(parts[0]))
-	}
-	if !strings.Contains(parts[0], "...(truncated)") {
-		t.Errorf("truncated marker missing: %q", parts[0][:80])
-	}
-}
 
 func TestTruncate_utf8Boundary(t *testing.T) {
 	prefix := strings.Repeat("x", 100)
@@ -87,20 +20,6 @@ func TestTruncate_utf8Boundary(t *testing.T) {
 	}
 	if truncate(s, len(s)) != s {
 		t.Fatal("truncate noop should return identity")
-	}
-}
-
-func TestSanitizeDigestForMarkdown_Empty(t *testing.T) {
-	if out := sanitizeDigestForMarkdown(""); out != "" {
-		t.Errorf("expected empty output for empty input, got %q", out)
-	}
-}
-
-func TestSanitizeDigestForMarkdown_CRLFNormalization(t *testing.T) {
-	input := "line1\r\nline2\rline3"
-	out := sanitizeDigestForMarkdown(input)
-	if strings.Contains(out, "\r") {
-		t.Errorf("CRLF not normalized: %q", out)
 	}
 }
 
@@ -182,34 +101,6 @@ func TestParseStartFlags_Explicit(t *testing.T) {
 	}
 	if cfg.ReadyTimeoutSeconds != 120 {
 		t.Errorf("expected 120, got %d", cfg.ReadyTimeoutSeconds)
-	}
-}
-
-// H11: digestIntegrityMarker must produce the canonical hash marker for any
-// non-empty body, and yield the empty string for empty / whitespace input so
-// runStop does not write a marker against a missing digest file.
-func TestDigestIntegrityMarker_RoundTrip(t *testing.T) {
-	body := "## Coldstep digest\n\n- exec rows: 4\n"
-	got := digestIntegrityMarker(body)
-	sum := sha256.Sum256([]byte(body))
-	want := fmt.Sprintf("\n<!-- coldstep-digest-sha256: %s -->\n", hex.EncodeToString(sum[:]))
-	if got != want {
-		t.Fatalf("marker mismatch:\n got %q\nwant %q", got, want)
-	}
-	if !strings.HasPrefix(got, "\n<!-- coldstep-digest-sha256: ") {
-		t.Errorf("marker missing canonical prefix: %q", got)
-	}
-	if !strings.HasSuffix(got, " -->\n") {
-		t.Errorf("marker missing canonical suffix: %q", got)
-	}
-}
-
-func TestDigestIntegrityMarker_EmptyBodyYieldsNothing(t *testing.T) {
-	if got := digestIntegrityMarker(""); got != "" {
-		t.Fatalf("expected empty marker for empty body, got %q", got)
-	}
-	if got := digestIntegrityMarker("   \n\t  "); got != "" {
-		t.Fatalf("expected empty marker for whitespace body, got %q", got)
 	}
 }
 

@@ -20,10 +20,6 @@ const (
 type Config struct {
 	Mode            Mode
 	StepSummaryPath string
-	// DetectLogPath, when set, receives exec lines during the job; the action post step
-	// merges this file into GITHUB_STEP_SUMMARY (GitHub freezes per-step summary files
-	// when a step ends, so a long-running agent cannot write the summary path directly).
-	DetectLogPath string
 
 	AllowedHosts         string
 	AllowedIPs           string
@@ -71,12 +67,6 @@ func LoadFromEnv() (Config, error) {
 	}
 
 	summary := os.Getenv("GITHUB_STEP_SUMMARY")
-	detectLog := strings.TrimSpace(os.Getenv("COLDSTEP_DETECT_LOG"))
-	// Match events log: default to workspace so digest is not silently written only to
-	// GITHUB_STEP_SUMMARY when COLDSTEP_DETECT_LOG is missing (e.g. sudo env filtering).
-	if detectLog == "" {
-		detectLog = defaultUnderWorkspace(".coldstep-detect.md")
-	}
 	allowedDomains := policy.NormalizeDomainsFromRaw(os.Getenv("COLDSTEP_ALLOWED_DOMAINS"))
 	if mode == ModeDefend && len(allowedDomains) == 0 {
 		return Config{}, fmt.Errorf("CI_GUARD_MODE=defend requires non-empty allowlist (set COLDSTEP_ALLOWED_DOMAINS)")
@@ -128,7 +118,6 @@ func LoadFromEnv() (Config, error) {
 	return Config{
 		Mode:                 mode,
 		StepSummaryPath:      summary,
-		DetectLogPath:        detectLog,
 		AllowedHosts:         hosts,
 		AllowedIPs:           ips,
 		IgnoredIPNets:        ignored,

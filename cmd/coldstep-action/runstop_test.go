@@ -38,15 +38,17 @@ func TestWaitForReady_Timeout(t *testing.T) {
 	}
 }
 
-// TestRunStop_JobSummaryMergeAndMarker exercises the default report path:
-// the on-disk digest is appended to GITHUB_STEP_SUMMARY behind the section
-// heading, and the H11 integrity marker is appended to the detect log.
-func TestRunStop_JobSummaryMergeAndMarker(t *testing.T) {
+// TestRunStop_JobSummaryFromJSONL exercises the default report path: the job
+// summary is rendered by the markdown generator from .coldstep-events.jsonl
+// (the source of truth), not from any agent-written digest.
+func TestRunStop_JobSummaryFromJSONL(t *testing.T) {
 	ws := t.TempDir()
 	action := t.TempDir()
-	detect := filepath.Join(ws, ".coldstep-detect.md")
-	const body = "## digest\n\nsome egress rows\n"
-	if err := os.WriteFile(detect, []byte(body), 0o644); err != nil {
+	events := filepath.Join(ws, ".coldstep-events.jsonl")
+	const jsonl = `{"type":"meta","ts":"t0","mode":"detect"}
+{"type":"tcp","dst":"140.82.112.3","dport":443,"fqdn":"github.com"}
+`
+	if err := os.WriteFile(events, []byte(jsonl), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	summary := filepath.Join(ws, "step-summary.md")
@@ -68,20 +70,16 @@ func TestRunStop_JobSummaryMergeAndMarker(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := string(got)
-	if !strings.Contains(s, "Coldstep - digest") {
-		t.Errorf("step summary missing section heading:\n%s", s)
+	if !strings.Contains(s, "## coldstep") {
+		t.Errorf("step summary missing markdown report heading:\n%s", s)
 	}
-	if !strings.Contains(s, "some egress rows") {
-		t.Errorf("step summary missing digest body:\n%s", s)
+	if !strings.Contains(s, "github.com") {
+		t.Errorf("step summary missing observed destination:\n%s", s)
 	}
 
-	// Integrity marker appended to the on-disk detect log.
-	d, err := os.ReadFile(detect)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(d), "coldstep-digest-sha256:") {
-		t.Errorf("detect log missing integrity marker:\n%s", d)
+	// The detailed report artifact is written alongside the summary.
+	if _, err := os.Stat(filepath.Join(ws, ".coldstep-report.md")); err != nil {
+		t.Errorf(".coldstep-report.md not written: %v", err)
 	}
 }
 
@@ -90,7 +88,8 @@ func TestRunStop_JobSummaryMergeAndMarker(t *testing.T) {
 func TestRunStop_ReportNoneSkipsSummary(t *testing.T) {
 	ws := t.TempDir()
 	action := t.TempDir()
-	if err := os.WriteFile(filepath.Join(ws, ".coldstep-detect.md"), []byte("## d\n\nrows\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(ws, ".coldstep-events.jsonl"),
+		[]byte(`{"type":"meta","ts":"t0","mode":"detect"}`+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	summary := filepath.Join(ws, "step-summary.md")
