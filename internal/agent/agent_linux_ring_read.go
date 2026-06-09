@@ -798,27 +798,12 @@ func readTCPStateRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 // best-effort SQE buffer peek matched a TLS ClientHello prefix.
 func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (io_uring)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
-		_, pid, fd, daddr, dport, op, hasTLSHello, commb, ok := decodeIOUringSendEvent(record.RawSample)
+	return runRingReader(ctx, "io_uring", rd, func(raw []byte) {
+		_, pid, fd, daddr, dport, op, hasTLSHello, commb, ok := decodeIOUringSendEvent(raw)
 		if !ok {
 			stats.addDropped("io_uring_decode")
-			slog.Warn("decode io_uring send", "len", len(record.RawSample))
-			continue
+			slog.Warn("decode io_uring send", "len", len(raw))
+			return
 		}
 		stats.addIoUringSend()
 
@@ -860,7 +845,7 @@ func readIoUringRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 				slog.Warn("events jsonl (io_uring)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 // egressBackstopProtoName maps the raw IP-header protocol byte to a JSONL
@@ -915,26 +900,11 @@ func egressBackstopEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.Eg
 // allocated under jsonlMu only on emit (matches every other ring reader).
 func readEgressBackstopRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (egress_backstop)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
+	return runRingReader(ctx, "egress_backstop", rd, func(raw []byte) {
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		ev, emit := egressBackstopEventFromRaw(record.RawSample, ts, 0)
+		ev, emit := egressBackstopEventFromRaw(raw, ts, 0)
 		if !emit {
-			continue
+			return
 		}
 		stats.addEgressBackstop(ev.Dst)
 		if cfg.EventsLogPath != "" {
@@ -947,7 +917,7 @@ func readEgressBackstopRing(ctx context.Context, cfg config.Config, rd *ringbuf.
 				slog.Warn("events jsonl (egress_backstop)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 // bpfSelfDefenseKindName maps the wire target_kind byte to a JSONL string.
@@ -989,26 +959,11 @@ func bpfSelfDefenseEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.Bp
 // allocated under jsonlMu only on emit (matches every other ring reader).
 func readBpfSelfDefenseRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (bpf_self_defense)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
+	return runRingReader(ctx, "bpf_self_defense", rd, func(raw []byte) {
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		ev, emit := bpfSelfDefenseEventFromRaw(record.RawSample, ts, 0)
+		ev, emit := bpfSelfDefenseEventFromRaw(raw, ts, 0)
 		if !emit {
-			continue
+			return
 		}
 		stats.addBpfSelfDefense()
 		if cfg.EventsLogPath != "" {
@@ -1021,7 +976,7 @@ func readBpfSelfDefenseRing(ctx context.Context, cfg config.Config, rd *ringbuf.
 				slog.Warn("events jsonl (bpf_self_defense)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 // ioUringTLSEventFromRaw decodes a captured io_uring ClientHello and parses its
@@ -1066,30 +1021,15 @@ func ioUringTLSEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.IOUrin
 // digest "io_uring TLS SNI" KPI row via runStats.
 func readIoUringTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (io_uring_tls)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
+	return runRingReader(ctx, "io_uring_tls", rd, func(raw []byte) {
 		// Decode + parse outside jsonlMu and only allocate a sequence number
 		// once emit is known — parse misses must not burn seq values, and the
 		// stats update must not run under the JSONL lock (matches every other
 		// ring reader in this file).
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
-		ev, emit := ioUringTLSEventFromRaw(record.RawSample, ts, 0)
+		ev, emit := ioUringTLSEventFromRaw(raw, ts, 0)
 		if !emit {
-			continue
+			return
 		}
 		stats.addIoUringTLSSNI(ev.SNI)
 		if cfg.EventsLogPath != "" {
@@ -1102,31 +1042,16 @@ func readIoUringTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Read
 				slog.Warn("events jsonl (io_uring_tls)", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (bpf_audit)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
-		tgid, tid, commb, cmd, ok := decodeBPFAuditEvent(record.RawSample)
+	return runRingReader(ctx, "bpf_audit", rd, func(raw []byte) {
+		tgid, tid, commb, cmd, ok := decodeBPFAuditEvent(raw)
 		if !ok {
 			stats.addDropped("bpf_audit_decode")
-			slog.Warn("decode bpf audit", "len", len(record.RawSample))
-			continue
+			slog.Warn("decode bpf audit", "len", len(raw))
+			return
 		}
 
 		stats.addBPFAudit()
@@ -1150,7 +1075,7 @@ func readBPFAuditRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader
 				slog.Warn("events jsonl (bpf_audit)", "err", err)
 			}
 		}
-	}
+	})
 }
 
 // ipv6ObsEventWireSize must match the _Static_assert in
@@ -1195,33 +1120,18 @@ func ipv6ObsHookName(hook uint8) string {
 // only — running it in defend mode would silently observe zero events.
 func readIPv6ObsRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (ipv6_obs)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
-		if len(record.RawSample) < ipv6ObsEventWireSize {
+	return runRingReader(ctx, "ipv6_obs", rd, func(raw []byte) {
+		if len(raw) < ipv6ObsEventWireSize {
 			stats.addDropped("ipv6_obs_decode")
-			slog.Warn("decode ipv6_obs", "len", len(record.RawSample), "want", ipv6ObsEventWireSize)
-			continue
+			slog.Warn("decode ipv6_obs", "len", len(raw), "want", ipv6ObsEventWireSize)
+			return
 		}
 
 		var wire ipv6ObsEventWire
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &wire); err != nil {
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &wire); err != nil {
 			stats.addDropped("ipv6_obs_decode")
 			slog.Warn("decode ipv6_obs", "err", err)
-			continue
+			return
 		}
 
 		stats.addIPv6Event()
@@ -1250,5 +1160,5 @@ func readIPv6ObsRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader,
 				slog.Warn("events jsonl (ipv6_obs)", "err", werr)
 			}
 		}
-	}
+	})
 }
