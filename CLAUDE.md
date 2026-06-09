@@ -15,10 +15,10 @@ The config enum (`internal/config/config.go`) uses `ModeDefend` with the underly
 
 ## Build and dev commands
 
-**Build the agent + action helper (Linux only).** `scripts/build-agent-linux.sh` is the single source of truth — it installs clang/llvm/libbpf-dev, dumps BTF to `bpf/vmlinux.h` if missing, runs `go generate` for every `internal/bpf/<probe>` package, and `go build`s two binaries into `bin/`:
+**Build the combined `coldstep` binary (Linux only).** `scripts/build-agent-linux.sh` is the single source of truth — it installs clang/llvm/libbpf-dev, dumps BTF to `bpf/vmlinux.h` if missing, runs `go generate` for every `internal/bpf/<probe>` package, and `go build`s one binary into `bin/`:
 
 ```bash
-bash scripts/build-agent-linux.sh "$PWD"    # bin/coldstep, bin/coldstep-action
+bash scripts/build-agent-linux.sh "$PWD"    # bin/coldstep (run|validate|start|stop|diff|assert-integrity)
 ```
 
 `bpf/vmlinux.h` and `internal/bpf/**/*_bpfel.go` / `*_bpfeb.go` are **gitignored generated artifacts** — never commit them.
@@ -49,7 +49,7 @@ npm run typecheck                     # tsc --noEmit
 npm run build                         # esbuild pre/main/post → dist/{pre,main,post}/index.js
 ```
 
-`action.yml` declares `using: node24` with `pre: dist/pre/index.js`, `main: dist/main/index.js`, `post: dist/post/index.js`. The TS layer is **legacy** — it largely shells out to the Go `coldstep-action` binary. If you edit `src/*.ts`, commit a matching `dist/` rebuild in the same PR (CI/CodeQL verifies it).
+`action.yml` declares `using: node24` with `pre: dist/pre/index.js`, `main: dist/main/index.js`, `post: dist/post/index.js`. The TS layer is **legacy** — it largely shells out to the combined `coldstep` binary (`coldstep start|stop`). If you edit `src/*.ts`, commit a matching `dist/` rebuild in the same PR (CI/CodeQL verifies it).
 
 **Local Linux oracle when not on Linux:**
 
@@ -65,10 +65,13 @@ Set `COLDSTEP_VERIFY_MODE=quick|deep|fast` to switch the wrapper (default `deep`
 
 ## Architecture
 
-### Two Go binaries, one composite action
+### One combined Go binary, one composite action
 
-- **`cmd/coldstep`** (`bin/coldstep run`) — privileged BPF agent. `main` is one line: dispatch to `internal/agent.Main`. Linux-only build (`agent_linux.go`); a non-Linux stub returns an error so the binary still compiles cross-platform.
-- **`cmd/coldstep-action`** (`bin/coldstep-action start|stop|diff|assert-integrity`) — the action's runtime helper. `start` parses inputs from flags / `INPUT_*` env, sanitizes allowlists, computes effective config, and spawns `bin/coldstep run` as a `sudo` child. `stop` renders the pure-markdown report from `.coldstep-events.jsonl` (`internal/report/markdown`): the simple report into `$GITHUB_STEP_SUMMARY` and the detailed report into `.coldstep-report.md`, optionally posts a PR comment via the GitHub REST API (bounded by `httpNotifyClient`'s 60s timeout — do not remove), and with `--strict` enforces the required-event-type anti-blindness gate. `diff` is the JSONL-direct baseline destination-domain gate (`--fail-on-new-domain`); `assert-integrity` is the standalone required-types gate. The separate `coldstep-report` binary + the model/integrity/HTML pipeline were removed — reporting is now one pure-markdown path in userspace.
+`cmd/coldstep` (`bin/coldstep`) dispatches every subcommand from a single shipped artifact — consumers download one prebuilt binary, never compile source on the runner:
+
+- **`run`** — privileged BPF agent. Dispatches to `internal/agent.Main`. Linux-only build (`agent_linux.go`); a non-Linux stub returns an error so the binary still compiles cross-platform.
+- **`validate`** — config/manifest validation (`cmd/coldstep/validate.go`).
+- **`start|stop|diff|assert-integrity`** — the composite action's runtime helper, implemented in `internal/actioncli` (was the standalone `coldstep-action` command before the merge). `start` parses inputs from flags / `INPUT_*` env, sanitizes allowlists, computes effective config, and spawns `bin/coldstep run` as a `sudo` child. `stop` renders the pure-markdown report from `.coldstep-events.jsonl` (`internal/report/markdown`): the simple report into `$GITHUB_STEP_SUMMARY` and the detailed report into `.coldstep-report.md`, optionally posts a PR comment via the GitHub REST API (bounded by `httpNotifyClient`'s 60s timeout — do not remove), and with `--strict` enforces the required-event-type anti-blindness gate. `diff` is the JSONL-direct baseline destination-domain gate (`--fail-on-new-domain`); `assert-integrity` is the standalone required-types gate. The separate `coldstep-report` binary + the model/integrity/HTML pipeline were removed — reporting is one pure-markdown path in userspace.
 
 ### Composite lifecycle (`action.yml`)
 
@@ -89,33 +92,33 @@ Seven BPF probe packages under `internal/bpf/`, each compiled by `go generate`:
 
 Shared C headers live in `bpf/` (notably `coldstep_pure.h`, `deny_event.h`, `defend_policy.inc`, `defend_lpm_key.h`, `trace_connect_obs.h`, `trace_*_obs.inc`, `trace_tls_write.inc`). Defend hooks come from one combined source `trace_defend_all.bpf.c`, which includes `trace_defend_cgroup.inc` (cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`) and `trace_lsm_defend_lsm.inc` (BPF LSM `socket_connect`/`socket_sendmsg`), plus `trace_lsm_bpf_self_defense.inc` (BPF LSM `bpf` — sub-project B self-defense). The self-defense hook denies `BPF_PROG_GET_FD_BY_ID` / `BPF_MAP_GET_FD_BY_ID` / `BPF_OBJ_GET` that target coldstep's **own** object ids (recorded into `self_prog_ids`/`self_map_ids` by `armBpfSelfDefense` at startup) by a non-agent task, blocking a CAP_BPF attacker from grabbing a handle to detach the monitor; it is armed (`self_defense_cfg.enabled=1`) only after the id sets are populated, the agent's own tgid is exempt, and it emits a `bpf_self_defense` JSONL row + digest KPI on each denial. Like every LSM hook here it only **enforces** where `bpf` is in the kernel boot `lsm=` chain (`/sys/kernel/security/lsm`) — GH hosted runners boot without it, so the hook attaches but stays silent there; the deny integration test gates on that and skips otherwise. The cgroup section enforces **IPv4, IPv4-mapped IPv6, and native IPv6**: the `connect6`/`sendmsg6` hooks (`defend_cgroup_sock_addr_ipv6`, `bpf/trace_defend_cgroup.inc:296-339`, H14, v0.4.0) gate v4-mapped destinations against the IPv4 allowlist and native IPv6 against the `allowed_ipv6` LPM trie, with `::1` (loopback) and `fe80::/10` (link-local) always bypassing. The **LSM section remains IPv4-only** — do not promise IPv6 for the LSM path. The Go-side loader `defend.LoadDefendObjectsForKernel` strips the LSM section from the spec on kernels without CONFIG_BPF_LSM so prog_load doesn't fail.
 
-The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep-action stop --strict` / `assert-integrity` step so the required-event-type gate matches.
+The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in a fixed order, captures BPF status into `telemetry.BPFStatus` rows used by the digest, and drains ringbufs through `agent_linux_ring_read.go`. Feature gates `proc_tree`, `tls_sni`, `fs_events` (parsed in `internal/config/featuregates.go`) toggle optional event streams; `COLDSTEP_DETECT_PROFILE=enhanced` flips defaults on if a key is unset. Set the same profile env on the post-run `coldstep stop --strict` / `coldstep assert-integrity` step so the required-event-type gate matches.
 
 **QUIC / HTTP3 visibility note (P2-2).** QUIC payloads are encrypted at the transport layer and cannot be inspected by the BPF probes, so coldstep treats UDP/443 egress to non-loopback IPv4 as a *likely* QUIC/HTTP3 flow and emits a synthetic `quic_candidate` JSONL line alongside the underlying `udp` event (see `IsQUICCandidate` in `internal/agent/quic_candidate.go` and the `QUIC (port-443 UDP)` KPI row in the digest). This is a userspace heuristic — no BPF/clang work involved — and surfaces the visibility gap explicitly rather than letting QUIC traffic look like silent UDP.
 
 ### Config + policy compilation
 
-`internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep-action` from action inputs):
+`internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep start` from action inputs):
 
 - `CI_GUARD_MODE=enforce` is **rejected** (returns an error). `defend` maps to `ModeDefend`. Detect is default.
 - `defend` mode also requires `COLDSTEP_ALLOWED_DOMAINS` to be non-empty.
-- Output paths default under `$GITHUB_WORKSPACE` and are overrideable: `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`, `COLDSTEP_AGENT_STATUS`, `COLDSTEP_CGROUP_PATH`, `COLDSTEP_SIGNING_KEY`.
+- Output paths default under `$GITHUB_WORKSPACE` and are overrideable: `COLDSTEP_EVENTS_LOG`, `COLDSTEP_TELEMETRY_JSON`, `COLDSTEP_AGENT_STATUS`, `COLDSTEP_CGROUP_PATH`, `COLDSTEP_SIGNING_KEY`.
 
 `internal/policy/allowlist.go` resolves the effective IPv4 set. DNS lookups are bounded (`coldstepDomainLookupConcurrencyLimit = 32`, 25s per lookup) and warn when a single domain resolves to >10 IPv4s — warn-only, do not change effective allowlist on that path without updating the comments.
 
 ### Report generator + integrity gate
 
-`internal/report/markdown/` reads `.coldstep-events.jsonl` (and the shutdown `meta` event for BPF health) and renders both reports as pure Markdown — `RenderSimple` (job summary) + `RenderDetailed` (`.coldstep-report.md` artifact); a regex-guard test forbids any embedded HTML. `markdown.RequiredTypes("enhanced")` expands required event types from `{meta, exec, tcp}` to `{meta, exec, tcp, udp, http, tls, proc_fork, fs_event}`; `coldstep-action assert-integrity` / `stop --strict` enforces them as the anti-blindness gate (replaces the removed `internal/report/{model,integrity}` + `coldstep-report assert-integrity`). The agent still writes its own `.coldstep-detect.md` digest (`internal/report/digest*.go`) but it is no longer the report source — a follow-up removes that path so the agent writes data only.
+`internal/report/markdown/` reads `.coldstep-events.jsonl` (and the shutdown `meta` event for BPF health) and renders both reports as pure Markdown — `RenderSimple` (job summary) + `RenderDetailed` (`.coldstep-report.md` artifact); a regex-guard test forbids any embedded HTML. `markdown.RequiredTypes("enhanced")` expands required event types from `{meta, exec, tcp}` to `{meta, exec, tcp, udp, http, tls, proc_fork, fs_event}`; `coldstep assert-integrity` / `coldstep stop --strict` enforces them as the anti-blindness gate (replaces the removed `internal/report/{model,integrity}` + `coldstep-report assert-integrity`). The agent writes **data only** (`.coldstep-events.jsonl`) — the `.coldstep-detect.md` agent digest path was removed; the report is rendered in userspace from the JSONL by `coldstep stop`.
 
 ### Artifacts written to `$GITHUB_WORKSPACE`
 
-- `.coldstep-events.jsonl` — append-only event stream (source of truth).
-- `.coldstep-detect.md` — Markdown shutdown digest (post-step merges into Job Summary unless `report: none`/`pr-comment`).
+- `.coldstep-events.jsonl` — append-only event stream (source of truth; the agent writes data only).
+- `.coldstep-report.md` — pure-markdown detailed report rendered by `coldstep stop` from the JSONL (artifact). The old `.coldstep-detect.md` agent digest was removed.
 - `.coldstep-telemetry.json` — totals + BPF health.
 - `.coldstep-ready.json` — readiness probe; `fail-on-error: true` waits for `ok:true` (clamp 60–2700s, default 1500).
 - `.coldstep-agent.stderr.log`, `.coldstep-verify-last.log`, `.coldstep-deep-debug/` — local-only, gitignored.
 
-Note GitHub freezes per-step summary files when a step ends, so the agent writes to `.coldstep-detect.md` during the job; the **stop** step merges into `$GITHUB_STEP_SUMMARY`.
+Note GitHub freezes per-step summary files when a step ends, so the agent writes only `.coldstep-events.jsonl` during the job; the **stop** step (`coldstep stop`) renders the report from that JSONL and writes the simple report into `$GITHUB_STEP_SUMMARY` plus `.coldstep-report.md`.
 
 ## CI gates (what merges depend on)
 

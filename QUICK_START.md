@@ -26,7 +26,7 @@ Recommended workflow:
 1. **Collect ≥ 3 builds.** Run detect across at least three different PRs or branches (preferably touching different parts of the codebase). One short run on one branch is the easiest poisoning target.
 2. **Diff against a baseline.** Before promoting domains to `allow:`, compare the new JSONL against a known-good baseline:
    ```bash
-   coldstep-action diff \
+   coldstep diff \
      --baseline baseline.jsonl \
      --current  .coldstep-events.jsonl \
      --summary  diff-summary.md \
@@ -35,7 +35,7 @@ Recommended workflow:
    `--fail-on-new-domain` exits non-zero when any destination FQDN appears in the current run but not the baseline. Wire it into CI on PRs that touch `.github/coldstep/egress-allow.txt`.
 3. **Require a second-engineer review.** Newly observed domains in the diff output get a separate human approval before they land in the `allow:` list. Treat the diff as a code review, not as an automated step that closes itself.
 
-> **Note (report pipeline change):** the older `coldstep-report build-model` model — including the `suspicious_domains` / `risk_hint` heuristics (high-entropy/DGA labels, single-observation, port anomalies) and the `--min-observation-hours` window gate — was removed when reporting was consolidated into a single pure-markdown path. The surviving programmatic gates are `coldstep-action diff --fail-on-new-domain` (baseline new-domain) and `coldstep-action assert-integrity` (required event types). The manual-review discipline below still applies; the entropy/window heuristics are a candidate to reintroduce in the markdown generator if needed.
+> **Note (report pipeline change):** the older `coldstep-report build-model` model — including the `suspicious_domains` / `risk_hint` heuristics (high-entropy/DGA labels, single-observation, port anomalies) and the `--min-observation-hours` window gate — was removed when reporting was consolidated into a single pure-markdown path. The surviving programmatic gates are `coldstep diff --fail-on-new-domain` (baseline new-domain) and `coldstep assert-integrity` (required event types). The manual-review discipline below still applies; the entropy/window heuristics are a candidate to reintroduce in the markdown generator if needed.
 
 ### Building a safe allowlist (manual review discipline)
 
@@ -213,7 +213,7 @@ Start with default **detect**, then set **`detect-profile: enhanced`** when you 
 
 ### Report pipeline (maintainers)
 
-Reporting is one pure-markdown path in `coldstep-action` (no separate `coldstep-report` binary, no HTML): `stop` renders the simple report to the Job Summary and the detailed report to `.coldstep-report.md`; `diff` and `assert-integrity` are the baseline / anti-blindness gates. Demo/CI workflows upload `.coldstep-report.md` as the downloadable artifact.
+Reporting is one pure-markdown path in the combined `coldstep` binary (no separate `coldstep-report` binary, no HTML): `coldstep stop` renders the simple report to the Job Summary and the detailed report to `.coldstep-report.md`; `coldstep diff` and `coldstep assert-integrity` are the baseline / anti-blindness gates. Demo/CI workflows upload `.coldstep-report.md` as the downloadable artifact.
 
 Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
 

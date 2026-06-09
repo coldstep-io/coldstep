@@ -1,5 +1,7 @@
-// Command coldstep-action is the entry-point binary invoked by the GitHub
-// composite action wrapper.
+// Package actioncli implements the GitHub composite action's runtime helper
+// subcommands (start / stop / diff / assert-integrity), dispatched from the
+// combined `coldstep` binary. It was the standalone `coldstep-action` command
+// before the agent and helper were merged into one shipped artifact.
 //
 // It owns two subcommands wired to the composite's pre/post phases:
 //
@@ -11,21 +13,20 @@
 //     .coldstep-ready.json (or returns an explicit not-ready / timeout /
 //     child-exit verdict).
 //
-//   - stop: SIGTERMs the agent via its pidfile, drains the on-disk digest,
-//     and emits the configured surfaces — GitHub Actions job summary, PR
-//     comment via the GitHub REST API, or both — depending on --report.
+//   - stop: SIGTERMs the agent via its pidfile, then renders both reports from
+//     the JSONL event stream (internal/report/markdown) and emits the configured
+//     surfaces — GitHub Actions job summary, PR comment via the GitHub REST API,
+//     or both — depending on --report.
 //
 // All filesystem and subprocess inputs come from controlled sources
 // (GITHUB_ACTION_PATH / GITHUB_WORKSPACE / GITHUB_EVENT_PATH /
 // GITHUB_STEP_SUMMARY / GITHUB_REPOSITORY); see the gosec exclusions in
 // .github/workflows/coldstep-ci-runner.yml for the rationale.
-package main
+package actioncli
 
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -51,14 +52,6 @@ var httpNotifyClient = &http.Client{Timeout: 60 * time.Second}
 // githubRepoPartRE validates org and repo name segments from GITHUB_REPOSITORY.
 // GitHub allows alphanumeric, hyphens, dots, and underscores in org/repo names.
 var githubRepoPartRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
-
-// Markdown fence runs escaped per-line by sanitizeDigestForMarkdown. Compiled
-// once at package scope — the function runs over every digest line, so a
-// per-call MustCompile was needless work on the post-step hot path.
-var (
-	markdownBacktickRunRE = regexp.MustCompile("`{3,}")
-	markdownTildeRunRE    = regexp.MustCompile("~{3,}")
-)
 
 const (
 	maxReadyStatusJSONBytes = 512 << 10 // agent status should be tiny; bound disk/memory abuse
@@ -93,32 +86,50 @@ type stopConfig struct {
 	DetectProfile string
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: coldstep-action <start|stop> [flags]")
-		os.Exit(2)
-	}
+// Commands is the set of subcommands actioncli handles, for the parent
+// dispatcher's usage string and routing.
+var Commands = map[string]struct{}{
+	"start": {}, "stop": {}, "diff": {}, "assert-integrity": {},
+}
 
-	switch os.Args[1] {
-	case "start":
-		cfg, err := parseStartFlags(os.Args[2:])
-		if err != nil {
-			fatal(err)
-		}
-		fatal(runStart(cfg))
-	case "stop":
-		cfg, err := parseStopFlags(os.Args[2:])
-		if err != nil {
-			fatal(err)
-		}
-		fatal(runStop(cfg))
-	case "diff":
-		fatal(runDiff(os.Args[2:]))
-	case "assert-integrity":
-		fatal(runAssertIntegrity(os.Args[2:]))
-	default:
-		fatal(fmt.Errorf("unknown command %q", os.Args[1]))
+// Dispatch runs one actioncli subcommand. args[0] is the subcommand name and
+// args[1:] its flags. It returns a process exit code (0 success, 1 runtime
+// error, 2 usage) instead of calling os.Exit so the parent `coldstep` binary
+// owns process termination.
+func Dispatch(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: coldstep <start|stop|diff|assert-integrity> [flags]")
+		return 2
 	}
+	switch args[0] {
+	case "start":
+		cfg, err := parseStartFlags(args[1:])
+		if err != nil {
+			return errExit(err)
+		}
+		return errExit(runStart(cfg))
+	case "stop":
+		cfg, err := parseStopFlags(args[1:])
+		if err != nil {
+			return errExit(err)
+		}
+		return errExit(runStop(cfg))
+	case "diff":
+		return errExit(runDiff(args[1:]))
+	case "assert-integrity":
+		return errExit(runAssertIntegrity(args[1:]))
+	default:
+		return errExit(fmt.Errorf("unknown command %q", args[0]))
+	}
+}
+
+// errExit maps an error to an exit code, printing it to stderr when non-nil.
+func errExit(err error) int {
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, err.Error())
+	return 1
 }
 
 func parseStartFlags(args []string) (startConfig, error) {
@@ -157,20 +168,6 @@ func parseStopFlags(args []string) (stopConfig, error) {
 		return cfg, err
 	}
 	return cfg, nil
-}
-
-// digestIntegrityMarker is the H11 tamper-evidence HTML comment appended to
-// `.coldstep-detect.md`. It returns the empty string for an empty / whitespace
-// body so the marker is only emitted when there is a real digest to protect.
-// The leading newline guarantees the comment lands on its own line even when
-// the agent's digest does not end in `\n`; the trailing newline keeps the
-// file POSIX-clean.
-func digestIntegrityMarker(body string) string {
-	if strings.TrimSpace(body) == "" {
-		return ""
-	}
-	sum := sha256.Sum256([]byte(body))
-	return fmt.Sprintf("\n<!-- coldstep-digest-sha256: %s -->\n", hex.EncodeToString(sum[:]))
 }
 
 // parseReportFlags maps the unified `report` input to per-surface booleans
@@ -215,15 +212,11 @@ func runStart(cfg startConfig) error {
 	// PID. Mixed-entrypoint use otherwise no-ops the stop SIGTERM, leaving
 	// the agent to be SIGKILLed on runner teardown with no digest flush.
 	pidFile := filepath.Join(baseDir, ".coldstep.pid")
-	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
 	stderrLog := filepath.Join(baseDir, ".coldstep-agent.stderr.log")
 	readyMarker := filepath.Join(actionPath, ".coldstep.ready.ok")
 
 	if err := os.MkdirAll(filepath.Join(actionPath, "bin"), 0o755); err != nil {
-		return err
-	}
-	if err := os.WriteFile(detectLog, []byte{}, 0o644); err != nil {
 		return err
 	}
 	_ = os.Remove(agentStatus)
@@ -300,7 +293,6 @@ func runStart(cfg startConfig) error {
 	childEnv := os.Environ()
 	childEnv = append(childEnv,
 		"GITHUB_WORKSPACE="+baseDir,
-		"COLDSTEP_DETECT_LOG="+detectLog,
 		"COLDSTEP_ALLOWED_DOMAINS="+strings.Join(allow.domains, ","),
 		"COLDSTEP_ALLOWED_HOSTS="+strings.Join(allow.hosts, ","),
 		"COLDSTEP_ALLOWED_IPS="+strings.Join(allow.ips, ","),
@@ -374,7 +366,6 @@ func runStop(cfg stopConfig) error {
 	// Bug #9: must match runStart's pidFile path so mixed-entrypoint runs
 	// (Go start + TS stop, or vice versa) read the same file.
 	pidFile := filepath.Join(baseDir, ".coldstep.pid")
-	detectLog := filepath.Join(baseDir, ".coldstep-detect.md")
 	agentStatus := filepath.Join(baseDir, ".coldstep-ready.json")
 	readyMarker := filepath.Join(actionPath, ".coldstep.ready.ok")
 
@@ -403,53 +394,19 @@ func runStop(cfg stopConfig) error {
 		}
 	}
 
-	// Report-binary elimination (Phase 1): render the pure-markdown detailed
-	// report from the JSONL source of truth and write it to .coldstep-report.md
-	// for artifact upload. Best-effort — never fails the job; the agent's
-	// .coldstep-detect.md remains the job-summary source until later phases swap
-	// it for the markdown generator's simple report.
+	// Reporting is one path: render both reports from the JSONL source of truth.
+	// writeDetailedMarkdownReport writes .coldstep-report.md (artifact) and
+	// returns the parsed Aggregate; the job summary and PR comment are rendered
+	// from the same Aggregate. The agent no longer writes a .coldstep-detect.md
+	// digest — there is no legacy body to fall back to. Best-effort: a nil
+	// Aggregate means no event stream (agent never started), so nothing is
+	// posted. reportAgg is nil only in that case.
 	reportAgg := writeDetailedMarkdownReport(baseDir)
-
-	body := ""
-	if raw, err := os.ReadFile(detectLog); err == nil {
-		body = string(raw)
-	}
-
-	// H11: tamper-evidence hash of the digest file. The SHA-256 covers the
-	// agent-written digest content (everything currently in `body`); we then
-	// append the marker comment to the on-disk file and to `body` so
-	// downstream surfaces (Job Summary, PR comment) carry the same value.
-	// Best-effort: a failure here logs to stderr and continues — the digest
-	// remains readable without the integrity comment. JSONL signing remains
-	// the cryptographically strong guarantee; this is a lightweight surface
-	// for unsigned runs.
-	if marker := digestIntegrityMarker(body); marker != "" {
-		if f, ferr := os.OpenFile(detectLog, os.O_APPEND|os.O_WRONLY, 0o644); ferr != nil {
-			fmt.Fprintf(os.Stderr, "coldstep: open detect log for hash marker: %v\n", ferr)
-		} else {
-			if _, werr := f.WriteString(marker); werr != nil {
-				fmt.Fprintf(os.Stderr, "coldstep: write hash marker: %v\n", werr)
-			}
-			if cerr := f.Close(); cerr != nil {
-				fmt.Fprintf(os.Stderr, "coldstep: close detect log: %v\n", cerr)
-			}
-		}
-		body += marker
-	}
 
 	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)
 
-	if reportJobSummary {
-		// Job summary now comes from the pure-markdown generator's simple report
-		// (rendered from the JSONL source of truth), not the agent's
-		// .coldstep-detect.md digest. Fall back to the legacy digest body only
-		// when no event stream was parsed (e.g. agent never started).
-		block := ""
-		if reportAgg != nil {
-			block = reportAgg.RenderSimple()
-		} else if strings.TrimSpace(body) != "" {
-			block = "## Coldstep - digest (exec / network / defend)\n\n" + sanitizeDigestForMarkdown(body)
-		}
+	if reportJobSummary && reportAgg != nil {
+		block := reportAgg.RenderSimple()
 		if summaryPath := strings.TrimSpace(os.Getenv("GITHUB_STEP_SUMMARY")); summaryPath != "" && strings.TrimSpace(block) != "" {
 			if !strings.HasSuffix(block, "\n") {
 				block += "\n"
@@ -467,19 +424,14 @@ func runStop(cfg stopConfig) error {
 			}
 		}
 	}
-	// Keep .coldstep-detect.md on disk: the agent still writes it and some
-	// workflows list/read it after Stop. It is no longer the report source
-	// (the markdown generator renders from .coldstep-events.jsonl); a follow-up
-	// removes the agent digest path entirely. The runner is ephemeral, so no
-	// cleanup is needed.
 
-	if reportPRSummary && strings.TrimSpace(body) != "" {
+	if reportPRSummary && reportAgg != nil {
 		token := strings.TrimSpace(cfg.GithubToken)
 		if token == "" {
 			token = strings.TrimSpace(os.Getenv("GITHUB_TOKEN"))
 		}
 		if token != "" {
-			if err := postPRComment(token, sanitizeDigestForMarkdown(body)); err != nil {
+			if err := postPRComment(token, reportAgg.RenderDetailed()); err != nil {
 				fmt.Fprintf(os.Stderr, "coldstep: report pr-comment: %v\n", err)
 			}
 		}
@@ -681,36 +633,6 @@ func waitForAgentExit(pid int, timeout, tick time.Duration) bool {
 	}
 }
 
-func sanitizeDigestForMarkdown(body string) string {
-	if body == "" {
-		return body
-	}
-	body = strings.TrimPrefix(body, "\uFEFF")
-	body = strings.ReplaceAll(strings.ReplaceAll(body, "\r\n", "\n"), "\r", "\n")
-	lines := strings.Split(body, "\n")
-	for i := range lines {
-		line := lines[i]
-		if len(line) > 4096 {
-			// Clip at a valid UTF-8 boundary to avoid producing invalid byte sequences.
-			end := 4096
-			for end > 0 && !utf8.ValidString(line[:end]) {
-				end--
-			}
-			line = line[:end] + " ...(truncated)"
-		}
-		line = strings.ReplaceAll(line, "\\", "\\\\")
-		line = strings.ReplaceAll(line, "<", "&lt;")
-		line = markdownBacktickRunRE.ReplaceAllStringFunc(line, func(m string) string {
-			return strings.Repeat("\\`", len(m))
-		})
-		line = markdownTildeRunRE.ReplaceAllStringFunc(line, func(m string) string {
-			return strings.Repeat("\\~", len(m))
-		})
-		lines[i] = line
-	}
-	return strings.Join(lines, "\n")
-}
-
 func boolString(v bool) string {
 	if v {
 		return "true"
@@ -760,12 +682,4 @@ func mustGetwd() string {
 		return "."
 	}
 	return wd
-}
-
-func fatal(err error) {
-	if err == nil {
-		return
-	}
-	fmt.Fprintln(os.Stderr, err.Error())
-	os.Exit(1)
 }

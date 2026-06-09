@@ -10,7 +10,7 @@
 
 ### Runtime
 
-Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** — the composite runs **Go** binaries (`bin/coldstep-action`, `bin/coldstep` after build). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
+Using Coldstep in **your** workflow does **not** require **Python** or **`pip install`** — the composite downloads one prebuilt **Go** binary (`bin/coldstep`, which carries the agent plus the `start`/`stop`/`diff`/`assert-integrity` subcommands). Your job may still run **`pip install`**, **`npm ci`**, or any other tooling for **other** steps; Coldstep does **not** restrict that.
 
 ---
 
@@ -63,7 +63,7 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
-| **Action runtime** | Composite action is shell + Go binaries (`bin/coldstep`, `bin/coldstep-action`); the node24 `pre`/`post` hooks start/stop the agent. |
+| **Action runtime** | Composite action is shell + one Go binary (`bin/coldstep`, downloaded prebuilt); the node24 `pre`/`post` hooks start/stop the agent. |
 
 For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hook coverage), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
 
@@ -94,15 +94,15 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 
 | File | Role |
 | :--- | :--- |
-| **`.coldstep-events.jsonl`** | Append-only event stream (source of truth for investigations). |
-| **`.coldstep-detect.md`** | Shutdown digest (triage ribbon, KPI tables, collapsible sections). |
+| **`.coldstep-events.jsonl`** | Append-only event stream (source of truth for investigations; the agent writes data only). |
+| **`.coldstep-report.md`** | Detailed pure-markdown report, rendered by `coldstep stop` from the JSONL (artifact). |
 | **`.coldstep-telemetry.json`** | Shutdown totals and BPF health. |
 
-The **post** step merges **`.coldstep-detect.md`** into the **Actions Summary** tab by default (`report: job-summary`). Full **detect-report** workflows set **`report: none`** so the Summary is not dominated by the long shutdown digest:
+The **post** step renders the report from the JSONL and writes the **simple** report into the **Actions Summary** tab by default (`report: job-summary`). Workflows set **`report: none`** to skip the Summary:
 
-- **`coldstep-demo.yml`** (`uses: ./`): runs detect, then `coldstep-action diff` (baseline destination-domain delta) and uploads the pure-markdown **`.coldstep-report.md`** artifact. The simple report lands in the Job Summary via the action's stop step.
+- **`coldstep-demo.yml`** (`uses: ./`): runs detect and uploads the pure-markdown **`.coldstep-report.md`** artifact. The simple report lands in the Job Summary via the action's stop step.
 
-Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_DETECT_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
+Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_TELEMETRY_JSON`. For cgroup BPF attach, **`COLDSTEP_CGROUP_PATH`** overrides the directory passed to **`link.AttachCgroup`** (default: cgroup v2 path from **`/proc/self/cgroup`**, else **`/sys/fs/cgroup`**).
 
 ### Suggested allowlist (`suggested-allow` output)
 
@@ -129,7 +129,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
 | `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards (**detect only** — rejected at parse time in `defend`), IPv4 literals/CIDRs, and `!CIDR` ignore entries. |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode. |
-| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for a stricter required-event-type gate (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep-action assert-integrity`). |
+| `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for a stricter required-event-type gate (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep assert-integrity`). |
 | `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
 | `no-default-ignored-nets` | Drop the implicit 10.0.0.0/8 + 172.16.0.0/12 ignores. Add your own ignores as `!CIDR` entries in `allow` / `allow-file`. |
 
