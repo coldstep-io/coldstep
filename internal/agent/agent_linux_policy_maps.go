@@ -509,6 +509,7 @@ func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult, pol *pol
 			continue
 		}
 		var key [20]byte
+		// #nosec G115 -- ones is an IPv6 prefix length from net.IPMask.Size() (0..128); always fits uint32 //nolint:gosec
 		binary.LittleEndian.PutUint32(key[0:4], uint32(ones))
 		copy(key[4:20], ip16)
 		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
