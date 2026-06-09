@@ -651,8 +651,12 @@ type IOUringTLSEvent struct {
 	Comm string `json:"comm"`
 	Op   string `json:"op"` // "SEND" | "SENDMSG"
 	SNI  string `json:"sni"`
-	Dst  string `json:"dst"`
-	Sig  string `json:"sig,omitempty"`
+	// Dst is the connected IPv4 peer resolved in kernel from the submission's
+	// socket (ORDER 1 / BG-5), or "unknown" when unresolvable. DstPort is the
+	// peer port (host order), 0 when unresolved.
+	Dst     string `json:"dst"`
+	DstPort uint16 `json:"dst_port,omitempty"`
+	Sig     string `json:"sig,omitempty"`
 }
 
 // BPFAuditEvent is one JSONL record for a bpf(2) syscall audit event.

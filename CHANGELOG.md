@@ -9,6 +9,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **io_uring TLS destination correlation (ORDER 1 / BG-5).** `io_uring_tls` events now carry the connected IPv4 peer (`dst` + `dst_port`), resolved in kernel from the submission's socket (`req->file` → socket → `sk` → `skc_daddr`), instead of the `"unknown"` placeholder. Best-effort: the SNI still emits with `dst:"unknown"` when the peer is not resolvable.
 - **IPv6-literal allowlisting (SP-2).** `allow` / `allow-file` now accept native IPv6 literals (`2001:db8::1`) and IPv6 CIDRs (`2001:db8::/32`). They are classified to the IP path, parsed by `policy.Parse` into the v6 buckets, and programmed into the defend `allowed_ipv6` LPM trie (literals as `/128`, CIDRs as prefix entries) alongside AAAA-resolved domains. Previously IPv6 literals were silently treated as hostnames and failed to resolve. The `!CIDR` ignore mechanism remains IPv4-only.
 
 ### Fixed
