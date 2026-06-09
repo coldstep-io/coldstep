@@ -18,8 +18,14 @@ import (
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
-func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
-	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+// runRingReader drives the ringbuf read loop shared by every reader: exponential
+// backoff on transient read errors, a clean return on ringbuf.ErrClosed (the
+// shutdown closer Close()s each reader), ctx-cancel -> ctx.Err(), and a backoff
+// reset on each good record. onRecord handles the per-reader decode + emit for
+// one raw sample; a decode failure returns early from onRecord (the loop
+// continues to the next record). Extracted from the readers that duplicated this
+// scaffolding (Phase 6.2). Behavior is identical to the prior inline loops.
+func runRingReader(ctx context.Context, name string, rd *ringbuf.Reader, onRecord func(raw []byte)) error {
 	backoff := newRingReadRetryBackoff()
 	for {
 		record, err := rd.Read()
@@ -31,16 +37,22 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				return ctx.Err()
 			}
 			delay := backoff.sleep()
-			slog.Warn("ringbuf read (exec)", "err", err, "backoff", delay)
+			slog.Warn("ringbuf read", "reader", name, "err", err, "backoff", delay)
 			continue
 		}
 		backoff.reset()
+		onRecord(record.RawSample)
+	}
+}
 
+func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
+	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
+	return runRingReader(ctx, "exec", rd, func(raw []byte) {
 		var ev execEvent
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
 			stats.addDropped("exec_decode")
 			slog.Warn("decode exec", "err", err)
-			continue
+			return
 		}
 
 		// P1-5: sanitize attacker-controlled strings at the decode point so
@@ -68,7 +80,7 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				slog.Warn("events jsonl", "err", err)
 			}
 		}
-	}
+	})
 }
 
 type forkEventWire struct {
@@ -82,27 +94,12 @@ type forkEventWire struct {
 
 func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	backoff := newRingReadRetryBackoff()
-	for {
-		record, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (fork)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
-
+	return runRingReader(ctx, "fork", rd, func(raw []byte) {
 		var ev forkEventWire
-		if err := binary.Read(bytes.NewReader(record.RawSample), binary.LittleEndian, &ev); err != nil {
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
 			stats.addDropped("proc_fork_decode")
 			slog.Warn("decode fork", "err", err)
-			continue
+			return
 		}
 
 		pcomm := telemetry.SanitizeField(nullTermStr(ev.ParentComm[:]), 16)
@@ -128,7 +125,7 @@ func readForkRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 				slog.Warn("events jsonl", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 func nullTermStr(b []byte) string {
@@ -217,27 +214,13 @@ const maxFSEventsTotal = 5000
 
 func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stats *runStats,
 	seq *telemetry.SeqGen, jsonlMu *sync.Mutex, signer *telemetry.Signer) error {
-	count := 0
-	backoff := newRingReadRetryBackoff()
-	for {
-		rec, err := rd.Read()
-		if err != nil {
-			if errors.Is(err, ringbuf.ErrClosed) {
-				return nil
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			delay := backoff.sleep()
-			slog.Warn("ringbuf read (fs)", "err", err, "backoff", delay)
-			continue
-		}
-		backoff.reset()
+	count := 0 // persists across records (closure captures by reference) for the rate cap
+	return runRingReader(ctx, "fs", rd, func(raw []byte) {
 		var ev fsEventWire
-		if err := binary.Read(bytes.NewReader(rec.RawSample), binary.LittleEndian, &ev); err != nil {
+		if err := binary.Read(bytes.NewReader(raw), binary.LittleEndian, &ev); err != nil {
 			stats.addDropped("fs_decode")
 			slog.Warn("decode fs event", "err", err)
-			continue
+			return
 		}
 
 		count++
@@ -247,7 +230,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 			if count == maxFSEventsTotal+1 {
 				slog.Warn("fs event cap reached; further events counted but not written to JSONL or rows", "cap", maxFSEventsTotal)
 			}
-			continue
+			return
 		}
 
 		comm := telemetry.SanitizeField(nullTermStr(ev.Comm[:]), 16)
@@ -270,7 +253,7 @@ func readFSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, stat
 				slog.Warn("events jsonl", "err", werr)
 			}
 		}
-	}
+	})
 }
 
 func readConnectRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns *DNSCache,
