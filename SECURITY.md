@@ -76,11 +76,11 @@ Coldstep’s contract has three layers:
 | Layer | BPF object (repo) | Role |
 | ----- | ----------------- | ---- |
 | **cgroup** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_defend_cgroup.inc`) | **`cgroup/connect4`**, **`cgroup/sendmsg4`**, **`cgroup/connect6`**, **`cgroup/sendmsg6`** — primary IPv4 and IPv6 egress defend for TCP and UDP on the job cgroup. IPv6 (H14) consults the AAAA-populated `allowed_ipv6` LPM trie; `::1` and `fe80::/10` always bypass. |
-| **LSM** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_lsm.inc`) | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available; IPv4 path only). |
+| **LSM** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_lsm.inc`) | **`lsm/socket_connect`**, **`lsm/socket_sendmsg`** (`SEC(...)` names; supplemental BPF LSM defend where available). Gates **IPv4 and IPv6** (ORDER 4 / Phase 4.2): native IPv6 against the `allowed_ipv6` LPM trie via `lsm_v6_enforce`, IPv4-mapped against the IPv4 allowlist; `::1` / `fe80::/10` bypass. |
 | **LSM (io_uring)** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_lsm_defend_iouring.inc`) | **`lsm/io_uring_cmd`** — H15 defense-in-depth on `IORING_OP_URING_CMD` paths that bypass `security_socket_sendmsg()`. Requires Linux **5.19+** (`security_uring_cmd` BTF) plus `CONFIG_BPF_LSM`; silently skipped on older kernels. IPv4 path only. |
 | **Egress backstop (tc/clsact)** | `bpf/trace_defend_all.bpf.c` (`bpf/trace_defend_skb.inc`) | **`tcx/egress`** — observe-only in defend mode, attached per-interface via TCX (kernel 6.6+). Flags packets reaching the egress qdisc bound for a non-allowlisted IP, including raw `SOCK_RAW`, `AF_PACKET`, and post-connect redirects that bypassed `connect4`/`sendmsg4`. Emits `egress_backstop` JSONL + digest row; does not drop. IPv4 + IPv6. PID/comm unavailable (packet context). |
 
-The LSM supplemental paths remain **IPv4 only**; the cgroup path gates **IPv4 and IPv6**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
+The LSM `socket_connect` / `socket_sendmsg` paths gate **IPv4 and IPv6** (the `lsm/io_uring_cmd` supplemental path remains IPv4 only); the cgroup path also gates **IPv4 and IPv6**. The agent reports BPF load/attach status in **`.coldstep-telemetry.json`** and in logs. If a program fails to attach, treat **defend** as **degraded** and inspect those rows and stderr—do not assume silent fallback implies the same defense story on every kernel.
 
 ### File integrity
 
@@ -91,6 +91,22 @@ Coldstep ships two distinct integrity surfaces for its on-disk artifacts. Pick t
 | **JSONL signing** (`signing-key`) | `.coldstep-events.jsonl` | **Strong.** Each JSONL line is **Ed25519-signed** (asymmetric) over its canonical-JSON form; downstream replay rejects lines whose `sig` field does not verify. **Verify against the public key you derive out-of-band from your own `signing-key` secret — NOT the `public_key` field embedded in `.coldstep-telemetry.json`.** That embedded key is informational only: a step that rewrites the artifacts can re-sign them with its own keypair and set `public_key` to match, so any verifier that trusts the embedded key accepts forgeries. | Recommended for any workflow that gates merges, promotions, or releases on coldstep output. The key never appears in the runner image — supply it via secrets. |
 | **Events file SHA-256** (`MetaEvent.events_file_sha256`) | `.coldstep-events.jsonl` | **Tamper-evidence hint.** The agent's shutdown `MetaEvent` line carries the SHA-256 of every preceding line, hex-encoded. A consumer can recompute the digest over the bytes ahead of that line and compare. | Detects post-run modification by anything that does not also rewrite the shutdown meta. Not a substitute for signing — a malicious step that can rewrite the JSONL can also rewrite the meta line. |
 The events-file SHA-256 above is the surviving tamper-evidence hint. The older `.coldstep-detect.md` digest hash marker was removed: the agent now writes data only (`.coldstep-events.jsonl`) and the report is rendered from that JSONL by `coldstep stop`, so there is no agent-written digest body to hash.
+
+### BPF program integrity (code-signing posture)
+
+A separate question from on-disk *artifact* integrity (above) is the integrity of the **BPF programs** coldstep loads into the kernel: what proves the bytecode the verifier accepts is the bytecode coldstep shipped, and what stops a co-resident privileged task from swapping or detaching it.
+
+**What coldstep does today:**
+
+- **Binary provenance.** The combined `coldstep-linux-amd64` agent is published with **GitHub build provenance attestations** (`supply-chain-attest.yml`, `actions/attest-build-provenance`). Consumers download one prebuilt binary whose origin is attestable; the TS layer SHA-256-verifies the downloaded asset against the release. The BPF objects are compiled into that binary (`go:embed` of the bpf2go output), so the program bytecode inherits the binary's provenance — there is no separate, unattested `.o` fetched at runtime.
+- **Runtime self-defense (sub-project B).** The `lsm/bpf` self-defense hook (`bpf/trace_lsm_bpf_self_defense.inc`) denies `BPF_PROG_GET_FD_BY_ID` / `BPF_MAP_GET_FD_BY_ID` / `BPF_OBJ_GET` against coldstep's **own** program/map ids by a non-agent task, blocking a CAP_BPF attacker from grabbing a handle to detach the monitor. Like all LSM hooks it **enforces only** where `bpf` is in the kernel `lsm=` boot chain (silent on GH-hosted runners, which boot without it).
+
+**What coldstep does *not* do yet — kernel BPF program signing.** Linux has begun adding support for **signed BPF programs** (signature verification at `BPF_PROG_LOAD`, building on the lskel / `bpf_token` and light-skeleton work). coldstep does **not** sign its programs for kernel-side verification because:
+
+- The feature is **nascent** and **not present** on the kernels coldstep targets (GitHub-hosted `ubuntu-latest`, currently 6.x without BPF program-signing enabled).
+- Hosted runners load coldstep under `sudo` from an attested binary, so the marginal trust added by kernel signature checks — over and above build provenance + the self-defense hook — is small **on that platform** today.
+
+**Roadmap.** Adopt kernel BPF program signing once it is broadly available on hosted runners — a tracked hardening item (re-check kernel + hosted-runner support, sign the embedded bytecode, thread the signature / `bpf_token` through the loader, extend `coldstep-kernel-matrix.yml`). Until then the integrity story is: *attested binary → embedded bytecode → verifier-checked load → LSM self-defense against tamper*. Operators needing stronger load-time guarantees should run on a kernel with `CONFIG_BPF_LSM` + `bpf` in the `lsm=` chain so the self-defense hook actively enforces.
 
 ### Residual risk (honest scope)
 
