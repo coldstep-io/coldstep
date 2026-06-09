@@ -1089,13 +1089,14 @@ func readBpfSelfDefenseRing(ctx context.Context, cfg config.Config, rd *ringbuf.
 // SNI via the same parser the syscall TLS sniffer uses (telemetry.ParseClientHelloSNI).
 // Returns emit=false when the payload does not parse as a ClientHello with a
 // server_name — the lightweight io_uring_send event already recorded the
-// has_tls_hello signal, so a parse miss is not a silent drop. Dst is always
-// "unknown": the io_uring submission path does not expose the destination.
+// has_tls_hello signal, so a parse miss is not a silent drop. ORDER 1 (BG-5):
+// Dst is the connected IPv4 peer resolved in kernel from the submission's socket
+// (req->file), or "unknown" when the socket peer was not resolvable.
 // seq may be 0 when the caller assigns the real sequence number later (the
 // reader allocates it under jsonlMu only after emit is known, so parse misses
 // do not burn JSONL sequence numbers).
 func ioUringTLSEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.IOUringTLSEvent, bool) {
-	_, pid, op, payload, commb, ok := decodeIOUringTLSEvent(raw)
+	_, pid, op, payload, commb, daddr, dport, ok := decodeIOUringTLSEvent(raw)
 	if !ok {
 		return telemetry.IOUringTLSEvent{}, false
 	}
@@ -1103,15 +1104,20 @@ func ioUringTLSEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.IOUrin
 	if !parsed || sni == "" {
 		return telemetry.IOUringTLSEvent{}, false
 	}
+	dst := "unknown"
+	if daddr != [4]byte{} {
+		dst = net.IPv4(daddr[0], daddr[1], daddr[2], daddr[3]).String()
+	}
 	return telemetry.IOUringTLSEvent{
-		Type: telemetry.EventTypeIOUringTLS,
-		TS:   ts,
-		Seq:  seq,
-		PID:  pid,
-		Comm: telemetry.SanitizeField(nullTermStr(commb[:]), 16),
-		Op:   ioUringOpName(op),
-		SNI:  telemetry.SanitizeField(sni, 253),
-		Dst:  "unknown",
+		Type:    telemetry.EventTypeIOUringTLS,
+		TS:      ts,
+		Seq:     seq,
+		PID:     pid,
+		Comm:    telemetry.SanitizeField(nullTermStr(commb[:]), 16),
+		Op:      ioUringOpName(op),
+		SNI:     telemetry.SanitizeField(sni, 253),
+		Dst:     dst,
+		DstPort: dport,
 	}, true
 }
 

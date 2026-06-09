@@ -313,7 +313,11 @@ _Static_assert(sizeof(struct io_uring_send_event) == 40,
  * in-BPF extension walk.
  *
  * Layout (alignment-of-8 from the leading __u64): 8 + 4 + 16 + 1 + 3 + 2 +
- * 256 + 6 = 296. The explicit _pad2[6] tail makes sizeof deterministic.
+ * 256 (payload) + 2 (_gap to 4-align daddr) + 4 (daddr) + 2 (dport) + 6 (_pad2)
+ * = 304. ORDER 1 (BG-5) added the connected-peer dst (resolved from req->file's
+ * socket) so the SNI joins its real destination instead of "unknown". The
+ * submission fd is not a member of io_kiocb in the kernels' BTF here, so it is
+ * not captured. The explicit padding makes sizeof deterministic.
  */
 struct io_uring_tls_event {
 	__u64 timestamp_ns;
@@ -323,10 +327,13 @@ struct io_uring_tls_event {
 	__u8 _pad[3];
 	__u16 capture_len; /* <= TLS_PAYLOAD_MAX */
 	__u8 payload[TLS_PAYLOAD_MAX];
+	__u8 _gap[2]; /* align daddr to a 4-byte boundary */
+	__be32 daddr; /* connected peer IPv4 (network byte order); 0 if unresolved */
+	__be16 dport; /* connected peer port (network byte order); 0 if unresolved */
 	__u8 _pad2[6];
 };
-_Static_assert(sizeof(struct io_uring_tls_event) == 296,
-	       "io_uring_tls_event wire size must match ioUringTLSEventWireSize=296 in agent_linux_decode.go");
+_Static_assert(sizeof(struct io_uring_tls_event) == 304,
+	       "io_uring_tls_event wire size must match ioUringTLSEventWireSize=304 in agent_linux_decode.go");
 
 static __always_inline int read_ipv4_sockaddr(unsigned long sockaddr_ptr, __be16 *port,
 					      __be32 *addr)
