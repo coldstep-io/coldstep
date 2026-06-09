@@ -24,10 +24,26 @@ func TestParse_Empty(t *testing.T) {
 	}
 }
 
-func TestParse_AllowedIPv6LiteralRejected(t *testing.T) {
-	_, err := Parse("", "2001:db8::1")
-	if err == nil {
-		t.Fatal("expected error for IPv6 literal in allowed-ips")
+// SP-2: IPv6 literals are now accepted and stored as /128 entries for the
+// defend allowed_ipv6 LPM trie.
+func TestParse_AllowedIPv6Literal(t *testing.T) {
+	p, err := Parse("", "2001:db8::1")
+	if err != nil {
+		t.Fatalf("Parse IPv6 literal: %v", err)
+	}
+	if len(p.ipv6s) != 1 {
+		t.Fatalf("ipv6s = %d want 1", len(p.ipv6s))
+	}
+	if _, ok := p.ipv6s[string(net.ParseIP("2001:db8::1").To16())]; !ok {
+		t.Error("2001:db8::1 not stored in ipv6s")
+	}
+	if !p.enabled {
+		t.Error("policy should be enabled with an IPv6 literal")
+	}
+	var s IPv6Set
+	p.MergeLiteralAllowedIPv6Into(&s)
+	if !s.Contains(net.ParseIP("2001:db8::1")) {
+		t.Error("MergeLiteralAllowedIPv6Into missed the literal")
 	}
 }
 
@@ -90,10 +106,36 @@ func TestParse_AllowedIPv4CIDRNormalizesHostBitsSetInput(t *testing.T) {
 	}
 }
 
-func TestParse_AllowedIPv6CIDRRejected(t *testing.T) {
-	_, err := Parse("", "2001:db8::/32")
-	if err == nil {
-		t.Fatal("expected error for IPv6 CIDR in allowed-ips")
+// SP-2: IPv6 CIDRs are now accepted and stored as prefix entries for the defend
+// allowed_ipv6 LPM trie.
+func TestParse_AllowedIPv6CIDR(t *testing.T) {
+	p, err := Parse("", "2001:db8::/32")
+	if err != nil {
+		t.Fatalf("Parse IPv6 CIDR: %v", err)
+	}
+	nets := p.AllowedIPv6Nets()
+	if len(nets) != 1 {
+		t.Fatalf("AllowedIPv6Nets = %d want 1", len(nets))
+	}
+	if nets[0].String() != "2001:db8::/32" {
+		t.Errorf("CIDR = %q want 2001:db8::/32", nets[0].String())
+	}
+	if !p.enabled {
+		t.Error("policy should be enabled with an IPv6 CIDR")
+	}
+}
+
+// SP-2: a mixed v4/v6 allowlist keeps the families disjoint in the right buckets.
+func TestParse_MixedV4V6(t *testing.T) {
+	p, err := Parse("", "1.2.3.4, 10.0.0.0/8, 2001:db8::1, 2606:4700::/32")
+	if err != nil {
+		t.Fatalf("Parse mixed: %v", err)
+	}
+	if len(p.ips) != 1 || len(p.nets) != 1 {
+		t.Errorf("v4: ips=%d nets=%d want 1/1", len(p.ips), len(p.nets))
+	}
+	if len(p.ipv6s) != 1 || len(p.ipv6nets) != 1 {
+		t.Errorf("v6: ipv6s=%d ipv6nets=%d want 1/1", len(p.ipv6s), len(p.ipv6nets))
 	}
 }
 

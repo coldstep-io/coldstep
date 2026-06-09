@@ -7,6 +7,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **IPv6-literal allowlisting (SP-2).** `allow` / `allow-file` now accept native IPv6 literals (`2001:db8::1`) and IPv6 CIDRs (`2001:db8::/32`). They are classified to the IP path, parsed by `policy.Parse` into the v6 buckets, and programmed into the defend `allowed_ipv6` LPM trie (literals as `/128`, CIDRs as prefix entries) alongside AAAA-resolved domains. Previously IPv6 literals were silently treated as hostnames and failed to resolve. The `!CIDR` ignore mechanism remains IPv4-only.
+
+### Fixed
+
+- **Stop step no longer drops the report on a transient GitHub API failure.** The post step renders the report from the already-downloaded + SHA-verified cached binary (`cachedColdstepBinaryPath`) instead of re-fetching the release SHA over the network; a transient Releases API rate-limit/5xx no longer silently omits the report.
+
 ## [0.5.0] — 2026-06-08
 
 ### Changed (BREAKING)
