@@ -185,7 +185,15 @@ type ExecEvent struct {
 	Comm     string `json:"comm"`
 	// Exe is the executable path from the tracepoint (BPF-capped; may be truncated vs kernel path).
 	Exe string `json:"exe,omitempty"`
-	Sig string `json:"sig,omitempty"`
+	// Kernel-truth identity (Sub-project C / ORDER 5). ExeInode + ExeDev are read
+	// in-kernel from mm->exe_file->f_inode and uniquely identify the on-disk
+	// binary independent of its (spoofable) path/comm; 0 means the walk failed.
+	// ExeSHA256 is a best-effort userspace content hash of the resolved path at
+	// event time (hex, possibly empty/partial — see the reader for caveats).
+	ExeInode  uint64 `json:"exe_inode,omitempty"`
+	ExeDev    uint32 `json:"exe_dev,omitempty"`
+	ExeSHA256 string `json:"exe_sha256,omitempty"`
+	Sig       string `json:"sig,omitempty"`
 }
 
 // ProcForkEvent is one JSONL record for sched_process_fork (parent/child ids are kernel-reported; best-effort TGID on typical kernels).
