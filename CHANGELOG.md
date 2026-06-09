@@ -7,10 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-06-09
+
 ### Added
 
 - **io_uring WRITE/WRITEV egress visibility (ORDER 2 / Phase 3.3).** `IORING_OP_WRITE` (23) and `IORING_OP_WRITEV` (2) submissions are now surfaced as `io_uring_send` events when their fd resolves to an AF_INET socket. The fd is walked `req->file` → socket → `sk` with an `S_ISSOCK` guard before `file->private_data` is trusted, so routine file I/O bails with no event (no ringbuf flood). The connected-peer dst (`dst_ip`/`dst_port`) is populated from that same walk for every write-class opcode, reusing the ORDER 1 resolver. Native-IPv6 io_uring writes are not surfaced (the walk gates on AF_INET, matching the IPv4 focus of the LSM/cgroup egress paths).
 - **IPv6 LSM defense-in-depth twin (ORDER 4 / Phase 4.2).** The BPF LSM `socket_connect` / `socket_sendmsg` hooks now enforce native IPv6 (previously IPv4-only), mirroring the cgroup `connect6`/`sendmsg6` path: they read the 16-byte destination (from `sockaddr_in6` or the connected `skc_v6_daddr` fallback) and gate it against the `allowed_ipv6` LPM trie via `lsm_v6_enforce`, with `::1` (loopback) and `fe80::/10` (link-local) always bypassing and IPv4-mapped destinations judged against the IPv4 allowlist. Denies emit an `AF_INET6` deny event. Like every LSM hook it enforces only where `bpf` is in the kernel `lsm=` boot chain; the load+attach path verifies on `CONFIG_BPF_LSM=y` kernels.
+- **Kernel-truth executable identity (Sub-project C / ORDER 5 / Phase 5.1).** `exec` JSONL events now carry `exe_inode` + `exe_dev`, read in-kernel from `mm->exe_file->f_inode` at `sched_process_exec`, plus a best-effort userspace `exe_sha256` content hash. Unlike the spoofable `comm` / `exe` path, the inode/dev pair uniquely identifies the on-disk binary: replacing it (new inode at the same path) changes `exe_inode`, a rename keeps it. `0` means the walk failed (older kernel / no mm). The content hash is TOCTOU-best-effort (absolute paths only, ≤16 MiB, empty on any error) — a tamper hint layered on the robust kernel identity, not a guarantee the hashed bytes are the exec'd bytes.
 
 ### Changed
 
@@ -249,6 +252,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.5.2]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.0
 [v0.4.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.1

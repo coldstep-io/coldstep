@@ -11,6 +11,9 @@ type execEvent struct {
 	TID     uint32
 	Comm    [16]byte
 	ExePath [256]byte
+	ExeIno  uint64 // Sub-project C: mm->exe_file inode number (kernel-truth identity)
+	ExeDev  uint32 // Sub-project C: superblock device (i_sb->s_dev)
+	_       uint32 // tail pad mirroring the C struct's _pad (binary.Read consumes it)
 }
 
 func decodeConnectEvent(raw []byte) (tgid, tid uint32, comm [16]byte, daddr [4]byte, dport uint16, ok bool) {

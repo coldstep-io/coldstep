@@ -65,13 +65,23 @@ func readExecRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, st
 		stats.addExec()
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 
+		// Sub-project C: best-effort userspace content hash of the resolved exe
+		// path at event time. TOCTOU-prone (the file may already differ from
+		// what was exec'd) and skipped for non-absolute / over-cap paths — the
+		// in-kernel exe_ino/exe_dev are the robust identity; this is a
+		// supplemental tamper hint. Empty when unavailable.
+		exeSHA := bestEffortExeSHA256(exe)
+
 		if cfg.EventsLogPath != "" {
 			jsonlMu.Lock()
 			n := seq.Next()
 			evOut := telemetry.ExecEvent{
 				Type: "exec", TS: ts, Seq: n,
 				PID: ev.TGID, TGID: ev.TGID, ThreadID: ev.TID, Comm: comm,
-				Exe: exe,
+				Exe:       exe,
+				ExeInode:  ev.ExeIno,
+				ExeDev:    ev.ExeDev,
+				ExeSHA256: exeSHA,
 			}
 			err := telemetry.AppendJSONL(cfg.EventsLogPath, evOut, signer)
 			jsonlMu.Unlock()
