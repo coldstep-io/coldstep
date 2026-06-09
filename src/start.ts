@@ -273,17 +273,14 @@ export async function startAgent(): Promise<void> {
 
   const actionPath = actionRootPath();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
-  const detectLog = path.join(baseDir, '.coldstep-detect.md');
   // Bug #9: PID file lives under $GITHUB_WORKSPACE so the TS entrypoints,
-  // the Go cmd/coldstep-action runStart/runStop, and external bash steps
-  // all agree on a single location. Mixed-entrypoint use (Go start + TS
-  // stop, or vice versa) otherwise no-ops the stop SIGTERM — the agent
-  // runs until SIGKILL on runner teardown with no digest flush.
+  // the Go coldstep start/stop, and external bash steps all agree on a single
+  // location. Mixed-entrypoint use (Go start + TS stop, or vice versa) otherwise
+  // no-ops the stop SIGTERM — the agent runs until SIGKILL on runner teardown.
   const pidFile = path.join(baseDir, '.coldstep.pid');
   const agentStatus = path.join(baseDir, '.coldstep-ready.json');
   const eventsLog = path.join(baseDir, '.coldstep-events.jsonl');
 
-  fs.writeFileSync(detectLog, '', 'utf8');
   if (fs.existsSync(agentStatus)) fs.unlinkSync(agentStatus);
 
   const stderrLog = path.join(baseDir, '.coldstep-agent.stderr.log');
@@ -310,7 +307,6 @@ export async function startAgent(): Promise<void> {
   const childEnv: NodeJS.ProcessEnv = {
     ...process.env,
     GITHUB_WORKSPACE: baseDir,
-    COLDSTEP_DETECT_LOG: detectLog,
     COLDSTEP_ALLOWED_HOSTS: allowlist.allowedHosts,
     COLDSTEP_ALLOWED_IPS: allowlist.allowedIPs,
     COLDSTEP_IGNORED_IP_NETS: allowlist.ignoredNets,

@@ -19088,7 +19088,7 @@ var https = __toESM(require("https"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.4.1";
+var COLDSTEP_BINARY_VERSION = "v0.5.0";
 var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
 var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
 var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
@@ -19254,7 +19254,22 @@ async function ensureColdstepBinary() {
     }
   }
   info(`coldstep: downloading ${COLDSTEP_BINARY_VERSION} from ${COLDSTEP_BINARY_URL}`);
-  await downloadToFile(COLDSTEP_BINARY_URL, binPath);
+  {
+    const maxAttempts = 4;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await downloadToFile(COLDSTEP_BINARY_URL, binPath);
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const permanent = /HTTP 4\d\d /.test(msg);
+        if (permanent || attempt >= maxAttempts) throw e;
+        const delayMs = 1e3 * attempt;
+        warning(`coldstep: download attempt ${attempt} failed (${msg}); retrying in ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
   const got = sha256File(binPath);
   if (got !== expectedSha) {
     try {
@@ -19572,11 +19587,9 @@ async function startAgent() {
   }
   const actionPath = actionRootPath();
   const baseDir = process.env.GITHUB_WORKSPACE || actionPath;
-  const detectLog = path2.join(baseDir, ".coldstep-detect.md");
   const pidFile = path2.join(baseDir, ".coldstep.pid");
   const agentStatus = path2.join(baseDir, ".coldstep-ready.json");
   const eventsLog = path2.join(baseDir, ".coldstep-events.jsonl");
-  fs4.writeFileSync(detectLog, "", "utf8");
   if (fs4.existsSync(agentStatus)) fs4.unlinkSync(agentStatus);
   const stderrLog = path2.join(baseDir, ".coldstep-agent.stderr.log");
   if (failOnError && fs4.existsSync(stderrLog)) fs4.unlinkSync(stderrLog);
@@ -19602,7 +19615,6 @@ async function startAgent() {
   const childEnv = {
     ...process.env,
     GITHUB_WORKSPACE: baseDir,
-    COLDSTEP_DETECT_LOG: detectLog,
     COLDSTEP_ALLOWED_HOSTS: allowlist.allowedHosts,
     COLDSTEP_ALLOWED_IPS: allowlist.allowedIPs,
     COLDSTEP_IGNORED_IP_NETS: allowlist.ignoredNets,
