@@ -129,6 +129,37 @@ func TestDNSCache_longerNameSkippedWhileValid(t *testing.T) {
 	}
 }
 
+// TestDNSCache_lowercasesSniffedName pins that a mixed-case sniffed reply
+// (e.g. resolver 0x20 case-randomization) is canonicalized to lowercase so the
+// cached owner byte-matches the lowercased allowlist / allowed_domains keys and
+// the observed FQDN in JSONL doesn't trip the diff gate's new-domain check.
+func TestDNSCache_lowercasesSniffedName(t *testing.T) {
+	orig := dnsNow
+	defer func() { dnsNow = orig }()
+	t0 := time.Unix(50_000, 0).UTC()
+	dnsNow = func() time.Time { return t0 }
+
+	// A valid reply for WWW.EXAMPLE.COM (uppercase labels) -> 93.184.216.34.
+	pkt := []byte{
+		0x12, 0x34, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00,
+		0x03, 'W', 'W', 'W',
+		0x07, 'E', 'X', 'A', 'M', 'P', 'L', 'E',
+		0x03, 'C', 'O', 'M',
+		0x00,
+		0x00, 0x01, 0x00, 0x01,
+		0xc0, 0x0c,
+		0x00, 0x01, 0x00, 0x01,
+		0x00, 0x00, 0x01, 0x2c,
+		0x00, 0x04,
+		93, 184, 216, 34,
+	}
+	c := NewDNSCache()
+	c.AddFromPacket(pkt)
+	if got := c.Lookup(net.IPv4(93, 184, 216, 34)); got != "www.example.com" {
+		t.Fatalf("sniffed owner not lowercased: got %q want %q", got, "www.example.com")
+	}
+}
+
 // TestDNSCache_purgeExpiredEvictsAndCallsHook exercises in-memory purge without
 // BPF maps. BPF Delete + map verification lives in dns_cache_linux_test.go.
 func TestDNSCache_purgeExpiredEvictsAndCallsHook(t *testing.T) {

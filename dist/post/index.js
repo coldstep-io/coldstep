@@ -19308,6 +19308,13 @@ function readAgentReadyOk(statusPath) {
     return false;
   }
 }
+function resolveFailOnError(mode) {
+  const raw = getInput("fail-on-error");
+  if (raw === "") {
+    return mode === "defend";
+  }
+  return ["true", "1", "yes", "on"].includes(raw.toLowerCase());
+}
 function resolveReportFlags() {
   const report = (getInput("report") || "job-summary").trim().toLowerCase();
   switch (report) {
@@ -19516,7 +19523,7 @@ async function waitForProcessExit(pid, timeoutMs) {
 }
 async function stopAgent() {
   const { reportJobSummary, reportPRSummary } = resolveReportFlags();
-  const failOnError = getInput("fail-on-error") !== "" ? ["true", "1", "yes", "on"].includes(getInput("fail-on-error").toLowerCase()) : false;
+  const failOnError = resolveFailOnError((getInput("mode") || "detect").trim().toLowerCase());
   if (failOnError && getState("coldstep_wait_ready_ok") !== "true") {
     const st = agentStatusPath();
     if (!readAgentReadyOk(st)) {

@@ -84,6 +84,18 @@ func TestRun_DefendAllowlistStartFailures(t *testing.T) {
 	if res.AllowedIPv4.Len() != 1 || !res.AllowedIPv4.Contains(net.ParseIP("1.1.1.1")) {
 		t.Fatalf("expected single 1.1.1.1 in compiled set, got len=%d", res.AllowedIPv4.Len())
 	}
+
+	// An IPv4 CIDR fallback must also satisfy the gate when DNS yields no A
+	// records — CIDRs are programmed into allowed_ipv4 (pol.AllowedIPv4Nets)
+	// but are NOT merged into compiled.AllowedIPv4, so the emptiness check must
+	// count them explicitly (symmetric with the IPv6 CIDR path).
+	if _, err = compileDefendAllowlist(ctx, config.Config{
+		Mode:           config.ModeDefend,
+		AllowedDomains: []string{"example.com"},
+		AllowedIPs:     "10.0.0.0/8",
+	}, resolver, 1); err != nil {
+		t.Fatalf("IPv4 CIDR allowed-ips should satisfy compile when DNS yields no A records: %v", err)
+	}
 }
 
 // TestRun_DefendDenyEventEmission checks testAppendDenySample appends JSONL and returns the synthetic
@@ -293,6 +305,27 @@ func TestAppendDenyFromRaw_DistinctDstCrossFamily(t *testing.T) {
 	}
 	if got := state.denyCount(); got != 2 {
 		t.Fatalf("denyCount=%d want 2 (distinct dst must not dedup)", got)
+	}
+	if got := state.denyCorroborated(); got != 0 {
+		t.Fatalf("denyCorroborated=%d want 0", got)
+	}
+}
+
+// TestShouldEmitDeny_BackwardClockNotFresh verifies a wall-clock step backward
+// (NTP/VM adjust between two denies) does not satisfy the dedup window: the
+// cross-family second deny must emit rather than be suppressed as a twin.
+func TestShouldEmitDeny_BackwardClockNotFresh(t *testing.T) {
+	t.Parallel()
+	state := newDefendState()
+	key := denyDedupKey{tgid: 1, tid: 2, dst: "1.2.3.4", dport: 443, protocol: "tcp"}
+
+	if !state.shouldEmitDeny(key, "cgroup", 5_000_000_000) {
+		t.Fatalf("first deny must emit")
+	}
+	// Clock steps backward 400ms: delta is negative, so the prior entry must
+	// not count as fresh and the deny must emit.
+	if !state.shouldEmitDeny(key, "lsm", 4_600_000_000) {
+		t.Fatalf("deny after backward clock step must emit, not corroborate")
 	}
 	if got := state.denyCorroborated(); got != 0 {
 		t.Fatalf("denyCorroborated=%d want 0", got)
