@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.3] — 2026-06-09
+
+### Fixed
+
+- **Deny-dedup clock skew.** A backward NTP/VM wall-clock step made the deduplication delta negative, which caused a genuine deny to be suppressed as a cross-layer twin. The window check now guards `nowNano >= prev.nano` so backward clock steps never suppress new deny events.
+- **DNS owner case canonicalization.** Sniffed DNS replies echo the query's casing; resolvers using the "0x20" anti-spoofing trick randomize it. The cache now lowercases the owner name on entry so it byte-matches the lowercased allowlist keys and the diff gate's new-domain check.
+- **Stop step `fail-on-error` default in defend mode.** The stop step computed `failOnError` independently from the start step, always defaulting to `false` when the input was unset. It now calls `resolveFailOnError()` so the defend-mode default (`true`) is consistent with `start.ts`.
+- **TypeScript typecheck rot.** Tightened `tsconfig.json` and corrected the `stop.ts` import list; `npm run typecheck` is clean.
+
 ## [0.5.2] — 2026-06-09
 
 ### Added
@@ -252,6 +261,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.5.3]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.3
 [0.5.2]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.0
