@@ -84,6 +84,18 @@ func TestRun_DefendAllowlistStartFailures(t *testing.T) {
 	if res.AllowedIPv4.Len() != 1 || !res.AllowedIPv4.Contains(net.ParseIP("1.1.1.1")) {
 		t.Fatalf("expected single 1.1.1.1 in compiled set, got len=%d", res.AllowedIPv4.Len())
 	}
+
+	// An IPv4 CIDR fallback must also satisfy the gate when DNS yields no A
+	// records — CIDRs are programmed into allowed_ipv4 (pol.AllowedIPv4Nets)
+	// but are NOT merged into compiled.AllowedIPv4, so the emptiness check must
+	// count them explicitly (symmetric with the IPv6 CIDR path).
+	if _, err = compileDefendAllowlist(ctx, config.Config{
+		Mode:           config.ModeDefend,
+		AllowedDomains: []string{"example.com"},
+		AllowedIPs:     "10.0.0.0/8",
+	}, resolver, 1); err != nil {
+		t.Fatalf("IPv4 CIDR allowed-ips should satisfy compile when DNS yields no A records: %v", err)
+	}
 }
 
 // TestRun_DefendDenyEventEmission checks testAppendDenySample appends JSONL and returns the synthetic

@@ -44,12 +44,19 @@ func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver pol
 	// SP-2: literal IPv6 addresses count toward the effective allowlist too.
 	pol.MergeLiteralAllowedIPv6Into(&compiled.AllowedIPv6)
 	literalV6CIDRs := len(pol.AllowedIPv6Nets())
+	// IPv4 CIDRs from allowed-ips are programmed into allowed_ipv4 by
+	// buildDefendAllowedPlan (pol.AllowedIPv4Nets()) but are NOT merged into
+	// compiled.AllowedIPv4 (that set only holds A-record resolutions + bare
+	// /32 literals), so they must be counted here alongside the IPv6 CIDRs —
+	// otherwise an `allowed-ips 10.0.0.0/8` fallback is wrongly rejected as
+	// empty whenever the domains fail to resolve.
+	literalV4CIDRs := len(pol.AllowedIPv4Nets())
 	// P2-1 Phase 2: an IPv6-only allowlist (AAAA resolutions, no A) is
 	// valid — both BPF defend hooks attach, IPv4 cgroup denies everything,
 	// IPv6 cgroup denies everything outside allowed_ipv6. Only reject
 	// when ALL families are empty (every domain failed both A and AAAA and
 	// no IPv4/IPv6 literals or CIDRs were given).
-	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 && literalV6CIDRs == 0 {
+	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 && literalV4CIDRs == 0 && literalV6CIDRs == 0 {
 		msg := "defend allowlist effective allowlist is empty (no A/AAAA resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
