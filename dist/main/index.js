@@ -19976,7 +19976,7 @@ async function waitForProcessExit(pid, timeoutMs) {
 }
 async function stopAgent() {
   const { reportJobSummary, reportPRSummary } = resolveReportFlags();
-  const failOnError = getInput("fail-on-error") !== "" ? ["true", "1", "yes", "on"].includes(getInput("fail-on-error").toLowerCase()) : false;
+  const failOnError = resolveFailOnError((getInput("mode") || "detect").trim().toLowerCase());
   if (failOnError && getState("coldstep_wait_ready_ok") !== "true") {
     const st = agentStatusPath();
     if (!readAgentReadyOk(st)) {

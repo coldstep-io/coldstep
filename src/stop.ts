@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { actionRootPath, agentStatusPath, cachedColdstepBinaryPath, ensureColdstepBinary, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
+import { actionRootPath, agentStatusPath, cachedColdstepBinaryPath, ensureColdstepBinary, eventsLogPath, readAgentReadyOk, resolveFailOnError, resolveReportFlags } from './shared';
 
 // Caps on JSONL ingestion for suggested-allow: stop reading at MAX_EVENTS_BYTES so a
 // pathological 10 GiB log can't OOM the runner, and at MAX_EVENTS_LINES so quadratic
@@ -268,10 +268,9 @@ async function waitForProcessExit(pid: number, timeoutMs: number): Promise<void>
 export async function stopAgent(): Promise<void> {
   const { reportJobSummary, reportPRSummary } = resolveReportFlags();
 
-  const failOnError =
-    core.getInput('fail-on-error') !== ''
-      ? ['true', '1', 'yes', 'on'].includes(core.getInput('fail-on-error').toLowerCase())
-      : false;
+  // Must mirror start.ts: resolveFailOnError defaults to true in defend mode
+  // when the input is unset, so the readiness backstop below stays armed there.
+  const failOnError = resolveFailOnError((core.getInput('mode') || 'detect').trim().toLowerCase());
 
   if (failOnError && core.getState('coldstep_wait_ready_ok') !== 'true') {
     const st = agentStatusPath();
