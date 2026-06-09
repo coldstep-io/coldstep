@@ -412,7 +412,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
+          ls -la "${GITHUB_WORKSPACE}"/.coldstep-report.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
     needs: [gofmt]
@@ -520,9 +520,8 @@ jobs:
         run: |
           set -euo pipefail
           sleep 2
-          # `.coldstep-detect.md` is consumed and unlinked by the stop step
-          # (it appends the digest to GITHUB_STEP_SUMMARY before deleting),
-          # so only the events JSONL is asserted here.
+          # The agent writes data only; the report is rendered from the JSONL by
+          # the stop step. The events JSONL is the source of truth asserted here.
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
           test -f "$j"
           if grep -q '"type":"deny"' "$j"; then

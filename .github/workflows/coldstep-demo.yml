@@ -4,10 +4,12 @@
 # agent (stub DNS / mirrors break once defend is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
-# Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Both jobs pass `release-path`. The detect job builds `coldstep-action`
-# from source for the baseline `diff`, then uploads the pure-markdown `.coldstep-report.md` artifact
-# (the report binary + HTML render were removed when reporting moved into coldstep-action).
+# Agent binary: download the combined `coldstep-linux-amd64` from the repo GitHub Release for
+# `COLDSTEP_AGENT_VERSION` (`supply-chain-attest.yml`). Both jobs pass `release-path`. The single
+# `coldstep` binary provides the agent plus the `diff` / `stop` subcommands; the detect job runs the
+# baseline `diff` and uploads the pure-markdown `.coldstep-report.md` artifact rendered from JSONL.
+# NOTE: the `diff` subcommand requires a release that ships the combined binary; bump
+# `COLDSTEP_AGENT_VERSION` to that tag (Train-2) before this demo's diff step will pass.
 
 name: coldstep-demo
 
@@ -285,7 +287,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
+          ls -la "${GITHUB_WORKSPACE}"/.coldstep-report.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
     if: inputs.run_defend
@@ -397,13 +399,8 @@ jobs:
         run: |
           set -euo pipefail
           sleep 4
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
           test -f "$j"
-          if ! grep -q '### Defend' "$f"; then
-            echo "::warning::defend section marker missing in digest; continuing while JSONL deny assertions follow CI variance rules"
-          fi
           if grep -q '"type":"deny"' "$j"; then
             grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
             grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }
