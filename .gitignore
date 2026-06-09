@@ -85,3 +85,4 @@ AGENTS.md
 
 # Internal dev tooling not part of the shipped action.
 /docker/code-review-assistant/
+.coldstep-suggested-allow.txt
