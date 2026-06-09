@@ -91,6 +91,91 @@ struct {
 #undef emit_deny_event_ipv4
 
 /*
+ * IPv6 LSM defense-in-depth twin (ORDER 4 / Phase 4.2). The cgroup connect6/
+ * sendmsg6 hooks already enforce native IPv6 against allowed_ipv6; this gives
+ * the LSM layer the same coverage on kernels that boot with `bpf` in the LSM
+ * chain, mirroring how lsm_socket_connect/sendmsg twin the cgroup IPv4 path.
+ * Hand-written (not via the defend_policy.inc template) so the v6 deny is
+ * emitted into the LSM's own renamed ring (lsm_deny_events) without having to
+ * thread a new templated symbol through every includer.
+ *
+ * Reuses the byte-buffer v6 helpers from trace_defend_skb.inc
+ * (skb_v6_is_loopback / _link_local / _v4mapped / _is_allowlisted), which is
+ * included before this file, and the IPv4 allowlist/ignored/deny helpers above
+ * for the v4-mapped case.
+ */
+static __always_inline void lsm_emit_deny_event_ipv6(__u8 protocol,
+						     const __u8 *dst16, __be16 dport,
+						     __u8 reason)
+{
+	/* AUDIT(5b): submit/discard paired — only exit between reserve and submit
+	 * is the `!de` early return (no slot held). */
+	struct deny_event *de = bpf_ringbuf_reserve(&lsm_deny_events, sizeof(*de), 0);
+
+	if (!de) {
+		lsm_note_deny_ring_reserve_failed();
+		return;
+	}
+	{
+		__u64 pt = bpf_get_current_pid_tgid();
+
+		de->tgid = (__u32)(pt >> 32);
+		de->tid = (__u32)pt;
+	}
+	bpf_get_current_comm(&de->comm, sizeof(de->comm));
+	de->protocol = protocol;
+	de->reason = reason;
+	de->af = AF_INET6;
+	de->_pad = 0;
+	__builtin_memset(de->daddr, 0, sizeof(de->daddr));
+	if (dst16)
+		__builtin_memcpy(de->daddr, dst16, 16);
+	__builtin_memcpy(de->dport, &dport, sizeof(de->dport));
+	bpf_ringbuf_submit(de, 0);
+}
+
+/*
+ * Enforce a 16-byte network-order IPv6 destination against the allowlist.
+ * Returns -EPERM (deny) or 0 (allow). ::1 and fe80::/10 always allow; IPv4-
+ * mapped destinations are judged against the IPv4 allowlist (the wire traffic
+ * is v4), exactly mirroring defend_cgroup_sock_addr_ipv6. defense_enabled is
+ * already checked by the caller for the native-v6 path; the v4-mapped branch
+ * re-checks via the IPv4 helpers which are inert when defense is off.
+ */
+static __always_inline int lsm_v6_enforce(__u8 proto, const __u8 daddr16[16],
+					  __be16 dport)
+{
+	__u32 a[4];
+	__builtin_memcpy(a, daddr16, sizeof(a));
+
+	if (skb_v6_is_loopback(a))
+		return 0;
+	if (skb_v6_is_link_local(a))
+		return 0;
+
+	if (skb_v6_is_v4mapped(a)) {
+		__be32 v4 = a[3]; /* embedded IPv4, network byte order */
+		__u8 addr4[4];
+
+		if (lsm_dst_in_ignored(v4))
+			return 0;
+		if (lsm_dst_is_allowlisted(v4))
+			return 0;
+		__builtin_memcpy(addr4, &v4, sizeof(addr4));
+		lsm_emit_deny_event_ipv4(proto, addr4, dport,
+					 COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+		return -EPERM;
+	}
+
+	if (skb_v6_is_allowlisted(daddr16))
+		return 0;
+
+	lsm_emit_deny_event_ipv6(proto, daddr16, dport,
+				 COLDSTEP_DENY_REASON_DST_NOT_ALLOWLISTED);
+	return -EPERM;
+}
+
+/*
  * LSM hooks return 0 to allow, -EPERM to deny.
  */
 SEC("lsm/socket_connect")
@@ -117,6 +202,35 @@ int BPF_PROG(lsm_socket_connect, struct socket *sock, struct sockaddr *address, 
 	/* AUDIT(5f): return intentionally not checked — destination is zeroed on
 	 * failure and the AF_INET guard below fails closed (0 != AF_INET). */
 	bpf_probe_read_kernel(&family, sizeof(family), &addr4->sin_family);
+
+	/*
+	 * ORDER 4: native IPv6 connect. Defense is already enabled (checked at
+	 * the top of the hook). Read the 16-byte sin6_addr + sin6_port and the
+	 * socket protocol, then enforce against allowed_ipv6 (v4-mapped is judged
+	 * against the IPv4 allowlist inside lsm_v6_enforce).
+	 */
+	if (family == AF_INET6) {
+		if (addrlen < (int)sizeof(struct sockaddr_in6))
+			return 0;
+		struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)address;
+		__u8 d16[16] = {};
+		__be16 dport6 = 0;
+		/* AUDIT(5f): returns not checked — zero-init means a probe miss
+		 * yields ::/0:0 which is judged like any other dst (fail-closed
+		 * against the allowlist, not a crash). */
+		bpf_probe_read_kernel(d16, sizeof(d16), &addr6->sin6_addr);
+		bpf_probe_read_kernel(&dport6, sizeof(dport6), &addr6->sin6_port);
+
+		struct sock *sk6 = NULL;
+		bpf_probe_read_kernel(&sk6, sizeof(sk6), &sock->sk);
+		short protocol6 = 0;
+		if (sk6)
+			bpf_probe_read_kernel(&protocol6, sizeof(protocol6),
+					      &sk6->sk_protocol);
+		__u8 proto6 = (protocol6 == IPPROTO_UDP) ? COLDSTEP_PROTO_UDP
+							 : COLDSTEP_PROTO_TCP;
+		return lsm_v6_enforce(proto6, d16, dport6);
+	}
 
 	if (family != AF_INET)
 		return 0;
@@ -202,6 +316,36 @@ int BPF_PROG(lsm_socket_sendmsg, struct socket *sock, struct msghdr *msg, int si
 	 * through to the sock_common-derived peer path on failure. */
 	bpf_probe_read_kernel(&address, sizeof(address), &msg->msg_name);
 	bpf_probe_read_kernel(&namelen, sizeof(namelen), &msg->msg_namelen);
+
+	/*
+	 * ORDER 4: native IPv6 sendmsg. When the socket is AF_INET6, take the dst
+	 * from an explicit sockaddr_in6 msg_name (unconnected send) or fall back
+	 * to the connected peer in sock_common (skc_v6_daddr). v4-mapped dsts are
+	 * gated against the IPv4 allowlist inside lsm_v6_enforce.
+	 */
+	{
+		__u16 sk_fam6 = 0;
+		bpf_probe_read_kernel(&sk_fam6, sizeof(sk_fam6),
+				      &sk->__sk_common.skc_family);
+		if (sk_fam6 == AF_INET6) {
+			__u8 d16[16] = {};
+			__be16 dport6 = 0;
+
+			if (address && namelen >= (int)sizeof(struct sockaddr_in6)) {
+				struct sockaddr_in6 *a6 = (struct sockaddr_in6 *)address;
+
+				bpf_probe_read_kernel(d16, sizeof(d16), &a6->sin6_addr);
+				bpf_probe_read_kernel(&dport6, sizeof(dport6),
+						      &a6->sin6_port);
+			} else {
+				bpf_probe_read_kernel(d16, sizeof(d16),
+						      &sk->__sk_common.skc_v6_daddr);
+				bpf_probe_read_kernel(&dport6, sizeof(dport6),
+						      &sk->__sk_common.skc_dport);
+			}
+			return lsm_v6_enforce(proto, d16, dport6);
+		}
+	}
 
 	__be32 daddr = 0;
 	__be16 dport = 0;
