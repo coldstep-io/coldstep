@@ -299,6 +299,27 @@ func TestAppendDenyFromRaw_DistinctDstCrossFamily(t *testing.T) {
 	}
 }
 
+// TestShouldEmitDeny_BackwardClockNotFresh verifies a wall-clock step backward
+// (NTP/VM adjust between two denies) does not satisfy the dedup window: the
+// cross-family second deny must emit rather than be suppressed as a twin.
+func TestShouldEmitDeny_BackwardClockNotFresh(t *testing.T) {
+	t.Parallel()
+	state := newDefendState()
+	key := denyDedupKey{tgid: 1, tid: 2, dst: "1.2.3.4", dport: 443, protocol: "tcp"}
+
+	if !state.shouldEmitDeny(key, "cgroup", 5_000_000_000) {
+		t.Fatalf("first deny must emit")
+	}
+	// Clock steps backward 400ms: delta is negative, so the prior entry must
+	// not count as fresh and the deny must emit.
+	if !state.shouldEmitDeny(key, "lsm", 4_600_000_000) {
+		t.Fatalf("deny after backward clock step must emit, not corroborate")
+	}
+	if got := state.denyCorroborated(); got != 0 {
+		t.Fatalf("denyCorroborated=%d want 0", got)
+	}
+}
+
 func TestAppendDenyFromRaw_InvalidPayload(t *testing.T) {
 	t.Parallel()
 	cfg := config.Config{Mode: config.ModeDefend}
