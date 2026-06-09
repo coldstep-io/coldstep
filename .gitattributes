@@ -18,3 +18,6 @@ go.sum text eol=lf
 # Linux (LF), so a Windows CRLF checkin would falsely fail it. Pin LF.
 dist/**/*.js text eol=lf
 dist/**/*.map text eol=lf
+
+# HTML (website) is LF to avoid CRLF churn from Windows edits
+*.html text eol=lf
