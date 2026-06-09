@@ -80,7 +80,7 @@ jobs:
             ${{ github.workspace }}/.coldstep-events.jsonl
             ${{ github.workspace }}/.coldstep-telemetry.json
             ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-detect.md
+            ${{ github.workspace }}/.coldstep-report.md
           if-no-files-found: warn
 
   dind:
@@ -137,7 +137,7 @@ jobs:
             ${{ github.workspace }}/.coldstep-events.jsonl
             ${{ github.workspace }}/.coldstep-telemetry.json
             ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-detect.md
+            ${{ github.workspace }}/.coldstep-report.md
           if-no-files-found: warn
 
   buildkit:
@@ -192,7 +192,7 @@ jobs:
             ${{ github.workspace }}/.coldstep-events.jsonl
             ${{ github.workspace }}/.coldstep-telemetry.json
             ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-detect.md
+            ${{ github.workspace }}/.coldstep-report.md
           if-no-files-found: warn
 
   service-containers:
@@ -252,7 +252,7 @@ jobs:
             ${{ github.workspace }}/.coldstep-events.jsonl
             ${{ github.workspace }}/.coldstep-telemetry.json
             ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-detect.md
+            ${{ github.workspace }}/.coldstep-report.md
           if-no-files-found: warn
 
   aggregate:

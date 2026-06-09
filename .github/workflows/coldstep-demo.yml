@@ -4,10 +4,12 @@
 # agent (stub DNS / mirrors break once defend is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
 # after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
 #
-# Agent binary: download `coldstep-linux-amd64` from the repo GitHub Release for `COLDSTEP_AGENT_VERSION`
-# (`supply-chain-attest.yml`). Both jobs pass `release-path`. The detect job builds `coldstep-action`
-# from source for the baseline `diff`, then uploads the pure-markdown `.coldstep-report.md` artifact
-# (the report binary + HTML render were removed when reporting moved into coldstep-action).
+# Agent binary: download the combined `coldstep-linux-amd64` from the repo GitHub Release for
+# `COLDSTEP_AGENT_VERSION` (`supply-chain-attest.yml`). Both jobs pass `release-path`. The single
+# `coldstep` binary provides the agent plus the `diff` / `stop` subcommands; the detect job runs the
+# baseline `diff` and uploads the pure-markdown `.coldstep-report.md` artifact rendered from JSONL.
+# NOTE: the `diff` subcommand requires a release that ships the combined binary; bump
+# `COLDSTEP_AGENT_VERSION` to that tag (Train-2) before this demo's diff step will pass.
 
 name: coldstep-demo
 
@@ -81,9 +83,6 @@ jobs:
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 
-      - name: Build coldstep-action (Go only; agent from release)
-        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-action ./cmd/coldstep-action
-
       - name: Coldstep (detect mode)
         uses: ./
         with:
@@ -144,10 +143,9 @@ jobs:
       - name: Verify detect capabilities and write visual summary
         run: |
           set -euo pipefail
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          # The agent finalizes the digest at SIGTERM, not continuously. Stop it now so the digest
-          # is complete before we check it. post.js will handle the already-dead process gracefully.
+          # The agent flushes ringbufs at SIGTERM, not continuously. Stop it now so the JSONL
+          # is complete before we check it. post.js handles the already-dead process gracefully.
           if CS_PID="$(cat "${GITHUB_WORKSPACE}/.coldstep.pid" 2>/dev/null)"; then
             sudo kill -s SIGTERM "${CS_PID}" 2>/dev/null || true
             for _i in 1 2 3 4 5 6 7 8; do
@@ -155,7 +153,6 @@ jobs:
               sudo kill -0 "${CS_PID}" 2>/dev/null || break
             done
           fi
-          test -f "$f"
           test -f "$j"
           # Drain delay + retries: tls_sni rows can lag ringbuf flush on hosted runners (same class as fs_event variance).
           sleep 6
@@ -168,12 +165,10 @@ jobs:
             sleep 5
           done
           if [[ "${tls_jsonl_ok}" -eq 0 ]]; then
-            if grep -q 'TLS ClientHello' "$f" 2>/dev/null; then
-              echo "::warning::no tls JSONL rows after retry window; digest still contains TLS section (ubuntu-latest variance)"
-            else
-              echo "::warning::no tls JSONL or TLS digest section — tls_sni hook inactive on this runner image (ubuntu-latest variance; non-blocking)"
-            fi
+            echo "::warning::no tls JSONL rows after retry window — tls_sni hook inactive on this runner image (ubuntu-latest variance; non-blocking)"
           fi
+          # JSONL is the source of truth (the agent writes data only; the report is rendered
+          # in userspace from this stream). Required types fail the job; feature-gate types warn.
           grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
           grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
           grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
@@ -186,99 +181,18 @@ jobs:
           if ! grep -q '"type":"fs_event"' "$j"; then
             echo "::warning::fs_event JSONL absent — fs_events gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
           fi
-          if ! grep -Eq '"type":"fs_event".*"op":"create"' "$j"; then
-            echo "::warning::fs_event create not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"unlink"' "$j"; then
-            echo "::warning::fs_event unlink not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
-            echo "::warning::fs_event rename not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
-            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -q 'TLS ClientHello' "$f" 2>/dev/null; then
-            echo "::warning::TLS ClientHello section absent from digest — tls_sni gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
-          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
-          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
-          if ! grep -qi 'process tree' "$f" 2>/dev/null; then
-            echo "::warning::process tree section absent from digest — proc_tree gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
-          if ! grep -qi 'Filesystem' "$f" 2>/dev/null; then
-            echo "::warning::Filesystem section absent from digest — fs_events gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
+          for op in create unlink rename chmod; do
+            if ! grep -Eq "\"type\":\"fs_event\".*\"op\":\"${op}\"" "$j"; then
+              echo "::warning::fs_event ${op} not observed in this run (best-effort signal on ubuntu-latest)"
+            fi
+          done
+          # The detailed report is rendered by the stop step from the JSONL above.
+          test -f "${GITHUB_WORKSPACE}/.coldstep-report.md" || echo "::warning::.coldstep-report.md not present yet (written by the stop step)"
           {
             echo "## Detect verification"
             echo ""
-            echo "- **Result:** pass — required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
+            echo "- **Result:** pass — required JSONL types present (\`ubuntu-latest\`). The Markdown report is rendered from \`.coldstep-events.jsonl\` by the stop step."
           } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Compare detect output with previous successful run (opt-in)
-        if: env.COLDSTEP_DIFF_PREV_RUN == '1'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          summary="${GITHUB_STEP_SUMMARY}"
-          current_file="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          marker_prefix="coldstep-prev-diff"
-          fail_diff_unavailable() {
-            local reason="$1"
-            echo "- ${marker_prefix}.result=unavailable (${reason})" >> "${summary}"
-            if [[ "${COLDSTEP_DIFF_STRICT:-0}" == "1" ]]; then
-              echo "::error::${reason}"
-              exit 1
-            fi
-            exit 0
-          }
-
-          if [[ ! -f "${current_file}" ]]; then
-            fail_diff_unavailable "current JSONL missing"
-          fi
-
-          current_run="${GITHUB_RUN_ID}"
-          branch="${GITHUB_HEAD_REF:-${GITHUB_REF_NAME}}"
-          workflow_file="$(basename "${GITHUB_WORKFLOW_REF%@*}")"
-          # Single gh --jq filter (no awk|head): awk exiting first line SIGPIPEs jq under pipefail (exit 141).
-          # gh only accepts one --jq string (not jq --arg); embed run id in the expression (digits only).
-          baseline_run="$(
-            gh run list --workflow "${workflow_file}" --branch "${branch}" --status success --limit 30 --json databaseId \
-              --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
-          )"
-          fallback_used="false"
-
-          if [[ -z "${baseline_run}" ]]; then
-            baseline_run="$(
-              gh run list --branch "${branch}" --status success --limit 30 --json databaseId \
-                --jq '[.[] | select((.databaseId|tostring) != "'"${current_run}"'")] | first | if . == null then empty else .databaseId|tostring end'
-            )"
-            fallback_used="true"
-          fi
-
-          if [[ -z "${baseline_run}" ]]; then
-            echo "- ${marker_prefix}.fallback_used=${fallback_used}" >> "${summary}"
-            fail_diff_unavailable "no prior successful run found"
-          fi
-
-          echo "::notice::coldstep-prev-diff baseline_run=${baseline_run} fallback_used=${fallback_used}"
-
-          rm -rf prev-state
-          mkdir -p prev-state
-          baseline_artifact="coldstep-events-baseline-${NS_RUNNER_LABEL}"
-          if ! gh run download "${baseline_run}" --name "${baseline_artifact}" --dir prev-state >/dev/null 2>&1; then
-            fail_diff_unavailable "baseline artifact missing for run ${baseline_run}"
-          fi
-
-          baseline_file="prev-state/.coldstep-events.jsonl"
-          if [[ ! -f "${baseline_file}" ]]; then
-            fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
-          fi
-
-          if ! ./bin/coldstep-action diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
-            fail_diff_unavailable "coldstep-action diff failed"
-          fi
 
       - name: Persist detect JSONL baseline artifact
         if: always()
@@ -308,7 +222,7 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          ls -la "${GITHUB_WORKSPACE}"/.coldstep-detect.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
+          ls -la "${GITHUB_WORKSPACE}"/.coldstep-report.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
 
   defend-mode:
     if: inputs.run_defend
@@ -420,13 +334,8 @@ jobs:
         run: |
           set -euo pipefail
           sleep 4
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$f"
           test -f "$j"
-          if ! grep -q '### Defend' "$f"; then
-            echo "::warning::defend section marker missing in digest; continuing while JSONL deny assertions follow CI variance rules"
-          fi
           if grep -q '"type":"deny"' "$j"; then
             grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
             grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }

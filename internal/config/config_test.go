@@ -115,37 +115,6 @@ func TestLoadFromEnv_DetectCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestLoadFromEnv_DefaultDetectLogUnderWorkspace(t *testing.T) {
-	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "detect")
-	t.Setenv("GITHUB_STEP_SUMMARY", "/tmp/gh-step-summary")
-	t.Setenv("GITHUB_WORKSPACE", "/tmp/ghws")
-	t.Setenv("COLDSTEP_DETECT_LOG", "")
-	c, err := LoadFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := "/tmp/ghws/.coldstep-detect.md"
-	if c.DetectLogPath != want {
-		t.Fatalf("DetectLogPath: got %q want %q", c.DetectLogPath, want)
-	}
-}
-
-func TestLoadFromEnv_DetectLogPath(t *testing.T) {
-	clearColdstepPolicyEnv(t)
-	t.Setenv("CI_GUARD_MODE", "detect")
-	t.Setenv("GITHUB_STEP_SUMMARY", "")
-	t.Setenv("GITHUB_WORKSPACE", "")
-	t.Setenv("COLDSTEP_DETECT_LOG", "/tmp/coldstep-detect.log")
-	c, err := LoadFromEnv()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.DetectLogPath != "/tmp/coldstep-detect.log" {
-		t.Fatalf("DetectLogPath: got %q", c.DetectLogPath)
-	}
-}
-
 func TestLoadFromEnv_DefendAccepted(t *testing.T) {
 	clearColdstepPolicyEnv(t)
 	t.Setenv("CI_GUARD_MODE", "defend")
@@ -399,8 +368,5 @@ func TestLoadFromEnv_DefaultArtifactPathsUnderWorkspace(t *testing.T) {
 	}
 	if !strings.Contains(c.EventsLogPath, "ws") {
 		t.Fatalf("expected workspace in path: %q", c.EventsLogPath)
-	}
-	if c.DetectLogPath != "/tmp/ws/.coldstep-detect.md" {
-		t.Fatalf("DetectLogPath: got %q", c.DetectLogPath)
 	}
 }

@@ -1,6 +1,6 @@
 //go:build linux
 
-package main
+package actioncli
 
 import (
 	"os/exec"

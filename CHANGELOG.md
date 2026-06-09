@@ -9,11 +9,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed (BREAKING)
 
+- **Single combined `coldstep` binary.** The agent (`cmd/coldstep`) and the composite action helper (the former `cmd/coldstep-action`, now `internal/actioncli`) are merged into one binary that dispatches `run | validate | start | stop | diff | assert-integrity`. The Release ships one artifact and consumers download that prebuilt build (they no longer compile source on the runner). `scripts/build-agent-linux.sh` builds one binary; CI/supply-chain reference `bin/coldstep <subcommand>`.
+- **Reporting fully consolidated to one userspace path.** The agent writes data only (`.coldstep-events.jsonl`); the `.coldstep-detect.md` agent digest and the `COLDSTEP_DETECT_LOG` / `config.DetectLogPath` plumbing are removed. `coldstep stop` renders both reports from the JSONL via `internal/report/markdown` (`RenderSimple` → job summary, `RenderDetailed` → `.coldstep-report.md`). This fixes a regression where `report: pr-comment` / `both` posted nothing once the agent stopped writing the digest.
 - **Allowlist input consolidation.** Removed the `ignored-nets`, `ignored-nets-file`, and `bootstrap-allowlist` action inputs. The allowlist is now a single model: `allow` / `allow-file` carry domains, wildcards, IPv4 literals/CIDRs, and `!CIDR` ignore entries (the only ignore mechanism); `no-default-ignored-nets` still toggles the implicit RFC1918 ignores. Migration: `ignored-nets: "10.0.0.0/8"` → `allow: "!10.0.0.0/8"` (or `!CIDR` lines in an `allow-file`); `bootstrap-allowlist: true` → copy the reference packs in `scripts/coldstep_bootstrap/` into your own `allow-file`. If a removed input is still set, the action emits a one-line warning naming the replacement rather than silently ignoring it.
 
 ### Removed
 
 - **Reputation / threat-intel enrichment subsystem (OTX + rDNS).** Removed `internal/reputation/*` (the pluggable `Enricher` interface, registry, loader, and the AlienVault OTX backend), `internal/report/enrich/*` (the Source pipeline), and the `coldstep-report` `otx-enrich` / `rdns-enrich` subcommands. The report model drops its `otx` and `rdns` slots and the `ClassifiedIndicator.rdns` field. The `OTX_API_KEY` / `COLDSTEP_OTX_API_KEY` secrets and the CI enrichment steps are no longer used. This slims the post-run report pipeline to build/diff/render only; detect reports no longer perform any outbound threat-intel lookups.
+
+### Fixed
+
+- **Defend run mislabeled as `detect` in the report.** The report inferred run mode only from `deny` events, so a defend run where everything was allowlisted (zero denies — the success case) rendered "detect ✅ no anomalies". Mode is now carried in the shutdown `meta` event and read authoritatively.
+- **Markdown link-injection in report table cells.** `mdCell` neutralized `|`, backtick, newline, and `<` but left `[`/`]`, so a hostile SNI/FQDN could render a clickable link in the Job Summary; the brackets are now neutralized too.
 
 ---
 
