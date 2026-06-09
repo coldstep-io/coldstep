@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **IPv6 LSM defense-in-depth twin (ORDER 4 / Phase 4.2).** The BPF LSM `socket_connect` / `socket_sendmsg` hooks now enforce native IPv6 (previously IPv4-only), mirroring the cgroup `connect6`/`sendmsg6` path: they read the 16-byte destination (from `sockaddr_in6` or the connected `skc_v6_daddr` fallback) and gate it against the `allowed_ipv6` LPM trie via `lsm_v6_enforce`, with `::1` (loopback) and `fe80::/10` (link-local) always bypassing and IPv4-mapped destinations judged against the IPv4 allowlist. Denies emit an `AF_INET6` deny event. Like every LSM hook it enforces only where `bpf` is in the kernel `lsm=` boot chain; the load+attach path verifies on `CONFIG_BPF_LSM=y` kernels.
+
 ## [0.5.1] — 2026-06-09
 
 ### Added
