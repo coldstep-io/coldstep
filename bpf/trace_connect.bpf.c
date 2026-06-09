@@ -993,6 +993,37 @@ int handle_inet_sock_set_state(struct trace_event_raw_inet_sock_set_state *ctx)
  */
 #define COLDSTEP_USER_MSGHDR_MSG_IOV_OFFSET 16u
 
+/*
+ * ORDER 1 (BG-5): resolve the io_uring submission's fd + connected IPv4 peer
+ * from req->file's socket, mirroring the proven walk in
+ * trace_lsm_defend_iouring.inc (file->private_data as struct socket* -> sk ->
+ * skc_family/skc_daddr/skc_dport). Best-effort: any failed read or non-AF_INET
+ * socket leaves the corresponding field at 0; the TLS event still emits with
+ * the SNI, just without (or with partial) dst. Fills tev->fd/daddr/dport.
+ */
+static __always_inline void iouring_tls_resolve_peer(struct io_kiocb *req,
+						     struct io_uring_tls_event *tev)
+{
+	struct file *file = NULL;
+	if (bpf_core_read(&file, sizeof(file), &req->file) || !file)
+		return;
+	void *priv = NULL;
+	if (bpf_probe_read_kernel(&priv, sizeof(priv), &file->private_data) || !priv)
+		return;
+	struct socket *sock = (struct socket *)priv;
+	struct sock *sk = NULL;
+	if (bpf_probe_read_kernel(&sk, sizeof(sk), &sock->sk) || !sk)
+		return;
+	__u16 fam = 0;
+	if (bpf_probe_read_kernel(&fam, sizeof(fam), &sk->__sk_common.skc_family) ||
+	    fam != AF_INET)
+		return;
+	bpf_probe_read_kernel(&tev->daddr, sizeof(tev->daddr),
+			      &sk->__sk_common.skc_daddr);
+	bpf_probe_read_kernel(&tev->dport, sizeof(tev->dport),
+			      &sk->__sk_common.skc_dport);
+}
+
 SEC("raw_tp/io_uring_submit_sqe")
 int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 {
@@ -1092,7 +1123,12 @@ int trace_io_uring_submit_sqe(struct bpf_raw_tracepoint_args *ctx)
 							tev->op = opcode;
 							tev->_pad[0] = tev->_pad[1] = tev->_pad[2] = 0;
 							tev->capture_len = 0;
+							tev->_gap[0] = tev->_gap[1] = 0;
+							tev->daddr = 0;
+							tev->dport = 0;
 							__builtin_memset(tev->_pad2, 0, sizeof(tev->_pad2));
+							/* ORDER 1: resolve connected peer dst (best-effort). */
+							iouring_tls_resolve_peer(req, tev);
 							/*
 							 * AUDIT(5b/5f): submit only when the full payload
 							 * window was captured; a short/failed read discards

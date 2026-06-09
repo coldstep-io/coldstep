@@ -37,8 +37,8 @@ const (
 	ioUringSendEventWireSize = 40
 	// egress_backstop_event (sub-project A): 8(ts)+4(pid)+16(comm)+1(af)+1(ipproto)+2(_pad)+16(daddr)+2(dport)+6(_pad2) → 56
 	egressBackstopEventWireSize = 56
-	// io_uring_tls_event (P6 Phase 2.5): 8(ts)+4(pid)+16(comm)+1(op)+3(_pad)+2(capture_len)+256(payload)+6(_pad2) → 296
-	ioUringTLSEventWireSize = 296
+	// io_uring_tls_event (P6 Phase 2.5; ORDER 1 added dst): 8(ts)+4(pid)+16(comm)+1(op)+3(_pad)+2(capture_len)+256(payload)+2(_gap)+4(daddr)+2(dport)+6(_pad2) → 304
+	ioUringTLSEventWireSize = 304
 	ioUringTLSPayloadMax    = 256
 	// bpf_self_defense_event (sub-project B): 8(ts)+16(comm)+4(tgid)+4(target_id)+4(cmd)+1(target_kind)+3(_pad) → 40
 	bpfSelfDefenseEventWireSize = 40

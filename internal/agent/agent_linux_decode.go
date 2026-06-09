@@ -264,14 +264,16 @@ func decodeBpfSelfDefenseEvent(raw []byte) (ts uint64, comm [16]byte, tgid, targ
 	return ts, comm, tgid, targetID, cmd, kind, true
 }
 
-// decodeIOUringTLSEvent parses io_uring_tls_event (296 bytes, see
+// decodeIOUringTLSEvent parses io_uring_tls_event (304 bytes, see
 // bpf/trace_connect_obs.h). Layout: ts(8) pid(4) comm(16) op(1) _pad(3)
-// capture_len(2, LE) payload(256) _pad2(6). capture_len is clamped to the
-// payload window so a corrupt length can never slice out of bounds; payload
-// is a sub-slice of raw (caller must not retain it past the ringbuf record).
-func decodeIOUringTLSEvent(raw []byte) (ts uint64, pid uint32, op uint8, payload []byte, comm [16]byte, ok bool) {
+// capture_len(2, LE) payload(256) _gap(2) daddr(4, BE) dport(2, BE) _pad2(6).
+// capture_len is clamped to the payload window so a corrupt length can never
+// slice out of bounds; payload is a sub-slice of raw (caller must not retain it
+// past the ringbuf record). daddr/dport are the connected IPv4 peer resolved in
+// kernel (network byte order); both 0 when unresolved.
+func decodeIOUringTLSEvent(raw []byte) (ts uint64, pid uint32, op uint8, payload []byte, comm [16]byte, daddr [4]byte, dport uint16, ok bool) {
 	if len(raw) < ioUringTLSEventWireSize {
-		return 0, 0, 0, nil, [16]byte{}, false
+		return 0, 0, 0, nil, [16]byte{}, [4]byte{}, 0, false
 	}
 	ts = binary.LittleEndian.Uint64(raw[0:8])
 	pid = binary.LittleEndian.Uint32(raw[8:12])
@@ -283,7 +285,10 @@ func decodeIOUringTLSEvent(raw []byte) (ts uint64, pid uint32, op uint8, payload
 	}
 	const payloadOff = 34
 	payload = raw[payloadOff : payloadOff+capLen]
-	return ts, pid, op, payload, comm, true
+	// daddr@292 (4, network byte order), dport@296 (2, network byte order).
+	copy(daddr[:], raw[292:296])
+	dport = binary.BigEndian.Uint16(raw[296:298])
+	return ts, pid, op, payload, comm, daddr, dport, true
 }
 
 // ioUringOpName maps the raw IORING_OP_ byte to the JSONL op string. Values

@@ -585,7 +585,7 @@ func TestDecodeIOUringTLSEvent_roundTrip(t *testing.T) {
 	binary.LittleEndian.PutUint16(raw[32:34], 5)
 	copy(raw[34:39], []byte{0x16, 0x03, 0x01, 0x00, 0x2f})
 
-	ts, pid, op, payload, comm, ok := decodeIOUringTLSEvent(raw)
+	ts, pid, op, payload, comm, _, _, ok := decodeIOUringTLSEvent(raw)
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
@@ -604,7 +604,7 @@ func TestDecodeIOUringTLSEvent_capLenClamped(t *testing.T) {
 	// A corrupt capture_len larger than the payload window must clamp, not panic.
 	raw := make([]byte, ioUringTLSEventWireSize)
 	binary.LittleEndian.PutUint16(raw[32:34], 0xFFFF)
-	_, _, _, payload, _, ok := decodeIOUringTLSEvent(raw)
+	_, _, _, payload, _, _, _, ok := decodeIOUringTLSEvent(raw)
 	if !ok {
 		t.Fatal("expected ok=true")
 	}
@@ -614,9 +614,30 @@ func TestDecodeIOUringTLSEvent_capLenClamped(t *testing.T) {
 }
 
 func TestDecodeIOUringTLSEvent_tooShort(t *testing.T) {
-	_, _, _, _, _, ok := decodeIOUringTLSEvent(make([]byte, ioUringTLSEventWireSize-1))
+	_, _, _, _, _, _, _, ok := decodeIOUringTLSEvent(make([]byte, ioUringTLSEventWireSize-1))
 	if ok {
 		t.Fatal("expected ok=false for short input")
+	}
+}
+
+// ORDER 1 (BG-5): when the kernel resolved the connected peer, daddr/dport are
+// set and the event carries the real dst instead of "unknown".
+func TestIoUringTLSEventFromRaw_resolvesDst(t *testing.T) {
+	hello := buildSyntheticClientHello(t, "b.test")
+	raw := packIOUringTLSWire(t, 26, hello)
+	// daddr@292 = 93.184.216.34 (network byte order), dport@296 = 443 (BE).
+	copy(raw[292:296], []byte{93, 184, 216, 34})
+	binary.BigEndian.PutUint16(raw[296:298], 443)
+
+	ev, emit := ioUringTLSEventFromRaw(raw, "2026-06-09T00:00:00Z", 7)
+	if !emit {
+		t.Fatal("expected emit=true")
+	}
+	if ev.Dst != "93.184.216.34" || ev.DstPort != 443 {
+		t.Fatalf("dst=%q port=%d, want 93.184.216.34/443", ev.Dst, ev.DstPort)
+	}
+	if ev.SNI != "b.test" {
+		t.Fatalf("sni=%q", ev.SNI)
 	}
 }
 
