@@ -99,7 +99,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 | Input | Default | Summary |
 | :---- | :------ | :------ |
 | **`mode`** | `detect` | **`detect`** — observe only. **`defend`** — block non-allowlisted egress (**`enforce`** is rejected). |
-| **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com` — **detect only**, rejected at parse time when `mode: defend`), IPv4 literals (`1.2.3.4`), and CIDRs (`10.0.0.0/8`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
+| **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com` — **detect only**, rejected at parse time when `mode: defend`), IPv4/IPv6 literals (`1.2.3.4`, `2001:db8::1`), and CIDRs (`10.0.0.0/8`, `2001:db8::/32`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
 | **`allow-file`** | *(empty)* | Comma-separated workspace paths to UTF-8 files; same format as `allow`. Merged after inline `allow`. |
 | **`no-default-ignored-nets`** | `false` | If **`true`**, do **not** add implicit **`10.0.0.0/8`** and **`172.16.0.0/12`** ignores. Add your own ignores as **`!CIDR`** entries in **`allow`** / **`allow-file`** (the only ignore mechanism; max **128** CIDRs). |
 | **`detect-profile`** | `standard` | **`detect` only**: `standard` (default) or `enhanced`. Enhanced enables `proc_tree`, `tls_sni`, and `fs_events`, and tightens report-model integrity. |
@@ -187,7 +187,7 @@ Denied egress appears as `"type":"deny"` in JSONL and in the digest.
 
 For large allowlists, keep **UTF-8 text files** in the repository and pass **comma-separated paths** to **`allow-file`** relative to **`GITHUB_WORKSPACE`** (no path escape outside the workspace).
 
-**File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline `allow:` list, but reviewable in PRs as a file). Entries are auto-classified into domains, wildcard hosts, IPv4 literals, and `!`-prefixed ignore CIDRs.
+**File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline `allow:` list, but reviewable in PRs as a file). Entries are auto-classified into domains, wildcard hosts, IPv4/IPv6 literals, and `!`-prefixed ignore CIDRs.
 
 **Starter packs:** reference domain/IP packs live in **`scripts/coldstep_bootstrap/`** in the repo. Copy the lines you want into your own **`allow-file`** — there is no separate input to merge them (the `bootstrap-allowlist` input was removed).
 

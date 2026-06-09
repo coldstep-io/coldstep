@@ -23,14 +23,16 @@ inputs:
     description: >-
       Comma- or newline-separated egress allowlist — the single list source.
       Accepts plain domains (example.com), wildcard domains (*.example.com),
-      IPv4 literals (1.2.3.4), and CIDRs (10.0.0.0/8). Prefix a CIDR with ! to
-      ignore that net (e.g. !192.168.0.0/16) — this is the only ignore mechanism
-      (see no-default-ignored-nets for the implicit RFC1918 ignores). Entries are
-      auto-classified: IP/CIDR → allowed-ips, !CIDR → ignored nets, domain/wildcard
-      → allowed-hosts + allowed-domains. Merged with allow-file. In defend mode each
-      domain is resolved for both A and AAAA records; matching IPv4 and IPv6
-      addresses populate the BPF allowlists. IPv6 literals are not accepted as
-      input today — use AAAA-bearing hostnames instead. Wildcard entries
+      IPv4 and IPv6 literals (1.2.3.4, 2001:db8::1), and CIDRs (10.0.0.0/8,
+      2001:db8::/32). Prefix an IPv4 CIDR with ! to ignore that net
+      (e.g. !192.168.0.0/16) — this is the only ignore mechanism (see
+      no-default-ignored-nets for the implicit RFC1918 ignores; the ignore trie
+      is IPv4-only). Entries are auto-classified: IP/CIDR → allowed-ips,
+      !CIDR → ignored nets, domain/wildcard → allowed-hosts + allowed-domains.
+      Merged with allow-file. In defend mode each domain is resolved for both A
+      and AAAA records; matching IPv4 and IPv6 addresses populate the BPF
+      allowlists, and literal IPv6 entries are programmed into the allowed_ipv6
+      LPM trie alongside them (SP-2). Wildcard entries
       (*.example.com) are detect-only — they are rejected at parse time when
       mode=defend, because the BPF allowed_domains map uses exact-string lookup.
     required: false
