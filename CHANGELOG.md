@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.2] — 2026-06-09
+
 ### Added
 
 - **io_uring WRITE/WRITEV egress visibility (ORDER 2 / Phase 3.3).** `IORING_OP_WRITE` (23) and `IORING_OP_WRITEV` (2) submissions are now surfaced as `io_uring_send` events when their fd resolves to an AF_INET socket. The fd is walked `req->file` → socket → `sk` with an `S_ISSOCK` guard before `file->private_data` is trusted, so routine file I/O bails with no event (no ringbuf flood). The connected-peer dst (`dst_ip`/`dst_port`) is populated from that same walk for every write-class opcode, reusing the ORDER 1 resolver. Native-IPv6 io_uring writes are not surfaced (the walk gates on AF_INET, matching the IPv4 focus of the LSM/cgroup egress paths).
@@ -250,6 +252,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[0.5.2]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.2
 [v0.5.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.0
 [v0.4.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.1
