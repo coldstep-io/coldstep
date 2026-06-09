@@ -25,7 +25,7 @@ const (
 	// IPv6 trailer = daddr6[16] + is_ipv6(1) + _pad_v6[3]. Layout chosen so the
 	// IPv4 bytes (offsets 0..289) stay byte-identical to the pre-P5 wire format.
 	tlsSniffEventWireSize = 312
-	execEventWireSize     = 280 // 4+4+16+exe_path[256] → 280
+	execEventWireSize     = 296 // 4+4+16+exe_path[256]+exe_ino(8)+exe_dev(4)+_pad(4) → 296
 	forkEventWireSize     = 48  // 4+4+parent_comm[16]+child_comm[16]+4(sid)+4(pidns) → 48
 	fsEventWireSize       = 284 // 4+4+16+1+path[256]+_pad[3] → 284
 	denyEventWireSize     = 46  // packed: 4+4+16+1+1+1+_pad+daddr[16]+dport[2] → 46

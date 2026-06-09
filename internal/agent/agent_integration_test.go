@@ -303,6 +303,108 @@ func TestRun_ExecJSONLIncludesExePath(t *testing.T) {
 	}
 }
 
+// TestRun_ExecKernelTruthIdentity verifies Sub-project C (ORDER 5): the exec
+// JSONL carries the in-kernel exe_inode, and an atomic replace of the binary at
+// the same path produces a different inode — the spoof-resistant identity that
+// comm / exe path alone cannot provide. Uses a real ELF binary (not a shebang
+// script) so mm->exe_file resolves to the exec'd file itself, and rename(2) (not
+// truncate-in-place) so the replacement gets a fresh inode.
+func TestRun_ExecKernelTruthIdentity(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	srcA, srcB := "/usr/bin/true", "/usr/bin/false"
+	for _, p := range []string{srcA, srcB} {
+		if _, err := os.Stat(p); err != nil {
+			t.Skipf("%s not present: %v", p, err)
+		}
+	}
+
+	dir := t.TempDir()
+	summary := filepath.Join(dir, "summary.md")
+	if err := os.WriteFile(summary, []byte(""), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	events := filepath.Join(dir, ".coldstep-events.jsonl")
+
+	t.Setenv("GITHUB_WORKSPACE", dir)
+	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
+	t.Setenv("COLDSTEP_ALLOWED_IPS", "")
+	t.Setenv("CI_GUARD_MODE", "detect")
+	t.Setenv("GITHUB_STEP_SUMMARY", summary)
+	t.Setenv("COLDSTEP_EVENTS_LOG", events)
+
+	cfg, err := config.LoadFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- Run(ctx, cfg) }()
+	time.Sleep(350 * time.Millisecond)
+
+	bin := filepath.Join(dir, "idbin")
+	cp := func(src, dst string) {
+		data, err := os.ReadFile(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Exec #1: idbin is a copy of /usr/bin/true.
+	cp(srcA, bin)
+	if err := exec.Command(bin).Run(); err != nil {
+		t.Fatalf("exec idbin (true): %v", err)
+	}
+
+	// Atomic-replace idbin with /usr/bin/false (new inode via rename), exec #2.
+	tmp := filepath.Join(dir, "idbin.next")
+	cp(srcB, tmp)
+	if err := os.Rename(tmp, bin); err != nil {
+		t.Fatal(err)
+	}
+	_ = exec.Command(bin).Run() // /usr/bin/false exits 1; we only need the exec event
+
+	cancel()
+	if err = <-errCh; err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("Run: %v", err)
+	}
+
+	b, err := os.ReadFile(events)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var inodes []uint64
+	for _, line := range bytes.Split(bytes.TrimSpace(b), []byte("\n")) {
+		if !bytes.Contains(line, []byte(`"type":"exec"`)) || !bytes.Contains(line, []byte(`/idbin"`)) {
+			continue
+		}
+		var ev struct {
+			Exe      string `json:"exe"`
+			ExeInode uint64 `json:"exe_inode"`
+		}
+		if err := json.Unmarshal(line, &ev); err != nil {
+			t.Fatalf("unmarshal exec line: %v\n%s", err, line)
+		}
+		if ev.ExeInode == 0 {
+			t.Fatalf("exec for %s has zero exe_inode (kernel-truth walk failed):\n%s", ev.Exe, line)
+		}
+		inodes = append(inodes, ev.ExeInode)
+	}
+	if len(inodes) < 2 {
+		t.Fatalf("expected >=2 exec events for /idbin with inode, got %d:\n%s", len(inodes), b)
+	}
+	if inodes[0] == inodes[len(inodes)-1] {
+		t.Fatalf("exe_inode did not change after atomic binary replace: %d == %d",
+			inodes[0], inodes[len(inodes)-1])
+	}
+}
+
 func TestRun_ProcForkJSONLWhenFeatureGate(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("requires root for BPF load")
