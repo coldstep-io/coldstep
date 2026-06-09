@@ -2,7 +2,7 @@ import * as core from '@actions/core';
 import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { actionRootPath, agentStatusPath, ensureColdstepBinary, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
+import { actionRootPath, agentStatusPath, cachedColdstepBinaryPath, ensureColdstepBinary, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
 
 // Caps on JSONL ingestion for suggested-allow: stop reading at MAX_EVENTS_BYTES so a
 // pathological 10 GiB log can't OOM the runner, and at MAX_EVENTS_LINES so quadratic
@@ -180,7 +180,11 @@ async function finalizeDigestAndNotifications(_reportJobSummary: boolean, _repor
   const token = (core.getInput('github-token') || process.env.GITHUB_TOKEN || '').trim();
   const detectProfile = (core.getInput('detect-profile') || 'standard').trim();
   try {
-    const bin = await ensureColdstepBinary();
+    // Prefer the binary the start step already downloaded + SHA-verified. The
+    // report must not depend on a fresh GitHub Releases API call at post time
+    // (a transient rate-limit/5xx would otherwise drop the report). Fall back to
+    // a full download only when the cache is absent (e.g. mixed entrypoints).
+    const bin = cachedColdstepBinaryPath() ?? (await ensureColdstepBinary());
     const args = ['stop', '--report', report, '--detect-profile', detectProfile];
     if (token) args.push('--github-token', token);
     execFileSync(bin, args, { stdio: 'inherit' });
