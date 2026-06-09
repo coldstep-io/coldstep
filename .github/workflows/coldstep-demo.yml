@@ -81,9 +81,6 @@ jobs:
           mv bin/coldstep-linux-amd64 bin/coldstep
           chmod +x bin/coldstep
 
-      - name: Build coldstep-action (Go only; agent from release)
-        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-action ./cmd/coldstep-action
-
       - name: Coldstep (detect mode)
         uses: ./
         with:
@@ -144,10 +141,9 @@ jobs:
       - name: Verify detect capabilities and write visual summary
         run: |
           set -euo pipefail
-          f="${GITHUB_WORKSPACE}/.coldstep-detect.md"
           j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          # The agent finalizes the digest at SIGTERM, not continuously. Stop it now so the digest
-          # is complete before we check it. post.js will handle the already-dead process gracefully.
+          # The agent flushes ringbufs at SIGTERM, not continuously. Stop it now so the JSONL
+          # is complete before we check it. post.js handles the already-dead process gracefully.
           if CS_PID="$(cat "${GITHUB_WORKSPACE}/.coldstep.pid" 2>/dev/null)"; then
             sudo kill -s SIGTERM "${CS_PID}" 2>/dev/null || true
             for _i in 1 2 3 4 5 6 7 8; do
@@ -155,7 +151,6 @@ jobs:
               sudo kill -0 "${CS_PID}" 2>/dev/null || break
             done
           fi
-          test -f "$f"
           test -f "$j"
           # Drain delay + retries: tls_sni rows can lag ringbuf flush on hosted runners (same class as fs_event variance).
           sleep 6
@@ -168,12 +163,10 @@ jobs:
             sleep 5
           done
           if [[ "${tls_jsonl_ok}" -eq 0 ]]; then
-            if grep -q 'TLS ClientHello' "$f" 2>/dev/null; then
-              echo "::warning::no tls JSONL rows after retry window; digest still contains TLS section (ubuntu-latest variance)"
-            else
-              echo "::warning::no tls JSONL or TLS digest section — tls_sni hook inactive on this runner image (ubuntu-latest variance; non-blocking)"
-            fi
+            echo "::warning::no tls JSONL rows after retry window — tls_sni hook inactive on this runner image (ubuntu-latest variance; non-blocking)"
           fi
+          # JSONL is the source of truth (the agent writes data only; the report is rendered
+          # in userspace from this stream). Required types fail the job; feature-gate types warn.
           grep -q '"type":"meta"' "$j" || { echo "expected meta JSONL"; exit 1; }
           grep -q '"type":"exec"' "$j" || { echo "expected exec JSONL"; exit 1; }
           grep -q '"type":"tcp"' "$j" || { echo "expected tcp JSONL"; exit 1; }
@@ -186,33 +179,17 @@ jobs:
           if ! grep -q '"type":"fs_event"' "$j"; then
             echo "::warning::fs_event JSONL absent — fs_events gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
           fi
-          if ! grep -Eq '"type":"fs_event".*"op":"create"' "$j"; then
-            echo "::warning::fs_event create not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"unlink"' "$j"; then
-            echo "::warning::fs_event unlink not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"rename"' "$j"; then
-            echo "::warning::fs_event rename not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -Eq '"type":"fs_event".*"op":"chmod"' "$j"; then
-            echo "::warning::fs_event chmod not observed in this run (best-effort signal on ubuntu-latest)"
-          fi
-          if ! grep -q 'TLS ClientHello' "$f" 2>/dev/null; then
-            echo "::warning::TLS ClientHello section absent from digest — tls_sni gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
-          grep -q 'HTTP/1 cleartext' "$f" || { echo "expected HTTP section in digest"; exit 1; }
-          grep -q 'UDP sendto' "$f" || { echo "expected UDP section in digest"; exit 1; }
-          if ! grep -qi 'process tree' "$f" 2>/dev/null; then
-            echo "::warning::process tree section absent from digest — proc_tree gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
-          if ! grep -qi 'Filesystem' "$f" 2>/dev/null; then
-            echo "::warning::Filesystem section absent from digest — fs_events gate inactive on this runner image (ubuntu-latest variance; non-blocking)"
-          fi
+          for op in create unlink rename chmod; do
+            if ! grep -Eq "\"type\":\"fs_event\".*\"op\":\"${op}\"" "$j"; then
+              echo "::warning::fs_event ${op} not observed in this run (best-effort signal on ubuntu-latest)"
+            fi
+          done
+          # The detailed report is rendered by the stop step from the JSONL above.
+          test -f "${GITHUB_WORKSPACE}/.coldstep-report.md" || echo "::warning::.coldstep-report.md not present yet (written by the stop step)"
           {
             echo "## Detect verification"
             echo ""
-            echo "- **Result:** pass — required JSONL types and digest sections present (\`ubuntu-latest\`). Full matrix is redundant here; inspect \`.coldstep-detect.md\` if needed."
+            echo "- **Result:** pass — required JSONL types present (\`ubuntu-latest\`). The Markdown report is rendered from \`.coldstep-events.jsonl\` by the stop step."
           } >> "${GITHUB_STEP_SUMMARY}"
 
       - name: Compare detect output with previous successful run (opt-in)
@@ -276,7 +253,7 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          if ! ./bin/coldstep-action diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
+          if ! ./bin/coldstep diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "coldstep-action diff failed"
           fi
 

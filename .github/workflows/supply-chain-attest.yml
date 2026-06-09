@@ -42,9 +42,8 @@ jobs:
           set -euo pipefail
           test -f action.yml
           test -x bin/coldstep
-          test -x bin/coldstep-action
           tar -czf coldstep-action-bundle.tar.gz \
-            action.yml bin/coldstep bin/coldstep-action scripts/build-agent-linux.sh \
+            action.yml bin/coldstep scripts/build-agent-linux.sh \
             scripts/coldstep_bootstrap/README.md \
             scripts/coldstep_bootstrap/allowlist-domains-v1.txt \
             scripts/coldstep_bootstrap/allowlist-ips-v1.txt

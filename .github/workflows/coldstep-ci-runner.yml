@@ -232,11 +232,10 @@ jobs:
           go-version-file: go.mod
       - name: Build action binaries
         run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
-      - name: Verify action binaries exist
+      - name: Verify action binary exists
         run: |
           set -euo pipefail
           test -x bin/coldstep
-          test -x bin/coldstep-action
 
   detect-mode:
     needs: [gofmt]
@@ -256,12 +255,9 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The action downloads only the coldstep agent binary from releases; the
-      # report + integrity tooling used by detect-mode steps below now lives in
-      # coldstep-action (pure Go), built locally without the BPF toolchain.
-      - name: Build coldstep-action
-        run: go build -trimpath -ldflags="-s -w" -o bin/coldstep-action ./cmd/coldstep-action
-
+      # The combined coldstep binary (agent + report/integrity subcommands) is
+      # produced by the start step below (build-agent-linux.sh); the diff /
+      # assert-integrity steps invoke `bin/coldstep <subcommand>`.
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
@@ -314,7 +310,7 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || inputs.coldstep_diff_strict == true
         env:
           COLDSTEP_DETECT_PROFILE: enhanced
-        run: ./bin/coldstep-action assert-integrity --in "${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
+        run: ./bin/coldstep assert-integrity --in "${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
 
 
 
@@ -388,7 +384,7 @@ jobs:
             fail_diff_unavailable "downloaded artifact missing .coldstep-events.jsonl"
           fi
 
-          if ! ./bin/coldstep-action diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
+          if ! ./bin/coldstep diff --summary "${summary}" --baseline "${baseline_file}" --current "${current_file}" --marker "${marker_prefix}"; then
             fail_diff_unavailable "coldstep-action diff failed"
           fi
 
