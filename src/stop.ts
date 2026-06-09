@@ -33,6 +33,28 @@ export function buildSuggestedAllowlist(jsonl: string): string {
   return unique.join(',');
 }
 
+// SP-3: a paste-ready, grouped allow-file body — hostnames (preferred, survive
+// DNS rotation) in one section, bare IPs (no hostname observed) in another, with
+// `#` comments. Written to .coldstep-suggested-allow.txt for download/review and
+// drop-in as an `allow-file`. Empty sections are omitted; returns '' when nothing
+// was observed.
+export function buildSuggestedAllowFile(jsonl: string): string {
+  const observed = collectObservedDestinations(jsonl);
+  const hosts = [...observed.hosts].map((h) => h.toLowerCase()).filter((h) => h.length > 0).sort();
+  const ips = [...observed.ipsWithoutHost].filter((ip) => ip.length > 0).sort();
+  if (hosts.length === 0 && ips.length === 0) return '';
+  const out: string[] = ['# coldstep suggested allowlist — copy into your `allow:` input or commit as an allow-file.'];
+  if (hosts.length > 0) {
+    out.push('# Hostnames (preferred — survive DNS rotation):');
+    out.push(...hosts);
+  }
+  if (ips.length > 0) {
+    out.push('# Bare IPs (no hostname observed this run — pin only if a stable host is unavailable):');
+    out.push(...ips);
+  }
+  return out.join('\n') + '\n';
+}
+
 function collectObservedDestinations(jsonl: string): ObservedDestinations {
   const hosts = new Set<string>();
   const ipsAll = new Set<string>();
@@ -150,6 +172,21 @@ function emitSuggestedAllowlist(): void {
   }
   core.setOutput('suggested-allow', allow);
 
+  // SP-3: write a grouped, paste-ready artifact for download / drop-in as an
+  // allow-file. Best-effort — a write failure must not fail the post step.
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
+  const allowFilePath = path.join(baseDir, '.coldstep-suggested-allow.txt');
+  let artifactWritten = false;
+  const fileBody = buildSuggestedAllowFile(jsonl);
+  if (fileBody !== '') {
+    try {
+      fs.writeFileSync(allowFilePath, fileBody, 'utf8');
+      artifactWritten = true;
+    } catch (e) {
+      core.warning(`suggested-allow: artifact write failed (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
+
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (!summaryPath) return;
   const entries = allow.split(',').filter((e) => e.length > 0);
@@ -162,7 +199,10 @@ function emitSuggestedAllowlist(): void {
     '\n```\n\n' +
     `_${entries.length} entr${entries.length === 1 ? 'y' : 'ies'}` +
     (truncated ? ' (truncated)' : '') +
-    '_\n\n';
+    '_\n\n' +
+    (artifactWritten
+      ? 'A grouped, paste-ready copy was written to `.coldstep-suggested-allow.txt` (commit it as an `allow-file`).\n\n'
+      : '');
   try {
     fs.appendFileSync(summaryPath, block, 'utf8');
   } catch (e) {

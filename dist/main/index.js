@@ -19795,6 +19795,22 @@ function buildSuggestedAllowlist(jsonl) {
   const unique = [...new Set(entries)].filter((e) => e.length > 0).sort();
   return unique.join(",");
 }
+function buildSuggestedAllowFile(jsonl) {
+  const observed = collectObservedDestinations(jsonl);
+  const hosts = [...observed.hosts].map((h) => h.toLowerCase()).filter((h) => h.length > 0).sort();
+  const ips = [...observed.ipsWithoutHost].filter((ip) => ip.length > 0).sort();
+  if (hosts.length === 0 && ips.length === 0) return "";
+  const out = ["# coldstep suggested allowlist \u2014 copy into your `allow:` input or commit as an allow-file."];
+  if (hosts.length > 0) {
+    out.push("# Hostnames (preferred \u2014 survive DNS rotation):");
+    out.push(...hosts);
+  }
+  if (ips.length > 0) {
+    out.push("# Bare IPs (no hostname observed this run \u2014 pin only if a stable host is unavailable):");
+    out.push(...ips);
+  }
+  return out.join("\n") + "\n";
+}
 function collectObservedDestinations(jsonl) {
   const hosts = /* @__PURE__ */ new Set();
   const ipsAll = /* @__PURE__ */ new Set();
@@ -19895,13 +19911,25 @@ function emitSuggestedAllowlist() {
     warning(`suggested-allow: list exceeded ${MAX_SUGGESTED_ALLOW_CHARS} chars; truncated`);
   }
   setOutput("suggested-allow", allow);
+  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
+  const allowFilePath = path3.join(baseDir, ".coldstep-suggested-allow.txt");
+  let artifactWritten = false;
+  const fileBody = buildSuggestedAllowFile(jsonl);
+  if (fileBody !== "") {
+    try {
+      fs5.writeFileSync(allowFilePath, fileBody, "utf8");
+      artifactWritten = true;
+    } catch (e) {
+      warning(`suggested-allow: artifact write failed (${e instanceof Error ? e.message : String(e)})`);
+    }
+  }
   const summaryPath = process.env.GITHUB_STEP_SUMMARY;
   if (!summaryPath) return;
   const entries = allow.split(",").filter((e) => e.length > 0);
   const block = "## Suggested allowlist\n\nCopy these to your coldstep `allow:` input. Hostnames observed via DNS/SNI/HTTP take priority over raw IPs.\n\n```\n" + allow + `
 \`\`\`
 
-_${entries.length} entr${entries.length === 1 ? "y" : "ies"}` + (truncated ? " (truncated)" : "") + "_\n\n";
+_${entries.length} entr${entries.length === 1 ? "y" : "ies"}` + (truncated ? " (truncated)" : "") + "_\n\n" + (artifactWritten ? "A grouped, paste-ready copy was written to `.coldstep-suggested-allow.txt` (commit it as an `allow-file`).\n\n" : "");
   try {
     fs5.appendFileSync(summaryPath, block, "utf8");
   } catch (e) {
