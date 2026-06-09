@@ -1,5 +1,7 @@
-// Command coldstep-action is the entry-point binary invoked by the GitHub
-// composite action wrapper.
+// Package actioncli implements the GitHub composite action's runtime helper
+// subcommands (start / stop / diff / assert-integrity), dispatched from the
+// combined `coldstep` binary. It was the standalone `coldstep-action` command
+// before the agent and helper were merged into one shipped artifact.
 //
 // It owns two subcommands wired to the composite's pre/post phases:
 //
@@ -11,15 +13,16 @@
 //     .coldstep-ready.json (or returns an explicit not-ready / timeout /
 //     child-exit verdict).
 //
-//   - stop: SIGTERMs the agent via its pidfile, drains the on-disk digest,
-//     and emits the configured surfaces — GitHub Actions job summary, PR
-//     comment via the GitHub REST API, or both — depending on --report.
+//   - stop: SIGTERMs the agent via its pidfile, then renders both reports from
+//     the JSONL event stream (internal/report/markdown) and emits the configured
+//     surfaces — GitHub Actions job summary, PR comment via the GitHub REST API,
+//     or both — depending on --report.
 //
 // All filesystem and subprocess inputs come from controlled sources
 // (GITHUB_ACTION_PATH / GITHUB_WORKSPACE / GITHUB_EVENT_PATH /
 // GITHUB_STEP_SUMMARY / GITHUB_REPOSITORY); see the gosec exclusions in
 // .github/workflows/coldstep-ci-runner.yml for the rationale.
-package main
+package actioncli
 
 import (
 	"bytes"
@@ -83,32 +86,50 @@ type stopConfig struct {
 	DetectProfile string
 }
 
-func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: coldstep-action <start|stop> [flags]")
-		os.Exit(2)
-	}
+// Commands is the set of subcommands actioncli handles, for the parent
+// dispatcher's usage string and routing.
+var Commands = map[string]struct{}{
+	"start": {}, "stop": {}, "diff": {}, "assert-integrity": {},
+}
 
-	switch os.Args[1] {
-	case "start":
-		cfg, err := parseStartFlags(os.Args[2:])
-		if err != nil {
-			fatal(err)
-		}
-		fatal(runStart(cfg))
-	case "stop":
-		cfg, err := parseStopFlags(os.Args[2:])
-		if err != nil {
-			fatal(err)
-		}
-		fatal(runStop(cfg))
-	case "diff":
-		fatal(runDiff(os.Args[2:]))
-	case "assert-integrity":
-		fatal(runAssertIntegrity(os.Args[2:]))
-	default:
-		fatal(fmt.Errorf("unknown command %q", os.Args[1]))
+// Dispatch runs one actioncli subcommand. args[0] is the subcommand name and
+// args[1:] its flags. It returns a process exit code (0 success, 1 runtime
+// error, 2 usage) instead of calling os.Exit so the parent `coldstep` binary
+// owns process termination.
+func Dispatch(args []string) int {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: coldstep <start|stop|diff|assert-integrity> [flags]")
+		return 2
 	}
+	switch args[0] {
+	case "start":
+		cfg, err := parseStartFlags(args[1:])
+		if err != nil {
+			return errExit(err)
+		}
+		return errExit(runStart(cfg))
+	case "stop":
+		cfg, err := parseStopFlags(args[1:])
+		if err != nil {
+			return errExit(err)
+		}
+		return errExit(runStop(cfg))
+	case "diff":
+		return errExit(runDiff(args[1:]))
+	case "assert-integrity":
+		return errExit(runAssertIntegrity(args[1:]))
+	default:
+		return errExit(fmt.Errorf("unknown command %q", args[0]))
+	}
+}
+
+// errExit maps an error to an exit code, printing it to stderr when non-nil.
+func errExit(err error) int {
+	if err == nil {
+		return 0
+	}
+	fmt.Fprintln(os.Stderr, err.Error())
+	return 1
 }
 
 func parseStartFlags(args []string) (startConfig, error) {
@@ -661,12 +682,4 @@ func mustGetwd() string {
 		return "."
 	}
 	return wd
-}
-
-func fatal(err error) {
-	if err == nil {
-		return
-	}
-	fmt.Fprintln(os.Stderr, err.Error())
-	os.Exit(1)
 }
