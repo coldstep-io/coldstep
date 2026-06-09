@@ -133,11 +133,11 @@ jobs:
               <div class="mode">
                 <h3>Defend</h3>
                 <p>
-                  Block IPv4 egress outside your allowlist via cgroup <code>connect4</code> / <code>sendmsg4</code>
-                  and BPF LSM where available. Requires a non-empty allowlist.
-                  <strong>IPv6 egress is observed and surfaced as a warning</strong> — defend
-                  allowlists are IPv4-only, so any IPv6 destination escapes enforcement and is
-                  flagged 🚨 in the digest.
+                  Block egress outside your allowlist — IPv4 <em>and</em> IPv6 — via cgroup
+                  <code>connect4</code> / <code>sendmsg4</code> + <code>connect6</code> / <code>sendmsg6</code>,
+                  with BPF LSM where available. Requires a non-empty allowlist. Native IPv6 is
+                  enforced against the allowlist; loopback (<code>::1</code>) and link-local
+                  (<code>fe80::/10</code>) always pass.
                 </p>
                 <span class="tag">Opt-in</span>
               </div>
@@ -205,11 +205,11 @@ jobs:
                 <span>Append-only event stream — source of truth for investigations.</span>
               </li>
               <li>
-                <code>.coldstep-detect.md</code>
+                <code>.coldstep-report.md</code>
                 <span>
-                  Compact, GFM-compliant shutdown digest — verdict badge, single-row KPI table,
-                  Coverage scope line, and a collapsible Full KPI fold (per-channel counts and
-                  ringbuf drops).
+                  Pure-Markdown report rendered from the JSONL by <code>coldstep stop</code> —
+                  verdict, destinations, denies, TLS-SNI confidence, coverage signals, and BPF
+                  health. The agent writes data only; the report is built in userspace.
                 </span>
               </li>
               <li>
