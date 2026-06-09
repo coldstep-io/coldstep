@@ -11,7 +11,7 @@ export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 // the expected SHA-256 is fetched at runtime from the GitHub Releases API so we
 // don't have to hardcode an asset digest the supply-chain-attest build produces
 // only after the tag is pushed.
-export const COLDSTEP_BINARY_VERSION = 'v0.4.1';
+export const COLDSTEP_BINARY_VERSION = 'v0.5.0';
 export const COLDSTEP_BINARY_ASSET_NAME = 'coldstep-linux-amd64';
 export const COLDSTEP_BINARY_REPO = 'coldstep-io/coldstep';
 export const COLDSTEP_BINARY_URL =
@@ -27,11 +27,6 @@ export function inputBoolDefault(name: string, defaultVal: boolean): boolean {
   const v = core.getInput(name);
   if (v === '') return defaultVal;
   return ['true', '1', 'yes', 'on'].includes(v.toLowerCase());
-}
-
-export function detectLogPath(): string {
-  const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
-  return path.join(baseDir, '.coldstep-detect.md');
 }
 
 export function agentStatusPath(): string {
@@ -207,7 +202,26 @@ export async function ensureColdstepBinary(): Promise<string> {
   }
 
   core.info(`coldstep: downloading ${COLDSTEP_BINARY_VERSION} from ${COLDSTEP_BINARY_URL}`);
-  await downloadToFile(COLDSTEP_BINARY_URL, binPath);
+  // Retry transient failures (GitHub Releases CDN 5xx, timeouts, network resets).
+  // A single fetch failed CI on a transient HTTP 500; the download is now the
+  // consumer path, so a flaky CDN must not fail the whole job. A 404 (asset not
+  // published) is permanent — do not retry it.
+  {
+    const maxAttempts = 4;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        await downloadToFile(COLDSTEP_BINARY_URL, binPath);
+        break;
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const permanent = /HTTP 4\d\d /.test(msg);
+        if (permanent || attempt >= maxAttempts) throw e;
+        const delayMs = 1000 * attempt;
+        core.warning(`coldstep: download attempt ${attempt} failed (${msg}); retrying in ${delayMs}ms`);
+        await new Promise((r) => setTimeout(r, delayMs));
+      }
+    }
+  }
   const got = sha256File(binPath);
   if (got !== expectedSha) {
     try { fs.unlinkSync(binPath); } catch { /* ignore */ }

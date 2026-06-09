@@ -1,10 +1,8 @@
 import * as core from '@actions/core';
-import * as github from '@actions/github';
+import { execFileSync } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
-import { actionRootPath, agentStatusPath, detectLogPath, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
-
-const MAX_DIGEST_LINE_UNITS = 4096;
+import { actionRootPath, agentStatusPath, ensureColdstepBinary, eventsLogPath, readAgentReadyOk, resolveReportFlags } from './shared';
 
 // Caps on JSONL ingestion for suggested-allow: stop reading at MAX_EVENTS_BYTES so a
 // pathological 10 GiB log can't OOM the runner, and at MAX_EVENTS_LINES so quadratic
@@ -14,115 +12,6 @@ const MAX_EVENTS_LINES = 500_000;
 // Action outputs have a per-call size ceiling (envelope-encoded over the runner FD).
 // Cap the suggested-allow string so a sprawling run doesn't break the output write.
 const MAX_SUGGESTED_ALLOW_CHARS = 256 * 1024;
-
-function truncateLineUtf16(line: string, maxUnits: number): string {
-  if (line.length <= maxUnits) return line;
-  let end = maxUnits;
-  const c = line.charCodeAt(end - 1);
-  if (c >= 0xd800 && c <= 0xdbff) end -= 1;
-  return line.slice(0, end) + ' ...(truncated)';
-}
-
-function sanitizeDigestForMarkdown(body: string): string {
-  if (body === '') return body;
-  const stripped = body.replace(/^﻿/, '');
-  const normalized = stripped.replace(/\r\n?/g, '\n');
-  const cappedLines = normalized
-    .split('\n')
-    .map((line) => (line.length > MAX_DIGEST_LINE_UNITS ? truncateLineUtf16(line, MAX_DIGEST_LINE_UNITS) : line));
-  const escaped = cappedLines
-    .map((line) => line.replace(/\\/g, '\\\\'))
-    .map((line) => line.replace(/</g, '&lt;'))
-    .map((line) => line.replace(/`{3,}/g, (m) => '\\`'.repeat(m.length)))
-    .map((line) => line.replace(/~{3,}/g, (m) => '\\~'.repeat(m.length)));
-  return escaped.join('\n');
-}
-
-function readDetectDigest(): string {
-  const logPath = detectLogPath();
-  if (!fs.existsSync(logPath)) return '';
-  try {
-    return fs.readFileSync(logPath, 'utf8');
-  } catch (e) {
-    core.warning(`coldstep digest read failed (${e instanceof Error ? e.message : String(e)}); continuing with empty body`);
-    return '';
-  }
-}
-
-function discardDigestFileIfPresent(): void {
-  const logPath = detectLogPath();
-  if (!fs.existsSync(logPath)) return;
-  try {
-    fs.unlinkSync(logPath);
-  } catch (e) {
-    core.warning(`coldstep digest unlink failed (${e instanceof Error ? e.message : String(e)}): ${logPath}`);
-  }
-}
-
-function flushDetectLogToJobSummary(body: string): void {
-  if (body.trim() === '') {
-    discardDigestFileIfPresent();
-    return;
-  }
-  const summaryPath = process.env.GITHUB_STEP_SUMMARY;
-  if (!summaryPath) {
-    discardDigestFileIfPresent();
-    return;
-  }
-  const block =
-    '## Coldstep - digest (exec / network / defend)\n\n' +
-    sanitizeDigestForMarkdown(body) +
-    (body.endsWith('\n') ? '' : '\n');
-  try {
-    fs.appendFileSync(summaryPath, block, 'utf8');
-  } catch (e) {
-    core.warning(`GITHUB_STEP_SUMMARY append failed (${e instanceof Error ? e.message : String(e)}); digest file left at ${detectLogPath()}`);
-    return;
-  }
-  try {
-    fs.unlinkSync(detectLogPath());
-  } catch (e) {
-    core.warning(`coldstep digest unlink after summary flush (${e instanceof Error ? e.message : String(e)}): ${detectLogPath()}`);
-  }
-}
-
-async function maybePostPRSummary(body: string, reportPRSummary: boolean): Promise<void> {
-  if (!reportPRSummary) return;
-  if (body.trim() === '') return;
-  const token = (core.getInput('github-token') || process.env.GITHUB_TOKEN || '').trim();
-  if (!token) {
-    core.warning('report pr-comment: missing github-token');
-    return;
-  }
-  const ctx = github.context;
-  const pr = ctx.payload.pull_request;
-  if (!pr || typeof pr.number !== 'number') {
-    core.info('report pr-comment: not a pull_request event; skipping');
-    return;
-  }
-  const max = 65000;
-  const safe = sanitizeDigestForMarkdown(body);
-  const snippet = safe.length > max ? safe.slice(0, max) + '\n\n_(truncated)_\n' : safe;
-  const octokit = github.getOctokit(token);
-  const ghMs = 60_000;
-  const abort = new AbortController();
-  const timeoutId = setTimeout(() => abort.abort(), ghMs);
-  try {
-    await octokit.rest.issues.createComment({
-      owner: ctx.repo.owner,
-      repo: ctx.repo.repo,
-      issue_number: pr.number,
-      body: '## Coldstep digest\n\n' + snippet,
-      request: { signal: abort.signal },
-    });
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    if (abort.signal.aborted) throw new Error(`GitHub API timeout after ${ghMs / 1000}s`);
-    throw new Error(msg);
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
 
 interface ObservedDestinations {
   hosts: Set<string>;
@@ -281,17 +170,22 @@ function emitSuggestedAllowlist(): void {
   }
 }
 
-async function finalizeDigestAndNotifications(reportJobSummary: boolean, reportPRSummary: boolean): Promise<void> {
-  const digestBody = readDetectDigest();
-  if (reportJobSummary) {
-    flushDetectLogToJobSummary(digestBody);
-  } else {
-    discardDigestFileIfPresent();
-  }
+async function finalizeDigestAndNotifications(_reportJobSummary: boolean, _reportPRSummary: boolean): Promise<void> {
+  // Reporting is delegated to the combined coldstep binary: `coldstep stop`
+  // renders both reports from .coldstep-events.jsonl (the agent writes data only)
+  // and posts the PR comment via the GitHub REST API. The binary is the same
+  // version this action downloaded at start (COLDSTEP_BINARY_VERSION) and carries
+  // the stop subcommand. The TS layer keeps only the suggested-allow output.
+  const report = (core.getInput('report') || 'job-summary').trim();
+  const token = (core.getInput('github-token') || process.env.GITHUB_TOKEN || '').trim();
+  const detectProfile = (core.getInput('detect-profile') || 'standard').trim();
   try {
-    await maybePostPRSummary(digestBody, reportPRSummary);
+    const bin = await ensureColdstepBinary();
+    const args = ['stop', '--report', report, '--detect-profile', detectProfile];
+    if (token) args.push('--github-token', token);
+    execFileSync(bin, args, { stdio: 'inherit' });
   } catch (e) {
-    core.warning(`report pr-comment: ${e instanceof Error ? e.message : String(e)}`);
+    core.warning(`coldstep stop (report render): ${e instanceof Error ? e.message : String(e)}`);
   }
   emitSuggestedAllowlist();
 }
