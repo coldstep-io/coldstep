@@ -2,6 +2,7 @@ package actioncli
 
 import (
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -9,6 +10,21 @@ import (
 )
 
 var ipv4LiteralOrCIDR = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$`)
+
+// isIPLiteralOrCIDR reports whether t is an IP literal or CIDR — IPv4 or IPv6
+// (SP-2). Used to route IP entries to the `ips` bucket (-> COLDSTEP_ALLOWED_IPS
+// -> policy.Parse, which programs v4 into allowed_ipv4 and v6 into allowed_ipv6)
+// rather than treating an IPv6 literal as a hostname.
+func isIPLiteralOrCIDR(t string) bool {
+	if ipv4LiteralOrCIDR.MatchString(t) {
+		return true
+	}
+	if strings.Contains(t, "/") {
+		_, _, err := net.ParseCIDR(t)
+		return err == nil
+	}
+	return net.ParseIP(t) != nil
+}
 
 type classifiedAllow struct {
 	domains     []string
@@ -43,8 +59,9 @@ func rejectDefendWildcards(c classifiedAllow) error {
 }
 
 // classifyAllowTokens splits unified allow-list tokens into per-type buckets.
-// Plain or wildcard domains go to both hosts and domains; IPv4 literals/CIDRs
-// go to ips; a leading `!` on an IPv4 CIDR routes it to ignoredNets.
+// Plain or wildcard domains go to both hosts and domains; IP literals/CIDRs —
+// IPv4 or IPv6 (SP-2) — go to ips; a leading `!` on an IPv4 CIDR routes it to
+// ignoredNets (the ignore LPM trie is IPv4-only, so `!IPv6` is not classified).
 func classifyAllowTokens(tokens []string) classifiedAllow {
 	var c classifiedAllow
 	for _, t := range tokens {
@@ -59,7 +76,7 @@ func classifyAllowTokens(tokens []string) classifiedAllow {
 			}
 			continue
 		}
-		if ipv4LiteralOrCIDR.MatchString(t) {
+		if isIPLiteralOrCIDR(t) {
 			c.ips = append(c.ips, t)
 		} else {
 			c.hosts = append(c.hosts, t)

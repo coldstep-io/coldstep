@@ -76,6 +76,28 @@ func TestClassifyAllowTokens_Buckets(t *testing.T) {
 	}
 }
 
+// TestClassifyAllowTokens_IPv6 (SP-2): IPv6 literals and CIDRs route to the ips
+// bucket (-> COLDSTEP_ALLOWED_IPS -> policy.Parse -> allowed_ipv6 trie), NOT to
+// the hostname bucket. A `!`-prefixed IPv6 is dropped (ignore trie is v4-only).
+func TestClassifyAllowTokens_IPv6(t *testing.T) {
+	got := classifyAllowTokens([]string{
+		"2001:db8::1",    // literal -> ips
+		"2606:4700::/32", // CIDR -> ips
+		"::1",            // loopback literal -> ips
+		"!2001:db8::/48", // bang v6 -> dropped (v4-only ignore)
+		"example.com",    // domain -> hosts/domains
+		"1.2.3.4",        // v4 literal -> ips
+	})
+	want := classifiedAllow{
+		hosts:   []string{"example.com"},
+		domains: []string{"example.com"},
+		ips:     []string{"2001:db8::1", "2606:4700::/32", "::1", "1.2.3.4"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("classifyAllowTokens IPv6:\n got %+v\nwant %+v", got, want)
+	}
+}
+
 // TestClassifyAllowTokens_RegexIsShapeOnly documents that the IPv4 classifier is
 // a shape match, not a validity check: out-of-range octets and prefixes still
 // route to the ips bucket (downstream policy compilation validates them). This

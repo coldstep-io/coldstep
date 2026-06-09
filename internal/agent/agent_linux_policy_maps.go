@@ -41,11 +41,15 @@ func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver pol
 		return policy.CompileResult{}, perr
 	}
 	pol.MergeLiteralAllowedIPv4Into(&compiled.AllowedIPv4)
+	// SP-2: literal IPv6 addresses count toward the effective allowlist too.
+	pol.MergeLiteralAllowedIPv6Into(&compiled.AllowedIPv6)
+	literalV6CIDRs := len(pol.AllowedIPv6Nets())
 	// P2-1 Phase 2: an IPv6-only allowlist (AAAA resolutions, no A) is
 	// valid — both BPF defend hooks attach, IPv4 cgroup denies everything,
 	// IPv6 cgroup denies everything outside allowed_ipv6. Only reject
-	// when BOTH families are empty (every domain failed both A and AAAA).
-	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 {
+	// when ALL families are empty (every domain failed both A and AAAA and
+	// no IPv4/IPv6 literals or CIDRs were given).
+	if compiled.AllowedIPv4.Len() == 0 && compiled.AllowedIPv6.Len() == 0 && literalV6CIDRs == 0 {
 		msg := "defend allowlist effective allowlist is empty (no A/AAAA resolutions; add literals to allowed-ips if needed)"
 		if len(compiled.UnresolvedDomains) > 0 {
 			msg += fmt.Sprintf(" — check DNS for: %s", strings.Join(compiled.UnresolvedDomains, ", "))
@@ -343,7 +347,7 @@ func loadDefendMaps(objs *defend.DefendObjects, compiled policy.CompileResult, p
 	// when the map is present in the loaded objects. Loader stripped this
 	// to nil if the BPF stubs predate Phase 2 — populate returns (0, nil)
 	// in that case, so older stubs continue to load IPv4-only defend.
-	ipv6Programmed, err := populateAllowedIPv6Map(objs.AllowedIpv6, compiled)
+	ipv6Programmed, err := populateAllowedIPv6Map(objs.AllowedIpv6, compiled, pol)
 	if err != nil {
 		return 0, 0, 0, err
 	}
@@ -461,19 +465,25 @@ func loadAllowedLPMMap(m *ebpf.Map, plan allowedLPMPlan) error {
 // stubs that predate Phase 2) is tolerated: 0 returned, no error — the
 // BPF program also degrades gracefully because cgroup/connect6 +
 // sendmsg6 will be missing, leaving IPv4-only defend.
-func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult) (int, error) {
+func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult, pol *policy.Policy) (int, error) {
 	if m == nil {
 		return 0, nil
 	}
+	// SP-2: union AAAA-resolved /128s with literal IPv6 addresses from
+	// allowed-ips. Both are exact /128 entries; literal IPv6 CIDRs are
+	// programmed as prefix entries below.
+	pol.MergeLiteralAllowedIPv6Into(&compiled.AllowedIPv6)
+
 	// Deterministic ordering for reproducibility (tests, logs).
 	keys := make([][16]byte, 0, compiled.AllowedIPv6.Len())
 	compiled.AllowedIPv6.ForEach(func(k [16]byte) { keys = append(keys, k) })
 	sort.Slice(keys, func(i, j int) bool {
 		return bytes.Compare(keys[i][:], keys[j][:]) < 0
 	})
-	if len(keys) > policy.MaxAllowedDefendIPv6Keys {
+	cidrs := pol.AllowedIPv6Nets()
+	if len(keys)+len(cidrs) > policy.MaxAllowedDefendIPv6Keys {
 		return 0, fmt.Errorf("allowed_ipv6: %d entries exceeds BPF max %d",
-			len(keys), policy.MaxAllowedDefendIPv6Keys)
+			len(keys)+len(cidrs), policy.MaxAllowedDefendIPv6Keys)
 	}
 	val := uint8(1)
 	programmed := 0
@@ -484,6 +494,26 @@ func populateAllowedIPv6Map(m *ebpf.Map, compiled policy.CompileResult) (int, er
 		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
 			return programmed, fmt.Errorf("load allowed_ipv6 map (/128 %s): %w",
 				net.IP(addr[:]).String(), err)
+		}
+		programmed++
+	}
+	// SP-2: literal IPv6 CIDRs as LPM prefix entries. net.ParseCIDR already
+	// masked the network address; prefix length comes from the mask.
+	for _, n := range cidrs {
+		ones, bits := n.Mask.Size()
+		if bits != 128 {
+			continue // defensive: non-v6 mask should never reach here
+		}
+		ip16 := n.IP.To16()
+		if ip16 == nil {
+			continue
+		}
+		var key [20]byte
+		// #nosec G115 -- ones is an IPv6 prefix length from net.IPMask.Size() (0..128); always fits uint32 //nolint:gosec
+		binary.LittleEndian.PutUint32(key[0:4], uint32(ones))
+		copy(key[4:20], ip16)
+		if err := m.Update(key, val, ebpf.UpdateAny); err != nil {
+			return programmed, fmt.Errorf("load allowed_ipv6 map (%s): %w", n.String(), err)
 		}
 		programmed++
 	}
