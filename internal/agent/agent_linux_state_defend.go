@@ -186,7 +186,10 @@ func (s *defendState) shouldEmitDeny(key denyDedupKey, family string, nowNano in
 		s.denyDedup = make(map[denyDedupKey]denyDedupEntry)
 	}
 	prev, ok := s.denyDedup[key]
-	fresh := ok && nowNano-prev.nano <= int64(denyDedupWindow)
+	// nowNano is wall-clock; a backward step (NTP/VM adjust) makes the delta
+	// negative, which must not count as "within the window" or a genuine deny
+	// would be suppressed as a cross-layer twin.
+	fresh := ok && nowNano >= prev.nano && nowNano-prev.nano <= int64(denyDedupWindow)
 	if fresh && prev.family != "" && family != "" && prev.family != family {
 		// Cross-layer twin of a recently emitted deny: corroborate, don't
 		// re-emit. Keep the original emitting family; refresh the timestamp so

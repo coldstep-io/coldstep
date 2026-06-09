@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -156,31 +157,38 @@ func (c *DNSCache) AddFromPacket(packet []byte) {
 	defer c.mu.Unlock()
 	c.purgeExpiredLocked(now.Unix())
 	for ip, ans := range m {
+		// DNS names are case-insensitive on the wire, and some resolvers
+		// randomize query case (the "0x20" anti-spoofing trick), so a sniffed
+		// reply can echo mixed case. Canonicalize to lowercase so the cached
+		// owner byte-matches the lowercased allowed_domains keys / allowlist
+		// (the documented contract in defend_dns_seed.go) and so the observed
+		// FQDN in JSONL doesn't trip the diff gate's new-domain check.
+		name := strings.ToLower(ans.name)
 		exp := ttlToExpiry(ans.ttl, now)
 		prev, ok := c.entries[ip]
 		if ok && now.Unix() < prev.expires {
 			switch {
-			case ans.name == prev.name:
+			case name == prev.name:
 				// Same owner — refresh TTL only, skip BPF Update churn (M-08).
-				c.entries[ip] = dnsEntry{name: ans.name, expires: exp}
+				c.entries[ip] = dnsEntry{name: name, expires: exp}
 				continue
-			case len(ans.name) > len(prev.name):
+			case len(name) > len(prev.name):
 				// Existing entry still valid and shorter; preserve it (M-08).
 				continue
 			}
 		}
-		c.entries[ip] = dnsEntry{name: ans.name, expires: exp}
+		c.entries[ip] = dnsEntry{name: name, expires: exp}
 
 		// Update BPF maps for in-kernel enrichment/defense.
 		if len(c.bpfMaps) > 0 {
 			var bpfKey [4]byte
 			copy(bpfKey[:], ip[:])
 			var bpfVal [256]byte
-			bpfName, truncated := dnsNameForBPF(ans.name)
+			bpfName, truncated := dnsNameForBPF(name)
 			if truncated {
 				ipString := net.IP(ip[:]).String()
 				slog.Warn("dns cache owner truncated for BPF map value",
-					"ip", ipString, "name_len", len(ans.name), "max_len", dnsBPFNameMax)
+					"ip", ipString, "name_len", len(name), "max_len", dnsBPFNameMax)
 			}
 			copy(bpfVal[:], bpfName)
 			for i, bpfMap := range c.bpfMaps {
