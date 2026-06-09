@@ -7,14 +7,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.1] — 2026-06-09
+
 ### Added
 
 - **io_uring TLS destination correlation (ORDER 1 / BG-5).** `io_uring_tls` events now carry the connected IPv4 peer (`dst` + `dst_port`), resolved in kernel from the submission's socket (`req->file` → socket → `sk` → `skc_daddr`), instead of the `"unknown"` placeholder. Best-effort: the SNI still emits with `dst:"unknown"` when the peer is not resolvable.
 - **IPv6-literal allowlisting (SP-2).** `allow` / `allow-file` now accept native IPv6 literals (`2001:db8::1`) and IPv6 CIDRs (`2001:db8::/32`). They are classified to the IP path, parsed by `policy.Parse` into the v6 buckets, and programmed into the defend `allowed_ipv6` LPM trie (literals as `/128`, CIDRs as prefix entries) alongside AAAA-resolved domains. Previously IPv6 literals were silently treated as hostnames and failed to resolve. The `!CIDR` ignore mechanism remains IPv4-only.
+- **Grouped suggested-allow artifact (SP-3).** The post step writes `.coldstep-suggested-allow.txt` — a paste-ready, grouped allow-file (hostnames preferred, then bare IPs) — alongside the existing `suggested-allow` output and summary block.
 
 ### Fixed
 
 - **Stop step no longer drops the report on a transient GitHub API failure.** The post step renders the report from the already-downloaded + SHA-verified cached binary (`cachedColdstepBinaryPath`) instead of re-fetching the release SHA over the network; a transient Releases API rate-limit/5xx no longer silently omits the report.
+
+### Changed
+
+- **Internal: ring-reader scaffolding dedup.** Extracted the shared ringbuf read loop (backoff / ErrClosed / ctx-cancel) into `runRingReader`; migrated the exec/fork/fs readers. No behavior change.
 
 ## [0.5.0] — 2026-06-08
 
@@ -233,6 +240,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+[v0.5.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.1
 [v0.5.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.5.0
 [v0.4.1]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.1
 [v0.4.0]: https://github.com/coldstep-io/coldstep/releases/tag/v0.4.0
