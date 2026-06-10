@@ -19095,6 +19095,30 @@ var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/d
 function actionRootPath() {
   return path.resolve(__dirname, "..", "..");
 }
+function resolveUnderTrustedRoots(p) {
+  let resolved;
+  try {
+    resolved = fs3.realpathSync(p);
+  } catch {
+    return null;
+  }
+  const roots = [];
+  for (const raw of [process.env.GITHUB_WORKSPACE, process.env.RUNNER_TEMP, os5.tmpdir(), process.cwd()]) {
+    if (!raw) continue;
+    try {
+      roots.push(fs3.realpathSync(raw));
+    } catch {
+      roots.push(path.resolve(raw));
+    }
+  }
+  for (const root of roots) {
+    const rel = path.relative(root, resolved);
+    if (rel === "" || !rel.startsWith(".." + path.sep) && rel !== ".." && !path.isAbsolute(rel)) {
+      return resolved;
+    }
+  }
+  return null;
+}
 function inputBoolDefault(name, defaultVal) {
   const v = getInput(name);
   if (v === "") return defaultVal;
@@ -19287,12 +19311,24 @@ async function ensureColdstepBinary() {
 function splitTokens(raw) {
   return raw.split(/[\n,]+/).map((t) => t.replace(/#.*$/, "").trim()).filter((t) => t.length > 0);
 }
+var MAX_ALLOW_FILES = 64;
+var MAX_ALLOW_FILE_BYTES = 8 * 1024 * 1024;
 function readFileTokensSafe(filePaths, baseDir) {
   if (!filePaths.trim()) return [];
   const tokens = [];
-  for (const fp of filePaths.split(",").map((s) => s.trim()).filter(Boolean)) {
+  const paths = filePaths.split(",").map((s) => s.trim()).filter(Boolean);
+  if (paths.length > MAX_ALLOW_FILES) {
+    warning(`allow-file: ${paths.length} files exceeds maximum ${MAX_ALLOW_FILES}; ignoring the rest`);
+    paths.length = MAX_ALLOW_FILES;
+  }
+  for (const fp of paths) {
     const absPath = path.isAbsolute(fp) ? fp : path.join(baseDir, fp);
     try {
+      const stat2 = fs3.statSync(absPath);
+      if (stat2.size > MAX_ALLOW_FILE_BYTES) {
+        warning(`allow-file: ${absPath} is ${stat2.size} bytes (max ${MAX_ALLOW_FILE_BYTES}); skipping`);
+        continue;
+      }
       tokens.push(...splitTokens(fs3.readFileSync(absPath, "utf8")));
     } catch (e) {
       warning(`allow-file: could not read ${absPath}: ${e instanceof Error ? e.message : String(e)}`);
@@ -19600,12 +19636,17 @@ async function startAgent() {
       setFailed(`release-path not found: ${src}`);
       return;
     }
-    binPath = src;
+    const contained = resolveUnderTrustedRoots(src);
+    if (contained === null) {
+      setFailed(`release-path resolves outside trusted roots (workspace / runner temp): ${src}`);
+      return;
+    }
+    binPath = contained;
     try {
       fs4.chmodSync(binPath, 493);
     } catch {
     }
-    info(`coldstep: using release-path binary ${src}`);
+    info(`coldstep: using release-path binary ${binPath}`);
   } else {
     binPath = await ensureColdstepBinary();
   }

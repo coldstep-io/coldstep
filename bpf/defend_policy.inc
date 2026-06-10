@@ -80,20 +80,17 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 	struct ns_lpm4_key k = {};
 
 	/*
-	 * IPv4 loopback (127.0.0.0/8) always bypasses enforcement — parity
-	 * with the ::1 / fe80::/10 hardcoded bypass on the IPv6 paths in
-	 * trace_defend_cgroup.inc and trace_lsm_defend_lsm.inc.
-	 *
-	 * 127.0.0.53 is the systemd-resolved DNS stub; blocking UDP/53 to it
-	 * severs all external DNS resolution for every process in the defend
-	 * cgroup, including the GitHub Actions runner's job-completion
-	 * reporting, causing runners to appear stuck in "in_progress" after
-	 * the job has already finished.
-	 *
-	 * daddr is __be32 (network byte order). The mask tests the first
-	 * (most-significant) byte for 0x7F regardless of host endianness.
+	 * 127.0.0.0/8 always bypasses IPv4 enforcement, mirroring the hardcoded
+	 * ::1 bypass on the IPv6 paths and the skb backstop's skb_v4_is_loopback.
+	 * Loopback is not egress; without this, defend mode denies the
+	 * systemd-resolved stub at 127.0.0.53:53 and every getaddrinfo on
+	 * GitHub-hosted runners fails with EAI_AGAIN (no allow: entry can fix
+	 * that hop) — including the Actions runner's own job-completion
+	 * reporting, which left defend-mode jobs stuck "in_progress" after
+	 * finishing. Living here makes the bypass automatic for every caller —
+	 * all IPv4 deny paths check dst_in_ignored before denying.
 	 */
-	if ((daddr & bpf_htonl(0xFF000000U)) == bpf_htonl(0x7F000000U))
+	if (coldstep_ipv4_is_loopback(daddr))
 		return 1;
 
 	k.prefixlen = 32;
