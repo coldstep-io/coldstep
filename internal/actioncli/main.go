@@ -425,6 +425,17 @@ func runStop(cfg stopConfig) error {
 	// posted. reportAgg is nil only in that case.
 	reportAgg := writeDetailedMarkdownReport(baseDir)
 
+	// "Captured nothing" must be visibly distinct from "observed nothing": on
+	// short jobs with fail-on-error unset, the workload can finish before BPF
+	// attach and the run looks green while proving nothing. ::warning:: is a
+	// GitHub workflow annotation (surfaced on the run page); the report verdict
+	// carries the same banner. reportAgg == nil means not even a stream exists.
+	if reportAgg == nil {
+		fmt.Println("::warning title=coldstep captured no events::no .coldstep-events.jsonl was written — the agent likely never started; this run proves nothing about egress. Set fail-on-error: true to wait for BPF attach.")
+	} else if reportAgg.CapturedNothing() {
+		fmt.Println("::warning title=coldstep captured no events::the event stream has no workload telemetry — the job may have finished before BPF attach; this run proves nothing about egress. Set fail-on-error: true for short jobs.")
+	}
+
 	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)
 
 	if reportJobSummary && reportAgg != nil {

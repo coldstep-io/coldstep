@@ -119,6 +119,33 @@ int main(void)
 			       "sockaddr6 reject non inet6");
 	}
 
+	/* coldstep_ipv4_is_loopback — input is network byte order: byte 0 is the first octet */
+	{
+		__be32 addr;
+		__u8 bytes_loopback[4] = { 127, 0, 0, 1 };       /* 127.0.0.1 */
+		__u8 bytes_stub[4] = { 127, 0, 0, 53 };          /* 127.0.0.53 (systemd-resolved) */
+		__u8 bytes_subnet_high[4] = { 127, 255, 255, 255 };
+		__u8 bytes_public[4] = { 168, 63, 129, 16 };     /* Azure resolver — NOT loopback */
+		__u8 bytes_almost[4] = { 126, 255, 255, 255 };
+		__u8 bytes_above[4] = { 128, 0, 0, 1 };
+		__u8 bytes_swapped[4] = { 1, 0, 0, 127 };        /* 1.0.0.127 — 127 in LAST octet */
+
+		memcpy(&addr, bytes_loopback, 4);
+		EXPECT_NE_ZERO(coldstep_ipv4_is_loopback(addr), "loopback 127.0.0.1");
+		memcpy(&addr, bytes_stub, 4);
+		EXPECT_NE_ZERO(coldstep_ipv4_is_loopback(addr), "loopback 127.0.0.53 stub");
+		memcpy(&addr, bytes_subnet_high, 4);
+		EXPECT_NE_ZERO(coldstep_ipv4_is_loopback(addr), "loopback 127.255.255.255");
+		memcpy(&addr, bytes_public, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_loopback(addr), "not loopback 168.63.129.16");
+		memcpy(&addr, bytes_almost, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_loopback(addr), "not loopback 126.255.255.255");
+		memcpy(&addr, bytes_above, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_loopback(addr), "not loopback 128.0.0.1");
+		memcpy(&addr, bytes_swapped, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_loopback(addr), "not loopback 1.0.0.127");
+	}
+
 	/* coldstep_http_prefix_is_request */
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("GET "), "GET ");
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("POST"), "POST");
