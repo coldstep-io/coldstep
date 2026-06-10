@@ -19556,7 +19556,16 @@ async function stopAgent() {
     } catch (e) {
       const err = e;
       signaled = false;
-      if (err.code !== "ESRCH") warning(`failed to signal pid ${pid}: ${e}`);
+      if (err.code === "EPERM") {
+        try {
+          (0, import_child_process.execFileSync)("sudo", ["kill", "-TERM", String(pid)], { stdio: "pipe" });
+          signaled = true;
+        } catch {
+          warning(`failed to signal pid ${pid}: ${e}`);
+        }
+      } else if (err.code !== "ESRCH") {
+        warning(`failed to signal pid ${pid}: ${e}`);
+      }
     }
     if (signaled) {
       await waitForProcessExit(pid, 3e3);

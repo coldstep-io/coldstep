@@ -382,7 +382,15 @@ func runStop(cfg stopConfig) error {
 		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 		if err == nil && pid > 0 {
 			if p, perr := os.FindProcess(pid); perr == nil {
-				_ = p.Signal(syscall.SIGTERM)
+				if serr := p.Signal(syscall.SIGTERM); serr != nil && errors.Is(serr, syscall.EPERM) {
+					// Agent runs as root (via sudo); fall back to `sudo kill` so
+					// BPF cgroup programs are detached before post-job cleanup.
+					// Without this the enforce hooks block the runner's own DNS
+					// lookups and the job hangs until GitHub force-cancels it.
+					if out, kerr := exec.Command("sudo", "kill", "-TERM", strconv.Itoa(pid)).CombinedOutput(); kerr != nil { // #nosec G204 -- pid is an integer; no injection risk
+						fmt.Fprintf(os.Stderr, "coldstep: failed to sudo kill agent pid=%d: %v: %s\n", pid, kerr, out)
+					}
+				}
 			}
 			// Poll for the agent to exit instead of using a fixed sleep. The
 			// previous 400ms hard sleep was shorter than the agent's actual
