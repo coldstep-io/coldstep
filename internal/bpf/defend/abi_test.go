@@ -183,22 +183,46 @@ func TestSendpageHookProgram(t *testing.T) {
 	}
 }
 
-// TestSKBBackstopMapsExist asserts the cgroup_skb/egress backstop maps
+// TestSKBBackstopMapsExist asserts the tc/clsact egress backstop maps
 // (skb_backstop_events, skb_backstop_reserve_failures, skb_backstop_seen)
-// are present in the spec. These maps support the egress packet filter
-// and its telemetry. Skips until stubs are regenerated on Linux.
-// TODO: remove skip after Linux regeneration.
+// are present with the correct types and shapes. The package cannot compile
+// without its generated bindings and CI regenerates them before running tests,
+// so a missing map is a real regression that must fail hard.
 func TestSKBBackstopMapsExist(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
 		t.Fatalf("LoadDefend: %v", err)
 	}
-	for _, name := range []string{"skb_backstop_events", "skb_backstop_reserve_failures", "skb_backstop_seen"} {
-		ms, ok := spec.Maps[name]
-		if !ok {
-			t.Skipf("defend stubs not regenerated yet: map %q absent from CollectionSpec — run `go generate ./internal/bpf/defend/` on Linux", name)
-		}
-		_ = ms // suppress unused if type assertion not needed for this test
+
+	ms, ok := spec.Maps["skb_backstop_events"]
+	if !ok {
+		t.Fatalf("BPF map \"skb_backstop_events\" not found in CollectionSpec")
+	}
+	if ms.Type != ebpf.RingBuf {
+		t.Errorf("skb_backstop_events type = %v, want ebpf.RingBuf", ms.Type)
+	}
+
+	ms, ok = spec.Maps["skb_backstop_reserve_failures"]
+	if !ok {
+		t.Fatalf("BPF map \"skb_backstop_reserve_failures\" not found in CollectionSpec")
+	}
+	if ms.Type != ebpf.PerCPUArray {
+		t.Errorf("skb_backstop_reserve_failures type = %v, want ebpf.PerCPUArray", ms.Type)
+	}
+	if ms.MaxEntries != 1 || ms.KeySize != 4 || ms.ValueSize != 4 {
+		t.Errorf("skb_backstop_reserve_failures shape MaxEntries=%d KeySize=%d ValueSize=%d, want MaxEntries=1 KeySize=4 ValueSize=4",
+			ms.MaxEntries, ms.KeySize, ms.ValueSize)
+	}
+
+	ms, ok = spec.Maps["skb_backstop_seen"]
+	if !ok {
+		t.Fatalf("BPF map \"skb_backstop_seen\" not found in CollectionSpec")
+	}
+	if ms.Type != ebpf.LRUHash {
+		t.Errorf("skb_backstop_seen type = %v, want ebpf.LRUHash", ms.Type)
+	}
+	if ms.MaxEntries != 1024 {
+		t.Errorf("skb_backstop_seen MaxEntries = %d, want 1024", ms.MaxEntries)
 	}
 }
 
