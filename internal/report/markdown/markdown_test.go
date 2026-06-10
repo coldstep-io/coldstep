@@ -65,6 +65,45 @@ func TestParse_Counts(t *testing.T) {
 	}
 }
 
+// A stream with only agent meta rows captured no workload telemetry — on
+// short jobs with fail-on-error unset the workload can finish before BPF
+// attach. The report must say so loudly instead of rendering a green
+// "no anomalies" verdict that proves nothing (upstream issue: silent empty
+// capture on short detect jobs).
+func TestRenderSimple_CapturedNothingBanner(t *testing.T) {
+	a, err := Parse(strings.NewReader(`{"type":"meta","ts":"t0","mode":"detect"}` + "\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !a.CapturedNothing() {
+		t.Fatal("CapturedNothing() = false for meta-only stream, want true")
+	}
+	simple := a.RenderSimple()
+	if !strings.Contains(simple, "no events captured") {
+		t.Errorf("RenderSimple missing captured-nothing banner:\n%s", simple)
+	}
+	if strings.Contains(simple, "✅") {
+		t.Errorf("RenderSimple must not render a green verdict when nothing was captured:\n%s", simple)
+	}
+	if detailed := a.RenderDetailed(); !strings.Contains(detailed, "no events captured") {
+		t.Errorf("RenderDetailed missing captured-nothing banner:\n%s", detailed)
+	}
+
+	// One real workload event flips it back to the normal verdict.
+	a2, err := Parse(strings.NewReader(`{"type":"meta","ts":"t0","mode":"detect"}
+{"type":"exec","comm":"bash"}
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a2.CapturedNothing() {
+		t.Fatal("CapturedNothing() = true with an exec event, want false")
+	}
+	if strings.Contains(a2.RenderSimple(), "no events captured") {
+		t.Error("captured-nothing banner must not render when workload events exist")
+	}
+}
+
 // A defend run where everything was allowlisted produces zero deny events.
 // Mode must still come from the meta line, not be inferred as detect.
 func TestParse_DefendModeFromMeta_NoDenies(t *testing.T) {

@@ -178,6 +178,10 @@ func TestRun_DefendModeBlockedConnectEmitsDenyJSONL(t *testing.T) {
 	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", "localhost")
 	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
 	t.Setenv("COLDSTEP_ALLOWED_IPS", "127.0.0.1/32")
+	// The test host's resolv.conf may list any public IP (8.8.8.8 is Docker's
+	// default) — disable resolver auto-allow so the deny assertion below can't
+	// race the environment's DNS configuration.
+	t.Setenv("COLDSTEP_NO_RESOLVER_AUTOALLOW", "1")
 	t.Setenv("GITHUB_STEP_SUMMARY", summary)
 	t.Setenv("COLDSTEP_DETECT_LOG", detect)
 	t.Setenv("COLDSTEP_EVENTS_LOG", events)
