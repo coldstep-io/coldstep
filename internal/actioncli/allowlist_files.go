@@ -2,11 +2,22 @@ package actioncli
 
 import (
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+)
+
+// maxAllowlistFiles bounds the number of comma-separated allow-file paths a
+// single input may name; maxAllowlistFileBytes bounds each file's size
+// (mirrors the maxGitHubEventJSONBytes posture — a pathological multi-GiB
+// workspace file must not OOM the runner before parsing even starts).
+// Realistic allowlists are a few KiB across one or two files.
+const (
+	maxAllowlistFiles     = 64
+	maxAllowlistFileBytes = 8 << 20
 )
 
 var ipv4LiteralOrCIDR = regexp.MustCompile(`^(\d{1,3}\.){3}\d{1,3}(/\d{1,2})?$`)
@@ -94,6 +105,9 @@ func mergeInlineAndAllowlistFiles(workspaceRoot, inline, filesCSV string) (strin
 	if len(paths) == 0 {
 		return strings.TrimSpace(inline), nil
 	}
+	if len(paths) > maxAllowlistFiles {
+		return "", fmt.Errorf("allow-file: %d files exceeds maximum %d", len(paths), maxAllowlistFiles)
+	}
 	wsAbs, err := filepath.Abs(workspaceRoot)
 	if err != nil {
 		return "", err
@@ -104,7 +118,7 @@ func mergeInlineAndAllowlistFiles(workspaceRoot, inline, filesCSV string) (strin
 		if err != nil {
 			return "", fmt.Errorf("allowlist file %q: %w", rel, err)
 		}
-		body, err := os.ReadFile(full)
+		body, err := readFileCapped(full, maxAllowlistFileBytes)
 		if err != nil {
 			return "", fmt.Errorf("read allowlist file %q: %w", rel, err)
 		}
@@ -119,6 +133,26 @@ func mergeInlineAndAllowlistFiles(workspaceRoot, inline, filesCSV string) (strin
 	inlineTok := splitAllowInlineTokens(inline)
 	all := append(append([]string{}, inlineTok...), fileTokens...)
 	return strings.Join(all, ","), nil
+}
+
+// readFileCapped reads path, rejecting files larger than maxBytes instead of
+// loading them. The cap is checked by reading maxBytes+1 through a LimitReader
+// rather than trusting a pre-read Stat (which would race with the TOCTOU
+// symlink re-check in mergeInlineAndAllowlistFiles).
+func readFileCapped(path string, maxBytes int64) ([]byte, error) {
+	f, err := os.Open(path) // #nosec G304 -- path containment enforced by resolvePathUnderWorkspace at the call site //nolint:gosec
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxBytes+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("file exceeds maximum size %d bytes", maxBytes)
+	}
+	return data, nil
 }
 
 // splitTrimNonEmpty splits s using sep, trims whitespace from each token, and
