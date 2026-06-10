@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **Defend mode blocks IPv4 loopback / DNS stub (127.0.0.0/8).** The BPF cgroup and LSM enforcement paths had no IPv4 loopback bypass, so UDP/53 to `127.0.0.53` (systemd-resolved) was denied under defend mode. This severed all external DNS resolution for every process in the defend cgroup, including the GitHub Actions runner's job-completion reporting — causing defend-mode CI jobs to appear stuck `in_progress` indefinitely after finishing. Fixed by adding a `127.0.0.0/8` hardcoded bypass to `dst_in_ignored` in `bpf/defend_policy.inc`, giving IPv4 loopback parity with the existing `::1`/`fe80::/10` bypass on the IPv6 paths.
+
 ## [0.5.2] — 2026-06-09
 
 ### Added

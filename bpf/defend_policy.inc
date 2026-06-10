@@ -79,6 +79,23 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 {
 	struct ns_lpm4_key k = {};
 
+	/*
+	 * IPv4 loopback (127.0.0.0/8) always bypasses enforcement — parity
+	 * with the ::1 / fe80::/10 hardcoded bypass on the IPv6 paths in
+	 * trace_defend_cgroup.inc and trace_lsm_defend_lsm.inc.
+	 *
+	 * 127.0.0.53 is the systemd-resolved DNS stub; blocking UDP/53 to it
+	 * severs all external DNS resolution for every process in the defend
+	 * cgroup, including the GitHub Actions runner's job-completion
+	 * reporting, causing runners to appear stuck in "in_progress" after
+	 * the job has already finished.
+	 *
+	 * daddr is __be32 (network byte order). The mask tests the first
+	 * (most-significant) byte for 0x7F regardless of host endianness.
+	 */
+	if ((daddr & bpf_htonl(0xFF000000U)) == bpf_htonl(0x7F000000U))
+		return 1;
+
 	k.prefixlen = 32;
 	k.addr = daddr;
 	/* AUDIT(5a): null checked — pointer used only as boolean (`v != 0`). */
