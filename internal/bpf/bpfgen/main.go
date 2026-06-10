@@ -58,7 +58,12 @@ func main() {
 		"run", "github.com/cilium/ebpf/cmd/bpf2go@v0.21.0",
 		"-cc", "clang",
 		"-no-strip",
-		"-target", "bpfel,bpfeb",
+		// bpfel only: every supported platform (linux amd64 + arm64, the CI
+		// matrix and the published binary) is little-endian. Generating the
+		// big-endian twin doubled clang work in all seven probe packages for
+		// artifacts nothing builds. Keep in sync with the direct go:generate
+		// lines in traceexec/tracefork/traceipv6 gen.go.
+		"-target", "bpfel",
 		"-cflags", cflags,
 		target,
 		filepath.Join(bpfInclude, bpfSrc),

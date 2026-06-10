@@ -80,7 +80,23 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Prepare BPF and generated Go
+      # Build cache: restores generated bpf2go bindings + embedded BPF objects
+      # + bin/coldstep, skipping the clang/bpf2go rebuild when nothing
+      # build-relevant changed. Key includes runner arch because BPF objects
+      # are compiled with -D__TARGET_ARCH_<arch>; objects are CO-RE-portable
+      # across kernel versions within an arch (same property the released
+      # binary relies on). Keep path+key in sync across all jobs using it.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Prepare BPF and generated Go (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Run gosec
         uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889 # v2.27.1
@@ -100,7 +116,18 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
-      - name: Prepare BPF and generated Go
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Prepare BPF and generated Go (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Install staticcheck
         env:
@@ -125,7 +152,18 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Prepare BPF and generated Go
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Prepare BPF and generated Go (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
@@ -155,7 +193,18 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Prepare BPF and generated Go
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Prepare BPF and generated Go (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Go vet
         run: go vet ./...
@@ -189,7 +238,18 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Prepare BPF
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Prepare BPF (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Kernel staleness check (P2-4)
         # Annotate when the integration runner kernel drifts >2 major versions
@@ -230,7 +290,18 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Build action binaries
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Build action binaries (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
       - name: Verify action binary exists
         run: |
@@ -376,14 +447,20 @@ jobs:
 
       # Cache skips clang+bpf rebuild when sources unchanged — composite uses release-path so startup
       # stays fast under fail-on-error (BPF verifier remains on first load inside the agent).
+      # Same path+key as the shared build cache in the gosec/unit/integration/
+      # action_bundle jobs (see gosec for rationale) so one build seeds all.
       - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
-        id: coldstep-bin-cache
+        id: coldstep-build-cache
         with:
-          path: bin/coldstep
-          key: coldstep-defend-bin-${{ runner.os }}-${{ hashFiles('bpf/**/*.c', 'bpf/**/*.h', 'bpf/**/*.inc', 'bpf/trace_tls_write.inc', 'internal/bpf/**/*.go', 'internal/agent/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh') }}
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
 
       - name: Build Linux agent (runs on cache miss only)
-        if: steps.coldstep-bin-cache.outputs.cache-hit != 'true'
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
 
       - name: Install runtime probes (before defend so mirrors/DNS still work)
