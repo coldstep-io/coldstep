@@ -151,6 +151,18 @@ func Run(ctx context.Context, cfg config.Config) error {
 	if err != nil {
 		return err
 	}
+	if cfg.Mode == config.ModeDefend && !cfg.NoResolverAutoAllow {
+		resolverV4, resolverV6 := autoAllowSystemResolvers(&defendCompiled, policy.DefaultResolvConfPaths()...)
+		for _, ip := range resolverV4 {
+			slog.Info("defend: system DNS resolver auto-allowed", "resolver", ip.String(), "family", "ipv4")
+		}
+		for _, ip := range resolverV6 {
+			slog.Info("defend: system DNS resolver auto-allowed", "resolver", ip.String(), "family", "ipv6")
+		}
+		if len(resolverV4)+len(resolverV6) == 0 {
+			slog.Warn("defend: no system DNS resolvers discovered — workload DNS may fail (EAI_AGAIN) unless resolver IPs are allowlisted explicitly")
+		}
+	}
 	allowlistCompileTime := defendCompiled.CompileTimestamp
 	if allowlistCompileTime.IsZero() {
 		allowlistCompileTime = time.Now()

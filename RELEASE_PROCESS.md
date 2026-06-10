@@ -2,12 +2,31 @@
 
 Run these **in order** when cutting a new **tag** so the **Marketplace / `uses: coldstep-io/coldstep@<tag>`** story, the **prebuilt Linux agent** on GitHub Releases, and the **static site** stay aligned.
 
+## Release invariant — the tag ships its own binary (normative, enforced)
+
+**The commit a `vX.Y.Z` tag points to MUST carry `COLDSTEP_BINARY_VERSION = 'vX.Y.Z'` in `src/shared.ts` AND in the compiled `dist/{pre,main,post}/index.js` bundles.** The action downloads the agent binary from the Release named by that constant — if the tagged commit still carries the previous version, everyone who pins the tag (the documented secure practice) silently runs the **previous** agent. This shipped for real: the `v0.5.2` tag pointed at a commit with `COLDSTEP_BINARY_VERSION='v0.5.1'` because the bump lived in a post-tag "Train-2" commit (see *Reference: v0.5.2 incident* below).
+
+**Therefore: the `COLDSTEP_BINARY_VERSION` bump + `npm run build` dist rebuild go in the release PR, BEFORE the tag. There is no post-tag binary-version train. Never tag a commit whose `src/shared.ts` lags the tag.**
+
+This is safe pre-tag because the action fetches the asset SHA-256 from the Releases API at runtime (`src/shared.ts`) — no digest needs to exist when the bump lands. The only cost is a short window between merging the release PR and the tag's `supply-chain-attest` run finishing, during which `@main` consumers fail fast with a clear Releases-API 404. Minimize it: **push the tag immediately after the release PR merges.**
+
+Enforced in three places — do not remove any of them:
+
+| Gate | Where it runs | What it catches |
+| :--- | :------------ | :-------------- |
+| `scripts/check_release_version_alignment.py` | `coldstep-ci-runner.yml` `action_bundle` job (every PR/push) | `src/shared.ts` vs `dist/` drift (bumped without rebuild) and `COLDSTEP_BINARY_VERSION` vs `MARKETPLACE_COLDSTEP_TAG` drift (docs pin bumped without the binary version, or vice versa). |
+| `scripts/check_release_version_alignment.py --tag "$GITHUB_REF_NAME"` | `supply-chain-attest.yml`, first step on every `v*` tag push | A tag placed on a commit that does not ship its own version — **fails the release before any asset is built, attested, or uploaded.** |
+| `internal/releasecheck` (Go test) | `go test ./...` locally + every CI unit job | Same src/dist/marketplace alignment, caught at unit-test time without Python. |
+
+If the tag gate fires: delete the bad tag (or leave it unreleased — the gate ran before any asset upload), land the bump + dist rebuild on `main`, and tag the corrected commit. **Never re-point an already-published tag**; if a bad tag already has a Release, cut the next patch version instead and note the bad tag in `CHANGELOG.md`.
+
 ## Consumer pin standard (normative)
 
 This is the **single standard** for where the recommended **`coldstep-io/coldstep@vX.Y.Z`** pin and **`COLDSTEP_AGENT_VERSION`** appear. Everything else should defer to this file.
 
 | Surface | When to update | Rule |
 | :------ | :------------- | :--- |
+| **`src/shared.ts` (`COLDSTEP_BINARY_VERSION`) + `dist/` rebuild (`npm run build`)** | **Release PR (before the tag — Release invariant)** | Must equal the tag you are about to publish; the tag-time gate in `supply-chain-attest` rejects the release otherwise. |
 | `scripts/check_workflow_action_pins.py` (`MARKETPLACE_COLDSTEP_TAG`) | Release PR (same train as the tag) | Must equal the tag you are about to publish. |
 | `README.md`, `QUICK_START.md`, `CONTRIBUTING.md` | Release PR | Recommended consumer pin = that tag. |
 | `.github/workflows/coldstep-demo*.yml` and related (`COLDSTEP_AGENT_VERSION`, comments) | Release PR | Must match the GitHub Release that publishes **`coldstep-linux-amd64`**. |
@@ -17,12 +36,12 @@ This is the **single standard** for where the recommended **`coldstep-io/coldste
 
 **Two trains (do not mix them up):**
 
-1. **Repository docs + CI pins** — updated in the **release PR** merged before **`git tag`**. They may document the **next** tag while **`CHANGELOG.md` `[Unreleased]`** explains what is not published yet (see that section when applicable).
-2. **GitHub Pages (`website/`)** — updated **only after** the tag is live on Releases, so visitors never copy a non-existent **`uses:`** pin.
+1. **Repository docs + CI pins + `COLDSTEP_BINARY_VERSION` + `dist/`** — updated in the **release PR** merged before **`git tag`**. They may document the **next** tag while **`CHANGELOG.md` `[Unreleased]`** explains what is not published yet (see that section when applicable). The binary version is **never** bumped post-tag — a post-tag "Train-2" bump is exactly what shipped the v0.5.2 incident (Release invariant above).
+2. **GitHub Pages (`website/`)** — updated **only after** the tag is live on Releases, so visitors never copy a non-existent **`uses:`** pin. This is why CI runs `check_workflow_action_pins.py --skip-website`; the no-flag run is the manual post-tag check that the site follow-up landed.
 
 ## 1. Land the release on `main`
 
-- Open a **PR** (for example `release/vX.Y.Z`) with version bumps: **`README`**, **`QUICK_START`**, **`CONTRIBUTING`**, **`scripts/check_workflow_action_pins.py`** → **`MARKETPLACE_COLDSTEP_TAG`**, **`coldstep-demo*`** workflows → **`COLDSTEP_AGENT_VERSION`**, and **`CHANGELOG.md`**. **Exclude `website/`** from this PR by default; bump **`website/index.html`** in a **follow-up PR after** the tag is published on Releases (**Consumer pin standard**).
+- Open a **PR** (for example `release/vX.Y.Z`) with version bumps: **`src/shared.ts`** → **`COLDSTEP_BINARY_VERSION`** **plus the matching `npm run build` `dist/` rebuild committed in the same PR** (Release invariant — CI fails the PR if either is missing), **`README`**, **`QUICK_START`**, **`CONTRIBUTING`**, **`scripts/check_workflow_action_pins.py`** → **`MARKETPLACE_COLDSTEP_TAG`**, **`coldstep-demo*`** workflows → **`COLDSTEP_AGENT_VERSION`**, and **`CHANGELOG.md`**. **Exclude `website/`** from this PR by default; bump **`website/index.html`** in a **follow-up PR after** the tag is published on Releases (**Consumer pin standard**).
 - Wait for **CI green** on the PR (`coldstep-ci`, CodeQL, etc.), then **merge to `main`**.  
 - **Do not** tag until the release commit is on `main`.
 
@@ -43,15 +62,19 @@ Confirm bug-hunting and bug-fix readiness explicitly before creating a release t
 ```bash
 git checkout main
 git pull origin main
+# Release invariant pre-flight: the commit you are about to tag must ship its own version.
+python3 scripts/check_release_version_alignment.py --tag vX.Y.Z
 git tag -s vX.Y.Z -m "Release vX.Y.Z — <short description>"
 git push origin vX.Y.Z
 ```
 
 Use an **annotated**, **signed** tag (`-s`) if your signing policy expects it.
 
+Tag **the release-PR merge commit** (current `main` tip right after the merge) — never an older commit. Push the tag **immediately** after the merge: until `supply-chain-attest` publishes the `vX.Y.Z` asset, `@main` consumers fail fast on the Releases-API 404 (Release invariant section above).
+
 ## 4. Verify `supply-chain-attest`
 
-Pushing **`v*`** triggers [`.github/workflows/supply-chain-attest.yml`](.github/workflows/supply-chain-attest.yml).
+Pushing **`v*`** triggers [`.github/workflows/supply-chain-attest.yml`](.github/workflows/supply-chain-attest.yml). Its **first step** is the Release-invariant gate (`check_release_version_alignment.py --tag`): a tag pointing at a commit that does not ship its own `COLDSTEP_BINARY_VERSION` fails here, before any artifact is built or uploaded. If it fires, follow the remediation in the Release invariant section — do not re-run the job hoping it passes.
 
 - Watch the run: **Actions → supply-chain-attest**, or  
   `gh run list --workflow=supply-chain-attest.yml --limit 3`
@@ -82,6 +105,7 @@ When cutting **`vX.Y.Z`**, bump **`[X.Y.Z]`** in **`CHANGELOG.md`** in the same 
 
 | Location | What to bump |
 | -------- | ------------ |
+| **`src/shared.ts`** | **`COLDSTEP_BINARY_VERSION` → `vX.Y.Z`, then `npm run build` and commit `dist/` (Release invariant — same PR, before the tag)** |
 | `scripts/check_workflow_action_pins.py` | `MARKETPLACE_COLDSTEP_TAG` |
 | `README.md`, `QUICK_START.md`, `CONTRIBUTING.md` | `coldstep-io/coldstep@vX.Y.Z` |
 | `.github/workflows/coldstep-demo*.yml` | `COLDSTEP_AGENT_VERSION` and comment examples |
@@ -107,6 +131,22 @@ When cutting **`vX.Y.Z`**, bump **`[X.Y.Z]`** in **`CHANGELOG.md`** in the same 
 | Branch / PR | **`release/v0.1.7-prerelease`** — open PR to `main` (pin + `CHANGELOG` **pre-release** section) |
 | After merge | Tag **`v0.1.7`**, push, confirm **supply-chain-attest**; mark GitHub Release **pre-release** until promoted |
 | Second brain | `knowledge/wiki/versioned-releases-and-prerelease.md` + `knowledge/reports/2026-04-20-pre-release-v0.1.7-process.md` |
+
+## Reference: v0.5.2 incident — tag shipped the previous agent (root cause + fix)
+
+**What happened.** Consumers pinning `uses: coldstep-io/coldstep@v0.5.2` (or the commit SHA `3e58f37` the tag resolves to) silently downloaded and ran the **v0.5.1** agent. Found externally by coldstep-labs (runner log: `coldstep: downloading v0.5.1 from …/releases/download/v0.5.1/coldstep-linux-amd64` under the v0.5.2 pin).
+
+**Root cause.** The release flow at the time split the version bump across two trains: the `v0.5.2` tag was placed on the Train-1 release-pins commit (`3e58f37`, PR #301) while `src/shared.ts` / `dist/` still read `COLDSTEP_BINARY_VERSION='v0.5.1'`; the bump landed one commit **after** the tag (`23a3bbe`, Train-2, PR #302). The same pattern existed at v0.5.1 (PR #294) — so **every** tag structurally shipped the previous binary. Not a one-off mistake; a process defect.
+
+**Why it was invisible.** No CI job or release gate compared `COLDSTEP_BINARY_VERSION` to anything: `check_workflow_action_pins.py` was manual-only and never checked `src/shared.ts`, and `supply-chain-attest` built and uploaded whatever the tagged commit contained.
+
+**Fix (this is now the standing rule — see Release invariant at the top):**
+
+1. `COLDSTEP_BINARY_VERSION` bump + `dist/` rebuild moved into the release PR, before the tag. The post-tag Train-2 binary bump is abolished.
+2. `scripts/check_release_version_alignment.py` enforces src == dist == `MARKETPLACE_COLDSTEP_TAG` on every PR (`action_bundle` job), and `== tag` as the first step of `supply-chain-attest` on every `v*` push.
+3. `internal/releasecheck` repeats the alignment check in `go test ./...`.
+
+**Remediation of the shipped tag.** `v0.5.2` was left as-is (signed tag, immutable Release — never re-point a published tag); the first tag cut under the corrected flow supersedes it and `CHANGELOG.md` notes that `v0.5.2` ran the v0.5.1 agent.
 
 ## Reference: v0.2.1
 

@@ -66,6 +66,31 @@ func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver pol
 	return compiled, nil
 }
 
+// autoAllowSystemResolvers folds the host's configured DNS resolver addresses
+// into the compiled defend allowlist (issue: defend mode breaks DNS on hosted
+// runners). The systemd-resolved stub hop (127.0.0.53) is covered by the BPF
+// loopback bypass; this covers the second hop — resolved's upstream query to
+// the platform resolver (168.63.129.16 on Azure-hosted runners), a public IP
+// outside the default ignored nets. Without it every workload getaddrinfo in
+// defend mode fails with EAI_AGAIN, since the runner cannot resolve even
+// allowlisted domains.
+//
+// Trust note: this allows ALL traffic to the resolver IPs (the LPM allowlist
+// has no port dimension), not just UDP/53. Resolvers are already infrastructure
+// a workload can tunnel data through (DNS exfil), so this does not widen the
+// inherent destination-allowlisting trust model; every auto-allowed address is
+// logged at startup for auditability. Returns the addresses added per family.
+func autoAllowSystemResolvers(compiled *policy.CompileResult, paths ...string) (v4 []net.IP, v6 []net.IP) {
+	v4, v6 = policy.SystemResolverIPs(paths...)
+	for _, ip := range v4 {
+		compiled.AllowedIPv4.Add(ip)
+	}
+	for _, ip := range v6 {
+		compiled.AllowedIPv6.Add(ip)
+	}
+	return v4, v6
+}
+
 // loadIgnoredLPMMap programs the BPF LPM trie used to bypass denies for ignored IPv4 CIDRs.
 func loadIgnoredLPMMap(m *ebpf.Map, nets []*net.IPNet) (int, error) {
 	if len(nets) == 0 {

@@ -79,6 +79,18 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 {
 	struct ns_lpm4_key k = {};
 
+	/*
+	 * 127.0.0.0/8 always bypasses IPv4 enforcement, mirroring the hardcoded
+	 * ::1 bypass on the IPv6 paths and the skb backstop's skb_v4_is_loopback.
+	 * Loopback is not egress; without this, defend mode denies the
+	 * systemd-resolved stub at 127.0.0.53:53 and every getaddrinfo on
+	 * GitHub-hosted runners fails with EAI_AGAIN (no allow: entry can fix
+	 * that hop). Living here makes the bypass automatic for every caller —
+	 * all IPv4 deny paths check dst_in_ignored before denying.
+	 */
+	if (coldstep_ipv4_is_loopback(daddr))
+		return 1;
+
 	k.prefixlen = 32;
 	k.addr = daddr;
 	/* AUDIT(5a): null checked — pointer used only as boolean (`v != 0`). */
