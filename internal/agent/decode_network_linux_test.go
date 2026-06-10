@@ -763,6 +763,42 @@ func TestEgressBackstopEventFromRaw_shortNoEmit(t *testing.T) {
 	}
 }
 
+// An unexpected address-family byte (corrupt record) must be dropped rather than
+// rendered as a 4-byte "ipv4" address — the producer only ever emits AF_INET /
+// AF_INET6. Guards against the mislabel-unknown-AF-as-ipv4 finding.
+func TestEgressBackstopEventFromRaw_unknownAFNoEmit(t *testing.T) {
+	raw := make([]byte, egressBackstopEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1)
+	binary.LittleEndian.PutUint32(raw[8:12], 77)
+	raw[28] = 99 // neither AF_INET (2) nor AF_INET6 (10)
+	raw[29] = 6
+	copy(raw[32:36], []byte{198, 51, 100, 9})
+	if _, emit := egressBackstopEventFromRaw(raw, "t", 1); emit {
+		t.Fatal("expected emit=false for unknown address family")
+	}
+}
+
+// AF_INET6 records must render the full 16-byte address and the ipv6 label.
+func TestEgressBackstopEventFromRaw_ipv6(t *testing.T) {
+	raw := make([]byte, egressBackstopEventWireSize)
+	binary.LittleEndian.PutUint64(raw[0:8], 1)
+	binary.LittleEndian.PutUint32(raw[8:12], 77)
+	raw[28] = 10 // AF_INET6
+	raw[29] = 6
+	// 2001:db8::1
+	raw[32], raw[33] = 0x20, 0x01
+	raw[34], raw[35] = 0x0d, 0xb8
+	raw[47] = 0x01
+	binary.BigEndian.PutUint16(raw[48:50], 443)
+	ev, emit := egressBackstopEventFromRaw(raw, "t", 1)
+	if !emit {
+		t.Fatal("expected emit=true for AF_INET6")
+	}
+	if ev.AF != "ipv6" || ev.Dst != "2001:db8::1" {
+		t.Fatalf("ev=%+v", ev)
+	}
+}
+
 func TestDecodeBpfSelfDefenseEvent(t *testing.T) {
 	raw := make([]byte, bpfSelfDefenseEventWireSize)
 	binary.LittleEndian.PutUint64(raw[0:8], 1717000000002)

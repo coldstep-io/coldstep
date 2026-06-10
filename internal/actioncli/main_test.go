@@ -246,3 +246,48 @@ func TestWaitForAgentExit_RejectsZeroAndNegative(t *testing.T) {
 		t.Errorf("waitForAgentExit(timeout=0) = true; want false")
 	}
 }
+
+// Markdown-structure repair (LOW item from the security audit): when the
+// truncation cut lands inside a fenced code block, the open fence must be
+// closed so the _(truncated)_ marker still renders as Markdown.
+func TestTruncate_closesOpenCodeFence(t *testing.T) {
+	s := "intro\n```\n" + strings.Repeat("y", 200)
+	out := truncate(s, 50)
+	if strings.Count(out, "```")%2 != 0 {
+		t.Fatalf("expected balanced code fences, got %q", out)
+	}
+	if !strings.HasSuffix(out, "\n\n_(truncated)_\n") {
+		t.Fatalf("missing truncation marker: %q", out)
+	}
+}
+
+func TestTruncate_balancedFencesUntouched(t *testing.T) {
+	s := "a\n```\ncode\n```\n" + strings.Repeat("z", 200)
+	out := truncate(s, 20)
+	if strings.Count(out, "```")%2 != 0 {
+		t.Fatalf("expected balanced code fences, got %q", out)
+	}
+}
+
+// GHES compatibility (LOW item from the security audit): the PR-comment
+// endpoint must honour GITHUB_API_URL so the Bearer token is not sent to
+// public GitHub from an Enterprise Server runner, and must refuse non-https
+// bases so the token never travels plaintext.
+func TestGithubAPIBaseURL(t *testing.T) {
+	t.Setenv("GITHUB_API_URL", "")
+	got, err := githubAPIBaseURL()
+	if err != nil || got != "https://api.github.com" {
+		t.Fatalf("default: got %q err %v", got, err)
+	}
+
+	t.Setenv("GITHUB_API_URL", "https://ghes.example.corp/api/v3/")
+	got, err = githubAPIBaseURL()
+	if err != nil || got != "https://ghes.example.corp/api/v3" {
+		t.Fatalf("ghes: got %q err %v", got, err)
+	}
+
+	t.Setenv("GITHUB_API_URL", "http://ghes.example.corp/api/v3")
+	if _, err = githubAPIBaseURL(); err == nil {
+		t.Fatal("expected error for plaintext http GITHUB_API_URL")
+	}
+}

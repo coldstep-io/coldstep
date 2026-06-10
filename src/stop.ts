@@ -309,7 +309,20 @@ export async function stopAgent(): Promise<void> {
     } catch (e: unknown) {
       const err = e as NodeJS.ErrnoException;
       signaled = false;
-      if (err.code !== 'ESRCH') core.warning(`failed to signal pid ${pid}: ${e}`);
+      if (err.code === 'EPERM') {
+        // Agent runs as root (spawned via sudo). Direct signal is blocked.
+        // Fall back to `sudo kill` so the BPF cgroup programs are detached
+        // before post-job cleanup; without this the enforce hooks block the
+        // runner's own DNS lookups and the job hangs until force-cancelled.
+        try {
+          execFileSync('sudo', ['kill', '-TERM', String(pid)], { stdio: 'pipe' });
+          signaled = true;
+        } catch {
+          core.warning(`failed to signal pid ${pid}: ${e}`);
+        }
+      } else if (err.code !== 'ESRCH') {
+        core.warning(`failed to signal pid ${pid}: ${e}`);
+      }
     }
     if (signaled) {
       // Wait for the agent to actually exit (or up to 3s) so in-flight ringbuf

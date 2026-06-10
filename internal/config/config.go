@@ -44,6 +44,13 @@ type Config struct {
 	// The detection itself lives in the action layer; the agent just forwards
 	// the flag to the digest.
 	RunnerHasIPv6 bool
+	// NoResolverAutoAllow reflects COLDSTEP_NO_RESOLVER_AUTOALLOW. By default
+	// defend mode folds the host's configured DNS resolver IPs (resolv.conf /
+	// systemd-resolved upstreams) into the allowlist so workload getaddrinfo
+	// keeps working on hosted runners; set this to manage resolver IPs
+	// explicitly via allow: instead. Integration tests also set it so deny
+	// assertions can't race the test host's resolver configuration.
+	NoResolverAutoAllow bool
 }
 
 func defaultUnderWorkspace(rel string) string {
@@ -132,6 +139,7 @@ func LoadFromEnv() (Config, error) {
 		CgroupAttachPath:     cgPath,
 		SigningKey:           strings.TrimSpace(os.Getenv("COLDSTEP_SIGNING_KEY")),
 		RunnerHasIPv6:        envBoolTrue("COLDSTEP_RUNNER_HAS_IPV6"),
+		NoResolverAutoAllow:  envBoolTrue("COLDSTEP_NO_RESOLVER_AUTOALLOW"),
 	}, nil
 }
 

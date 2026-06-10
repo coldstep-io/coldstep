@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -43,6 +44,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
 // httpNotifyClient bounds post-step webhook/API calls so a stuck egress target
@@ -236,10 +239,21 @@ func runStart(cfg startConfig) error {
 		if !filepath.IsAbs(src) {
 			src = filepath.Join(baseDir, src)
 		}
+		// Defense-in-depth: the bytes at release-path are executed under sudo.
+		// release-path is an internal-only input set by the trusted TS layer,
+		// but contain it to the trusted roots (GITHUB_WORKSPACE, RUNNER_TEMP,
+		// os.TempDir, cwd) anyway so a compromised wrapper or a hostile
+		// workflow env cannot point the agent binary at an arbitrary
+		// attacker-controlled filesystem location via symlink or traversal.
+		resolved, err := safepath.Workspace(src, "release-path")
+		if err != nil {
+			return fmt.Errorf("release-path: %w", err)
+		}
+		src = resolved
 		if _, err := os.Stat(src); err != nil {
 			return fmt.Errorf("release-path not found: %w", err)
 		}
-		raw, err := os.ReadFile(src)
+		raw, err := os.ReadFile(src) // #nosec G304 -- containment + symlink resolution enforced by safepath.Workspace above //nolint:gosec
 		if err != nil {
 			return err
 		}
@@ -382,7 +396,15 @@ func runStop(cfg stopConfig) error {
 		pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
 		if err == nil && pid > 0 {
 			if p, perr := os.FindProcess(pid); perr == nil {
-				_ = p.Signal(syscall.SIGTERM)
+				if serr := p.Signal(syscall.SIGTERM); serr != nil && errors.Is(serr, syscall.EPERM) {
+					// Agent runs as root (via sudo); fall back to `sudo kill` so
+					// BPF cgroup programs are detached before post-job cleanup.
+					// Without this the enforce hooks block the runner's own DNS
+					// lookups and the job hangs until GitHub force-cancels it.
+					if out, kerr := exec.Command("sudo", "kill", "-TERM", strconv.Itoa(pid)).CombinedOutput(); kerr != nil { // #nosec G204 -- pid is an integer; no injection risk
+						fmt.Fprintf(os.Stderr, "coldstep: failed to sudo kill agent pid=%d: %v: %s\n", pid, kerr, out)
+					}
+				}
 			}
 			// Poll for the agent to exit instead of using a fixed sleep. The
 			// previous 400ms hard sleep was shorter than the agent's actual
@@ -402,6 +424,17 @@ func runStop(cfg stopConfig) error {
 	// Aggregate means no event stream (agent never started), so nothing is
 	// posted. reportAgg is nil only in that case.
 	reportAgg := writeDetailedMarkdownReport(baseDir)
+
+	// "Captured nothing" must be visibly distinct from "observed nothing": on
+	// short jobs with fail-on-error unset, the workload can finish before BPF
+	// attach and the run looks green while proving nothing. ::warning:: is a
+	// GitHub workflow annotation (surfaced on the run page); the report verdict
+	// carries the same banner. reportAgg == nil means not even a stream exists.
+	if reportAgg == nil {
+		fmt.Println("::warning title=coldstep captured no events::no .coldstep-events.jsonl was written — the agent likely never started; this run proves nothing about egress. Set fail-on-error: true to wait for BPF attach.")
+	} else if reportAgg.CapturedNothing() {
+		fmt.Println("::warning title=coldstep captured no events::the event stream has no workload telemetry — the job may have finished before BPF attach; this run proves nothing about egress. Set fail-on-error: true for short jobs.")
+	}
 
 	reportJobSummary, reportPRSummary := parseReportFlags(cfg.Report)
 
@@ -451,6 +484,25 @@ func runStop(cfg stopConfig) error {
 	return nil
 }
 
+// githubAPIBaseURL returns the REST API base for the current GitHub instance.
+// The runner exports GITHUB_API_URL on both github.com and GHES; honouring it
+// keeps the Bearer token off public GitHub when the action runs on an
+// Enterprise Server host (previously the endpoint was hardcoded to
+// api.github.com). https is required so the token never travels plaintext;
+// the default preserves prior behaviour when the env var is absent.
+func githubAPIBaseURL() (string, error) {
+	raw := strings.TrimSpace(os.Getenv("GITHUB_API_URL"))
+	if raw == "" {
+		return "https://api.github.com", nil
+	}
+	raw = strings.TrimRight(raw, "/")
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Host == "" {
+		return "", fmt.Errorf("invalid GITHUB_API_URL %q: must be an https URL", raw)
+	}
+	return raw, nil
+}
+
 func postPRComment(token, body string) error {
 	repo := strings.TrimSpace(os.Getenv("GITHUB_REPOSITORY"))
 	if repo == "" {
@@ -488,7 +540,11 @@ func postPRComment(token, body string) error {
 	if err != nil {
 		return err
 	}
-	urlStr := fmt.Sprintf("https://api.github.com/repos/%s/%s/issues/%d/comments", parts[0], parts[1], int(number))
+	apiBase, err := githubAPIBaseURL()
+	if err != nil {
+		return err
+	}
+	urlStr := fmt.Sprintf("%s/repos/%s/%s/issues/%d/comments", apiBase, parts[0], parts[1], int(number))
 	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, urlStr, bytes.NewReader(b))
 	if err != nil {
 		return err
@@ -648,7 +704,15 @@ func truncate(s string, max int) string {
 	for end > 0 && !utf8.ValidString(s[:end]) {
 		end--
 	}
-	return s[:end] + "\n\n_(truncated)_\n"
+	out := s[:end]
+	// Markdown-structure repair: if the cut landed inside a fenced code block
+	// (odd number of ``` markers so far), close the fence so the trailing
+	// _(truncated)_ marker — and anything GitHub appends after the comment —
+	// renders as Markdown instead of being swallowed by the open code block.
+	if strings.Count(out, "```")%2 == 1 {
+		out += "\n```"
+	}
+	return out + "\n\n_(truncated)_\n"
 }
 
 func clamp(v, lo, hi int) int {

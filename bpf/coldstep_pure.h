@@ -113,6 +113,24 @@ static __always_inline int coldstep_parse_ipv6_sockaddr24(const __u8 scratch[24]
 	return 0;
 }
 
+/*
+ * 127.0.0.0/8 loopback test on a network-byte-order IPv4 address. Byte 0 of
+ * the in-memory representation is the first dotted octet regardless of host
+ * endianness, so no htonl is needed — keeps this header pure / host-testable.
+ * Used by defend_policy.inc:dst_in_ignored so every IPv4 defend hook (cgroup
+ * connect4/sendmsg4, LSM connect/sendmsg/sendpage, v4-mapped IPv6 branches)
+ * bypasses loopback: it is not egress, and denying it breaks the
+ * systemd-resolved stub (127.0.0.53:53) that GitHub-hosted runners resolve
+ * through, failing every getaddrinfo with EAI_AGAIN in defend mode.
+ */
+static __always_inline int coldstep_ipv4_is_loopback(__be32 daddr)
+{
+	__u8 first_octet;
+
+	__builtin_memcpy(&first_octet, &daddr, 1);
+	return first_octet == 127;
+}
+
 /* First four bytes of an HTTP request line (after userspace read). */
 static __always_inline int coldstep_http_prefix_is_request(const char p[4])
 {

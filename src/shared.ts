@@ -11,7 +11,7 @@ export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 // the expected SHA-256 is fetched at runtime from the GitHub Releases API so we
 // don't have to hardcode an asset digest the supply-chain-attest build produces
 // only after the tag is pushed.
-export const COLDSTEP_BINARY_VERSION = 'v0.5.2';
+export const COLDSTEP_BINARY_VERSION = 'v0.5.3';
 export const COLDSTEP_BINARY_ASSET_NAME = 'coldstep-linux-amd64';
 export const COLDSTEP_BINARY_REPO = 'coldstep-io/coldstep';
 export const COLDSTEP_BINARY_URL =
@@ -21,6 +21,36 @@ export const COLDSTEP_BINARY_URL =
 // so derive the action root from this bundle's location: dist/{pre,main,post}/index.js → root.
 export function actionRootPath(): string {
   return path.resolve(__dirname, '..', '..');
+}
+
+// resolveUnderTrustedRoots canonicalises p (realpath, so symlinks cannot smuggle
+// the target elsewhere) and asserts it lives under one of the trusted roots:
+// GITHUB_WORKSPACE, RUNNER_TEMP, os.tmpdir(), or cwd. Mirrors the Go side's
+// safepath.Workspace — used for release-path, whose bytes are executed under
+// sudo. Returns the resolved path, or null when containment fails.
+export function resolveUnderTrustedRoots(p: string): string | null {
+  let resolved: string;
+  try {
+    resolved = fs.realpathSync(p);
+  } catch {
+    return null;
+  }
+  const roots: string[] = [];
+  for (const raw of [process.env.GITHUB_WORKSPACE, process.env.RUNNER_TEMP, os.tmpdir(), process.cwd()]) {
+    if (!raw) continue;
+    try {
+      roots.push(fs.realpathSync(raw));
+    } catch {
+      roots.push(path.resolve(raw));
+    }
+  }
+  for (const root of roots) {
+    const rel = path.relative(root, resolved);
+    if (rel === '' || (!rel.startsWith('..' + path.sep) && rel !== '..' && !path.isAbsolute(rel))) {
+      return resolved;
+    }
+  }
+  return null;
 }
 
 export function inputBoolDefault(name: string, defaultVal: boolean): boolean {
@@ -267,12 +297,28 @@ function splitTokens(raw: string): string[] {
     .filter((t) => t.length > 0);
 }
 
+// Caps mirroring the Go side (maxAllowlistFiles / maxAllowlistFileBytes in
+// internal/actioncli): a pathological multi-GiB workspace file or a sprawling
+// comma list must not OOM the runner before parsing even starts.
+const MAX_ALLOW_FILES = 64;
+const MAX_ALLOW_FILE_BYTES = 8 * 1024 * 1024;
+
 function readFileTokensSafe(filePaths: string, baseDir: string): string[] {
   if (!filePaths.trim()) return [];
   const tokens: string[] = [];
-  for (const fp of filePaths.split(',').map((s) => s.trim()).filter(Boolean)) {
+  const paths = filePaths.split(',').map((s) => s.trim()).filter(Boolean);
+  if (paths.length > MAX_ALLOW_FILES) {
+    core.warning(`allow-file: ${paths.length} files exceeds maximum ${MAX_ALLOW_FILES}; ignoring the rest`);
+    paths.length = MAX_ALLOW_FILES;
+  }
+  for (const fp of paths) {
     const absPath = path.isAbsolute(fp) ? fp : path.join(baseDir, fp);
     try {
+      const stat = fs.statSync(absPath);
+      if (stat.size > MAX_ALLOW_FILE_BYTES) {
+        core.warning(`allow-file: ${absPath} is ${stat.size} bytes (max ${MAX_ALLOW_FILE_BYTES}); skipping`);
+        continue;
+      }
       tokens.push(...splitTokens(fs.readFileSync(absPath, 'utf8')));
     } catch (e) {
       core.warning(`allow-file: could not read ${absPath}: ${e instanceof Error ? e.message : String(e)}`);

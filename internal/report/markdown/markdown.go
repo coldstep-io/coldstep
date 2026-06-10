@@ -98,6 +98,19 @@ type Aggregate struct {
 
 	ParseErrors int
 	TotalEvents int
+	// NonMetaEvents counts every event except the meta rows the agent writes
+	// about itself. Zero means the run captured no workload telemetry at all —
+	// on short jobs with fail-on-error unset the workload can finish before
+	// BPF attach, leaving a stream that looks green while proving nothing.
+	// CapturedNothing surfaces that distinctly from "observed nothing".
+	NonMetaEvents int
+}
+
+// CapturedNothing reports whether the stream carried no workload telemetry
+// (only agent meta rows, or nothing at all). Distinct from a quiet job: an
+// attached agent always captures at least the job's own exec events.
+func (a *Aggregate) CapturedNothing() bool {
+	return a.NonMetaEvents == 0
 }
 
 // BPFStatus is the report-local view of a BPF attach outcome from the meta
@@ -154,6 +167,9 @@ func Parse(r io.Reader) (*Aggregate, error) {
 			continue
 		}
 		a.TotalEvents++
+		if t.Type != "meta" {
+			a.NonMetaEvents++
+		}
 		a.seen[t.Type] = struct{}{}
 		switch t.Type {
 		case "meta":
@@ -432,6 +448,9 @@ func (a *Aggregate) verdict() string {
 	}
 	if a.EgressBackstop > 0 {
 		return fmt.Sprintf("⚠️ %d egress reached the backstop (bypassed address hooks)", a.EgressBackstop)
+	}
+	if a.CapturedNothing() {
+		return "⚠️ no events captured — the job may have finished before BPF attach; this proves nothing about egress (set fail-on-error: true for short jobs)"
 	}
 	return "✅ no anomalies (IPv4 TCP/UDP in scope)"
 }
