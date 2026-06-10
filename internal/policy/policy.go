@@ -88,6 +88,18 @@ func Parse(allowedHosts, allowedIPs string) (*Policy, error) {
 			if len(h) > MaxAllowedHostnameBytes {
 				return nil, fmt.Errorf("allowed-hosts: hostname exceeds maximum length %d bytes", MaxAllowedHostnameBytes)
 			}
+			// Validate the exact-host charset the same way the wildcard suffix
+			// above is validated, so a token carrying whitespace / control
+			// characters / '=' (e.g. from a hostile allow-file or a malformed
+			// `allow:` input) is rejected up front instead of silently becoming
+			// a BPF allowed_domains map key. A single trailing dot (root-labelled
+			// FQDN, e.g. "example.com.") is tolerated by trimming before the
+			// charset check; sniffed DNS owner names are stored without it, so
+			// the trailing-dot form would never match at enforcement time anyway.
+			check := strings.TrimSuffix(h, ".")
+			if !validHostnameSuffix.MatchString(check) {
+				return nil, fmt.Errorf("allowed-hosts: hostname %q contains invalid hostname characters", h)
+			}
 			p.exactHosts[h] = struct{}{}
 		}
 	}
