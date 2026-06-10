@@ -19308,6 +19308,7 @@ function readAgentReadyOk(statusPath) {
     return false;
   }
 }
+var MAX_ALLOW_FILE_BYTES = 8 * 1024 * 1024;
 function resolveFailOnError(mode) {
   const raw = getInput("fail-on-error");
   if (raw === "") {
