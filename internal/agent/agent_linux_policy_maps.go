@@ -210,15 +210,17 @@ func readSendpageObservedCount(objs *defend.DefendObjects) uint32 {
 // readUint32PerCPUArraySum down to uint32 with explicit saturation. The
 // per-cpu values are uint32 but summed into an int across the CPU set;
 // in practice the result fits, but gosec G115 wants an explicit bounded
-// conversion before the narrowing cast.
+// conversion before the narrowing cast. The comparison goes through int64
+// so the function is correct (and compiles) independent of the platform
+// int width rather than assuming the 64-bit int of amd64/arm64.
 func clampPerCPUSumToUint32(n int) uint32 {
 	if n <= 0 {
 		return 0
 	}
-	if n > math.MaxUint32 {
+	if int64(n) > math.MaxUint32 {
 		return math.MaxUint32
 	}
-	return uint32(n)
+	return uint32(n) // #nosec G115 -- saturation bounds checked above //nolint:gosec
 }
 
 // buildDefendAllowedPlan unifies the compile-and-merge sequence shared by the
