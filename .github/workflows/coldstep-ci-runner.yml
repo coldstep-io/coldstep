@@ -237,6 +237,17 @@ jobs:
           set -euo pipefail
           test -x bin/coldstep
 
+      # Release-version invariant (v0.5.2 incident): COLDSTEP_BINARY_VERSION
+      # (src/shared.ts) == compiled dist/ bundles == MARKETPLACE_COLDSTEP_TAG,
+      # and all consumer-facing docs/workflow pins match that tag. PR-time
+      # twin of the supply-chain-attest tag gate; see RELEASE_PROCESS.md
+      # "Release invariant".
+      - name: Release version + consumer pin alignment
+        run: |
+          set -euo pipefail
+          python3 scripts/check_release_version_alignment.py
+          python3 scripts/check_workflow_action_pins.py --skip-website
+
   detect-mode:
     needs: [gofmt]
     runs-on: ubuntu-latest
