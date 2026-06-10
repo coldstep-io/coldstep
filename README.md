@@ -19,7 +19,7 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 | Mode | What it does | Allowlist |
 | :--- | :------------- | :-------- |
 | **`detect`** (default) | Observe and log IPv4-focused TCP/UDP egress activity (IPv6 and QUIC not observed); no blocking. | Optional (policy labels only). |
-| **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
+| **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). Loopback (`127.0.0.0/8`, `::1`) always bypasses, and the host's configured DNS resolvers are auto-allowed so workload DNS keeps working (opt out: env `COLDSTEP_NO_RESOLVER_AUTOALLOW=1`). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
 
 **Upgrading from old workflows**
 
@@ -128,7 +128,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 | :---- | :------ |
 | `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
 | `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards (**detect only** — rejected at parse time in `defend`), IPv4/IPv6 literals/CIDRs, and `!CIDR` ignore entries. |
-| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode. |
+| `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode and **`false`** in detect mode — detect then starts the workload without waiting for BPF attach, so **short jobs can finish before any telemetry is captured** (the stop step warns "no events captured" and the report verdict says so). **Recommended: `true` for short detect jobs.** |
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for a stricter required-event-type gate (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep assert-integrity`). |
 | `report` | `job-summary` (default), `pr-comment`, `both`, or `none` — where to post the detect digest. |
 | `no-default-ignored-nets` | Drop the implicit 10.0.0.0/8 + 172.16.0.0/12 ignores. Add your own ignores as `!CIDR` entries in `allow` / `allow-file`. |

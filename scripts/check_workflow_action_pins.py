@@ -3,9 +3,15 @@
 Guardrail: consumer-facing coldstep-io/coldstep pin matches the tag we publish.
 
 Bump MARKETPLACE_COLDSTEP_TAG with each release (see RELEASE_PROCESS.md).
+
+--skip-website: exclude website/index.html. CI (coldstep-ci-runner action_bundle)
+uses this because the site pin intentionally lags until the post-tag follow-up
+PR (Consumer pin standard train 2); the no-flag run is the manual release-step
+check that the follow-up landed.
 """
 from __future__ import annotations
 
+import argparse
 import pathlib
 import re
 import sys
@@ -38,8 +44,19 @@ def _scan_wrong_pins(text: str) -> list[str]:
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skip-website",
+        action="store_true",
+        help="exclude website/index.html (its pin lags until the post-tag follow-up PR)",
+    )
+    args = parser.parse_args()
+    pinned_files = tuple(
+        p for p in PINNED_FILES if not (args.skip_website and p.name == "index.html")
+    )
+
     exit_code = 0
-    for path in PINNED_FILES:
+    for path in pinned_files:
         if not path.is_file():
             print(f"skip missing {path.relative_to(ROOT)}", file=sys.stderr)
             continue

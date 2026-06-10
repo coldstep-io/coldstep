@@ -19093,7 +19093,7 @@ var https = __toESM(require("https"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.5.2";
+var COLDSTEP_BINARY_VERSION = "v0.5.3";
 var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
 var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
 var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
@@ -19308,6 +19308,7 @@ function readAgentReadyOk(statusPath) {
     return false;
   }
 }
+var MAX_ALLOW_FILE_BYTES = 8 * 1024 * 1024;
 function resolveFailOnError(mode) {
   const raw = getInput("fail-on-error");
   if (raw === "") {
@@ -19556,7 +19557,16 @@ async function stopAgent() {
     } catch (e) {
       const err = e;
       signaled = false;
-      if (err.code !== "ESRCH") warning(`failed to signal pid ${pid}: ${e}`);
+      if (err.code === "EPERM") {
+        try {
+          (0, import_child_process.execFileSync)("sudo", ["kill", "-TERM", String(pid)], { stdio: "pipe" });
+          signaled = true;
+        } catch {
+          warning(`failed to signal pid ${pid}: ${e}`);
+        }
+      } else if (err.code !== "ESRCH") {
+        warning(`failed to signal pid ${pid}: ${e}`);
+      }
     }
     if (signaled) {
       await waitForProcessExit(pid, 3e3);

@@ -7,14 +7,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-## [0.5.3] — 2026-06-09
+## [0.5.3] — 2026-06-10
 
 ### Fixed
 
+- **Defend mode no longer breaks DNS on GitHub-hosted runners** (reported by coldstep-labs: every `getaddrinfo` failed with `EAI_AGAIN`, blocking all registry installs; the same block also severed the Actions runner's own job-completion reporting, leaving defend-mode CI jobs stuck `in_progress` after finishing). Two-part fix: (1) IPv4 loopback (`127.0.0.0/8`) now always bypasses defend enforcement in every IPv4 hook (cgroup `connect4`/`sendmsg4`, LSM `socket_connect`/`socket_sendmsg`/`socket_sendpage`, and the v4-mapped IPv6 branches), mirroring the long-standing `::1` bypass — this unblocks the systemd-resolved stub hop at `127.0.0.53:53`, which no `allow:` entry could fix; (2) the agent auto-allows the host's configured upstream DNS resolvers (parsed from `/run/systemd/resolve/resolv.conf` + `/etc/resolv.conf`, e.g. the Azure platform resolver `168.63.129.16`; capped at 8, each logged at startup) — opt out with env `COLDSTEP_NO_RESOLVER_AUTOALLOW=1`. IP-literal `allow:` entries were verified to be honored on the UDP `sendmsg4` path (new integration test); the reported "allowing 168.63.129.16 didn't work" was the still-blocked loopback stub hop.
+- **`action.yml` `mode` description no longer claims IPv6 is not blocked** — defend has enforced IPv6 via cgroup `connect6`/`sendmsg6` since v0.4.0 and via the LSM twin since v0.5.2; the input doc now matches `README.md` / `SECURITY.md` (reported by coldstep-labs).
+- **Short detect jobs that capture zero events are now loudly flagged** instead of looking green: the report verdict becomes "⚠️ no events captured — … proves nothing about egress" and `coldstep stop` emits a `::warning::` workflow annotation when the JSONL stream has no workload telemetry (only agent `meta` rows, or no stream at all). `fail-on-error: true` is now documented as the recommended setting for short detect jobs (reported by coldstep-labs).
 - **Deny-dedup clock skew.** A backward NTP/VM wall-clock step made the deduplication delta negative, which caused a genuine deny to be suppressed as a cross-layer twin. The window check now guards `nowNano >= prev.nano` so backward clock steps never suppress new deny events.
 - **DNS owner case canonicalization.** Sniffed DNS replies echo the query's casing; resolvers using the "0x20" anti-spoofing trick randomize it. The cache now lowercases the owner name on entry so it byte-matches the lowercased allowlist keys and the diff gate's new-domain check.
 - **Stop step `fail-on-error` default in defend mode.** The stop step computed `failOnError` independently from the start step, always defaulting to `false` when the input was unset. It now calls `resolveFailOnError()` so the defend-mode default (`true`) is consistent with `start.ts`.
 - **TypeScript typecheck rot.** Tightened `tsconfig.json` and corrected the `stop.ts` import list; `npm run typecheck` is clean.
+
+### Changed
+
+- **Release process: the v0.5.2 tag shipped the v0.5.1 agent** (reported by coldstep-labs). The post-tag "Train-2" binary-version bump is abolished: the `COLDSTEP_BINARY_VERSION` bump + `dist/` rebuild now land in the release PR before the tag, enforced by `scripts/check_release_version_alignment.py` in PR CI and as the first step of `supply-chain-attest` on every tag, plus the `internal/releasecheck` Go test. v0.5.3 is the first tag cut under the corrected flow; `v0.5.2` itself is left as published — consumers pinning it run the v0.5.1 agent and should upgrade to v0.5.3.
+- **CI: bpf2go generates little-endian objects only and all jobs share one build cache** (binary + generated bindings keyed on sources + arch), roughly halving BPF compile work and skipping rebuilds entirely on unchanged sources.
 
 ## [0.5.2] — 2026-06-09
 

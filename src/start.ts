@@ -10,6 +10,7 @@ import {
   resolveAllowlist,
   resolveFeatureGates,
   resolveFailOnError,
+  resolveUnderTrustedRoots,
   warnRemovedAllowlistInputs,
 } from './shared';
 
@@ -293,9 +294,18 @@ export async function startAgent(): Promise<void> {
       core.setFailed(`release-path not found: ${src}`);
       return;
     }
-    binPath = src;
+    // Defense-in-depth: these bytes are executed under sudo. Contain the
+    // resolved (symlink-free) path to the trusted roots so a hostile env
+    // cannot point the agent binary at an arbitrary filesystem location.
+    // Mirrors the Go runStart's safepath.Workspace check.
+    const contained = resolveUnderTrustedRoots(src);
+    if (contained === null) {
+      core.setFailed(`release-path resolves outside trusted roots (workspace / runner temp): ${src}`);
+      return;
+    }
+    binPath = contained;
     try { fs.chmodSync(binPath, 0o755); } catch { /* best-effort */ }
-    core.info(`coldstep: using release-path binary ${src}`);
+    core.info(`coldstep: using release-path binary ${binPath}`);
   } else {
     binPath = await ensureColdstepBinary();
   }
