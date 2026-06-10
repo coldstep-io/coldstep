@@ -104,7 +104,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 | **`no-default-ignored-nets`** | `false` | If **`true`**, do **not** add implicit **`10.0.0.0/8`** and **`172.16.0.0/12`** ignores. Add your own ignores as **`!CIDR`** entries in **`allow`** / **`allow-file`** (the only ignore mechanism; max **128** CIDRs). |
 | **`detect-profile`** | `standard` | **`detect` only**: `standard` (default) or `enhanced`. Enhanced enables `proc_tree`, `tls_sni`, and `fs_events`, and tightens report-model integrity. |
 | **`report`** | `job-summary` | Where to post the detect digest: `job-summary`, `pr-comment`, `both`, or `none`. |
-| **`fail-on-error`** | `false` (detect) / `true` (defend) | If **`true`**, fail when the agent never reaches **operational readiness** (BPF/trace/cgroup). Does **not** fail on policy/deny traffic alone. |
+| **`fail-on-error`** | `false` (detect) / `true` (defend) | If **`true`**, fail when the agent never reaches **operational readiness** (BPF/trace/cgroup). Does **not** fail on policy/deny traffic alone. With the detect default (`false`) the workload starts without waiting for BPF attach — a short job can finish before anything is captured (the stop step emits a "no events captured" warning). **Set `true` for short detect jobs.** |
 | **`ready-timeout-seconds`** | `1500` | Only when **`fail-on-error`** is **`true`**: max seconds to wait for **`.coldstep-ready.json`** (`ok:true`). Clamped **60–2700**; malformed **`ok:false`** fails fast. |
 | **`log-level`** | `info` | Agent stderr log level: **`debug`**, **`info`**, **`warn`**, **`error`**. |
 | **`github-token`** | `${{ github.token }}` | Token for PR comments when **`report`** is **`pr-comment`** or **`both`**. |

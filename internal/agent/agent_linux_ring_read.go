@@ -825,12 +825,20 @@ func egressBackstopEventFromRaw(raw []byte, ts string, seq uint64) (telemetry.Eg
 		return telemetry.EgressBackstopEvent{}, false
 	}
 	var ip net.IP
-	afStr := "ipv4"
-	if af == 10 { // AF_INET6
+	var afStr string
+	switch af {
+	case uint8(linuxAFInet):
+		afStr = "ipv4"
+		ip = net.IP(daddr[:4])
+	case uint8(linuxAFInet6):
 		afStr = "ipv6"
 		ip = net.IP(daddr[:16])
-	} else {
-		ip = net.IP(daddr[:4])
+	default:
+		// The skb backstop producer only ever emits AF_INET / AF_INET6; an
+		// unexpected family byte means a corrupt record. Drop it rather than
+		// mislabeling it as IPv4 (matches appendDenyFromRaw's reject-unknown-AF
+		// posture instead of defaulting to a 4-byte render).
+		return telemetry.EgressBackstopEvent{}, false
 	}
 	return telemetry.EgressBackstopEvent{
 		Type:  telemetry.EventTypeEgressBackstop,

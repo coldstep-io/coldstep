@@ -155,6 +155,35 @@ func TestParse_WildcardSuffixTooLong(t *testing.T) {
 	}
 }
 
+func TestParse_ExactHostInvalidCharsRejected(t *testing.T) {
+	// Whitespace and commas are already split away by splitFields; the residual
+	// vectors are single tokens carrying invalid host bytes (control chars, '=',
+	// underscores, shell metacharacters). These can never be valid hostnames and
+	// must be rejected up front rather than silently becoming a BPF
+	// allowed_domains map key (hardening for the allow-file / allow-input
+	// argument-injection finding).
+	for _, bad := range []string{"a=b", "under_score.example.com", "host;rm", "a$b", "host\x1bname", "ho`st", "-leadinghyphen.com"} {
+		if _, err := Parse(bad, ""); err == nil {
+			t.Errorf("expected error for malformed exact host %q", bad)
+		}
+	}
+}
+
+func TestParse_ExactHostValidAccepted(t *testing.T) {
+	// Ordinary hostnames, including a single-label host and a root-labelled
+	// FQDN (trailing dot), must still parse.
+	for _, good := range []string{"example.com", "sub.example.com", "registry-1.docker.io", "localhost", "example.com."} {
+		p, err := Parse(good, "")
+		if err != nil {
+			t.Errorf("expected %q to parse, got %v", good, err)
+			continue
+		}
+		if _, ok := p.exactHosts[strings.ToLower(good)]; !ok {
+			t.Errorf("expected %q in exactHosts", good)
+		}
+	}
+}
+
 func TestPolicy_MergeLiteralAllowedIPv4Into(t *testing.T) {
 	p, err := Parse("", "1.1.1.1, 8.8.8.8")
 	if err != nil {

@@ -132,3 +132,52 @@ func TestClassifyAllowTokens_IgnoreRouting(t *testing.T) {
 		t.Fatalf("domains = %v want [example.com]", c.domains)
 	}
 }
+
+// Allow-file resource caps (LOW item from the security audit): an oversized
+// workspace file or a sprawling comma list of paths must be rejected before
+// the contents are loaded, not parsed into OOM.
+func TestMergeInlineAndAllowlistFiles_FileTooLargeRejected(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(f, make([]byte, maxAllowlistFileBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err := mergeInlineAndAllowlistFiles(dir, "", "big.txt")
+	if err == nil {
+		t.Fatal("expected error for allow-file exceeding maxAllowlistFileBytes")
+	}
+	if !strings.Contains(err.Error(), "maximum size") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestMergeInlineAndAllowlistFiles_FileAtCapAccepted(t *testing.T) {
+	dir := t.TempDir()
+	f := filepath.Join(dir, "ok.txt")
+	body := []byte("a.example.com\n")
+	if err := os.WriteFile(f, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err := mergeInlineAndAllowlistFiles(dir, "", "ok.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "a.example.com" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestMergeInlineAndAllowlistFiles_TooManyFilesRejected(t *testing.T) {
+	dir := t.TempDir()
+	var paths []string
+	for i := 0; i <= maxAllowlistFiles; i++ {
+		paths = append(paths, "f.txt")
+	}
+	_, err := mergeInlineAndAllowlistFiles(dir, "", strings.Join(paths, ","))
+	if err == nil {
+		t.Fatal("expected error for too many allow-file paths")
+	}
+	if !strings.Contains(err.Error(), "maximum") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}

@@ -84,6 +84,9 @@ func (h redteamHarness) applyDefendEnv(t *testing.T, allowedDomains, allowedIPs 
 	t.Setenv("COLDSTEP_ALLOWED_DOMAINS", allowedDomains)
 	t.Setenv("COLDSTEP_ALLOWED_HOSTS", "")
 	t.Setenv("COLDSTEP_ALLOWED_IPS", allowedIPs)
+	// The test host's resolv.conf may list any public IP — disable resolver
+	// auto-allow so red-team deny assertions test exactly the supplied lists.
+	t.Setenv("COLDSTEP_NO_RESOLVER_AUTOALLOW", "1")
 	t.Setenv("GITHUB_STEP_SUMMARY", h.summary)
 	t.Setenv("COLDSTEP_DETECT_LOG", h.detect)
 	t.Setenv("COLDSTEP_EVENTS_LOG", h.events)
