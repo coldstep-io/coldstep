@@ -23,6 +23,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **Release process: the v0.5.2 tag shipped the v0.5.1 agent** (reported by coldstep-labs). The post-tag "Train-2" binary-version bump is abolished: the `COLDSTEP_BINARY_VERSION` bump + `dist/` rebuild now land in the release PR before the tag, enforced by `scripts/check_release_version_alignment.py` in PR CI and as the first step of `supply-chain-attest` on every tag, plus the `internal/releasecheck` Go test. v0.5.3 is the first tag cut under the corrected flow; `v0.5.2` itself is left as published — consumers pinning it run the v0.5.1 agent and should upgrade to v0.5.3.
 - **CI: bpf2go generates little-endian objects only and all jobs share one build cache** (binary + generated bindings keyed on sources + arch), roughly halving BPF compile work and skipping rebuilds entirely on unchanged sources.
+- **CI: release PRs no longer depend on the unpublished release.** The `detect-mode` job builds from source and passes `release-path` (like `defend-mode`), and `start` seeds the runner-temp binary cache from `release-path` so the stop phase renders the report without the Releases API — under the single-train flow a release PR pins the next, not-yet-published `COLDSTEP_BINARY_VERSION`, which previously 404'd the job.
 
 ## [0.5.2] — 2026-06-09
 

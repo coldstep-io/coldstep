@@ -19124,6 +19124,19 @@ function inputBoolDefault(name, defaultVal) {
   if (v === "") return defaultVal;
   return ["true", "1", "yes", "on"].includes(v.toLowerCase());
 }
+function seedColdstepBinaryCache(binPath) {
+  const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
+  const cacheDir = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION);
+  const dst = path.join(cacheDir, "coldstep");
+  try {
+    fs3.mkdirSync(cacheDir, { recursive: true });
+    fs3.copyFileSync(binPath, dst);
+    fs3.chmodSync(dst, 493);
+    info(`coldstep: seeded binary cache ${dst} from release-path`);
+  } catch (e) {
+    warning(`coldstep: failed to seed binary cache from release-path: ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
 function sha256File(p) {
   const h = (0, import_crypto.createHash)("sha256");
   h.update(fs3.readFileSync(p));
@@ -19647,6 +19660,7 @@ async function startAgent() {
     } catch {
     }
     info(`coldstep: using release-path binary ${binPath}`);
+    seedColdstepBinaryCache(binPath);
   } else {
     binPath = await ensureColdstepBinary();
   }
