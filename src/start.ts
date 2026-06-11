@@ -11,6 +11,7 @@ import {
   resolveFeatureGates,
   resolveFailOnError,
   resolveUnderTrustedRoots,
+  seedColdstepBinaryCache,
   warnRemovedAllowlistInputs,
 } from './shared';
 
@@ -306,6 +307,7 @@ export async function startAgent(): Promise<void> {
     binPath = contained;
     try { fs.chmodSync(binPath, 0o755); } catch { /* best-effort */ }
     core.info(`coldstep: using release-path binary ${binPath}`);
+    seedColdstepBinaryCache(binPath);
   } else {
     binPath = await ensureColdstepBinary();
   }
