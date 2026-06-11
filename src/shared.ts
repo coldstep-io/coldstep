@@ -11,7 +11,7 @@ export const MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
 // the expected SHA-256 is fetched at runtime from the GitHub Releases API so we
 // don't have to hardcode an asset digest the supply-chain-attest build produces
 // only after the tag is pushed.
-export const COLDSTEP_BINARY_VERSION = 'v0.5.2';
+export const COLDSTEP_BINARY_VERSION = 'v0.5.3';
 export const COLDSTEP_BINARY_ASSET_NAME = 'coldstep-linux-amd64';
 export const COLDSTEP_BINARY_REPO = 'coldstep-io/coldstep';
 export const COLDSTEP_BINARY_URL =
@@ -69,6 +69,26 @@ export function cachedColdstepBinaryPath(): string | null {
   const cacheRoot = process.env.RUNNER_TEMP || os.tmpdir();
   const binPath = path.join(cacheRoot, 'coldstep-action', COLDSTEP_BINARY_VERSION, 'coldstep');
   return fs.existsSync(binPath) ? binPath : null;
+}
+
+// Seeds the binary cache from a release-path staged binary so later phases
+// (stop's report render) find it via cachedColdstepBinaryPath and never need
+// the Releases API. Without this, a release PR — which pins the NEXT,
+// not-yet-published COLDSTEP_BINARY_VERSION under the single-train flow —
+// silently dropped the report at stop time (404 on the unpublished release).
+// Best-effort: the source binary is already containment-checked by start.
+export function seedColdstepBinaryCache(binPath: string): void {
+  const cacheRoot = process.env.RUNNER_TEMP || os.tmpdir();
+  const cacheDir = path.join(cacheRoot, 'coldstep-action', COLDSTEP_BINARY_VERSION);
+  const dst = path.join(cacheDir, 'coldstep');
+  try {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    fs.copyFileSync(binPath, dst);
+    fs.chmodSync(dst, 0o755);
+    core.info(`coldstep: seeded binary cache ${dst} from release-path`);
+  } catch (e) {
+    core.warning(`coldstep: failed to seed binary cache from release-path: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 
 export function agentStatusPath(): string {

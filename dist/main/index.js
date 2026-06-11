@@ -19099,7 +19099,7 @@ var https = __toESM(require("https"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.5.2";
+var COLDSTEP_BINARY_VERSION = "v0.5.3";
 var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
 var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
 var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
@@ -19139,6 +19139,19 @@ function cachedColdstepBinaryPath() {
   const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
   const binPath = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION, "coldstep");
   return fs3.existsSync(binPath) ? binPath : null;
+}
+function seedColdstepBinaryCache(binPath) {
+  const cacheRoot = process.env.RUNNER_TEMP || os5.tmpdir();
+  const cacheDir = path.join(cacheRoot, "coldstep-action", COLDSTEP_BINARY_VERSION);
+  const dst = path.join(cacheDir, "coldstep");
+  try {
+    fs3.mkdirSync(cacheDir, { recursive: true });
+    fs3.copyFileSync(binPath, dst);
+    fs3.chmodSync(dst, 493);
+    info(`coldstep: seeded binary cache ${dst} from release-path`);
+  } catch (e) {
+    warning(`coldstep: failed to seed binary cache from release-path: ${e instanceof Error ? e.message : String(e)}`);
+  }
 }
 function agentStatusPath() {
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
@@ -19695,6 +19708,7 @@ async function startAgent() {
     } catch {
     }
     info(`coldstep: using release-path binary ${binPath}`);
+    seedColdstepBinaryCache(binPath);
   } else {
     binPath = await ensureColdstepBinary();
   }

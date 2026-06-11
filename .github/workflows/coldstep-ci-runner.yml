@@ -337,18 +337,35 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # Demo-class smoke: consume the prebuilt build (the action downloads the
-      # released coldstep binary), never compile source here. The combined
-      # binary's report/diff/assert-integrity subcommands are validated by the
-      # from-source unit/integration/redteam jobs; the subcommand post-checks are
-      # re-enabled here once a release ships the combined binary and the pin is
-      # bumped (Train-2). This job asserts the JSONL stream inline instead.
+      # Built from source via release-path (same as defend-mode): under the
+      # single-train release flow (RELEASE_PROCESS.md "Release invariant") a
+      # release PR pins the NEXT, not-yet-published COLDSTEP_BINARY_VERSION,
+      # so the consumer download path 404s by design until the tag ships —
+      # this job must not depend on it. The published-release download path
+      # is exercised by consumers and the demo/redteam workflows post-tag.
+      # The combined binary's report/diff/assert-integrity subcommands are
+      # validated by the from-source unit/integration/redteam jobs; this job
+      # asserts the JSONL stream inline.
+      # Shared build cache — see the gosec job for rationale; keep in sync.
+      - uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae  # v5
+        id: coldstep-build-cache
+        with:
+          path: |
+            bin/coldstep
+            bpf/vmlinux.h
+            internal/bpf/**/*_bpfel.go
+            internal/bpf/**/*_bpfel.o
+          key: coldstep-build-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('bpf/**', 'internal/**/*.go', 'cmd/**/*.go', 'go.mod', 'go.sum', 'scripts/build-agent-linux.sh', 'scripts/run-bpf-c-unit-tests.sh') }}
+      - name: Build Linux agent (cache miss only)
+        if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
+        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
       - name: Start Coldstep (detect mode)
         uses: ./
         with:
           phase: start
           mode: detect
           detect-profile: enhanced
+          release-path: bin/coldstep
           allow: theclouddj.com, *.ubuntu.com
 
       - name: Install runtime probes
