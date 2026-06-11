@@ -10,6 +10,8 @@ Run these **in order** when cutting a new **tag** so the **Marketplace / `uses: 
 
 This is safe pre-tag because the action fetches the asset SHA-256 from the Releases API at runtime (`src/shared.ts`) — no digest needs to exist when the bump lands. The only cost is a short window between merging the release PR and the tag's `supply-chain-attest` run finishing, during which `@main` consumers fail fast with a clear Releases-API 404. Minimize it: **push the tag immediately after the release PR merges.**
 
+In-repo CI is immune to that window by construction: the `detect-mode` and `defend-mode` jobs build from source and pass `release-path: bin/coldstep` (a release PR pins the next, not-yet-published version, so they must never depend on the consumer download), and `start` seeds the runner-temp binary cache from `release-path` so the stop phase renders the report without touching the Releases API. The published-download path is exercised by consumers and the post-tag demo/red-team workflows.
+
 Enforced in three places — do not remove any of them:
 
 | Gate | Where it runs | What it catches |
