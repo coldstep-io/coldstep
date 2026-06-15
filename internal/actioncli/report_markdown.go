@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/coldstep-io/coldstep/internal/atomicwrite"
+	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/report/markdown"
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
@@ -192,8 +193,14 @@ func runAssertIntegrity(args []string) error {
 	fs.SetOutput(io.Discard)
 	ws := getenvDefault("GITHUB_WORKSPACE", ".")
 	in := fs.String("in", filepath.Join(ws, ".coldstep-events.jsonl"), "")
-	profile := fs.String("detect-profile", getenvDefault("COLDSTEP_DETECT_PROFILE", ""), "")
+	// Empty default: precedence (flag > COLDSTEP_DETECT_PROFILE env > "standard")
+	// is applied once via config.ResolveDetectProfile after parse.
+	profileFlag := fs.String("detect-profile", "", "")
 	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	profile, err := config.ResolveDetectProfile(*profileFlag, getenvDefault("COLDSTEP_DETECT_PROFILE", ""))
+	if err != nil {
 		return err
 	}
 	inPath, err := safepath.Workspace(*in, "in")
@@ -204,7 +211,7 @@ func runAssertIntegrity(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load events: %w", err)
 	}
-	if missing := agg.MissingRequiredTypes(*profile); len(missing) > 0 {
+	if missing := agg.MissingRequiredTypes(profile); len(missing) > 0 {
 		fmt.Fprintf(os.Stderr,
 			"::error title=Coldstep integrity gate::missing required event type(s): %s\n",
 			strings.Join(missing, ", "))

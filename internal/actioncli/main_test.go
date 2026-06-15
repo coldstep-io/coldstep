@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/coldstep-io/coldstep/internal/config"
 )
 
 func TestTruncate_utf8Boundary(t *testing.T) {
@@ -40,8 +42,14 @@ func TestParseStartFlags_Defaults(t *testing.T) {
 	if cfg.FailOnError {
 		t.Error("expected fail-on-error default=false")
 	}
-	if cfg.DetectProfile != "standard" {
-		t.Errorf("expected default detect-profile=standard, got %q", cfg.DetectProfile)
+	// detect-profile parses to "" by design: precedence (flag > env > "standard")
+	// is applied once in runStart via config.ResolveDetectProfile, not at the
+	// flag-default level. The effective default is still "standard".
+	if cfg.DetectProfile != "" {
+		t.Errorf("expected parsed detect-profile default=\"\" (resolution deferred), got %q", cfg.DetectProfile)
+	}
+	if got, err := config.ResolveDetectProfile(cfg.DetectProfile, ""); err != nil || got != "standard" {
+		t.Errorf("ResolveDetectProfile(%q, \"\") = %q, %v; want \"standard\", nil", cfg.DetectProfile, got, err)
 	}
 }
 
