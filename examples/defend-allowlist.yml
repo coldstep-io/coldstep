@@ -1,0 +1,51 @@
+# Example: coldstep in defend mode (block non-allowlisted egress).
+#
+# Defend mode blocks IPv4 (and IPv6) TCP/UDP egress to destinations that are
+# not on the effective allowlist. A non-empty allowlist is REQUIRED — defend
+# mode refuses to start without one.
+#
+# The `allow` input below permits the two domains an `npm install` needs:
+#   - registry.npmjs.org  (package metadata + tarballs)
+#   - nodejs.org          (used by some packages for Node headers / binaries)
+#
+# Loopback (127.0.0.0/8, ::1) always bypasses, and the runner's configured DNS
+# resolvers are auto-allowed so DNS keeps working. Any egress to a domain/IP
+# NOT covered by the allowlist is dropped at the cgroup/LSM layer.
+#
+# Requirements: GitHub-hosted `ubuntu-latest` (see README → Requirements).
+
+name: defend-allowlist
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: coldstep-io/coldstep@v0.5.3
+        with:
+          mode: defend
+          # Allowlist: comma- or newline-separated domains, wildcards,
+          # IPv4/CIDRs, and `!CIDR` ignore entries. Domains are resolved
+          # (A/AAAA) at startup into the effective IP allowlist.
+          allow: |
+            registry.npmjs.org
+            nodejs.org
+          fail-on-error: true
+          log-level: info
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # This install only touches allowlisted destinations, so it succeeds.
+      # Add a step that reaches some other host and defend mode will drop it.
+      - run: npm install express
