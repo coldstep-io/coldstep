@@ -1,0 +1,29 @@
+{
+  "name": "coldstep",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "workspaceFolder": "/work",
+  "workspaceMount": "source=${localWorkspaceFolder},target=/work,type=bind",
+  "runArgs": [
+    "--cap-add=BPF",
+    "--cap-add=PERFMON",
+    "--cap-add=SYS_ADMIN",
+    "--security-opt",
+    "seccomp=unconfined"
+  ],
+  "remoteUser": "root",
+  "postCreateCommand": "go version && clang --version | head -1",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "golang.go"
+      ],
+      "settings": {
+        "go.toolsManagement.checkForUpdates": "off",
+        "go.useLanguageServer": true
+      }
+    }
+  }
+}
