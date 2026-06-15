@@ -2,8 +2,8 @@
 #
 # agent-linux-verify.sh -- one Linux oracle for agent fix-loops (local CI analogue).
 #
-# Windows without bash on PATH: powershell -NoProfile -File scripts/agent-linux-verify.ps1 [-VerifyMode fast]
-# or: python scripts/agent_linux_verify.py [--mode fast]
+# Windows: powershell -NoProfile -File scripts/agent-linux-verify.ps1 [-VerifyMode fast]
+# (the .ps1 is a thin shim that locates Git Bash / bash and runs this script)
 #
 # Runs docker-linux-test (quick BPF + go test) or docker-deep-debug (runner-like),
 # saves the full transcript, and prints a structured bundle for assistants.
