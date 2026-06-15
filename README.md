@@ -1,6 +1,6 @@
 # coldstep
 
-**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`** only — the old **`enforce`** spelling is **not accepted**.
+**coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`**.
 
 **Pin workflows to** **`coldstep-io/coldstep@v0.5.3`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
@@ -20,15 +20,6 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 | :--- | :------------- | :-------- |
 | **`detect`** (default) | Observe and log IPv4-focused TCP/UDP egress activity (IPv6 and QUIC not observed); no blocking. | Optional (policy labels only). |
 | **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). Loopback (`127.0.0.0/8`, `::1`) always bypasses, and the host's configured DNS resolvers are auto-allowed so workload DNS keeps working (opt out: env `COLDSTEP_NO_RESOLVER_AUTOALLOW=1`). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
-
-**Upgrading from old workflows**
-
-| Before | After |
-| :----- | :---- |
-| `mode: enforce` | `mode: defend` |
-| `CI_GUARD_MODE: enforce` | `CI_GUARD_MODE: defend` |
-
-Older JSONL files may still show `"mode":"enforce"` in archived runs; that is **legacy data**, not a supported input anymore.
 
 Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode-optional)**.
 
@@ -126,7 +117,7 @@ Full list and defaults: **[`action.yml`](action.yml)**. Frequently used:
 
 | Input | Purpose |
 | :---- | :------ |
-| `mode` | **`detect`** or **`defend`** (blocking). **`enforce`** is rejected. |
+| `mode` | **`detect`** or **`defend`** (blocking). |
 | `allow` / `allow-file` | Unified egress allowlist (**required** for **defend** / blocking). Accepts plain domains, `*.example.com` wildcards (**detect only** — rejected at parse time in `defend`), IPv4/IPv6 literals/CIDRs, and `!CIDR` ignore entries. |
 | `fail-on-error` | Fail if the agent never reaches **operational** readiness (BPF/load), not for policy "violations" alone. Defaults to **`true`** in defend mode and **`false`** in detect mode — detect then starts the workload without waiting for BPF attach, so **short jobs can finish before any telemetry is captured** (the stop step warns "no events captured" and the report verdict says so). **Recommended: `true` for short detect jobs.** |
 | `detect-profile` | **`detect` only:** `standard` (default) or **`enhanced`** — enhanced enables `proc_tree` / `tls_sni` / `fs_events` and sets `COLDSTEP_DETECT_PROFILE` for a stricter required-event-type gate (set the same `COLDSTEP_DETECT_PROFILE` on `coldstep assert-integrity`). |
