@@ -65,51 +65,9 @@ jobs:
           release-path: bin/coldstep
 
       - name: Red-team probes (Generate Telemetry)
-        run: |
-          set -euo pipefail
-          
-          echo "--- EXEC CANARY ---"
-          # Standard exec activity
-          ls /etc/passwd >/dev/null
-          # Integrity canary: JSONL exec events must match predicate comm=bash.
-          bash -c 'echo "redteam-bash-canary" >/dev/null'
-          
-          echo "--- UDP/DNS CANARY ---"
-          # Trigger the DNS canary (8.8.8.8)
-          dig @8.8.8.8 google.com +short >/dev/null || true
-          
-          echo "--- BPF AUDIT PROBE ---"
-          # Prefer real binary path so comm=bpftool matches integrity canaries (not a shell wrapper).
-          BPFTOOL_BIN="$(command -v bpftool || true)"
-          if [[ -z "${BPFTOOL_BIN}" && -x /usr/sbin/bpftool ]]; then BPFTOOL_BIN=/usr/sbin/bpftool; fi
-          if [[ -n "${BPFTOOL_BIN}" ]]; then
-            sudo "${BPFTOOL_BIN}" map show >/dev/null 2>&1 || echo "bpftool map show failed; best effort audit signal"
-            sudo "${BPFTOOL_BIN}" prog show >/dev/null 2>&1 || echo "bpftool prog show failed; best effort audit signal"
-            sudo "${BPFTOOL_BIN}" map show >/dev/null 2>&1 || true
-          else
-            echo "bpftool not found; skipping bpf audit probe"
-          fi
-          
-          echo "--- NETWORK EGRESS PROBE (TLS) ---"
-          # TLS connect (SNI: theclouddj.com); -4 so agent records IPv4 TLS (JSONL filters non-IPv4).
-          for _ in 1 2 3; do
-            curl -4 --http1.1 -s -I --max-time 8 https://theclouddj.com >/dev/null && break || true
-            sleep 1
-          done
-          # Second probe: OpenSSL often emits ClientHello in one write (helps when curl path misses SNI sniff).
-          if command -v openssl >/dev/null 2>&1; then
-            timeout 8 openssl s_client -4 -connect theclouddj.com:443 -servername theclouddj.com </dev/null >/dev/null 2>&1 || true
-          fi
-          
-          echo "--- FS EVENT PROBE ---"
-          # Filesystem events (glibc chmod uses fchmodat, which trace_fs hooks).
-          TMP_F=$(mktemp)
-          echo "redteam" > "${TMP_F}"
-          /bin/chmod 400 "${TMP_F}"
-          rm "${TMP_F}"
-
-          # Give ring readers time to drain telemetry before stop.
-          sleep 5
+        # Probe cases live in redteam/<case>/probe.sh (each with a README);
+        # run-all.sh runs them in order and drains the ring readers before stop.
+        run: bash redteam/run-all.sh theclouddj.com
       - name: Stop Coldstep (flush digest)
         uses: ./
         with:
