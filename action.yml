@@ -22,7 +22,7 @@ inputs:
       working — opt out with env COLDSTEP_NO_RESOLVER_AUTOALLOW=1 and
       allowlist resolver IPs explicitly. QUIC/HTTP3 payloads, Unix sockets,
       and io_uring connect are not blocked. See SECURITY.md for full coverage
-      boundaries. The enforce spelling is not supported; use defend.
+      boundaries.
     required: false
     default: detect
 

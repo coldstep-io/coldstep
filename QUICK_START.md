@@ -4,16 +4,14 @@
 
 ## Two modes (read this first)
 
-Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`detect`** and **`defend`**. There is no **`enforce`** mode string anymore — use **`defend`** for blocking.
+Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`detect`** and **`defend`**. Use **`defend`** for blocking.
 
 | You want… | Set |
 | :-------- | :-- |
 | Observe-only telemetry (default) | `mode: detect` or omit `mode` |
 | Block egress not on the allowlist | `mode: defend` + non-empty **`allow`** / **`allow-file`** |
 
-> **Coverage scope:** **detect** mode observes **IPv4 TCP/UDP** only (IPv6 not observed). **defend** mode enforces **IPv4 _and_ IPv6 TCP/UDP** — cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`, with native IPv6 gated against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` and `fe80::/10` bypass by design. **QUIC/HTTP3 and Unix socket traffic remain uncovered** (QUIC inner framing uninspected; AF_UNIX silently bypassed). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
-
-If you still have `mode: enforce` or `CI_GUARD_MODE: enforce`, replace with **`defend`**. See **[CHANGELOG — Breaking](CHANGELOG.md)**.
+> **Coverage scope:** **detect** mode observes **IPv4 TCP/UDP** only (IPv6 not observed). **defend** mode enforces **IPv4 _and_ IPv6 TCP/UDP** — cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`, with native IPv6 gated against an AAAA-resolved `allowed_ipv6` LPM trie; `::1` and `fe80::/10` bypass by design. **QUIC/HTTP3 and Unix socket traffic remain uncovered** (QUIC inner framing uninspected; AF_UNIX silently bypassed). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
 
 ---
 
@@ -98,7 +96,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 
 | Input | Default | Summary |
 | :---- | :------ | :------ |
-| **`mode`** | `detect` | **`detect`** — observe only. **`defend`** — block non-allowlisted egress (**`enforce`** is rejected). |
+| **`mode`** | `detect` | **`detect`** — observe only. **`defend`** — block non-allowlisted egress. |
 | **`allow`** | *(empty)* | Comma/newline-separated egress allowlist. Accepts plain domains (`example.com`), wildcard domains (`*.example.com` — **detect only**, rejected at parse time when `mode: defend`), IPv4/IPv6 literals (`1.2.3.4`, `2001:db8::1`), and CIDRs (`10.0.0.0/8`, `2001:db8::/32`). Prefix a CIDR with `!` to ignore that net (e.g. `!192.168.0.0/16`). Entries are auto-classified. |
 | **`allow-file`** | *(empty)* | Comma-separated workspace paths to UTF-8 files; same format as `allow`. Merged after inline `allow`. |
 | **`no-default-ignored-nets`** | `false` | If **`true`**, do **not** add implicit **`10.0.0.0/8`** and **`172.16.0.0/12`** ignores. Add your own ignores as **`!CIDR`** entries in **`allow`** / **`allow-file`** (the only ignore mechanism; max **128** CIDRs). |
@@ -165,7 +163,7 @@ jobs:
 
 ## Defend mode (optional)
 
-Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.5.3`** pin as above, then configure `with:` (**`mode: defend`** — **`enforce`** is rejected):
+Detect mode is default. For defend behavior (block non-allowlisted egress), reuse the same **`env`** / **`checkout`** / **`coldstep-io/coldstep@v0.5.3`** pin as above, then configure `with:` (**`mode: defend`**):
 
 ```yaml
 - uses: coldstep-io/coldstep@v0.5.3
@@ -242,9 +240,6 @@ GitHub Summary rendering is Markdown-first; use short labels or optional emoji i
 
 **Why one `uses: coldstep-io/coldstep` block instead of two?**  
 The action is a node24 JavaScript action with `pre` / `main` / `post` hooks. GitHub runs `pre` before your build steps (starts the agent), `main` at the step's position (a status check), and `post` at job end (flushes digest, optional PR comment). One `uses:` block is all you need — no explicit start/stop. In-repo CI workflows use `phase: start` / `phase: stop` because `uses: ./` (local refs) do not fire node24 pre/post hooks; consumer workflows pin a published tag and omit `phase`.
-
-**Can I use `mode: enforce` or `CI_GUARD_MODE=enforce`?**  
-No. Use **`defend`** for blocking mode. See **[CHANGELOG](CHANGELOG.md)**.
 
 **Does `fail-on-error: true` fail when someone hits a blocked URL in defend mode?**  
 No for **v1** — it fails when the **agent** cannot become operationally ready (BPF/trace/cgroup), not when policy denies traffic.

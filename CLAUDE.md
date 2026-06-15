@@ -6,12 +6,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **coldstep** is a GitHub Action (`coldstep-io/coldstep@<tag>`) plus a Linux eBPF agent for GitHub-hosted `ubuntu-latest` runners. It records process / network egress activity to JSONL and optional Markdown digests, and can optionally block IPv4 egress not on an allowlist.
 
-Two runtime modes (the only `mode:` values; `enforce` is rejected at input parsing and in `CI_GUARD_MODE`):
+Two runtime modes (the only `mode:` values):
 
 - **`detect`** (default) — observe-only telemetry.
 - **`defend`** — block non-allowlisted IPv4 egress via cgroup `connect4`/`sendmsg4` (+ BPF LSM where available). Requires a non-empty effective allowlist.
 
-The config enum (`internal/config/config.go`) uses `ModeDefend` with the underlying string value `"defend"` — public input and internal value match. Older JSONL artifacts may show `"mode":"enforce"`; that is legacy data only, and `isBlockingDigestMode` in `internal/report/digest_aggregation.go` accepts `enforce` / `enforce+<backend>` as an alias for `defend` / `defend+<backend>` so digests replayed from pre-rename artifacts still surface the defend triage row, allowlist-trust section, and IPv6-defend logic.
+The config enum (`internal/config/config.go`) uses `ModeDefend` with the underlying string value `"defend"` — public input and internal value match.
 
 ## Build and dev commands
 
@@ -100,7 +100,7 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 
 `internal/config.LoadFromEnv` reads `CI_GUARD_MODE` and `COLDSTEP_*` env (set by `coldstep start` from action inputs):
 
-- `CI_GUARD_MODE=enforce` is **rejected** (returns an error). `defend` maps to `ModeDefend`. Detect is default.
+- `defend` maps to `ModeDefend`. Detect is default.
 - `defend` mode also requires `COLDSTEP_ALLOWED_DOMAINS` to be non-empty.
 - Output paths default under `$GITHUB_WORKSPACE` and are overrideable: `COLDSTEP_EVENTS_LOG`, `COLDSTEP_TELEMETRY_JSON`, `COLDSTEP_AGENT_STATUS`, `COLDSTEP_CGROUP_PATH`, `COLDSTEP_SIGNING_KEY`.
 
