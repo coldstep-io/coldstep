@@ -19103,7 +19103,7 @@ var https = __toESM(require("https"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
-var COLDSTEP_BINARY_VERSION = "v0.5.3";
+var COLDSTEP_BINARY_VERSION = "v0.5.4";
 var COLDSTEP_BINARY_ASSET_NAME = "coldstep-linux-amd64";
 var COLDSTEP_BINARY_REPO = "coldstep-io/coldstep";
 var COLDSTEP_BINARY_URL = `https://github.com/${COLDSTEP_BINARY_REPO}/releases/download/${COLDSTEP_BINARY_VERSION}/${COLDSTEP_BINARY_ASSET_NAME}`;
@@ -19999,10 +19999,12 @@ async function finalizeDigestAndNotifications(_reportJobSummary, _reportPRSummar
   const report = (getInput("report") || "job-summary").trim();
   const token = (getInput("github-token") || process.env.GITHUB_TOKEN || "").trim();
   const detectProfile = (getInput("detect-profile") || "standard").trim();
+  const digestOutput = (getInput("digest-output") || "").trim();
   try {
     const bin = cachedColdstepBinaryPath() ?? await ensureColdstepBinary();
     const args = ["stop", "--report", report, "--detect-profile", detectProfile];
     if (token) args.push("--github-token", token);
+    if (digestOutput) args.push("--digest-output", digestOutput);
     (0, import_child_process2.execFileSync)(bin, args, { stdio: "inherit" });
   } catch (e) {
     warning(`coldstep stop (report render): ${e instanceof Error ? e.message : String(e)}`);

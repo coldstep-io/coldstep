@@ -439,6 +439,14 @@ func (a *Aggregate) modeLabel() string {
 	return a.Mode
 }
 
+// ModeLabel returns the run mode ("detect" / "defend") used in rendered
+// headings, defaulting to "detect" when the event stream carried no mode. It
+// is exported so the stop step can name the digest artifact .coldstep-<mode>.md
+// from the same source of truth the renderer uses.
+func (a *Aggregate) ModeLabel() string {
+	return a.modeLabel()
+}
+
 func (a *Aggregate) verdict() string {
 	if a.BPFTamper > 0 {
 		return fmt.Sprintf("🚨 BPF tamper detected (%d) — telemetry integrity compromised", a.BPFTamper)

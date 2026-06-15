@@ -219,6 +219,7 @@ async function finalizeDigestAndNotifications(_reportJobSummary: boolean, _repor
   const report = (core.getInput('report') || 'job-summary').trim();
   const token = (core.getInput('github-token') || process.env.GITHUB_TOKEN || '').trim();
   const detectProfile = (core.getInput('detect-profile') || 'standard').trim();
+  const digestOutput = (core.getInput('digest-output') || '').trim();
   try {
     // Prefer the binary the start step already downloaded + SHA-verified. The
     // report must not depend on a fresh GitHub Releases API call at post time
@@ -227,6 +228,7 @@ async function finalizeDigestAndNotifications(_reportJobSummary: boolean, _repor
     const bin = cachedColdstepBinaryPath() ?? (await ensureColdstepBinary());
     const args = ['stop', '--report', report, '--detect-profile', detectProfile];
     if (token) args.push('--github-token', token);
+    if (digestOutput) args.push('--digest-output', digestOutput);
     execFileSync(bin, args, { stdio: 'inherit' });
   } catch (e) {
     core.warning(`coldstep stop (report render): ${e instanceof Error ? e.message : String(e)}`);

@@ -71,6 +71,16 @@ inputs:
     required: false
     default: job-summary
 
+  digest-output:
+    description: >-
+      Optional path for the rendered Markdown digest. The stop step always writes
+      the digest to ./.coldstep-<mode>.md (mode = detect or defend) by default, so
+      consumers can read it without opt-in; set this to write it elsewhere instead.
+      Relative paths resolve under GITHUB_WORKSPACE. The fixed-name .coldstep-report.md
+      artifact is still written regardless.
+    required: false
+    default: ''
+
   fail-on-error:
     description: >-
       If true, fail when the agent never reports operational readiness after startup attach succeeds.
