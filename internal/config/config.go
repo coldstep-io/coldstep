@@ -106,12 +106,9 @@ func LoadFromEnv() (Config, error) {
 		agentStatus = defaultUnderWorkspace(".coldstep-ready.json")
 	}
 
-	profile := strings.ToLower(strings.TrimSpace(os.Getenv("COLDSTEP_DETECT_PROFILE")))
-	if profile == "" {
-		profile = "standard"
-	}
-	if profile != "standard" && profile != "enhanced" {
-		return Config{}, fmt.Errorf("invalid COLDSTEP_DETECT_PROFILE %q (use standard or enhanced)", os.Getenv("COLDSTEP_DETECT_PROFILE"))
+	profile, err := ResolveDetectProfile("", os.Getenv("COLDSTEP_DETECT_PROFILE"))
+	if err != nil {
+		return Config{}, err
 	}
 
 	gates := ParseFeatureGates(os.Getenv("COLDSTEP_FEATURE_GATES"))
@@ -166,6 +163,30 @@ func mergeEnhancedFeatureGates(profile string, gates map[string]string) map[stri
 func envBoolTrue(key string) bool {
 	v := strings.TrimSpace(os.Getenv(key))
 	return strings.EqualFold(v, "true") || v == "1" || strings.EqualFold(v, "yes") || strings.EqualFold(v, "on")
+}
+
+// ResolveDetectProfile is the single source of truth for the detect profile.
+// Precedence: an explicit flag value wins; otherwise the env value (typically
+// COLDSTEP_DETECT_PROFILE); otherwise the "standard" default. The result is
+// trimmed/lowercased and validated to be exactly "standard" or "enhanced".
+//
+// Both the agent (config.LoadFromEnv) and the action CLI (start/stop/
+// assert-integrity) route through this function so the three layers
+// (action input -> COLDSTEP_DETECT_PROFILE env -> --detect-profile flag)
+// resolve identically everywhere.
+func ResolveDetectProfile(flagValue, envValue string) (string, error) {
+	pick := strings.TrimSpace(flagValue)
+	if pick == "" {
+		pick = strings.TrimSpace(envValue)
+	}
+	normalized := strings.ToLower(pick)
+	if normalized == "" {
+		normalized = "standard"
+	}
+	if normalized != "standard" && normalized != "enhanced" {
+		return "", fmt.Errorf("invalid detect-profile %q (use standard or enhanced)", pick)
+	}
+	return normalized, nil
 }
 
 // Policy returns the parsed allow-list policy (never nil; may be disabled).

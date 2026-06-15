@@ -45,6 +45,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/safepath"
 )
 
@@ -147,7 +148,9 @@ func parseStartFlags(args []string) (startConfig, error) {
 	fs.StringVar(&cfg.AllowFile, "allow-file", "", "")
 	fs.BoolVar(&cfg.NoDefaultIgnoredNets, "no-default-ignored-nets", false, "")
 	fs.StringVar(&cfg.LogLevel, "log-level", "info", "")
-	fs.StringVar(&cfg.DetectProfile, "detect-profile", "standard", "")
+	// Empty default: precedence (flag > COLDSTEP_DETECT_PROFILE env > "standard")
+	// is applied once via config.ResolveDetectProfile in runStart.
+	fs.StringVar(&cfg.DetectProfile, "detect-profile", "", "")
 	fs.StringVar(&cfg.ReleasePath, "release-path", "", "")
 	fs.BoolVar(&cfg.FailOnError, "fail-on-error", false, "")
 	fs.IntVar(&cfg.ReadyTimeoutSeconds, "ready-timeout-seconds", 1500, "")
@@ -169,7 +172,9 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.StringVar(&cfg.Report, "report", "job-summary", "")
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
 	fs.BoolVar(&cfg.Strict, "strict", false, "")
-	fs.StringVar(&cfg.DetectProfile, "detect-profile", getenvDefault("COLDSTEP_DETECT_PROFILE", ""), "")
+	// Empty default: precedence is applied once via config.ResolveDetectProfile
+	// in runStop (flag > COLDSTEP_DETECT_PROFILE env > "standard").
+	fs.StringVar(&cfg.DetectProfile, "detect-profile", "", "")
 	fs.StringVar(&cfg.DigestOutput, "digest-output", getenvDefault("COLDSTEP_DIGEST_OUTPUT", ""), "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
@@ -302,7 +307,10 @@ func runStart(cfg startConfig) error {
 		}
 	}
 
-	detectProfile := strings.ToLower(strings.TrimSpace(cfg.DetectProfile))
+	detectProfile, err := config.ResolveDetectProfile(cfg.DetectProfile, os.Getenv("COLDSTEP_DETECT_PROFILE"))
+	if err != nil {
+		return err
+	}
 	featureGates := ""
 	if detectProfile == "enhanced" {
 		featureGates = "proc_tree=1,tls_sni=1,fs_events=1"
@@ -480,7 +488,11 @@ func runStop(cfg stopConfig) error {
 		if reportAgg == nil {
 			return errors.New("strict: no .coldstep-events.jsonl to evaluate required event types")
 		}
-		if missing := reportAgg.MissingRequiredTypes(cfg.DetectProfile); len(missing) > 0 {
+		profile, err := config.ResolveDetectProfile(cfg.DetectProfile, os.Getenv("COLDSTEP_DETECT_PROFILE"))
+		if err != nil {
+			return err
+		}
+		if missing := reportAgg.MissingRequiredTypes(profile); len(missing) > 0 {
 			return fmt.Errorf("strict: missing required event type(s): %s", strings.Join(missing, ", "))
 		}
 	}

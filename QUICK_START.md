@@ -146,7 +146,7 @@ jobs:
 
 ### What these controls do
 
-- `detect-profile: enhanced`: enables `proc_tree` (fork edges + process tree), `tls_sni` (TLS ClientHello / SNI rows, `"type":"tls"`), and `fs_events` (filesystem events, `"type":"fs_event"`).
+- `detect-profile: enhanced`: enables `proc_tree` (fork edges + process tree), `tls_sni` (TLS ClientHello / SNI rows, `"type":"tls"`), and `fs_events` (filesystem events, `"type":"fs_event"`). Precedence is resolved once (`config.ResolveDetectProfile`): an explicit `--detect-profile` flag wins, then the `COLDSTEP_DETECT_PROFILE` env, then the `standard` default — the same resolution applies to the agent, `coldstep start`, `coldstep stop --strict`, and `coldstep assert-integrity`. The feature gates above are derived from this single value (there is no separate `feature-gates` input).
 - `report: job-summary` (default): merge the digest into the Job Summary tab. Use `pr-comment`, `both`, or `none` for other surfaces.
 - `fail-on-error: true`: fail the step if agent **operational** readiness cannot be established (BPF/load), not merely on policy noise.
 
