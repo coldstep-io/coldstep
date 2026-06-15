@@ -1,0 +1,41 @@
+# Example: coldstep in detect mode (observe-only).
+#
+# Drop this into `.github/workflows/` in a consumer repository. It starts the
+# coldstep agent before your build steps, runs a representative build
+# (`npm install express`), and flushes a telemetry digest at job end. Nothing
+# is blocked — detect mode only records IPv4 TCP/UDP egress and process
+# activity to JSONL + a job-summary report.
+#
+# Requirements: GitHub-hosted `ubuntu-latest` (see README → Requirements).
+
+name: detect-basic
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      # One `uses:` block is all you need. The node24 pre-hook starts the
+      # agent before the steps below; the post-hook flushes the digest.
+      - uses: coldstep-io/coldstep@v0.5.3
+        with:
+          mode: detect          # default; shown here for clarity
+          fail-on-error: true   # fail the job if the agent cannot start
+          log-level: info
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
+
+      # Representative egress: npm reaches registry.npmjs.org to fetch express.
+      # In detect mode this is observed and logged, never blocked.
+      - run: npm install express
