@@ -183,11 +183,13 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 	}
 
-	// P0-1 Phase 1: IPv6 observe counters. Optional in older generated
-	// stubs; tolerate absence so the cgroup IPv4 path keeps loading.
-	// TODO: remove the missing-map tolerance once defend objects are
-	// regenerated on Linux with bpf/trace_defend_cgroup.inc's
-	// ipv6_connect_observed / ipv6_sendmsg_observed maps.
+	// P0-1 Phase 1: IPv6 observe-only counters. Unconditionally compiled into
+	// the cgroup section by bpf/trace_defend_cgroup.inc (no #if guard), so they
+	// are always present whenever the cgroup IPv4 path loads — the cgroup
+	// section is never stripped (only the LSM section is, on kernels without
+	// CONFIG_BPF_LSM). Require them fail-closed: a missing one means the
+	// embedded ELF is stale or corrupted, matching the allowed_ipv4 /
+	// allowed_ipv6 posture below.
 	cgIPv6Maps := []struct {
 		name string
 		dst  **ebpf.Map
@@ -196,7 +198,9 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		{"ipv6_sendmsg_observed", &obj.Ipv6SendmsgObserved},
 	}
 	for _, m := range cgIPv6Maps {
-		detachMapIfPresent(coll, m.name, m.dst)
+		if err := detachMap(coll, m.name, m.dst); err != nil {
+			return LoadResult{}, err
+		}
 	}
 
 	// IPv6 enforcement allowlist trie (H14, v0.4.0): allowed_ipv6 is always
@@ -259,12 +263,11 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		}
 
 		// Sendfile/splice gap (kernel 5.15): lsm/socket_sendpage and its
-		// observe-only counter. Optional in older generated stubs; tolerate
-		// absence so existing LSM-enabled kernels still load the connect +
-		// sendmsg path.
-		// TODO: remove the missing-program tolerance once defend objects are
-		// regenerated on Linux with bpf/trace_lsm_defend_lsm.inc's
-		// lsm_socket_sendpage section and sendpage_observed map.
+		// observe-only counter. The tolerance here is permanent, not a stale
+		// stub: LoadDefendObjectsForKernel deletes lsm_socket_sendpage and
+		// sendpage_observed from the spec on kernel 6.5+ (which removed the
+		// socket_sendpage LSM hook) and whenever the LSM section is stripped,
+		// so their absence at this point is expected and must not fail the load.
 		detachProgramIfPresent(coll, "lsm_socket_sendpage", &obj.LsmSocketSendpage)
 		detachMapIfPresent(coll, "sendpage_observed", &obj.SendpageObserved)
 

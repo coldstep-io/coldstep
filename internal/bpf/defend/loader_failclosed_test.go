@@ -36,10 +36,15 @@ func TestIPv6EnforcementSymbolsInSpec(t *testing.T) {
 		}
 	}
 
-	if _, ok := spec.Maps["allowed_ipv6"]; !ok {
-		t.Errorf("IPv6 enforcement map \"allowed_ipv6\" missing from CollectionSpec; " +
-			"LoadDefendObjectsForKernel will now fail-closed on absence — " +
-			"regenerate BPF objects via go generate ./internal/bpf/defend/")
+	// allowed_ipv6 (H14 enforcement) plus the cgroup IPv6 observe-only counters
+	// are all required fail-closed by LoadDefendObjectsForKernel — they are
+	// unconditionally compiled into the cgroup section, which is never stripped.
+	for _, name := range []string{"allowed_ipv6", "ipv6_connect_observed", "ipv6_sendmsg_observed"} {
+		if _, ok := spec.Maps[name]; !ok {
+			t.Errorf("required cgroup IPv6 map %q missing from CollectionSpec; "+
+				"LoadDefendObjectsForKernel will now fail-closed on absence — "+
+				"regenerate BPF objects via go generate ./internal/bpf/defend/", name)
+		}
 	}
 }
 

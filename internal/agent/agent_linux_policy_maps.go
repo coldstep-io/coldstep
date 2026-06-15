@@ -193,11 +193,10 @@ func readPartialEgressCounts(m *ebpf.Map) (sendfile, splice, sendmmsg int) {
 
 // readIPv6ConnectObservedCount returns the per-CPU sum of the
 // ipv6_connect_observed counter populated by the cgroup/connect6
-// observe-only hook (P0-1 Phase 1). Returns 0 when the map is absent
-// (stubs predate the regeneration on Linux).
-// TODO: wire to defend objects after regeneration on Linux — this is a
-// no-op until defendObjs.Ipv6ConnectObserved is populated by the
-// generated bindings.
+// observe-only hook (P0-1 Phase 1). ipv6_connect_observed is
+// unconditionally compiled into the cgroup section and required
+// fail-closed by the loader, so objs.Ipv6ConnectObserved is non-nil
+// whenever defend loaded.
 func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
@@ -206,8 +205,10 @@ func readIPv6ConnectObservedCount(objs *defend.DefendObjects) uint32 {
 }
 
 // readIPv6SendmsgObservedCount mirrors readIPv6ConnectObservedCount for
-// the cgroup/sendmsg6 observe-only hook (P0-1 Phase 1).
-// TODO: wire to defend objects after regeneration on Linux.
+// the cgroup/sendmsg6 observe-only hook (P0-1 Phase 1). ipv6_sendmsg_observed
+// is unconditionally compiled into the cgroup section and required
+// fail-closed by the loader, so objs.Ipv6SendmsgObserved is non-nil
+// whenever defend loaded.
 func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
@@ -220,10 +221,10 @@ func readIPv6SendmsgObservedCount(objs *defend.DefendObjects) uint32 {
 // kernel-5.15 sendfile(2)/splice(2) egress gap (sock_sendpage path skips
 // cgroup/sendmsg4 and lsm/socket_sendmsg); non-zero values mean sendfile or
 // splice fired in defend mode and was gated against the IPv4 allowlist.
-// Returns 0 when the map is absent (stubs predate the regeneration on Linux
-// or LSM was disabled at load time).
-// TODO: remove the missing-map tolerance once defend objects are regenerated
-// on Linux with bpf/trace_lsm_defend_lsm.inc's sendpage_observed map.
+// Returns 0 when the map is absent — a permanent runtime state, not a stale
+// stub: kernel 6.5+ removed the socket_sendpage LSM hook (so
+// LoadDefendObjectsForKernel strips the map) and the map is likewise absent
+// when LSM was disabled at load time.
 func readSendpageObservedCount(objs *defend.DefendObjects) uint32 {
 	if objs == nil {
 		return 0
