@@ -113,7 +113,8 @@ The agent's Linux entry (`internal/agent/agent_linux.go`) loads each program in 
 ### Artifacts written to `$GITHUB_WORKSPACE`
 
 - `.coldstep-events.jsonl` — append-only event stream (source of truth; the agent writes data only).
-- `.coldstep-report.md` — pure-markdown detailed report rendered by `coldstep stop` from the JSONL (artifact). The old `.coldstep-detect.md` agent digest was removed.
+- `.coldstep-report.md` — pure-markdown detailed report rendered by `coldstep stop` from the JSONL (artifact, fixed name).
+- `.coldstep-<mode>.md` — the same detailed digest under a mode-named path (`.coldstep-detect.md` / `.coldstep-defend.md`, mode from `Aggregate.ModeLabel()`), written **by default** by `coldstep stop` so consumers read the digest without opt-in. The `digest-output` action input (→ `coldstep stop --digest-output <path>` / `COLDSTEP_DIGEST_OUTPUT`) overrides the path; relative paths resolve under `$GITHUB_WORKSPACE`. This is userspace render-to-file, **not** the old agent-written `.coldstep-detect.md` digest (the agent still writes data only).
 - `.coldstep-telemetry.json` — totals + BPF health.
 - `.coldstep-ready.json` — readiness probe; `fail-on-error: true` waits for `ok:true` (clamp 60–2700s, default 1500).
 - `.coldstep-agent.stderr.log`, `.coldstep-verify-last.log`, `.coldstep-deep-debug/` — local-only, gitignored.

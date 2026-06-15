@@ -19,7 +19,7 @@ func TestWriteDetailedMarkdownReport(t *testing.T) {
 		t.Fatalf("write events: %v", err)
 	}
 
-	writeDetailedMarkdownReport(dir)
+	writeDetailedMarkdownReport(dir, "")
 
 	raw, err := os.ReadFile(filepath.Join(dir, ".coldstep-report.md"))
 	if err != nil {
@@ -35,12 +35,70 @@ func TestWriteDetailedMarkdownReport(t *testing.T) {
 	if strings.Contains(out, "<") {
 		t.Errorf("report contains '<' (HTML not allowed):\n%s", out)
 	}
+
+	// The mode-named digest is written by default with the same detailed body.
+	// The deny event marks this run defend, so the digest is .coldstep-defend.md.
+	digest, err := os.ReadFile(filepath.Join(dir, ".coldstep-defend.md"))
+	if err != nil {
+		t.Fatalf("read mode-named digest: %v", err)
+	}
+	if string(digest) != out {
+		t.Errorf(".coldstep-defend.md body differs from .coldstep-report.md")
+	}
+}
+
+func TestWriteDetailedMarkdownReport_DefaultDetectDigest(t *testing.T) {
+	dir := t.TempDir()
+	// No mode anywhere → defaults to detect → .coldstep-detect.md.
+	jsonl := `{"type":"meta"}` + "\n" + `{"type":"tcp","dst":"1.2.3.4","fqdn":"github.com","dport":443}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".coldstep-events.jsonl"), []byte(jsonl), 0o644); err != nil {
+		t.Fatalf("write events: %v", err)
+	}
+	writeDetailedMarkdownReport(dir, "")
+	if _, err := os.Stat(filepath.Join(dir, ".coldstep-detect.md")); err != nil {
+		t.Fatalf(".coldstep-detect.md not written by default: %v", err)
+	}
+}
+
+func TestWriteDetailedMarkdownReport_DigestOutputOverride(t *testing.T) {
+	dir := t.TempDir()
+	jsonl := `{"type":"meta","mode":"defend"}` + "\n" + `{"type":"tcp","dst":"1.2.3.4","dport":443}` + "\n"
+	if err := os.WriteFile(filepath.Join(dir, ".coldstep-events.jsonl"), []byte(jsonl), 0o644); err != nil {
+		t.Fatalf("write events: %v", err)
+	}
+	writeDetailedMarkdownReport(dir, "custom-digest.md")
+	if _, err := os.Stat(filepath.Join(dir, "custom-digest.md")); err != nil {
+		t.Fatalf("override digest not written: %v", err)
+	}
+	// The default mode-named file must NOT be written when overridden.
+	if _, err := os.Stat(filepath.Join(dir, ".coldstep-defend.md")); !os.IsNotExist(err) {
+		t.Errorf("default .coldstep-defend.md should not exist when --digest-output set, stat err=%v", err)
+	}
+}
+
+func TestDigestArtifactPath(t *testing.T) {
+	base := filepath.FromSlash("/ws")
+	cases := []struct {
+		name, override, mode, want string
+	}{
+		{"default detect", "", "detect", filepath.Join(base, ".coldstep-detect.md")},
+		{"default defend", "", "defend", filepath.Join(base, ".coldstep-defend.md")},
+		{"relative override", "out/d.md", "detect", filepath.Join(base, "out", "d.md")},
+		{"trimmed override", "  d.md  ", "detect", filepath.Join(base, "d.md")},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := digestArtifactPath(base, c.override, c.mode); got != c.want {
+				t.Errorf("digestArtifactPath(%q,%q,%q)=%q want %q", base, c.override, c.mode, got, c.want)
+			}
+		})
+	}
 }
 
 func TestWriteDetailedMarkdownReport_NoEventsNoFile(t *testing.T) {
 	dir := t.TempDir()
 	// No .coldstep-events.jsonl present — helper must be a quiet no-op.
-	writeDetailedMarkdownReport(dir)
+	writeDetailedMarkdownReport(dir, "")
 	if _, err := os.Stat(filepath.Join(dir, ".coldstep-report.md")); !os.IsNotExist(err) {
 		t.Fatalf("expected no report file when events are absent, stat err=%v", err)
 	}
@@ -53,7 +111,7 @@ func TestStopStrictRequiredTypes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, ".coldstep-events.jsonl"), []byte(jsonl), 0o644); err != nil {
 		t.Fatalf("write events: %v", err)
 	}
-	agg := writeDetailedMarkdownReport(dir)
+	agg := writeDetailedMarkdownReport(dir, "")
 	if agg == nil {
 		t.Fatal("expected aggregate")
 	}

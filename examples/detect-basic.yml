@@ -26,7 +26,7 @@ jobs:
 
       # One `uses:` block is all you need. The node24 pre-hook starts the
       # agent before the steps below; the post-hook flushes the digest.
-      - uses: coldstep-io/coldstep@v0.5.3
+      - uses: coldstep-io/coldstep@v0.5.4
         with:
           mode: detect          # default; shown here for clarity
           fail-on-error: true   # fail the job if the agent cannot start
@@ -39,3 +39,11 @@ jobs:
       # Representative egress: npm reaches registry.npmjs.org to fetch express.
       # In detect mode this is observed and logged, never blocked.
       - run: npm install express
+
+      # The stop step writes the digest to .coldstep-detect.md by default
+      # (mode-named; v0.5.4+). Upload it without a custom extractor.
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: coldstep-detect-digest
+          path: .coldstep-detect.md

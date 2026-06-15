@@ -87,6 +87,9 @@ type stopConfig struct {
 	// JSONL event types are missing. DetectProfile selects the required set.
 	Strict        bool
 	DetectProfile string
+	// DigestOutput overrides the mode-named digest path (.coldstep-<mode>.md).
+	// Empty keeps the default; a relative path resolves under GITHUB_WORKSPACE.
+	DigestOutput string
 }
 
 // Commands is the set of subcommands actioncli handles, for the parent
@@ -167,6 +170,7 @@ func parseStopFlags(args []string) (stopConfig, error) {
 	fs.StringVar(&cfg.GithubToken, "github-token", "", "")
 	fs.BoolVar(&cfg.Strict, "strict", false, "")
 	fs.StringVar(&cfg.DetectProfile, "detect-profile", getenvDefault("COLDSTEP_DETECT_PROFILE", ""), "")
+	fs.StringVar(&cfg.DigestOutput, "digest-output", getenvDefault("COLDSTEP_DIGEST_OUTPUT", ""), "")
 	if err := fs.Parse(args); err != nil {
 		return cfg, err
 	}
@@ -417,13 +421,12 @@ func runStop(cfg stopConfig) error {
 	}
 
 	// Reporting is one path: render both reports from the JSONL source of truth.
-	// writeDetailedMarkdownReport writes .coldstep-report.md (artifact) and
-	// returns the parsed Aggregate; the job summary and PR comment are rendered
-	// from the same Aggregate. The agent no longer writes a .coldstep-detect.md
-	// digest — there is no legacy body to fall back to. Best-effort: a nil
-	// Aggregate means no event stream (agent never started), so nothing is
-	// posted. reportAgg is nil only in that case.
-	reportAgg := writeDetailedMarkdownReport(baseDir)
+	// writeDetailedMarkdownReport writes .coldstep-report.md (artifact) plus the
+	// mode-named .coldstep-<mode>.md digest (cfg.DigestOutput overrides its path)
+	// and returns the parsed Aggregate; the job summary and PR comment are
+	// rendered from the same Aggregate. Best-effort: a nil Aggregate means no
+	// event stream (agent never started), so nothing is posted.
+	reportAgg := writeDetailedMarkdownReport(baseDir, cfg.DigestOutput)
 
 	// "Captured nothing" must be visibly distinct from "observed nothing": on
 	// short jobs with fail-on-error unset, the workload can finish before BPF

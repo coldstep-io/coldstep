@@ -14,17 +14,21 @@ import (
 )
 
 // writeDetailedMarkdownReport reads the JSONL event stream (the source of truth)
-// and writes the pure-markdown detailed report to .coldstep-report.md for
-// artifact upload. Part of eliminating the separate coldstep-report binary:
-// report rendering moves into the userspace stop step.
+// and writes the pure-markdown detailed report. Part of eliminating the separate
+// coldstep-report binary: report rendering moves into the userspace stop step.
+//
+// Two artifacts carry the same detailed body:
+//   - .coldstep-report.md   — the fixed-name artifact (kept for back-compat).
+//   - .coldstep-<mode>.md    — the mode-named digest (mode = detect|defend),
+//     written by default so consumers can read the digest without an explicit
+//     opt-in. digestOutput, when non-empty, overrides the mode-named path
+//     (relative paths resolve under baseDir).
 //
 // Best-effort: any failure logs to stderr and returns without erroring, so a
-// missing or partial event stream never fails the post-job step. The agent's
-// .coldstep-detect.md remains the job-summary source until a later phase swaps
-// it for markdown.Aggregate.RenderSimple.
+// missing or partial event stream never fails the post-job step.
 // Returns the parsed Aggregate (or nil when no event stream is present) so the
 // caller can reuse it for the --strict required-type gate without re-parsing.
-func writeDetailedMarkdownReport(baseDir string) *markdown.Aggregate {
+func writeDetailedMarkdownReport(baseDir, digestOutput string) *markdown.Aggregate {
 	eventsPath := filepath.Join(baseDir, ".coldstep-events.jsonl")
 	f, err := os.Open(eventsPath) // #nosec G304 -- baseDir is GITHUB_WORKSPACE (trusted env), fixed filename //nolint:gosec
 	if err != nil {
@@ -39,11 +43,36 @@ func writeDetailedMarkdownReport(baseDir string) *markdown.Aggregate {
 		return nil
 	}
 
+	detailed := []byte(agg.RenderDetailed())
+
 	outPath := filepath.Join(baseDir, ".coldstep-report.md")
-	if werr := atomicwrite.Bytes(outPath, []byte(agg.RenderDetailed()), 0o644); werr != nil {
+	if werr := atomicwrite.Bytes(outPath, detailed, 0o644); werr != nil {
 		fmt.Fprintf(os.Stderr, "coldstep: write %s: %v\n", outPath, werr)
 	}
+
+	digestPath := digestArtifactPath(baseDir, digestOutput, agg.ModeLabel())
+	// Skip the second write only when it would target the exact same file.
+	if digestPath != outPath {
+		if werr := atomicwrite.Bytes(digestPath, detailed, 0o644); werr != nil {
+			fmt.Fprintf(os.Stderr, "coldstep: write %s: %v\n", digestPath, werr)
+		}
+	}
 	return agg
+}
+
+// digestArtifactPath resolves the mode-named digest destination. With no
+// override it is baseDir/.coldstep-<mode>.md; an explicit digestOutput wins,
+// resolved under baseDir when relative so a consumer-supplied path stays inside
+// the workspace by default.
+func digestArtifactPath(baseDir, digestOutput, mode string) string {
+	override := strings.TrimSpace(digestOutput)
+	if override == "" {
+		return filepath.Join(baseDir, ".coldstep-"+mode+".md")
+	}
+	if filepath.IsAbs(override) {
+		return filepath.Clean(override)
+	}
+	return filepath.Join(baseDir, override)
 }
 
 // warnRemovedAllowlistInputs emits a one-line GitHub Actions warning when a
