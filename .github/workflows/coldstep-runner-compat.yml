@@ -18,6 +18,11 @@
 # image strings), and `continue-on-error: true` on every variant keeps one
 # failure from cancelling the rest. The aggregate job reads `needs.*.result`
 # and converts per-variant results into the final pass/fail signal.
+#
+# The build/start/load/stop/assert/upload block that every variant shares is
+# factored into the local composite action
+# `.github/actions/detect-assertion-harness`; each job here owns only its
+# checkout, setup-go, services:/env:, and the variant-specific load script.
 
 name: coldstep-runner-compat
 
@@ -46,42 +51,13 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Build Linux agent
-        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
-      - name: Start Coldstep (detect)
-        uses: ./
+      - name: Detect-mode harness — vanilla
+        uses: ./.github/actions/detect-assertion-harness
         with:
-          phase: start
-          mode: detect
-          detect-profile: enhanced
-          fail-on-error: 'true'
-          release-path: bin/coldstep
-          allow: |
-            *.ubuntu.com
-            theclouddj.com
-      - name: Variant load — vanilla
-        run: |
-          set -euo pipefail
-          curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
-      - name: Stop Coldstep
-        uses: ./
-        with:
-          phase: stop
-          report: none
-          fail-on-error: 'false'
-      - name: Assert event stream + readiness
-        run: bash .github/workflows/scripts/runner-compat-assert.sh vanilla
-      - name: Upload variant artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coldstep-runner-compat-vanilla
-          path: |
-            ${{ github.workspace }}/.coldstep-events.jsonl
-            ${{ github.workspace }}/.coldstep-telemetry.json
-            ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-report.md
-          if-no-files-found: warn
+          variant: vanilla
+          load-script: |
+            set -euo pipefail
+            curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
 
   dind:
     name: dind
@@ -99,46 +75,17 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Build Linux agent
-        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
-      - name: Start Coldstep (detect)
-        uses: ./
+      - name: Detect-mode harness — dind
+        uses: ./.github/actions/detect-assertion-harness
         with:
-          phase: start
-          mode: detect
-          detect-profile: enhanced
-          fail-on-error: 'true'
-          release-path: bin/coldstep
-          allow: |
-            *.ubuntu.com
-            theclouddj.com
-      - name: Variant load — dind probe
-        run: |
-          set -euo pipefail
-          # Reach the dind sidecar from the runner. The probe is best-effort:
-          # the goal here is exercising cgroup egress against a service
-          # container, not validating dind itself.
-          timeout 10 bash -c 'until nc -z -w1 docker 2375; do sleep 1; done' || true
-          curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
-      - name: Stop Coldstep
-        uses: ./
-        with:
-          phase: stop
-          report: none
-          fail-on-error: 'false'
-      - name: Assert event stream + readiness
-        run: bash .github/workflows/scripts/runner-compat-assert.sh dind
-      - name: Upload variant artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coldstep-runner-compat-dind
-          path: |
-            ${{ github.workspace }}/.coldstep-events.jsonl
-            ${{ github.workspace }}/.coldstep-telemetry.json
-            ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-report.md
-          if-no-files-found: warn
+          variant: dind
+          load-script: |
+            set -euo pipefail
+            # Reach the dind sidecar from the runner. The probe is best-effort:
+            # the goal here is exercising cgroup egress against a service
+            # container, not validating dind itself.
+            timeout 10 bash -c 'until nc -z -w1 docker 2375; do sleep 1; done' || true
+            curl -4 -fsS --max-time 10 https://archive.ubuntu.com/ >/dev/null || true
 
   buildkit:
     name: buildkit
@@ -153,47 +100,18 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Build Linux agent
-        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
-      - name: Start Coldstep (detect)
-        uses: ./
+      - name: Detect-mode harness — buildkit
+        uses: ./.github/actions/detect-assertion-harness
         with:
-          phase: start
-          mode: detect
-          detect-profile: enhanced
-          fail-on-error: 'true'
-          release-path: bin/coldstep
-          allow: |
-            *.ubuntu.com
-            theclouddj.com
-      - name: Variant load — BuildKit build
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/buildkit-ctx
-          cat >/tmp/buildkit-ctx/Dockerfile <<'EOF'
-          FROM alpine:3.20
-          RUN echo coldstep-buildkit-compat
-          EOF
-          DOCKER_BUILDKIT=1 docker build -t coldstep-buildkit-compat:latest /tmp/buildkit-ctx || true
-      - name: Stop Coldstep
-        uses: ./
-        with:
-          phase: stop
-          report: none
-          fail-on-error: 'false'
-      - name: Assert event stream + readiness
-        run: bash .github/workflows/scripts/runner-compat-assert.sh buildkit
-      - name: Upload variant artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coldstep-runner-compat-buildkit
-          path: |
-            ${{ github.workspace }}/.coldstep-events.jsonl
-            ${{ github.workspace }}/.coldstep-telemetry.json
-            ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-report.md
-          if-no-files-found: warn
+          variant: buildkit
+          load-script: |
+            set -euo pipefail
+            mkdir -p /tmp/buildkit-ctx
+            cat >/tmp/buildkit-ctx/Dockerfile <<'EOF'
+            FROM alpine:3.20
+            RUN echo coldstep-buildkit-compat
+            EOF
+            DOCKER_BUILDKIT=1 docker build -t coldstep-buildkit-compat:latest /tmp/buildkit-ctx || true
 
   service-containers:
     name: service-containers
@@ -217,43 +135,14 @@ jobs:
       - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c  # v6
         with:
           go-version-file: go.mod
-      - name: Build Linux agent
-        run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
-      - name: Start Coldstep (detect)
-        uses: ./
+      - name: Detect-mode harness — service-containers
+        uses: ./.github/actions/detect-assertion-harness
         with:
-          phase: start
-          mode: detect
-          detect-profile: enhanced
-          fail-on-error: 'true'
-          release-path: bin/coldstep
-          allow: |
-            *.ubuntu.com
-            theclouddj.com
-      - name: Variant load — postgres query
-        run: |
-          set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client
-          PGPASSWORD=coldstep-compat psql -h localhost -U postgres -c 'SELECT 1;' || true
-      - name: Stop Coldstep
-        uses: ./
-        with:
-          phase: stop
-          report: none
-          fail-on-error: 'false'
-      - name: Assert event stream + readiness
-        run: bash .github/workflows/scripts/runner-compat-assert.sh service-containers
-      - name: Upload variant artifacts
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
-        with:
-          name: coldstep-runner-compat-service-containers
-          path: |
-            ${{ github.workspace }}/.coldstep-events.jsonl
-            ${{ github.workspace }}/.coldstep-telemetry.json
-            ${{ github.workspace }}/.coldstep-ready.json
-            ${{ github.workspace }}/.coldstep-report.md
-          if-no-files-found: warn
+          variant: service-containers
+          load-script: |
+            set -euo pipefail
+            sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq postgresql-client
+            PGPASSWORD=coldstep-compat psql -h localhost -U postgres -c 'SELECT 1;' || true
 
   aggregate:
     name: aggregate
