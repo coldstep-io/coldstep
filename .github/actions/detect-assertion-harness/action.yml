@@ -1,0 +1,64 @@
+name: "Coldstep detect-mode assertion harness"
+description: >-
+  Shared detect-mode harness for the runner-compat matrix: builds the Linux
+  agent, starts coldstep in detect mode, runs a variant-specific load, stops
+  coldstep, asserts event flow + readiness, and uploads the per-variant
+  artifacts. Keeps the four runner-compat jobs from duplicating the same
+  start/stop/assert/upload block. The calling job owns checkout, setup-go,
+  and any services:/env: it needs.
+
+inputs:
+  variant:
+    description: "Variant name (used for the assert step and artifact name)."
+    required: true
+  load-script:
+    description: >-
+      Variant-specific load shell run between start and stop. Should be
+      best-effort (the harness, not the load, is what is under test).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Build Linux agent
+      shell: bash
+      run: bash scripts/build-agent-linux.sh "${GITHUB_WORKSPACE}"
+
+    - name: Start Coldstep (detect)
+      uses: ./
+      with:
+        phase: start
+        mode: detect
+        detect-profile: enhanced
+        fail-on-error: 'true'
+        release-path: bin/coldstep
+        allow: |
+          *.ubuntu.com
+          theclouddj.com
+
+    - name: Variant load — ${{ inputs.variant }}
+      shell: bash
+      run: ${{ inputs.load-script }}
+
+    - name: Stop Coldstep
+      uses: ./
+      with:
+        phase: stop
+        report: none
+        fail-on-error: 'false'
+
+    - name: Assert event stream + readiness
+      shell: bash
+      run: bash .github/workflows/scripts/runner-compat-assert.sh "${{ inputs.variant }}"
+
+    - name: Upload variant artifacts
+      if: always()
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+      with:
+        name: coldstep-runner-compat-${{ inputs.variant }}
+        path: |
+          ${{ github.workspace }}/.coldstep-events.jsonl
+          ${{ github.workspace }}/.coldstep-telemetry.json
+          ${{ github.workspace }}/.coldstep-ready.json
+          ${{ github.workspace }}/.coldstep-report.md
+        if-no-files-found: warn
