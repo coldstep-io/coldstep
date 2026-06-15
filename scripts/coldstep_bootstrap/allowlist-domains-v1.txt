@@ -1,3 +1,0 @@
-# Coldstep bootstrap pack — domains (v1)
-# Merged only when bootstrap-allowlist: true. Default pack may be empty.
-# One domain or comma-separated tokens per line.
