@@ -81,9 +81,8 @@ if ([string]::IsNullOrWhiteSpace($BashExe)) {
     Write-Error @"
 Could not find bash.exe.
 
-Install Git for Windows (Git\bin\bash.exe) or ensure bash is on PATH.
-
-Alternatively: python scripts/agent_linux_verify.py [--mode fast]
+Install Git for Windows (Git\bin\bash.exe) or ensure bash is on PATH,
+or run scripts/agent-linux-verify.sh directly under WSL / Git Bash.
 "@
     exit 127
 }
