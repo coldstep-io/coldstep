@@ -15,1125 +15,147 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 	"os"
 	"os/signal"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/cilium/ebpf"
-	"github.com/cilium/ebpf/features"
-	"github.com/cilium/ebpf/link"
-	"github.com/cilium/ebpf/ringbuf"
-	"github.com/coldstep-io/coldstep/internal/bpf/defend"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceconnect"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracedns"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/bpf/traceipv6"
-	"github.com/coldstep-io/coldstep/internal/bpf/tracektls"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
 
 // Run loads BPF, streams events until ctx is cancelled, then drains workers.
+//
+// Run is orchestration only: it builds the shared *runState, drives the load /
+// attach phases (agent_run_load.go), spawns the reader and monitor goroutines
+// (agent_run_state.go), then waits for shutdown. Every Run-level resource is
+// released through the single runCleanup LIFO stack (s.cleanup) so the close
+// ordering matches the original monolithic body exactly — see runCleanup and
+// the per-phase push() calls for the ordering contract.
 func Run(ctx context.Context, cfg config.Config) error {
 	pol, err := cfg.Policy()
 	if err != nil {
 		return err
 	}
 
-	kernel := kernelRelease()
-	compatWarnings := CheckRunnerCompat()
-	for _, w := range compatWarnings {
+	s := &runState{
+		cfg:            cfg,
+		pol:            pol,
+		stats:          newRunStats(),
+		defendState:    newDefendState(),
+		canary:         newCanaryState(),
+		ktlsTr:         newKTLSTracker(),
+		dnsCache:       NewDNSCache(),
+		kernel:         kernelRelease(),
+		runnerEnv:      DetectRunnerEnv(),
+		compatWarnings: CheckRunnerCompat(),
+		procTreeGate:   config.FeatureGateEnabled(cfg.FeatureGates, "proc_tree"),
+		tlsSNIGate:     config.FeatureGateEnabled(cfg.FeatureGates, "tls_sni"),
+		fsGate:         config.FeatureGateEnabled(cfg.FeatureGates, "fs_events"),
+	}
+	for _, w := range s.compatWarnings {
 		slog.Warn("runner_compat_warning", "code", w.Code, "detail", w.Detail)
 	}
-	runnerEnv := DetectRunnerEnv()
-	if runnerEnv != RunnerEnvStandard {
-		slog.Info("runner_env_detected", "env", runnerEnv)
+	if s.runnerEnv != RunnerEnvStandard {
+		slog.Info("runner_env_detected", "env", s.runnerEnv)
 	}
-	stats := newRunStats()
-	stats.setRunnerEnv(runnerEnv)
-	// P4: shared between readKTLSRing (Mark) and readTLSRing (IsKTLS) so a
-	// pre-offload ClientHello sniff is reclassified as Confidence=unknown
-	// with confidence_reason="ktls" before it lands in JSONL.
-	ktlsTr := newKTLSTracker()
-	defendState := newDefendState()
-	canary := newCanaryState()
-	var seq telemetry.SeqGen
-	var jsonlMu sync.Mutex
-	procTreeGate := config.FeatureGateEnabled(cfg.FeatureGates, "proc_tree")
-	tlsSNIGate := config.FeatureGateEnabled(cfg.FeatureGates, "tls_sni")
-	fsGate := config.FeatureGateEnabled(cfg.FeatureGates, "fs_events")
+	s.stats.setRunnerEnv(s.runnerEnv)
+	// P4: ktlsTr is shared between readKTLSRing (Mark) and readTLSRing (IsKTLS)
+	// so a pre-offload ClientHello sniff is reclassified before it lands in JSONL.
+	s.dnsCache.SetBPFFailureCallback(s.stats.addDNSCacheUpdateFailure)
+
 	signer, err := telemetry.NewSigner(cfg.SigningKey)
 	if err != nil {
 		return fmt.Errorf("setup telemetry signer: %w", err)
 	}
+	s.signer = signer
 	if err := initMemlock(); err != nil {
 		return err
 	}
 
-	bpfSt := []telemetry.BPFStatus{
+	s.bpfSt = []telemetry.BPFStatus{
 		{Name: "sched_process_exec", OK: false, Detail: "not loaded"},
 		{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: "not loaded"},
 		{Name: "dns recvfrom sniff", OK: false, Detail: "not loaded"},
 		// Reaching Run means probeBTF() in Main has already succeeded; record
 		// that explicitly so .coldstep-telemetry.json carries a positive btf
-		// availability signal alongside per-program attach status. Kept at
-		// index 3 so bpfSt[0..2] index-sets below remain stable.
+		// availability signal. Kept at index 3 so bpfSt[0..2] index-sets stay stable.
 		{Name: "btf", OK: true, BTFAvailable: true},
-		// P3-2: paired kprobe/kretprobe on tcp_v4_connect for connect_result
-		// events. Filled in by attachTCPConnectKprobes below; kept at index 4
-		// so existing bpfSt[0..3] index-sets stay stable.
+		// P3-2: paired kprobe/kretprobe on tcp_v4_connect. Filled in by
+		// armSyscall; kept at index 4 so existing bpfSt[0..3] index-sets stay stable.
 		{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: "not loaded"},
 	}
 
-	// defendCompiled holds the resolved allowlist (IPv4 set + unresolved domain
-	// list). It is populated by compileDefendAllowlist below; declared up here
-	// so the shutdown digest defer can surface IP count + unresolved domains.
-	var defendCompiled policy.CompileResult
-
-	// hasDefend / ioUringRd are forward-declared so the shutdown defer can
-	// surface CoverageReport.QuicObserved and ipv6Enforced state (H19 + H14)
-	// without needing to inspect later-populated locals; they are reassigned
-	// below at the load-attach sites.
-	var hasDefend bool
-	var ioUringRd ringReader
-	var ioUringTLSRd ringReader
-
-	defer func() {
-		sum := stats.snapshotSummary(kernel, bpfSt)
-		sum.CompatWarnings = compatWarnings
-		if err := telemetry.WriteSummary(cfg.TelemetrySummaryPath, sum, signer); err != nil {
-			slog.Warn("telemetry summary", "err", err)
-		}
-		// H2: emit a shutdown MetaEvent line carrying per-channel ringbuf
-		// reserve-failure counts under `dropped_events`. The startup meta is
-		// already in JSONL; this second meta lands at the very end of the run
-		// so consumers can see silent event loss without parsing the digest.
-		// Map is nil (and omitted) when every counter is zero.
-		if cfg.EventsLogPath != "" {
-			if shutdownMeta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile, string(cfg.Mode)); err != nil {
-				slog.Warn("build shutdown meta", "err", err)
-			} else {
-				shutdownMeta.DroppedEvents = buildDroppedEventsMap(stats, defendState)
-				// H11: SHA-256 of the JSONL file before this MetaEvent gets
-				// appended so the hash covers every preceding event line.
-				// Tamper-evidence only — JSONL signing remains the strong
-				// guarantee. Best-effort: log a warning on hash failure and
-				// continue writing the meta (the field stays empty rather
-				// than blocking the shutdown record).
-				if sum, herr := sha256File(cfg.EventsLogPath); herr != nil {
-					slog.Warn("events file sha256", "err", herr)
-				} else {
-					shutdownMeta.EventsFileSHA256 = sum
-				}
-				// H19: surface CoverageReport.QuicObserved on the shutdown meta
-				// so downstream consumers can read the per-run UDP/443
-				// "possible-quic" total without scanning every udp JSONL line.
-				ipv6EnforcedShutdown := cfg.Mode == config.ModeDefend && hasDefend
-				shutdownMeta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6EnforcedShutdown, stats.quicObservedTotal())
-				if err := telemetry.AppendJSONL(cfg.EventsLogPath, shutdownMeta, signer); err != nil {
-					slog.Warn("shutdown meta jsonl", "err", err)
-				}
-			}
-		}
-	}()
+	// One LIFO cleanup stack drives every Run-level teardown. writeShutdownTelemetry
+	// is pushed first so it unwinds LAST (after all reader goroutines exit and every
+	// counter snapshot is taken); closeAllReaders is pushed early so it unwinds late
+	// (covering any early-return before the runCtx shutdown goroutine is registered).
+	// Subsequent per-phase pushes unwind in reverse registration order, preserving
+	// the original defer LIFO — including the security-critical close ordering.
+	defer s.cleanup.unwind()
+	s.cleanup.push(s.writeShutdownTelemetry)
 
 	compileCtx, compileCancel := context.WithTimeout(ctx, 120*time.Second)
-	defer compileCancel()
-	defendCompiled, err = compileDefendAllowlist(compileCtx, cfg, nil, 2)
+	s.cleanup.push(compileCancel)
+	s.defendCompiled, err = compileDefendAllowlist(compileCtx, cfg, nil, 2)
 	if err != nil {
 		return err
 	}
-	if cfg.Mode == config.ModeDefend && !cfg.NoResolverAutoAllow {
-		resolverV4, resolverV6 := autoAllowSystemResolvers(&defendCompiled, policy.DefaultResolvConfPaths()...)
-		for _, ip := range resolverV4 {
-			slog.Info("defend: system DNS resolver auto-allowed", "resolver", ip.String(), "family", "ipv4")
-		}
-		for _, ip := range resolverV6 {
-			slog.Info("defend: system DNS resolver auto-allowed", "resolver", ip.String(), "family", "ipv6")
-		}
-		if len(resolverV4)+len(resolverV6) == 0 {
-			slog.Warn("defend: no system DNS resolvers discovered — workload DNS may fail (EAI_AGAIN) unless resolver IPs are allowlisted explicitly")
-		}
+	s.finalizeAllowlist(compileCtx)
+	s.cleanup.push(s.closeAllReaders)
+
+	// Defend mode: cgroup attach before traceexec/traceconnect. Ready status is
+	// written only after syscall egress tracing attaches (defend requires it).
+	if err := s.loadDefend(compileCtx); err != nil {
+		return err
 	}
-	allowlistCompileTime := defendCompiled.CompileTimestamp
-	if allowlistCompileTime.IsZero() {
-		allowlistCompileTime = time.Now()
+	if err := s.loadExec(); err != nil {
+		return err
 	}
-	stats.setAllowlistCompileSnapshot(
-		allowlistCompileTime,
-		defendCompiled.AllowedIPv4.Len(),
-		defendCompiled.Domains,
-		defendCompiled.UnresolvedDomains,
-		defendCompiled.WildcardRiskDomains,
-	)
-	for _, d := range defendCompiled.UnresolvedDomains {
-		slog.Warn("allowlist domain did not resolve", "domain", d)
-	}
-	if cfg.Mode == config.ModeDefend && len(defendCompiled.UnresolvedDomains) > 0 {
-		slog.Warn("allowlist domains unresolved — legitimate traffic to these domains may be blocked",
-			"count", len(defendCompiled.UnresolvedDomains))
+	if err := s.armSyscall(); err != nil {
+		return err
 	}
 
-	dnsCache := NewDNSCache()
-	dnsCache.SetBPFFailureCallback(stats.addDNSCacheUpdateFailure)
-
-	var connRd, udpRd, httpRd, tlsRd, tcpStateRd ringReader
-	defer connRd.Close()
-	defer udpRd.Close()
-	defer httpRd.Close()
-	defer tlsRd.Close()
-	defer tcpStateRd.Close()
-	defer ioUringRd.Close()
-	defer ioUringTLSRd.Close()
-	var tcpStateLnk link.Link
-	var ioUringLnk link.Link
-
-	var denyRd ringReader
-	defer denyRd.Close()
-	var egressBackstopRd ringReader
-	defer egressBackstopRd.Close()
-	var lsmDenyRd ringReader
-	defer lsmDenyRd.Close()
-	var selfDefenseRd ringReader
-	defer selfDefenseRd.Close()
-	var syscallObjs *traceconnect.TraceconnectObjects
-	var syscallLnk link.Link
-	var defendObjs defend.DefendObjects
-	var hasLSM bool
-	var defendConnectLnk link.Link
-	var defendSendmsgLnk link.Link
-
-	// Defend mode: cgroup attach before traceexec/traceconnect. Ready status is written only after
-	// syscall egress tracing attaches (defend requires it); sched_process_exec + raw_tp/sys_enter loads
-	// can each take minutes on hosted runners — GitHub Actions fail-on-error waits on .coldstep-ready.json.
-	//
-	// AUDIT(5g): all attach paths close links on failure.
-	// - LSM section (lines ~205-247): if lnk2 attach fails after lnk1 succeeded,
-	//   lnk1.Close() runs explicitly before the function returns. cilium/ebpf
-	//   guarantees AttachLSM returns (nil, err) on failure, so a non-nil
-	//   sendpageLnk with attachErr != nil is unreachable.
-	// - Cgroup section (lines ~283-338): defendConnectLnk and defendSendmsgLnk
-	//   register `defer X.Close()` immediately after each successful attach;
-	//   the optional IPv6 hooks and probe failure path therefore unwind via
-	//   defers without leaking a previously-attached link.
-	// - defendObjs.Close() is registered once at the top of this block, so
-	//   the BPF collection is always released even on the partial-attach
-	//   error returns.
-	if cfg.Mode == config.ModeDefend {
-		haveLSM := false
-		if err := features.HaveProgramType(ebpf.LSM); err == nil {
-			haveLSM = true
-		}
-
-		// H15: lsm/io_uring_cmd needs `security_uring_cmd` in kernel BTF
-		// (Linux 5.19+). Probe before loading so older kernels keep the
-		// other LSM hooks instead of failing prog_load for the whole spec.
-		haveIOUringLSM := haveLSM && defend.HaveIOUringLSM()
-
-		// Phase 2.3: cgroup + LSM share one bpf2go object. The loader strips
-		// LSM programs (and their dedicated maps) from the spec when the
-		// kernel lacks CONFIG_BPF_LSM so prog_load doesn't fail.
-		//
-		// Bug #2: when prog_load rejects LSM for a non-sendpage reason
-		// (e.g. CONFIG_BPF_LSM absent despite the feature probe succeeding,
-		// `lsm=` boot chain without bpf), the loader silently strips every
-		// LSM section and reloads cgroup-only. Honour the LSMFellBack
-		// signal here: pretend the kernel never claimed LSM support so we
-		// skip the LSM attach block, and record the degradation as a
-		// BPFStatus row for the digest.
-		loadResult, err := defend.LoadDefendObjectsForKernel(&defendObjs, haveLSM, haveIOUringLSM)
-		if err != nil {
-			return fmt.Errorf("load defend bpf objects: %w", err)
-		}
-		if loadResult.LSMFellBack {
-			haveLSM = false
-			detail := "lsm prog_load failed; reloaded cgroup-only defend collection"
-			if loadResult.LSMFallbackErr != nil {
-				detail = fmt.Sprintf("%s: %v", detail, loadResult.LSMFallbackErr)
-			}
-			bpfSt = append(bpfSt, telemetry.BPFStatus{
-				Name:   "lsm_load_failed_fallback_cgroup",
-				OK:     false,
-				Detail: detail,
-			})
-			slog.Warn("defend: lsm prog_load failed; continuing with cgroup-only enforcement",
-				"err", loadResult.LSMFallbackErr)
-		}
-		hasDefend = true
-		defer func() {
-			defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.DenyReserveFailures, "deny_reserve_failures"))
-			stats.setEgressBackstopReserveFailures(readUint32PerCPUArraySum(defendObjs.SkbBackstopReserveFailures, "skb_backstop_reserve_failures"))
-			stats.setBpfSelfDefenseReserveFailures(readUint32PerCPUArraySum(defendObjs.BpfSelfDefenseReserveFailures, "bpf_self_defense_reserve_failures"))
-			if hasLSM {
-				defendState.setDenyReserveFailures(readUint32PerCPUArraySum(defendObjs.LsmDenyReserveFailures, "lsm_deny_reserve_failures"))
-			}
-			// P0-1 Phase 1: snapshot the IPv6 observe-only counters so the
-			// digest can warn when traffic escaped the IPv4-only defend
-			// allowlist over IPv6. Safe when maps are absent (returns 0).
-			// TODO: wire to defend objects after regeneration on Linux —
-			// today these are no-ops on stubs without the IPv6 maps.
-			stats.setIPv6ConnectObserved(readIPv6ConnectObservedCount(&defendObjs))
-			stats.setIPv6SendmsgObserved(readIPv6SendmsgObservedCount(&defendObjs))
-			// Gap 1+2 (sendfile/splice): snapshot the sendpage_observed
-			// counter populated by lsm/socket_sendpage. Safe when the map
-			// is absent (returns 0).
-			stats.setSendpageObserved(readSendpageObservedCount(&defendObjs))
-			_ = defendObjs.Close()
-		}()
-
-		var lsmAttachErr error
-		var ioUringAttachErr error
-		ioUringAttempted := false
-
-		if haveLSM {
-			if _, _, loadErr := loadLSMDefendMaps(&defendObjs, defendCompiled, pol); loadErr != nil {
-				return loadErr
-			}
-
-			rd, err := ringbuf.NewReader(defendObjs.LsmDenyEvents)
-			if err != nil {
-				return fmt.Errorf("ringbuf reader lsm deny: %w", err)
-			}
-
-			lnk1, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketConnect})
-			if err != nil {
-				lsmAttachErr = fmt.Errorf("attach lsm_socket_connect: %w", err)
-				_ = rd.Close()
-			} else {
-				lnk2, err := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendmsg})
-				if err != nil {
-					lsmAttachErr = fmt.Errorf("attach lsm_socket_sendmsg: %w", err)
-					_ = lnk1.Close()
-					_ = rd.Close()
-				} else {
-					hasLSM = true
-					// Keep the LSM ringbuf as a secondary reader. The primary denyRd
-					// always reads from the cgroup ringbuf (attached below) because on
-					// some kernels (e.g. Ubuntu 24.04 default) LSM hooks attach but
-					// never fire — `lsm_deny_events` then stays empty even though
-					// cgroup is defending.
-					lsmDenyRd.R = rd
-					defer lnk1.Close()
-					defer lnk2.Close()
-
-					// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
-					// so the sock_sendpage() path is gated against the same IPv4
-					// allowlist. Optional — tolerate missing program (older stubs)
-					// and attach failures (very old kernels that lack the
-					// sendpage LSM hook). On kernel 6.8+ this hook is never
-					// invoked because sendfile/splice go through sendmsg with
-					// MSG_SPLICE_PAGES; attaching anyway is harmless.
-					// TODO: regenerate defend objects after build on Linux so
-					// defendObjs.LsmSocketSendpage is always populated.
-					if defendObjs.LsmSocketSendpage != nil {
-						sendpageLnk, attachErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmSocketSendpage})
-						if attachErr != nil {
-							slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
-						} else {
-							defer sendpageLnk.Close()
-						}
-					} else {
-						slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
-					}
-
-					// Sub-project B: lsm/bpf self-defense. Attach the hook, arm
-					// it (record coldstep's own object ids + enabled=1), and
-					// open its ringbuf. Best-effort defense-in-depth — never
-					// fatal. Inert until armed; armBpfSelfDefense flips enabled
-					// only after the protected-id sets are populated.
-					if defendObjs.ColdstepBpfSelfDefense != nil {
-						if sdLnk, sdErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.ColdstepBpfSelfDefense}); sdErr != nil {
-							slog.Info("lsm/bpf self-defense attach failed; monitor tamper protection inactive", "err", sdErr)
-							bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "lsm/bpf (self-defense)", OK: false, Detail: bpfDetail(sdErr)})
-						} else {
-							defer sdLnk.Close()
-							progN, mapN := armBpfSelfDefense(&defendObjs, uint32(os.Getpid())) // #nosec G115 -- pid is always a small positive int; uint32 round-trip is intentional //nolint:gosec
-							if sdRd, rerr := ringbuf.NewReader(defendObjs.BpfSelfDefenseEvents); rerr != nil {
-								slog.Info("bpf self-defense ringbuf unavailable; continuing", "err", rerr)
-							} else {
-								selfDefenseRd.R = sdRd
-							}
-							bpfSt = append(bpfSt, telemetry.BPFStatus{
-								Name:   "lsm/bpf (self-defense)",
-								OK:     true,
-								Detail: fmt.Sprintf("protecting %d prog(s) + %d map(s)", progN, mapN),
-							})
-						}
-					}
-
-					// H15: lsm/io_uring_cmd is best-effort defense-in-depth on
-					// IORING_OP_URING_CMD; only emit a BPFStatus row when we
-					// actually attempted attach so pre-5.19 kernels are not
-					// reported as degraded for a hook they can't host.
-					if haveIOUringLSM && defendObjs.LsmIoUringCmd != nil {
-						ioUringAttempted = true
-						if lnk3, ioErr := link.AttachLSM(link.LSMOptions{Program: defendObjs.LsmIoUringCmd}); ioErr != nil {
-							slog.Info("lsm/io_uring_cmd attach failed; cgroup+socket LSM still active", "err", ioErr)
-							ioUringAttachErr = ioErr
-						} else {
-							defer lnk3.Close()
-						}
-					}
-				}
-			}
-		}
-
-		if ioUringAttempted {
-			row := telemetry.BPFStatus{Name: "lsm/io_uring_cmd", OK: ioUringAttachErr == nil}
-			if ioUringAttachErr != nil {
-				row.Detail = bpfDetail(ioUringAttachErr)
-			}
-			bpfSt = append(bpfSt, row)
-		}
-
-		backend := chooseDefendBackend(
-			defendBackendConfig{
-				modeDefend: cfg.Mode == config.ModeDefend,
-				haveLSM:    haveLSM,
-			},
-			lsmAttachErr,
-		)
-		if lsmAttachErr != nil {
-			slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
-		}
-
-		// Always program the cgroup defend maps and attach the cgroup hooks,
-		// regardless of whether LSM also attached. The cgroup hook is the
-		// reliable always-on defense path: LSM hooks may attach but never fire
-		// when the kernel's `lsm=` boot chain excludes BPF (Ubuntu 24.04 ships
-		// this way). The primary deny reader watches the cgroup `deny_events`
-		// ringbuf; the LSM ringbuf, when present, is drained by a separate
-		// reader.
-		allowlistSize, ipv6AllowlistSize, ignoredSize, loadErr := loadDefendMaps(&defendObjs, defendCompiled, pol)
-		if loadErr != nil {
-			return loadErr
-		}
-		defendState.setModeAndAllowlist(defendModeForBackend(backend.backend), allowlistSize, ignoredSize)
-		defendState.setIPv6AllowlistSize(ipv6AllowlistSize)
-
-		// SECURITY (dns-cache-trust): seed the defend dns_cache owner-fallback map
-		// from the agent's own resolver so dst_is_allowlisted's late-binding path
-		// is trusted, never fed by poisonable sniffed traffic (see SetBPFMaps note
-		// below). At startup these IPs already overlap the allowed_ipv4 LPM
-		// snapshot; the fallback's real value is the trusted refresh performed by
-		// the DNS drift watcher when a domain's A-record set rotates mid-job.
-		if defendObjs.DnsCache != nil && len(cfg.AllowedDomains) > 0 {
-			owners := policy.ResolveOwners(compileCtx, cfg.AllowedDomains, nil, 2)
-			seeded := seedDefendOwners(defendObjs.DnsCache, owners, stats.addDNSCacheUpdateFailure)
-			slog.Info("defend dns_cache owner map seeded from trusted resolver", "entries", seeded)
-		}
-		rd, err := ringbuf.NewReader(defendObjs.DenyEvents)
-		if err != nil {
-			return fmt.Errorf("ringbuf reader deny: %w", err)
-		}
-		denyRd.R = rd
-
-		cgPath := cfg.CgroupAttachPath
-		if cgPath == "" {
-			cgPath = "/sys/fs/cgroup"
-		}
-
-		defendConnectLnk, err = link.AttachCgroup(link.CgroupOptions{
-			Path:    cgPath,
-			Attach:  ebpf.AttachCGroupInet4Connect,
-			Program: defendObjs.DefendConnect4,
-		})
-		if err != nil {
-			return fmt.Errorf("attach defend_connect4: %w", err)
-		}
-		defer defendConnectLnk.Close()
-
-		defendSendmsgLnk, err = link.AttachCgroup(link.CgroupOptions{
-			Path:    cgPath,
-			Attach:  ebpf.AttachCGroupUDP4Sendmsg,
-			Program: defendObjs.DefendSendmsg4,
-		})
-		if err != nil {
-			return fmt.Errorf("attach defend_sendmsg4: %w", err)
-		}
-		defer defendSendmsgLnk.Close()
-
-		// Sub-project A: tc/clsact egress backstop (observe-only). Attaches the
-		// defend_skb_egress tc program to every non-loopback, up interface via
-		// TCX (kernel 6.6+). cgroup_skb/egress was tried first but is never
-		// invoked for locally-generated egress in this deployment; tc/clsact at
-		// the qdisc layer sees all egress including raw sockets. Best-effort —
-		// never fatal; the backstop is inactive if no interface attaches.
-		if defendObjs.DefendSkbEgress != nil {
-			if rd, rerr := ringbuf.NewReader(defendObjs.SkbBackstopEvents); rerr != nil {
-				slog.Info("egress backstop ringbuf unavailable; continuing", "err", rerr)
-			} else {
-				attached := 0
-				ifaces, ierr := net.Interfaces()
-				if ierr != nil {
-					slog.Info("egress backstop: net.Interfaces failed; continuing", "err", ierr)
-				}
-				for _, iface := range ifaces {
-					if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
-						continue
-					}
-					tcxLnk, attachErr := link.AttachTCX(link.TCXOptions{
-						Interface: iface.Index,
-						Program:   defendObjs.DefendSkbEgress,
-						Attach:    ebpf.AttachTCXEgress,
-					})
-					if attachErr != nil {
-						slog.Info("egress backstop tcx attach failed; continuing", "iface", iface.Name, "err", attachErr)
-						continue
-					}
-					defer tcxLnk.Close()
-					attached++
-				}
-				if attached > 0 {
-					egressBackstopRd.R = rd
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tcx/egress (backstop)", OK: true, Detail: fmt.Sprintf("%d interface(s)", attached)})
-				} else {
-					_ = rd.Close()
-					slog.Info("egress backstop: no non-loopback interface attached; backstop inactive")
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tcx/egress (backstop)", OK: false, Detail: "no non-loopback interface attached"})
-				}
-			}
-		}
-
-		// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs
-		// (e.g. defend stubs generated before the IPv6 sections were
-		// added) and attach failures (very old kernels without
-		// cgroup/connect6 / cgroup/sendmsg6 support). Phase 2 will block
-		// IPv6; for now we just count and warn.
-		// TODO: regenerate defend objects after build on Linux so
-		// defendObjs.DefendCgroupConnect6 / DefendCgroupSendmsg6 are
-		// always populated on supported kernels.
-		if defendObjs.DefendCgroupConnect6 != nil {
-			ipv6ConnectLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupInet6Connect,
-				Program: defendObjs.DefendCgroupConnect6,
-			})
-			if attachErr != nil {
-				slog.Info("ipv6 connect6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
-			} else {
-				defer ipv6ConnectLnk.Close()
-			}
-		} else {
-			slog.Info("ipv6 connect6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
-		}
-		if defendObjs.DefendCgroupSendmsg6 != nil {
-			ipv6SendmsgLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
-				Path:    cgPath,
-				Attach:  ebpf.AttachCGroupUDP6Sendmsg,
-				Program: defendObjs.DefendCgroupSendmsg6,
-			})
-			if attachErr != nil {
-				slog.Info("ipv6 sendmsg6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
-			} else {
-				defer ipv6SendmsgLnk.Close()
-			}
-		} else {
-			slog.Info("ipv6 sendmsg6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
-		}
-
-		// AttachCgroup returns once the program is bound, but on hosted runners the
-		// kernel has been observed to not yet enforce for newly-created sockets for
-		// ~1-3s afterward — so the first connect after .coldstep-ready.json was
-		// written could slip through. Block until a live probe deny is observed.
-		if err := probeDefendEnforcement(denyRd.R, defaultProbeTimeout); err != nil {
-			_ = writeAgentStatus(cfg.AgentStatusPath, false)
-			return fmt.Errorf("defend mode requires confirmed cgroup BPF enforcement: %w", err)
-		}
-
-		// Bug #3: AttachLSM can succeed but the kernel may still never invoke
-		// our LSM programs — Ubuntu 24.04 ships with `lsm=lockdown,yama,apparmor`
-		// by default (no `bpf` token), in which case `security_socket_connect`
-		// loads + attaches without ever dispatching. Cgroup probe just confirmed
-		// cgroup is firing; run the same dial-loop-and-drain pattern against the
-		// LSM ringbuf, and downgrade the backend label from `defend+lsm` to
-		// `defend+cgroup` when no LSM events arrive. The LSM ringbuf reader stays
-		// alive for any events that may yet fire — we just stop *claiming* LSM
-		// defense in the digest when it's observably absent.
-		if hasLSM && lsmDenyRd.R != nil {
-			if probeLSMSilent(lsmDenyRd.R, lsmProbeTimeout) {
-				defendState.downgradeMode(defendModeForBackend(defendBackendCgroup))
-				bpfSt = append(bpfSt, telemetry.BPFStatus{
-					Name:   "lsm_attached_but_silent",
-					OK:     false,
-					Detail: "lsm hooks attached but no deny events observed during post-attach probe; downgraded backend label to cgroup. Common on Ubuntu 24.04 where the kernel `lsm=` boot chain omits bpf — boot with e.g. `lsm=lockdown,yama,bpf,apparmor` to restore LSM dispatch.",
-				})
-				slog.Warn("defend: lsm hooks attached but silent during post-attach probe; downgrading backend label to cgroup",
-					"hint", "kernel `lsm=` boot chain likely missing `bpf` (Ubuntu 24.04 default)")
-			}
-		}
-	}
-
-	var execObjs traceexec.TraceexecObjects
-	if err := traceexec.LoadTraceexecObjects(&execObjs, nil); err != nil {
-		return fmt.Errorf("load bpf objects: %w", err)
-	}
-	defer execObjs.Close()
-	defer func() {
-		stats.setExecRingbufReserveFailures(readUint32PerCPUArraySum(execObjs.ExecRingbufReserveFailures, "exec_ringbuf_reserve_failures"))
-	}()
-
-	execLnk, err := link.Tracepoint("sched", "sched_process_exec", execObjs.HandleSchedProcessExec, nil)
-	if err != nil {
-		return fmt.Errorf("attach tracepoint sched_process_exec: %w", err)
-	}
-	defer execLnk.Close()
-	bpfSt[0] = telemetry.BPFStatus{Name: "sched_process_exec", OK: true}
-
-	var execRd ringReader
-	{
-		rd, err := ringbuf.NewReader(execObjs.Events)
-		if err != nil {
-			return fmt.Errorf("ringbuf reader exec: %w", err)
-		}
-		execRd.R = rd
-	}
-	// execRd is normally closed by the runCtx shutdown goroutine. The defer here covers
-	// any return before that goroutine is registered (e.g. defend mode when syscall trace
-	// attach fails). ringReader.Close is once-guarded, so the double defer is safe.
-	defer execRd.Close()
-
-	if cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(tlsSNIGate); err != nil {
-		slog.Info("syscall egress tracing disabled", "err", err)
-		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
-		if cfg.Mode == config.ModeDefend {
-			// Keep the status file for the composite post step; main may have already saved
-			// saveState. Record operational failure explicitly instead of deleting the path.
-			_ = writeAgentStatus(cfg.AgentStatusPath, false)
-			return fmt.Errorf("defend mode requires syscall trace attach: %w", err)
-		}
-	} else {
-		connRd.R, udpRd.R, httpRd.R, tlsRd.R = cR, uR, hR, tR
-		syscallObjs, syscallLnk = objs, lnk
-		syscallOK := true
-		syscallDetail := ""
-		if tlsCfgFailed {
-			syscallOK = false
-			syscallDetail = "tls_agent_cfg map update failed (TLS SNI sniff disabled in BPF)"
-		}
-		bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: syscallOK, Detail: syscallDetail}
-		slog.Info("tracing connect + UDP sendto + HTTP/80 sniff + optional TLS write (raw_tp/sys_enter)")
-
-		// P3-2: paired kprobe/kretprobe on tcp_v4_connect. Captures the
-		// kernel return code so the digest can distinguish established
-		// from refused / timeout / unreachable connections. Failure here
-		// is non-fatal — the entry-side connect_event still records the
-		// attempt, just without a paired result.
-		if kpLnk, krLnk, kerr := attachTCPConnectKprobes(syscallObjs); kerr != nil {
-			slog.Info("tcp_v4_connect kprobe pair attach failed; connect_result events disabled", "err", kerr)
-			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: false, Detail: bpfDetail(kerr)}
-		} else {
-			bpfSt[4] = telemetry.BPFStatus{Name: "kprobe tcp_v4_connect (connect_result)", OK: true}
-			slog.Info("tcp_v4_connect kprobe/kretprobe attached (connect_result events enabled)")
-			defer kpLnk.Close()
-			defer krLnk.Close()
-		}
-
-		// Defend mode readiness is written after the deny reader goroutine launches
-		// (further below); writing it here would race the action's probe steps, which
-		// run as soon as readiness is set, against the reader being alive.
-		defer syscallObjs.Close()
-		defer syscallLnk.Close()
-		defer func() {
-			if syscallObjs != nil {
-				stats.setConnect4TupleUpdateFailures(readUint32PerCPUArraySum(syscallObjs.Connect4TupleUpdateFailures, "connect4_tuple_update_failures"))
-				stats.setUDPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.UdpRingbufReserveFailures, "udp_ringbuf_reserve_failures"))
-				stats.setConnectRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.ConnectRingbufReserveFailures, "connect_ringbuf_reserve_failures"))
-				stats.setHTTPRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.HttpRingbufReserveFailures, "http_ringbuf_reserve_failures"))
-				stats.setTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TlsRingbufReserveFailures, "tls_ringbuf_reserve_failures"))
-				stats.setUDPSendmsgMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.UdpSendmsgMultiIovecObserved, "udp_sendmsg_multi_iovec_observed"))
-				stats.setSendmmsgMultiMessage(readUint32PerCPUArraySum(syscallObjs.SendmmsgMultiMessageObserved, "sendmmsg_multi_message_observed"))
-				// TODO: regenerate BPF stubs after building on Linux —
-				// syscallObjs.SendmmsgUnobservedExtra is defined by the new
-				// sendmmsg_unobserved_extra PERCPU_ARRAY in bpf/trace_connect.bpf.c.
-				stats.setSendmmsgUnobservedExtra(readUint32PerCPUArraySum(syscallObjs.SendmmsgUnobservedExtra, "sendmmsg_unobserved_extra"))
-				stats.setTLSWritevMultiIovecObserved(readUint32PerCPUArraySum(syscallObjs.TlsWritevMultiIovecObserved, "tls_writev_multi_iovec_observed"))
-				sendfileN, spliceN, sendmmsgN := readPartialEgressCounts(syscallObjs.PartialEgressObserved)
-				stats.setPartialEgressObserved(sendfileN, spliceN, sendmmsgN)
-				stats.setIoUringSetupObserved(readUint32PerCPUArraySum(syscallObjs.IoUringSetupObserved, "io_uring_setup_observed"))
-				stats.setTCPStateRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.TcpStateRingbufReserveFailures, "tcp_state_ringbuf_reserve_failures"))
-				stats.setIoUringRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringRingbufReserveFailures, "io_uring_ringbuf_reserve_failures"))
-				stats.setIoUringTLSRingbufReserveFailures(readUint32PerCPUArraySum(syscallObjs.IoUringTlsRingbufReserveFailures, "io_uring_tls_ringbuf_reserve_failures"))
-				stats.setIoUringTLSHelloObserved(readUint32PerCPUArraySum(syscallObjs.IoUringTlsHelloObserved, "io_uring_tls_hello_observed"))
-			}
-		}()
-		// Ring readers are closed exactly once via ringReader.Close (runCtx shutdown goroutine + deferred Close).
-
-		// P3-2b: attach sock/inet_sock_set_state tracepoint for kernel-confirmed
-		// TCP handshake outcomes. Best-effort — degrade gracefully if the
-		// tracepoint is unavailable (older kernel missing the tracepoint, or
-		// kernel without CONFIG_DEBUG_INFO_BTF needed for CO-RE field access).
-		// The connect/UDP/HTTP/TLS readers do not depend on this; failure here
-		// only loses the "(confirmed)" KPI annotation.
-		if lnk, lerr := link.Tracepoint("sock", "inet_sock_set_state", syscallObjs.HandleInetSockSetState, nil); lerr != nil {
-			slog.Info("inet_sock_set_state tracepoint disabled", "err", lerr)
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: false, Detail: bpfDetail(lerr)})
-		} else {
-			tcpStateLnk = lnk
-			rd, rerr := ringbuf.NewReader(syscallObjs.TcpStateEvents)
-			if rerr != nil {
-				slog.Info("tcp_state_events ringbuf reader failed", "err", rerr)
-				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: false, Detail: bpfDetail(rerr)})
-				_ = tcpStateLnk.Close()
-				tcpStateLnk = nil
-			} else {
-				tcpStateRd.R = rd
-				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "tp/sock/inet_sock_set_state", OK: true})
-				slog.Info("tracing TCP handshake outcomes (tp/sock/inet_sock_set_state)")
-				defer func() {
-					if tcpStateLnk != nil {
-						_ = tcpStateLnk.Close()
-					}
-				}()
-			}
-		}
-
-		// P6 Phase 1+2: best-effort attach of raw_tp/io_uring_submit_sqe. On
-		// kernels < 5.14 the tracepoint doesn't exist — degrade to a BPFStatus
-		// row rather than failing the agent. The probe is filtered to two
-		// write-class opcodes (SENDMSG=9, SEND=26) so volume stays bounded
-		// even when many io_uring users are active. When the detect profile
-		// is "enhanced", flip the io_uring_peek_cfg map's key-0 byte so BPF
-		// also attempts a bounded bpf_probe_read_user TLS ClientHello peek
-		// on each submission (Phase 2). Standard profile leaves the map at
-		// zero so the peek path stays cold.
-		enhancedIoUringPeek := strings.EqualFold(strings.TrimSpace(cfg.DetectProfile), "enhanced")
-		if rd, tlsRd, lnk, peekFailed, ioErr := startIoUringTrace(syscallObjs, enhancedIoUringPeek); ioErr != nil {
-			slog.Info("io_uring submit_sqe tracing disabled", "err", ioErr)
-			bpfSt = append(bpfSt, telemetry.BPFStatus{
-				Name:   "raw_tp/io_uring_submit_sqe",
-				OK:     false,
-				Detail: bpfDetail(ioErr),
-			})
-		} else {
-			ioUringLnk = lnk
-			ioUringRd.R = rd
-			ioUringTLSRd.R = tlsRd
-			ioStatus := telemetry.BPFStatus{Name: "raw_tp/io_uring_submit_sqe", OK: true}
-			if peekFailed {
-				ioStatus.OK = false
-				ioStatus.Detail = "io_uring_peek_cfg map update failed (TLS ClientHello peek disabled in BPF)"
-			}
-			bpfSt = append(bpfSt, ioStatus)
-			if enhancedIoUringPeek && !peekFailed {
-				slog.Info("tracing io_uring write-class submissions + enhanced TLS peek (raw_tp/io_uring_submit_sqe)")
-			} else {
-				slog.Info("tracing io_uring write-class submissions (raw_tp/io_uring_submit_sqe)")
-			}
-			defer func() {
-				if ioUringLnk != nil {
-					_ = ioUringLnk.Close()
-				}
-			}()
-		}
-	}
-
-	// Detect mode: ready after syscall trace initialized. Defend mode defers readiness
-	// until after the deny reader goroutine is launched (further below).
+	// Detect mode: ready after syscall trace initialized. Defend mode defers
+	// readiness until after the deny reader goroutine is launched (below).
 	if cfg.Mode != config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
 		}
 	}
 
-	var dnsRd ringReader
-	defer dnsRd.Close()
+	s.loadDNS()
+	s.loadFork()
+	s.loadFS()
+	s.loadKTLS()
+	s.loadIPv6Obs()
+	// Attach bpf() audit tracing only after other BPF collections finish loading,
+	// so coldstep's own bpf(2) load syscalls don't fill the small audit ringbuf
+	// before its reader starts.
+	s.loadBPFAudit()
 
-	var dnsObjs *tracedns.TracednsObjects
-	var dnsLnkEnter, dnsLnkExit link.Link
-	if rd, objs, le, lx, err := startDNSTrace(); err != nil {
-		slog.Info("dns reply sniffing disabled", "err", err)
-		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: false, Detail: bpfDetail(err)}
-	} else {
-		dnsRd.R = rd
-		dnsObjs, dnsLnkEnter, dnsLnkExit = objs, le, lx
-		// Register every live dns_cache map so userspace DNS observations
-		// flow into all in-kernel programs that consult dns_cache for
-		// late-binding IP -> FQDN attribution. Defend's cgroup + LSM sections
-		// share one dns_cache map (Phase 2.3 merge), so a single defend
-		// entry covers both hook families (M-14, paired with H-03's deletes).
-		// SECURITY (dns-cache-trust): the sniffed DNS cache feeds ONLY the
-		// detection-side enrichment map (dnsObjs.DnsCache), used for late-binding
-		// IP -> FQDN attribution in JSONL/digest. The defend ENFORCEMENT map
-		// (defendObjs.DnsCache), consulted by dst_is_allowlisted's owner fallback,
-		// is deliberately NOT registered here: a hostile build step can forge a DNS
-		// reply mapping an allowlisted FQDN to an attacker IP, and feeding that into
-		// the enforcement map would let the forged IP pass the allowlist (defend
-		// bypass). The defend map is seeded instead from the agent's own resolver
-		// via seedDefendOwners (policy.ResolveOwners) at startup and refreshed by
-		// the DNS drift watcher below.
-		dnsCache.SetBPFMaps([]*ebpf.Map{dnsObjs.DnsCache})
-		bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: true}
-		slog.Info("tracing DNS replies (recvfrom)")
-		defer dnsObjs.Close()
-		defer dnsLnkExit.Close()
-		defer dnsLnkEnter.Close()
-		defer func() {
-			if dnsObjs != nil {
-				stats.setDNSRingbufReserveFailures(readUint32PerCPUArraySum(dnsObjs.DnsRingbufReserveFailures, "dns_ringbuf_reserve_failures"))
-				stats.setTCPDNSResponsesObserved(readUint32PerCPUArraySum(dnsObjs.TcpDnsResponsesObserved, "tcp_dns_responses_observed"))
-				stats.setTCPDNSSkippedShortRead(readUint32PerCPUArraySum(dnsObjs.TcpDnsSkippedShortRead, "tcp_dns_skipped_short_read"))
-			}
-		}()
-	}
-
-	var bpfAuditRd ringReader
-	defer bpfAuditRd.Close()
-	var bpfAuditObjs *tracebpfaudit.TracebpfauditObjects
-	var bpfAuditLnk link.Link
-
-	var forkRd ringReader
-	defer forkRd.Close()
-	var forkObjs *tracefork.TraceforkObjects
-	var forkLnk link.Link
-	if procTreeGate {
-		objs := new(tracefork.TraceforkObjects)
-		if err := tracefork.LoadTraceforkObjects(objs, nil); err != nil {
-			slog.Info("sched_process_fork tracing disabled", "err", err)
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: false, Detail: bpfDetail(err)})
-		} else {
-			forkObjs = objs
-			lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-				Name:    "sched_process_fork",
-				Program: objs.HandleSchedProcessFork,
-			})
-			if err != nil {
-				slog.Info("sched_process_fork attach failed", "err", err)
-				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: false, Detail: bpfDetail(err)})
-				_ = objs.Close()
-				forkObjs = nil
-			} else {
-				forkLnk = lnk
-				rd, err := ringbuf.NewReader(objs.ForkEvents)
-				if err != nil {
-					slog.Info("sched_process_fork ringbuf reader failed", "err", err)
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: false, Detail: bpfDetail(err)})
-					_ = lnk.Close()
-					_ = objs.Close()
-					forkObjs = nil
-					forkLnk = nil
-				} else {
-					forkRd.R = rd
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: true})
-					slog.Info("tracing sched_process_fork (process tree)")
-					defer func() {
-						if forkObjs != nil {
-							stats.setForkRingbufReserveFailures(readUint32PerCPUArraySum(forkObjs.ForkRingbufReserveFailures, "fork_ringbuf_reserve_failures"))
-						}
-						forkRd.Close()
-						if forkLnk != nil {
-							_ = forkLnk.Close()
-						}
-						if forkObjs != nil {
-							_ = forkObjs.Close()
-						}
-					}()
-				}
-			}
-		}
-	}
-
-	var fsRd ringReader
-	defer fsRd.Close()
-
-	var fsObjs *tracefs.TracefsObjects
-	var fsLnk link.Link
-	if fsGate {
-		objs := new(tracefs.TracefsObjects)
-		if err := tracefs.LoadTracefsObjects(objs, nil); err != nil {
-			slog.Info("fs tracing disabled", "err", err)
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: bpfDetail(err)})
-		} else {
-			var fsCfgErr error
-			if err := objs.FsAgentCfg.Update(uint32(0), uint8(1), ebpf.UpdateAny); err != nil {
-				fsCfgErr = err
-				slog.Warn("fs cfg map update", "err", err)
-			}
-			fsObjs = objs
-			lnk, err := link.AttachRawTracepoint(link.RawTracepointOptions{
-				Name:    "sys_enter",
-				Program: objs.HandleFsSysEnter,
-			})
-			if err != nil {
-				slog.Info("fs sys_enter attach failed", "err", err)
-				bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: bpfDetail(err)})
-				_ = objs.Close()
-				fsObjs = nil
-			} else {
-				fsLnk = lnk
-				rd, err := ringbuf.NewReader(objs.FsEvents)
-				if err != nil {
-					slog.Info("fs ringbuf reader failed", "err", err)
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: bpfDetail(err)})
-					_ = lnk.Close()
-					_ = objs.Close()
-					fsObjs = nil
-					fsLnk = nil
-				} else {
-					fsRd.R = rd
-					fsOK := true
-					fsDetail := ""
-					if fsCfgErr != nil {
-						fsOK = false
-						fsDetail = bpfDetail(fsCfgErr)
-						if fsDetail == "" {
-							fsDetail = "fs_agent_cfg map update failed (fs events disabled in BPF)"
-						}
-					}
-					bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: fsOK, Detail: fsDetail})
-					slog.Info("tracing fs events (openat+create, unlink, rename, chmod)")
-					defer func() {
-						if fsObjs != nil {
-							stats.setFSRingbufReserveFailures(readUint32PerCPUArraySum(fsObjs.FsRingbufReserveFailures, "fs_ringbuf_reserve_failures"))
-						}
-						fsRd.Close()
-						if fsLnk != nil {
-							_ = fsLnk.Close()
-						}
-						if fsObjs != nil {
-							_ = fsObjs.Close()
-						}
-					}()
-				}
-			}
-		}
-	}
-
-	var ktlsRd ringReader
-	defer ktlsRd.Close()
-	var ktlsObjs *tracektls.TracektlsObjects
-	var ktlsLnk link.Link
-	if kR, kO, kL, err := startKTLSTrace(); err != nil {
-		slog.Info("ktls offload trace disabled", "err", err)
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (ktls)", OK: false, Detail: bpfDetail(err)})
-	} else {
-		ktlsRd.R = kR
-		ktlsObjs, ktlsLnk = kO, kL
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (ktls)", OK: true})
-		slog.Info("tracing setsockopt(SOL_TLS) for KTLS offload detection")
-		defer ktlsObjs.Close()
-		defer ktlsLnk.Close()
-		defer func() {
-			if ktlsObjs != nil {
-				stats.setKTLSRingbufReserveFailures(readUint32PerCPUArraySum(ktlsObjs.KtlsRingbufReserveFailures, "ktls_ringbuf_reserve_failures"))
-			}
-		}()
-	}
-
-	// H7: detect-mode IPv6 observe-only hooks. Loaded only when cfg.Mode is
-	// not defend — defend's own cgroup/connect6+sendmsg6 programs already
-	// attach there (and cgroup hook attach is single-program by default).
-	// Attach failures (very old kernels lacking cgroup/connect6 support, or
-	// missing /sys/fs/cgroup mount) are best-effort: the agent continues
-	// without IPv6 visibility, the digest's coverage scope reflects the gap.
-	var ipv6ObsRd ringReader
-	defer ipv6ObsRd.Close()
-	var ipv6ObsObjs *traceipv6.Traceipv6Objects
-	var ipv6ObsConnectLnk, ipv6ObsSendmsgLnk link.Link
-	if cfg.Mode != config.ModeDefend {
-		cgPath := cfg.CgroupAttachPath
-		if cgPath == "" {
-			cgPath = "/sys/fs/cgroup"
-		}
-		if r, o, c, s, err := startIPv6ObsTrace(cgPath); err != nil {
-			slog.Info("ipv6 observe-only trace disabled", "err", err)
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: false, Detail: bpfDetail(err)})
-		} else {
-			ipv6ObsRd.R = r
-			ipv6ObsObjs = o
-			ipv6ObsConnectLnk = c
-			ipv6ObsSendmsgLnk = s
-			bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: true})
-			slog.Info("tracing IPv6 egress (observe-only)")
-			defer func() {
-				if ipv6ObsObjs != nil {
-					stats.setIPv6RingbufReserveFailures(readUint32PerCPUArraySum(ipv6ObsObjs.Ipv6ObsRingbufReserveFailures, "ipv6_obs_ringbuf_reserve_failures"))
-				}
-				ipv6ObsRd.Close()
-				if ipv6ObsSendmsgLnk != nil {
-					_ = ipv6ObsSendmsgLnk.Close()
-				}
-				if ipv6ObsConnectLnk != nil {
-					_ = ipv6ObsConnectLnk.Close()
-				}
-				if ipv6ObsObjs != nil {
-					_ = ipv6ObsObjs.Close()
-				}
-			}()
-		}
-	}
-
-	// Attach bpf() audit tracing only after other BPF collections finish loading.
-	// Otherwise coldstep's own bpf(2) syscalls during object load can fill the small
-	// audit ringbuf before readBPFAuditRing starts, dropping later canary traffic (e.g. bpftool).
-	if bR, bO, bL, err := startBPFAuditTrace(); err != nil {
-		slog.Info("bpf audit trace disabled", "err", err)
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})
-	} else {
-		bpfAuditRd.R = bR
-		bpfAuditObjs, bpfAuditLnk = bO, bL
-		bpfSt = append(bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: true})
-		slog.Info("tracing bpf() syscall audit (raw_tp/sys_enter)")
-		defer bpfAuditObjs.Close()
-		defer bpfAuditLnk.Close()
-		defer func() {
-			if bpfAuditObjs != nil {
-				stats.setBPFAuditRingbufReserveFailures(readUint32PerCPUArraySum(bpfAuditObjs.BpfAuditReserveFailures, "bpf_audit_ringbuf_reserve_failures"))
-			}
-		}()
-	}
-
-	if cfg.EventsLogPath != "" {
-		meta, err := telemetry.BuildMeta(agentVersionString(), bpfSt, cfg.DetectProfile, string(cfg.Mode))
-		if err != nil {
-			slog.Warn("build meta", "err", err)
-		} else {
-			if capabilityEnabled(procTreeGate, bpfSt, "sched_process_fork") {
-				if meta.Capabilities == nil {
-					meta.Capabilities = make(map[string]bool)
-				}
-				meta.Capabilities["proc_tree"] = true
-			}
-			if capabilityEnabled(tlsSNIGate, bpfSt, "raw_tp/sys_enter (connect, sendto, http sniff, tls)") {
-				if meta.Capabilities == nil {
-					meta.Capabilities = make(map[string]bool)
-				}
-				meta.Capabilities["tls_sni"] = true
-			}
-			if capabilityEnabled(fsGate, bpfSt, "raw_tp/sys_enter (fs)") {
-				if meta.Capabilities == nil {
-					meta.Capabilities = make(map[string]bool)
-				}
-				meta.Capabilities["fs_events"] = true
-			}
-			meta.AllowlistIPCount = defendCompiled.AllowedIPv4.Len()
-			meta.AllowlistEntryCount = defendState.snapshot().allowlistSize
-			if len(defendCompiled.WildcardRiskDomains) > 0 {
-				meta.WildcardRiskDomains = append([]string(nil), defendCompiled.WildcardRiskDomains...)
-			}
-			meta.UnresolvedDomains = defendCompiled.UnresolvedDomains
-			meta.RunnerHasIPv6 = cfg.RunnerHasIPv6
-			if runnerEnv != RunnerEnvStandard {
-				meta.RunnerEnv = runnerEnv
-			}
-			// H14 v0.4.0 — IPv6 cgroup6 hooks (defend object) enforce only when
-			// defend mode is active AND at least one AAAA resolved into the
-			// allowed_ipv6 LPM trie. An empty trie in defend mode is the
-			// "block-all IPv6" posture; we still surface that as enforce
-			// because the hook denies every non-loopback IPv6 destination.
-			ipv6Enforced := cfg.Mode == config.ModeDefend && hasDefend
-			meta.Coverage = buildCoverageReport(bpfSt, tlsSNIGate, ioUringRd.R != nil, ipv6Enforced, 0)
-			if err := telemetry.AppendJSONL(cfg.EventsLogPath, meta, signer); err != nil {
-				slog.Warn("meta jsonl", "err", err)
-			}
-		}
-	}
+	s.writeStartupMeta()
 
 	runCtx, runCancel := context.WithCancel(ctx)
-	defer runCancel()
+	s.cleanup.push(runCancel)
 
 	go func() {
 		<-runCtx.Done()
-		execRd.Close()
-		connRd.Close()
-		udpRd.Close()
-		httpRd.Close()
-		tlsRd.Close()
-		tcpStateRd.Close()
-		ioUringRd.Close()
-		ioUringTLSRd.Close()
-		denyRd.Close()
-		lsmDenyRd.Close()
-		egressBackstopRd.Close()
-		selfDefenseRd.Close()
-		dnsRd.Close()
-		bpfAuditRd.Close()
-		forkRd.Close()
-		fsRd.Close()
-		ktlsRd.Close()
-		ipv6ObsRd.Close()
+		s.closeAllReaders()
 	}()
 
 	slog.Info("coldstep event readers started", "mode", string(cfg.Mode))
 
-	// Each reader goroutine sends one error on exit; buffer must fit all sends before wg.Wait returns.
-	readerCount := 1
-	if forkRd.R != nil {
-		readerCount++
-	}
-	if fsRd.R != nil {
-		readerCount++
-	}
-	if connRd.R != nil {
-		readerCount++
-	}
-	if udpRd.R != nil {
-		readerCount++
-	}
-	if httpRd.R != nil {
-		readerCount++
-	}
-	if tlsRd.R != nil {
-		readerCount++
-	}
-	if tcpStateRd.R != nil {
-		readerCount++
-	}
-	if ioUringRd.R != nil {
-		readerCount++
-	}
-	if ioUringTLSRd.R != nil {
-		readerCount++
-	}
-	if denyRd.R != nil {
-		readerCount++
-	}
-	if egressBackstopRd.R != nil {
-		readerCount++
-	}
-	if lsmDenyRd.R != nil {
-		readerCount++
-	}
-	if selfDefenseRd.R != nil {
-		readerCount++
-	}
-	if dnsRd.R != nil {
-		readerCount++
-	}
-	if bpfAuditRd.R != nil {
-		readerCount++
-	}
-	if ktlsRd.R != nil {
-		readerCount++
-	}
-	if ipv6ObsRd.R != nil {
-		readerCount++
-	}
-	if hasDefend {
-		readerCount++
-	}
-	if hasLSM {
-		readerCount++
-	}
-
 	var wg sync.WaitGroup
-	errCh := make(chan error, readerCount)
+	errCh := make(chan error, s.countReaders())
 
 	// sendReaderErr cancels runCtx whenever a reader returns a fatal error
-	// (anything other than context.Canceled). Without this, an isolated
-	// reader failure left the canary and heartbeat goroutines blocked on
-	// runCtx.Done forever — wg.Wait() then hung the whole agent (P3-bug-audit
-	// Bug 5). The cancel propagates to every peer goroutine and lets the
-	// outer wg.Wait return promptly so the deferred digest/telemetry writers
-	// can run.
+	// (anything other than context.Canceled) so peer goroutines unblock and
+	// wg.Wait returns promptly, letting the deferred digest/telemetry writers run
+	// (P3-bug-audit Bug 5).
 	sendReaderErr := func(err error) {
 		if err != nil && !errors.Is(err, context.Canceled) {
 			runCancel()
@@ -1141,280 +163,11 @@ func Run(ctx context.Context, cfg config.Config) error {
 		errCh <- err
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		sendReaderErr(readExecRing(runCtx, cfg, execRd.R, stats, &seq, &jsonlMu, signer))
-	}()
+	s.spawnReaders(runCtx, &wg, sendReaderErr)
 
-	if forkRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readForkRing(runCtx, cfg, forkRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-
-	if fsRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readFSRing(runCtx, cfg, fsRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-
-	if connRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readConnectRing(runCtx, cfg, connRd.R, dnsCache, pol, stats, &seq, &jsonlMu, canary, signer))
-		}()
-	}
-
-	// Telemetry integrity canary injection goroutine: writes a monotonic
-	// sequence number to the canary_trigger BPF map every canaryInterval.
-	// The BPF program picks it up on the next sys_enter and emits a canary
-	// event through connect_events ringbuf. If the canary doesn't arrive
-	// in readConnectRing, canaryState records a failure.
-	if syscallObjs != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			var seqNr uint64
-			ticker := time.NewTicker(canaryInterval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-runCtx.Done():
-					return
-				case <-ticker.C:
-					seqNr++
-					var k uint32
-					if err := syscallObjs.CanaryTrigger.Update(&k, &seqNr, ebpf.UpdateAny); err != nil {
-						slog.Warn("canary trigger write failed", "err", err)
-						continue
-					}
-					canary.noteSent(seqNr)
-					slog.Debug("canary armed", "seq", seqNr)
-
-					// Check if previous canary timed out.
-					if canary.checkAndRecordFailure() {
-						slog.Error("telemetry integrity canary FAILED — pipeline may be compromised",
-							"last_sent", canary.snapshot().lastSent,
-							"last_received", canary.snapshot().lastReceived)
-					}
-				}
-			}
-		}()
-	}
-
-	// H16: DNS allowlist trust hardening — background re-resolution goroutine.
-	// Periodically re-resolves the startup allowlist and emits a `dns_drift`
-	// JSONL event when the IPv4 set changes. WARNING-ONLY: the live BPF enforce
-	// policy is intentionally not updated mid-run (mid-job allowlist expansion
-	// is a TOCTOU risk — a freshly-resolved CDN tenant IP could be added between
-	// the lookup and the egress attempt). Only spins up when an allowlist was
-	// compiled (defend mode with at least one resolvable domain).
-	if len(defendCompiled.Domains) > 0 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			// SECURITY (dns-cache-trust): refresh the defend dns_cache owner
-			// fallback from the trusted resolver on every re-resolution tick so a
-			// domain whose A-records rotate mid-job stays reachable via the
-			// trusted late-binding path — without ever trusting sniffed traffic.
-			// Runs on both drift and no-drift ticks (the IPv4 LPM stays frozen;
-			// only the owner fallback, which was already a live path, is updated).
-			reseedDefendOwners := func() {
-				if defendObjs.DnsCache == nil || len(cfg.AllowedDomains) == 0 {
-					return
-				}
-				rctx, rcancel := context.WithTimeout(runCtx, 60*time.Second)
-				owners := policy.ResolveOwners(rctx, cfg.AllowedDomains, nil, allowlistReCheckMaxAttempts)
-				rcancel()
-				seeded := seedDefendOwners(defendObjs.DnsCache, owners, stats.addDNSCacheUpdateFailure)
-				slog.Debug("defend dns_cache owner map refreshed from trusted resolver", "entries", seeded)
-			}
-			onDrift := func(dr policy.DriftReport) {
-				stats.addDNSDrift()
-				reseedDefendOwners()
-				if cfg.EventsLogPath == "" {
-					return
-				}
-				ev := telemetry.DNSDriftEvent{
-					Type:        telemetry.EventTypeDNSDrift,
-					TS:          time.Now().UTC().Format(time.RFC3339Nano),
-					AddedIPs:    dr.AddedIPs,
-					RemovedIPs:  dr.RemovedIPs,
-					DomainCount: len(defendCompiled.Domains),
-					CheckedAt:   dr.CheckedAt,
-				}
-				jsonlMu.Lock()
-				err := telemetry.AppendJSONL(cfg.EventsLogPath, ev, signer)
-				jsonlMu.Unlock()
-				if err != nil {
-					slog.Warn("dns_drift jsonl append failed", "err", err)
-				}
-			}
-			onClean := func() {
-				reseedDefendOwners()
-				slog.Debug("allowlist DNS re-resolution: no drift", "domains", len(defendCompiled.Domains))
-			}
-			runDNSDriftWatch(runCtx, defendCompiled, nil, allowlistReCheckMaxAttempts, allowlistReCheckInterval, onDrift, onClean)
-		}()
-	}
-
-	// Capability 7A: BPF self-protection heartbeat monitor.
-	// Periodically polls the main sys_enter BPF program to ensure it's still attached and valid.
-	if syscallObjs != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			ticker := time.NewTicker(30 * time.Second)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-runCtx.Done():
-					return
-				case <-ticker.C:
-					// Prog.Info() uses bpf_obj_get_info_by_fd.
-					// If the BPF program was detached and garbage collected,
-					// or the fd was somehow broken, this will return an error.
-					info, err := syscallObjs.HandleRawSysEnter.Info()
-					if err != nil {
-						slog.Error("BPF heartbeat FAILED: sys_enter program get_info error", "err", err)
-						stats.addBPFHeartbeatFailure()
-						continue
-					}
-					id, ok := info.ID()
-					if ok {
-						slog.Debug("BPF heartbeat OK", "id", id)
-					} else {
-						slog.Warn("BPF heartbeat: program has no ID")
-						stats.addBPFHeartbeatFailure()
-					}
-				}
-			}
-		}()
-	}
-
-	if udpRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readUDPRing(runCtx, cfg, udpRd.R, dnsCache, pol, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if httpRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readHTTPRing(runCtx, cfg, httpRd.R, pol, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if tlsRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readTLSRing(runCtx, cfg, tlsRd.R, pol, stats, &seq, &jsonlMu, signer, ktlsTr))
-		}()
-	}
-	if tcpStateRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readTCPStateRing(runCtx, cfg, tcpStateRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if ioUringRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readIoUringRing(runCtx, cfg, ioUringRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if ioUringTLSRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readIoUringTLSRing(runCtx, cfg, ioUringTLSRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if denyRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readDenyRing(runCtx, cfg, denyRd.R, &seq, &jsonlMu, defendState, signer, "cgroup", dnsCache))
-		}()
-	}
-	if egressBackstopRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readEgressBackstopRing(runCtx, cfg, egressBackstopRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if lsmDenyRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readDenyRing(runCtx, cfg, lsmDenyRd.R, &seq, &jsonlMu, defendState, signer, "lsm", dnsCache))
-		}()
-	}
-	if selfDefenseRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readBpfSelfDefenseRing(runCtx, cfg, selfDefenseRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if dnsRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readDNSRing(runCtx, dnsRd.R, dnsCache, stats))
-		}()
-	}
-	if bpfAuditRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readBPFAuditRing(runCtx, cfg, bpfAuditRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-	if ktlsRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readKTLSRing(runCtx, cfg, ktlsRd.R, stats, &seq, &jsonlMu, signer, ktlsTr))
-		}()
-	}
-	if ipv6ObsRd.R != nil {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(readIPv6ObsRing(runCtx, cfg, ipv6ObsRd.R, stats, &seq, &jsonlMu, signer))
-		}()
-	}
-
-	if hasDefend {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(watchMapIntegrity(runCtx, cfg, defendObjs.DefendCfg, defendObjs.AllowedIpv4, defendObjs.IgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer))
-		}()
-	}
-	if hasLSM {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			sendReaderErr(watchMapIntegrity(runCtx, cfg, defendObjs.LsmDefendCfg, defendObjs.LsmAllowedIpv4, defendObjs.LsmIgnoredIpv4Lpm, defendCompiled, pol, stats, defendState, &seq, &jsonlMu, signer))
-		}()
-	}
-
-	// Defend-mode readiness: write only after the deny reader goroutine(s) are alive,
-	// so the GitHub Action's probe steps (which start as soon as readiness flips) cannot
-	// race the reader being attached. Detect-mode readiness was written above.
+	// Defend-mode readiness: write only after the deny reader goroutine(s) are
+	// alive, so the GitHub Action's probe steps cannot race the reader being
+	// attached. Detect-mode readiness was written above.
 	var readyErr error
 	if cfg.Mode == config.ModeDefend {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
