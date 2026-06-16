@@ -26,7 +26,7 @@ import (
 )
 
 func compileDefendAllowlist(ctx context.Context, cfg config.Config, resolver policy.LookupIPFunc, maxAttempts int) (policy.CompileResult, error) {
-	if cfg.Mode != config.ModeDefend {
+	if !cfg.ModeConfig().Defend {
 		return policy.CompileResult{}, nil
 	}
 	if len(cfg.AllowedDomains) == 0 {

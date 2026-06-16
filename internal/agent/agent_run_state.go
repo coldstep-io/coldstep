@@ -51,8 +51,9 @@ func (c *runCleanup) unwind() {
 // runState holds everything the phase helpers read or mutate. Pointer receiver
 // only; do not copy.
 type runState struct {
-	cfg config.Config
-	pol *policy.Policy
+	cfg  config.Config
+	mode config.ModeConfig
+	pol  *policy.Policy
 
 	stats       *runStats
 	defendState *defendState
@@ -110,7 +111,7 @@ type runState struct {
 // finalizeAllowlist performs the defend-mode resolver auto-allow, records the
 // compiled allowlist snapshot for the digest, and warns on unresolved domains.
 func (s *runState) finalizeAllowlist(compileCtx context.Context) {
-	if s.cfg.Mode == config.ModeDefend && !s.cfg.NoResolverAutoAllow {
+	if s.mode.ResolverAutoAllow {
 		resolverV4, resolverV6 := autoAllowSystemResolvers(&s.defendCompiled, policy.DefaultResolvConfPaths()...)
 		for _, ip := range resolverV4 {
 			slog.Info("defend: system DNS resolver auto-allowed", "resolver", ip.String(), "family", "ipv4")
@@ -136,7 +137,7 @@ func (s *runState) finalizeAllowlist(compileCtx context.Context) {
 	for _, d := range s.defendCompiled.UnresolvedDomains {
 		slog.Warn("allowlist domain did not resolve", "domain", d)
 	}
-	if s.cfg.Mode == config.ModeDefend && len(s.defendCompiled.UnresolvedDomains) > 0 {
+	if s.mode.Defend && len(s.defendCompiled.UnresolvedDomains) > 0 {
 		slog.Warn("allowlist domains unresolved — legitimate traffic to these domains may be blocked",
 			"count", len(s.defendCompiled.UnresolvedDomains))
 	}
@@ -182,7 +183,7 @@ func (s *runState) writeStartupMeta() {
 		meta.RunnerEnv = s.runnerEnv
 	}
 	// H14 v0.4.0 — IPv6 cgroup6 hooks enforce only when defend mode is active.
-	ipv6Enforced := s.cfg.Mode == config.ModeDefend && s.hasDefend
+	ipv6Enforced := s.mode.Defend && s.hasDefend
 	meta.Coverage = buildCoverageReport(s.bpfSt, s.tlsSNIGate, s.ioUringRd.R != nil, ipv6Enforced, 0)
 	if err := telemetry.AppendJSONL(s.cfg.EventsLogPath, meta, s.signer); err != nil {
 		slog.Warn("meta jsonl", "err", err)
@@ -216,7 +217,7 @@ func (s *runState) writeShutdownTelemetry() {
 	} else {
 		shutdownMeta.EventsFileSHA256 = sum
 	}
-	ipv6EnforcedShutdown := s.cfg.Mode == config.ModeDefend && s.hasDefend
+	ipv6EnforcedShutdown := s.mode.Defend && s.hasDefend
 	shutdownMeta.Coverage = buildCoverageReport(s.bpfSt, s.tlsSNIGate, s.ioUringRd.R != nil, ipv6EnforcedShutdown, s.stats.quicObservedTotal())
 	if err := telemetry.AppendJSONL(s.cfg.EventsLogPath, shutdownMeta, s.signer); err != nil {
 		slog.Warn("shutdown meta jsonl", "err", err)
