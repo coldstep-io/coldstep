@@ -28,7 +28,6 @@ import (
 	"github.com/coldstep-io/coldstep/internal/bpf/traceexec"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefork"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracefs"
-	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
 )
@@ -37,7 +36,7 @@ import (
 // hooks where the kernel supports them). No-op outside defend mode. Sets
 // s.hasDefend / s.hasLSM / s.defendObjs and the defend ring readers.
 func (s *runState) loadDefend(compileCtx context.Context) error {
-	if s.cfg.Mode != config.ModeDefend {
+	if !s.mode.Defend {
 		return nil
 	}
 	haveLSM := false
@@ -92,7 +91,7 @@ func (s *runState) loadDefend(compileCtx context.Context) error {
 
 	backend := chooseDefendBackend(
 		defendBackendConfig{
-			modeDefend: s.cfg.Mode == config.ModeDefend,
+			modeDefend: s.mode.Defend,
 			haveLSM:    s.hasLSM,
 		},
 		lsmAttachErr,
@@ -416,7 +415,7 @@ func (s *runState) armSyscall() error {
 	if err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		s.bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
-		if s.cfg.Mode == config.ModeDefend {
+		if s.mode.Defend {
 			// Keep the status file for the composite post step; record operational
 			// failure explicitly instead of deleting the path.
 			_ = writeAgentStatus(s.cfg.AgentStatusPath, false)
@@ -712,10 +711,10 @@ func (s *runState) loadKTLS() {
 // loadIPv6Obs attaches the detect-mode IPv6 observe-only cgroup hooks. No-op in
 // defend mode (defend attaches its own cgroup6 programs).
 func (s *runState) loadIPv6Obs() {
-	// H7: detect-mode IPv6 observe-only hooks. Loaded only when cfg.Mode is
-	// not defend — defend's own cgroup/connect6+sendmsg6 programs already
-	// attach there (cgroup hook attach is single-program by default).
-	if s.cfg.Mode == config.ModeDefend {
+	// H7: detect-mode IPv6 observe-only hooks. Loaded only in detect mode —
+	// defend's own cgroup/connect6+sendmsg6 programs already attach there
+	// (cgroup hook attach is single-program by default).
+	if s.mode.Defend {
 		return
 	}
 	cgPath := s.cfg.CgroupAttachPath

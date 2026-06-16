@@ -137,7 +137,7 @@ func buildCoverageReport(bpf []telemetry.BPFStatus, tlsSNIGate, ioUringAttached,
 
 // digestDefendLabel maps internal defend snapshot + config to the digest/JSONL-facing mode name.
 func digestDefendLabel(cfg config.Config, snap defendSnapshot) string {
-	if cfg.Mode != config.ModeDefend {
+	if !cfg.ModeConfig().Defend {
 		return snap.mode
 	}
 	if strings.TrimSpace(snap.mode) != "" {

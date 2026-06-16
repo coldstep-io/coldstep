@@ -43,6 +43,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	s := &runState{
 		cfg:            cfg,
+		mode:           cfg.ModeConfig(),
 		pol:            pol,
 		stats:          newRunStats(),
 		defendState:    newDefendState(),
@@ -121,7 +122,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 
 	// Detect mode: ready after syscall trace initialized. Defend mode defers
 	// readiness until after the deny reader goroutine is launched (below).
-	if cfg.Mode != config.ModeDefend {
+	if !s.mode.DeferReadiness {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			return fmt.Errorf("agent ready status: %w", err)
 		}
@@ -169,7 +170,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 	// alive, so the GitHub Action's probe steps cannot race the reader being
 	// attached. Detect-mode readiness was written above.
 	var readyErr error
-	if cfg.Mode == config.ModeDefend {
+	if s.mode.DeferReadiness {
 		if err := writeAgentStatus(cfg.AgentStatusPath, true); err != nil {
 			readyErr = fmt.Errorf("agent ready status: %w", err)
 			runCancel()

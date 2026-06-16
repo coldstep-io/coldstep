@@ -198,3 +198,39 @@ func (c Config) Policy() (*policy.Policy, error) {
 func (c Config) PublicMode() string {
 	return string(c.Mode)
 }
+
+// ModeConfig carries the behavioral flags derived once from Config.Mode (and the
+// mode-coupled inputs that gate them), so consumers branch on a named capability
+// instead of repeating `Mode == ModeDefend` comparisons. Resolve it once at
+// startup via Config.ModeConfig() and pass it (or its booleans) to consumers.
+type ModeConfig struct {
+	// Defend is true in defend mode (block non-allowlisted IPv4 egress).
+	Defend bool
+	// Detect is true in detect mode (observe-only telemetry); always !Defend.
+	Detect bool
+	// AllowlistEnforced is true when egress is gated against the effective
+	// allowlist in-kernel (defend only).
+	AllowlistEnforced bool
+	// DenyEmitted is true when the agent emits `deny` events (defend only).
+	DenyEmitted bool
+	// DeferReadiness is true when .coldstep-ready.json must be written only
+	// after the deny reader goroutines are alive (defend only); detect writes
+	// readiness as soon as syscall tracing attaches.
+	DeferReadiness bool
+	// ResolverAutoAllow is true when the host's DNS resolver IPs are folded into
+	// the allowlist (defend mode unless explicitly opted out).
+	ResolverAutoAllow bool
+}
+
+// ModeConfig resolves the mode-derived behavioral flags for this config.
+func (c Config) ModeConfig() ModeConfig {
+	defend := c.Mode == ModeDefend
+	return ModeConfig{
+		Defend:            defend,
+		Detect:            !defend,
+		AllowlistEnforced: defend,
+		DenyEmitted:       defend,
+		DeferReadiness:    defend,
+		ResolverAutoAllow: defend && !c.NoResolverAutoAllow,
+	}
+}
