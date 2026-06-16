@@ -52,10 +52,7 @@ jobs:
           test -f action.yml
           test -x bin/coldstep
           tar -czf coldstep-action-bundle.tar.gz \
-            action.yml bin/coldstep scripts/build-agent-linux.sh \
-            scripts/coldstep_bootstrap/README.md \
-            scripts/coldstep_bootstrap/allowlist-domains-v1.txt \
-            scripts/coldstep_bootstrap/allowlist-ips-v1.txt
+            action.yml bin/coldstep scripts/build-agent-linux.sh
 
       - name: Install Syft (pinned)
         env:
