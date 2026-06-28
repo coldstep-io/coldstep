@@ -74,23 +74,23 @@ jobs:
           ls -la sbom-go.cdx.json sbom-action.cdx.json
 
       - name: Attest — build provenance (Go binary)
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4
         with:
           subject-path: '${{ github.workspace }}/bin/coldstep'
 
       - name: Attest — build provenance (action bundle tarball)
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4
         with:
           subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
 
       - name: Attest — SBOM for Go binary subject
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4
         with:
           subject-path: '${{ github.workspace }}/bin/coldstep'
           sbom-path: '${{ github.workspace }}/sbom-go.cdx.json'
 
       - name: Attest — SBOM for action bundle subject
-        uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26  # v4
+        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763  # v4
         with:
           subject-path: '${{ github.workspace }}/coldstep-action-bundle.tar.gz'
           sbom-path: '${{ github.workspace }}/sbom-action.cdx.json'
