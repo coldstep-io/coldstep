@@ -15,7 +15,7 @@
     "undici": "^6.23.1"
   },
   "devDependencies": {
-    "@types/node": "^25.9.3",
+    "@types/node": "^26.1.2",
     "esbuild": "^0.28.1",
     "typescript": "^6.0.3"
   },
