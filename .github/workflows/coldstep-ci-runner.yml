@@ -99,7 +99,7 @@ jobs:
         if: steps.coldstep-build-cache.outputs.cache-hit != 'true'
         run: bash scripts/build-agent-linux.sh "$GITHUB_WORKSPACE"
       - name: Run gosec
-        uses: securego/gosec@9e6a9843d7a4a6e3e9a8539b02612c8a4aa3f889 # v2.27.1
+        uses: securego/gosec@deb54465fea23d19a77f037e11e6589021f8501d # v2.29.0
         with:
           args: '-exclude=G104,G204,G301,G302,G304,G306,G703,G704 ./...'
 
