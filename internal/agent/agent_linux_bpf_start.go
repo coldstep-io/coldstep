@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
 	"github.com/cilium/ebpf/rlimit"
@@ -32,19 +33,17 @@ func initMemlock() error {
 // cgroup + LSM defend load separately (internal/bpf/defend) when mode is defend.
 // When enableTLSSNI is true, sets tls_agent_cfg map so BPF emits TLS ClientHello captures.
 // tlsAgentCfgFailed is set when the map update fails (SNI path stays off in BPF) so callers can mark the hook degraded.
-func startSyscallTrace(enableTLSSNI bool) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {
+func startSyscallTrace(enableTLSSNI bool, btfCache *btf.Cache) (connRd, udpRd, httpRd, tlsRd *ringbuf.Reader, objs *traceconnect.TraceconnectObjects, lnk link.Link, tlsAgentCfgFailed bool, err error) {
 	objs = new(traceconnect.TraceconnectObjects)
 	// Default: fast verifier path (nil opts). Branch + instruction verifier logging makes
 	// LoadTraceconnectObjects disproportionately slow on hosted runners and can exceed the
 	// composite action's waitForAgentReady window (see src/main.ts). Opt in via env for debugging:
 	//   COLDSTEP_BPF_VERBOSE_VERIFY=1
-	var traceLoadOpts *ebpf.CollectionOptions
+	traceLoadOpts := &ebpf.CollectionOptions{Cache: btfCache}
 	if strings.TrimSpace(os.Getenv("COLDSTEP_BPF_VERBOSE_VERIFY")) != "" {
-		traceLoadOpts = &ebpf.CollectionOptions{
-			Programs: ebpf.ProgramOptions{
-				LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
-				LogSizeStart: 512 * 1024,
-			},
+		traceLoadOpts.Programs = ebpf.ProgramOptions{
+			LogLevel:     ebpf.LogLevelBranch | ebpf.LogLevelInstruction,
+			LogSizeStart: 512 * 1024,
 		}
 	}
 	if err = traceconnect.LoadTraceconnectObjects(objs, traceLoadOpts); err != nil {
@@ -130,9 +129,9 @@ func attachTCPConnectKprobes(objs *traceconnect.TraceconnectObjects) (kprobeLnk,
 // startKTLSTrace loads trace_ktls.bpf.c and attaches the setsockopt(SOL_TLS)
 // filter on raw_tp/sys_enter. Returns the ringbuf reader, objects (for the
 // reserve-failure counter), and the attach link. Closes intermediates on error.
-func startKTLSTrace() (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk link.Link, err error) {
+func startKTLSTrace(btfCache *btf.Cache) (rd *ringbuf.Reader, objs *tracektls.TracektlsObjects, lnk link.Link, err error) {
 	objs = new(tracektls.TracektlsObjects)
-	if err = tracektls.LoadTracektlsObjects(objs, nil); err != nil {
+	if err = tracektls.LoadTracektlsObjects(objs, &ebpf.CollectionOptions{Cache: btfCache}); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -219,9 +218,9 @@ func startIoUringTrace(objs *traceconnect.TraceconnectObjects, enhancedPeek bool
 // attaches its own cgroup/connect6 + cgroup/sendmsg6 programs, and cgroup
 // hook attach is single-program by default, so trying to load both would
 // fail with EBUSY. Callers must skip this in defend mode.
-func startIPv6ObsTrace(cgPath string) (rd *ringbuf.Reader, objs *traceipv6.Traceipv6Objects, connectLnk, sendmsgLnk link.Link, err error) {
+func startIPv6ObsTrace(cgPath string, btfCache *btf.Cache) (rd *ringbuf.Reader, objs *traceipv6.Traceipv6Objects, connectLnk, sendmsgLnk link.Link, err error) {
 	objs = new(traceipv6.Traceipv6Objects)
-	if err = traceipv6.LoadTraceipv6Objects(objs, nil); err != nil {
+	if err = traceipv6.LoadTraceipv6Objects(objs, &ebpf.CollectionOptions{Cache: btfCache}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 
@@ -256,9 +255,9 @@ func startIPv6ObsTrace(cgPath string) (rd *ringbuf.Reader, objs *traceipv6.Trace
 	return rd, objs, connectLnk, sendmsgLnk, nil
 }
 
-func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {
+func startBPFAuditTrace(btfCache *btf.Cache) (rd *ringbuf.Reader, objs *tracebpfaudit.TracebpfauditObjects, lnk link.Link, err error) {
 	objs = new(tracebpfaudit.TracebpfauditObjects)
-	if err = tracebpfaudit.LoadTracebpfauditObjects(objs, nil); err != nil {
+	if err = tracebpfaudit.LoadTracebpfauditObjects(objs, &ebpf.CollectionOptions{Cache: btfCache}); err != nil {
 		return nil, nil, nil, err
 	}
 
@@ -280,9 +279,9 @@ func startBPFAuditTrace() (rd *ringbuf.Reader, objs *tracebpfaudit.Tracebpfaudit
 	return rd, objs, lnk, nil
 }
 
-func startDNSTrace() (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, link.Link, error) {
+func startDNSTrace(btfCache *btf.Cache) (*ringbuf.Reader, *tracedns.TracednsObjects, link.Link, link.Link, error) {
 	objs := new(tracedns.TracednsObjects)
-	if err := tracedns.LoadTracednsObjects(objs, nil); err != nil {
+	if err := tracedns.LoadTracednsObjects(objs, &ebpf.CollectionOptions{Cache: btfCache}); err != nil {
 		return nil, nil, nil, nil, err
 	}
 

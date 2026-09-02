@@ -23,7 +23,7 @@ func TestSP2_LiteralIPv6ProgrammedIntoAllowedTrie(t *testing.T) {
 		t.Skip("requires root to load BPF defend objects")
 	}
 	objs := &defend.DefendObjects{}
-	if _, err := defend.LoadDefendObjectsForKernel(objs, true, defend.HaveIOUringLSM()); err != nil {
+	if _, err := defend.LoadDefendObjectsForKernel(objs, true, defend.HaveIOUringLSM(), nil); err != nil {
 		t.Fatalf("load defend objects: %v", err)
 	}
 	defer objs.Close()

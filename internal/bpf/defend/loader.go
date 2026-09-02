@@ -54,7 +54,7 @@ type LoadResult struct {
 // constructed either — defend cannot start.
 //
 // Caller is responsible for closing obj on shutdown.
-func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool) (LoadResult, error) {
+func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool, btfCache *btf.Cache) (LoadResult, error) {
 	spec, err := LoadDefend()
 	if err != nil {
 		return LoadResult{}, err
@@ -86,7 +86,8 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 	}
 
 	result := LoadResult{}
-	coll, err := ebpf.NewCollection(spec)
+	collOpts := ebpf.CollectionOptions{Cache: btfCache}
+	coll, err := ebpf.NewCollectionWithOptions(spec, collOpts)
 	if err != nil {
 		// Defensive fallback: BTF lookup may have succeeded but prog_load
 		// still rejected sendpage for some other reason (BTF mismatch,
@@ -99,7 +100,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 			}
 			delete(spec2.Programs, "lsm_socket_sendpage")
 			delete(spec2.Maps, "sendpage_observed")
-			coll, err = ebpf.NewCollection(spec2)
+			coll, err = ebpf.NewCollectionWithOptions(spec2, collOpts)
 		} else if wantLSM {
 			// Non-sendpage LSM load failure (e.g. CONFIG_BPF_LSM absent
 			// despite features.HaveProgramType(ebpf.LSM) returning ok,
@@ -115,7 +116,7 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 				return LoadResult{}, err2
 			}
 			stripAllLSM(spec2)
-			coll, err = ebpf.NewCollection(spec2)
+			coll, err = ebpf.NewCollectionWithOptions(spec2, collOpts)
 			if err == nil {
 				result.LSMFellBack = true
 				result.LSMFallbackErr = origLoadErr
