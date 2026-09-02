@@ -55,7 +55,7 @@ func bpfInLSMChain(t *testing.T) bool {
 func loadDefendForSelfDefenseTest(t *testing.T) *defend.DefendObjects {
 	t.Helper()
 	objs := &defend.DefendObjects{}
-	res, err := defend.LoadDefendObjectsForKernel(objs, true, defend.HaveIOUringLSM())
+	res, err := defend.LoadDefendObjectsForKernel(objs, true, defend.HaveIOUringLSM(), nil)
 	if err != nil {
 		t.Fatalf("load defend objects: %v", err)
 	}

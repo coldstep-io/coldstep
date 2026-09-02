@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/cilium/ebpf/link"
 	"github.com/coldstep-io/coldstep/internal/bpf/defend"
 	"github.com/coldstep-io/coldstep/internal/bpf/tracebpfaudit"
@@ -61,6 +62,13 @@ type runState struct {
 	ktlsTr      *ktlsTracker
 	dnsCache    *DNSCache
 	signer      *telemetry.Signer
+
+	// btfCache amortises kernel BTF decoding across the ~9 sequential BPF
+	// collection loads below (cilium/ebpf v0.22+ no longer caches this
+	// globally); without it each Load call re-parses /sys/kernel/btf/vmlinux
+	// from scratch, which can push probe attach past callers' readiness
+	// windows on slower runners.
+	btfCache *btf.Cache
 
 	bpfSt   []telemetry.BPFStatus
 	cleanup runCleanup

@@ -15,4 +15,4 @@
 // patterns used in this repo.
 package traceipv6
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 -cc clang -no-strip -target bpfel -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Traceipv6 ../../../bpf/trace_ipv6_obs.bpf.c -- -I../../../bpf -I/usr/include/bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.22.0 -cc clang -no-strip -target bpfel -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Traceipv6 ../../../bpf/trace_ipv6_obs.bpf.c -- -I../../../bpf -I/usr/include/bpf

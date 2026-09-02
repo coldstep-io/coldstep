@@ -52,7 +52,7 @@ func (s *runState) loadDefend(compileCtx context.Context) error {
 	// Phase 2.3: cgroup + LSM share one bpf2go object. The loader strips
 	// LSM programs (and their dedicated maps) from the spec when the
 	// kernel lacks CONFIG_BPF_LSM so prog_load doesn't fail.
-	loadResult, err := defend.LoadDefendObjectsForKernel(&s.defendObjs, haveLSM, haveIOUringLSM)
+	loadResult, err := defend.LoadDefendObjectsForKernel(&s.defendObjs, haveLSM, haveIOUringLSM, s.btfCache)
 	if err != nil {
 		return fmt.Errorf("load defend bpf objects: %w", err)
 	}
@@ -380,7 +380,7 @@ func (s *runState) attachDefendIPv6(cgPath string) {
 // loadExec loads the sched_process_exec tracepoint (mandatory) and its ring
 // reader. Returns a fatal error if the exec probe cannot attach.
 func (s *runState) loadExec() error {
-	if err := traceexec.LoadTraceexecObjects(&s.execObjs, nil); err != nil {
+	if err := traceexec.LoadTraceexecObjects(&s.execObjs, &ebpf.CollectionOptions{Cache: s.btfCache}); err != nil {
 		return fmt.Errorf("load bpf objects: %w", err)
 	}
 	s.cleanup.push(func() { _ = s.execObjs.Close() })
@@ -411,7 +411,7 @@ func (s *runState) loadExec() error {
 // sniff/TLS) plus its companion kprobes and the io_uring submit_sqe probe.
 // In defend mode a syscall-trace attach failure is fatal.
 func (s *runState) armSyscall() error {
-	cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(s.tlsSNIGate)
+	cR, uR, hR, tR, objs, lnk, tlsCfgFailed, err := startSyscallTrace(s.tlsSNIGate, s.btfCache)
 	if err != nil {
 		slog.Info("syscall egress tracing disabled", "err", err)
 		s.bpfSt[1] = telemetry.BPFStatus{Name: "raw_tp/sys_enter (connect, sendto, http sniff, tls)", OK: false, Detail: bpfDetail(err)}
@@ -542,7 +542,7 @@ func (s *runState) armIoUringTrace() {
 // loadDNS attaches the DNS recvfrom reply sniffer (best-effort) and registers
 // its enrichment-side dns_cache map with the userspace DNS cache.
 func (s *runState) loadDNS() {
-	rd, objs, le, lx, err := startDNSTrace()
+	rd, objs, le, lx, err := startDNSTrace(s.btfCache)
 	if err != nil {
 		slog.Info("dns reply sniffing disabled", "err", err)
 		s.bpfSt[2] = telemetry.BPFStatus{Name: "dns recvfrom sniff", OK: false, Detail: bpfDetail(err)}
@@ -575,7 +575,7 @@ func (s *runState) loadFork() {
 		return
 	}
 	objs := new(tracefork.TraceforkObjects)
-	if err := tracefork.LoadTraceforkObjects(objs, nil); err != nil {
+	if err := tracefork.LoadTraceforkObjects(objs, &ebpf.CollectionOptions{Cache: s.btfCache}); err != nil {
 		slog.Info("sched_process_fork tracing disabled", "err", err)
 		s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "sched_process_fork", OK: false, Detail: bpfDetail(err)})
 		return
@@ -627,7 +627,7 @@ func (s *runState) loadFS() {
 		return
 	}
 	objs := new(tracefs.TracefsObjects)
-	if err := tracefs.LoadTracefsObjects(objs, nil); err != nil {
+	if err := tracefs.LoadTracefsObjects(objs, &ebpf.CollectionOptions{Cache: s.btfCache}); err != nil {
 		slog.Info("fs tracing disabled", "err", err)
 		s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (fs)", OK: false, Detail: bpfDetail(err)})
 		return
@@ -689,7 +689,7 @@ func (s *runState) loadFS() {
 // loadKTLS attaches the setsockopt(SOL_TLS) KTLS-offload detection probe
 // (best-effort).
 func (s *runState) loadKTLS() {
-	kR, kO, kL, err := startKTLSTrace()
+	kR, kO, kL, err := startKTLSTrace(s.btfCache)
 	if err != nil {
 		slog.Info("ktls offload trace disabled", "err", err)
 		s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (ktls)", OK: false, Detail: bpfDetail(err)})
@@ -721,7 +721,7 @@ func (s *runState) loadIPv6Obs() {
 	if cgPath == "" {
 		cgPath = "/sys/fs/cgroup"
 	}
-	r, o, c, sm, err := startIPv6ObsTrace(cgPath)
+	r, o, c, sm, err := startIPv6ObsTrace(cgPath, s.btfCache)
 	if err != nil {
 		slog.Info("ipv6 observe-only trace disabled", "err", err)
 		s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "cgroup/connect6+sendmsg6 (ipv6_obs)", OK: false, Detail: bpfDetail(err)})
@@ -754,7 +754,7 @@ func (s *runState) loadIPv6Obs() {
 // coldstep's own object-load bpf(2) calls don't flood the small audit ringbuf
 // before its reader starts (best-effort).
 func (s *runState) loadBPFAudit() {
-	bR, bO, bL, err := startBPFAuditTrace()
+	bR, bO, bL, err := startBPFAuditTrace(s.btfCache)
 	if err != nil {
 		slog.Info("bpf audit trace disabled", "err", err)
 		s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "raw_tp/sys_enter (bpf audit)", OK: false, Detail: bpfDetail(err)})

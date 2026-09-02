@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/cilium/ebpf"
+	"github.com/cilium/ebpf/btf"
 	"github.com/coldstep-io/coldstep/internal/config"
 	"github.com/coldstep-io/coldstep/internal/policy"
 	"github.com/coldstep-io/coldstep/internal/telemetry"
@@ -50,6 +51,7 @@ func Run(ctx context.Context, cfg config.Config) error {
 		canary:         newCanaryState(),
 		ktlsTr:         newKTLSTracker(),
 		dnsCache:       NewDNSCache(),
+		btfCache:       btf.NewCache(),
 		kernel:         kernelRelease(),
 		runnerEnv:      DetectRunnerEnv(),
 		compatWarnings: CheckRunnerCompat(),

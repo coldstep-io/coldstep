@@ -10,4 +10,4 @@
 // patterns used in this repo.
 package traceexec
 
-//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.21.0 -cc clang -no-strip -target bpfel -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Traceexec ../../../bpf/trace_exec.bpf.c -- -I../../../bpf -I/usr/include/bpf
+//go:generate go run github.com/cilium/ebpf/cmd/bpf2go@v0.22.0 -cc clang -no-strip -target bpfel -cflags "-O2 -g -Wall -Werror -I../../../bpf -I/usr/include/bpf" Traceexec ../../../bpf/trace_exec.bpf.c -- -I../../../bpf -I/usr/include/bpf
