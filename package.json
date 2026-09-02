@@ -10,9 +10,9 @@
     "@actions/core": "^3.0.1",
     "@actions/github": "^9.1.1"
   },
-  "//overrides": "@actions/github and its transitive @actions/http-client both declare 'undici ^6.23.0'. The floor here is bumped one patch to clear advisories present in 6.23.0. Re-audit and bump this floor whenever 'npm audit' surfaces new GHSA entries against undici 6.x; on a major undici release, retest before widening the range.",
+  "//overrides": "@actions/github and its transitive @actions/http-client both declare 'undici ^6.23.0'. The floor here is bumped to 6.28.0, the newest 6.x release, to clear all advisories open against undici <6.28.0. Re-audit and bump this floor whenever 'npm audit' surfaces new GHSA entries against undici 6.x; on a major undici release, retest before widening the range.",
   "overrides": {
-    "undici": "^6.23.1"
+    "undici": "^6.28.0"
   },
   "devDependencies": {
     "@types/node": "^25.9.3",
