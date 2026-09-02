@@ -73,10 +73,23 @@ func TestBpfSelfDefense_ArmPopulatesIDs(t *testing.T) {
 	objs := loadDefendForSelfDefenseTest(t)
 	defer objs.Close()
 
+	// Attach the self-defense hook itself so there is a real link id to pass
+	// through armBpfSelfDefense's linkIDs param, exercising the same
+	// production path finalizeBpfSelfDefense uses (self_link_ids population).
+	lnk, err := link.AttachLSM(link.LSMOptions{Program: objs.ColdstepBpfSelfDefense})
+	if err != nil {
+		t.Skipf("lsm/bpf attach unsupported on this host: %v", err)
+	}
+	defer lnk.Close()
+	linkInfo, err := lnk.Info()
+	if err != nil {
+		t.Fatalf("link info: %v", err)
+	}
+
 	const wantTGID = uint32(424242)
-	progN, mapN := armBpfSelfDefense(objs, wantTGID)
-	if progN == 0 || mapN == 0 {
-		t.Fatalf("armBpfSelfDefense recorded progN=%d mapN=%d; want both > 0", progN, mapN)
+	progN, mapN, linkN := armBpfSelfDefense(objs, wantTGID, []uint32{uint32(linkInfo.ID)})
+	if progN == 0 || mapN == 0 || linkN == 0 {
+		t.Fatalf("armBpfSelfDefense recorded progN=%d mapN=%d linkN=%d; want all > 0", progN, mapN, linkN)
 	}
 
 	// cfg armed: enabled=1, agent_tgid set.
@@ -105,6 +118,11 @@ func TestBpfSelfDefense_ArmPopulatesIDs(t *testing.T) {
 				t.Fatalf("defend_cfg map id %d not protected in self_map_ids: %v", id, err)
 			}
 		}
+	}
+	// The link id passed in must be in self_link_ids.
+	var v uint8
+	if err := objs.SelfLinkIds.Lookup(uint32(linkInfo.ID), &v); err != nil {
+		t.Fatalf("link id %d not protected in self_link_ids: %v", linkInfo.ID, err)
 	}
 }
 
@@ -191,5 +209,26 @@ func TestRedTeam_BpfSelfDefense_DeniesSelfObjectHandle(t *testing.T) {
 	_, _, _, targetID, _, kind, ok := decodeBpfSelfDefenseEvent(rec.RawSample)
 	if !ok || targetID != uint32(protectedID) || kind != 2 /* KIND_MAP */ {
 		t.Fatalf("event targetID=%d kind=%d ok=%v; want id=%d kind=2(map)", targetID, kind, ok, protectedID)
+	}
+
+	// Same property, exercised on the parallel BPF_LINK_GET_FD_BY_ID branch
+	// (self_link_ids): grabbing a handle to the self-defense hook's own
+	// attached link must also be denied. `lnk` (attached above) is a real,
+	// live link — a strictly stronger test than a throwaway link would be,
+	// since it is exactly the kind of object the "unload the monitor" threat
+	// model cares about protecting.
+	linkInfo, err := lnk.Info()
+	if err != nil {
+		t.Fatalf("link info: %v", err)
+	}
+	protectedLinkID := linkInfo.ID
+	if err := objs.SelfLinkIds.Put(uint32(protectedLinkID), uint8(1)); err != nil {
+		t.Fatalf("put protected link id: %v", err)
+	}
+	if l, err := link.NewFromID(protectedLinkID); err == nil {
+		_ = l.Close()
+		t.Fatalf("expected EPERM grabbing protected link id %d, got a handle", protectedLinkID)
+	} else if !errors.Is(err, unix.EPERM) {
+		t.Fatalf("expected EPERM for protected link id, got %v", err)
 	}
 }

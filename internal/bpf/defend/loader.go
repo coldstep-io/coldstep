@@ -275,13 +275,15 @@ func LoadDefendObjectsForKernel(obj *DefendObjects, wantLSM, wantIOUringLSM bool
 		// Sub-project B: lsm/bpf self-defense (deny tamper of coldstep's own
 		// BPF objects). Optional (tolerate absence on stubs predating the
 		// section). The program ships inert — self_defense_cfg.enabled stays 0
-		// until the agent has populated self_prog_ids / self_map_ids, so a
-		// present-but-unconfigured program is a safe no-op (returns 0/allow on
-		// every bpf() call). Same gate as the other LSM hooks: only reached
-		// when CONFIG_BPF_LSM is present and the LSM section did not fall back.
+		// until the agent has populated self_prog_ids / self_map_ids /
+		// self_link_ids, so a present-but-unconfigured program is a safe
+		// no-op (returns 0/allow on every bpf() call). Same gate as the other
+		// LSM hooks: only reached when CONFIG_BPF_LSM is present and the LSM
+		// section did not fall back.
 		detachProgramIfPresent(coll, "coldstep_bpf_self_defense", &obj.ColdstepBpfSelfDefense)
 		detachMapIfPresent(coll, "self_prog_ids", &obj.SelfProgIds)
 		detachMapIfPresent(coll, "self_map_ids", &obj.SelfMapIds)
+		detachMapIfPresent(coll, "self_link_ids", &obj.SelfLinkIds)
 		detachMapIfPresent(coll, "self_pin_prefix", &obj.SelfPinPrefix)
 		detachMapIfPresent(coll, "self_defense_cfg", &obj.SelfDefenseCfg)
 		detachMapIfPresent(coll, "bpf_self_defense_events", &obj.BpfSelfDefenseEvents)
@@ -320,6 +322,7 @@ func stripAllLSM(spec *ebpf.CollectionSpec) {
 	delete(spec.Programs, "coldstep_bpf_self_defense")
 	delete(spec.Maps, "self_prog_ids")
 	delete(spec.Maps, "self_map_ids")
+	delete(spec.Maps, "self_link_ids")
 	delete(spec.Maps, "self_pin_prefix")
 	delete(spec.Maps, "self_defense_cfg")
 	delete(spec.Maps, "bpf_self_defense_events")

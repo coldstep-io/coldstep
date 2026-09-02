@@ -698,8 +698,8 @@ type BpfSelfDefenseEvent struct {
 	TGID       uint32 `json:"tgid"`
 	Comm       string `json:"comm"`
 	Cmd        int32  `json:"cmd"`
-	TargetKind string `json:"target_kind"`         // "prog" | "map" | "pin"
-	TargetID   uint32 `json:"target_id,omitempty"` // prog/map id; 0 for pin
+	TargetKind string `json:"target_kind"`         // "prog" | "map" | "link" | "pin"
+	TargetID   uint32 `json:"target_id,omitempty"` // prog/map/link id; 0 for pin
 	Action     string `json:"action"`              // "denied"
 	Sig        string `json:"sig,omitempty"`
 }
