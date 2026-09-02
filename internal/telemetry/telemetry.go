@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
@@ -25,8 +26,15 @@ func AppendJSONL(path string, v any, s *Signer) error {
 		if err != nil {
 			return err
 		}
+		// UseNumber keeps every numeric field as its literal source text.
+		// Plain json.Unmarshal into map[string]any decodes numbers as float64,
+		// which silently rounds any uint64 above 2^53 — TCPStateEvent.TimestampNS
+		// landed in the signed JSONL altered (…456789 -> …456800) and the
+		// signature then certified the corrupted value.
 		var m map[string]any
-		if err := json.Unmarshal(b, &m); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(b))
+		dec.UseNumber()
+		if err := dec.Decode(&m); err != nil {
 			return err
 		}
 		bCanon, err := json.Marshal(m)
