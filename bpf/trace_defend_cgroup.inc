@@ -171,6 +171,26 @@ static __always_inline int cg_ipv6_is_loopback(struct bpf_sock_addr *ctx)
 }
 
 /*
+ * :: (unspecified) check. The kernel rewrites an all-zero connect/sendmsg
+ * destination to loopback, but only after this hook runs — see
+ * coldstep_ipv6_is_unspecified in coldstep_pure.h. Twin of the 0.0.0.0 bypass
+ * on the IPv4 path (cg_dst_in_ignored -> coldstep_ipv4_is_unspecified).
+ */
+static __always_inline int cg_ipv6_is_unspecified(struct bpf_sock_addr *ctx)
+{
+	/*
+	 * Four direct converter loads rather than coldstep_ipv6_is_unspecified on
+	 * a copied array — same constraint cg_copy_user_ip6_u32 documents, and it
+	 * keeps this helper next to its cg_ipv6_is_loopback / _link_local siblings
+	 * (which is above cg_copy_user_ip6_u32's definition).
+	 */
+	return ctx->user_ip6[0] == 0 &&
+	       ctx->user_ip6[1] == 0 &&
+	       ctx->user_ip6[2] == 0 &&
+	       ctx->user_ip6[3] == 0;
+}
+
+/*
  * IPv6 link-local (fe80::/10) check: user_ip6[0] is the first __be32 of
  * the IPv6 address in network byte order, so the high-order bytes are at
  * the low memory addresses. fe80::/10 = first 10 bits 1111 1110 10xx, i.e.
@@ -300,6 +320,8 @@ static __always_inline int defend_cgroup_sock_addr_ipv6(struct bpf_sock_addr *ct
 	__u8 protocol = cg_protocol_from_sock_ctx(ctx);
 
 	if (cg_ipv6_is_loopback(ctx))
+		return 1;
+	if (cg_ipv6_is_unspecified(ctx))
 		return 1;
 	if (cg_ipv6_is_link_local(ctx))
 		return 1;

@@ -148,6 +148,31 @@ static __always_inline int coldstep_ipv4_is_unspecified(__be32 daddr)
 	return daddr == 0;
 }
 
+/*
+ * :: (the unspecified IPv6 address) as a connect(2)/sendmsg(2) destination —
+ * the IPv6 twin of coldstep_ipv4_is_unspecified, and bypassed for the same
+ * reason. tcp_v6_connect() and ip6_datagram_connect() rewrite an all-zero
+ * sin6_addr to in6addr_loopback (or to ::ffff:127.0.0.1 on a v4-mapped local
+ * address) before the connection goes anywhere, but that rewrite happens AFTER
+ * cgroup/connect6, cgroup/sendmsg6 and the LSM socket_connect/socket_sendmsg
+ * hooks have already seen the destination — so without this check they judge the
+ * raw :: against allowed_ipv6, miss, and deny a connection the kernel was about
+ * to route to loopback.
+ *
+ * The LSM sendmsg path needs it for a second reason: when msg_name is absent it
+ * falls back to skc_v6_daddr, which is all-zero on an unconnected socket. The
+ * IPv4 side of that same fallback already treats daddr == 0 as "no destination,
+ * do not judge"; this keeps the v6 side consistent instead of denying on a
+ * destination it never actually read.
+ *
+ * `a` is the address as four network-byte-order __u32 words (the shape of
+ * bpf_sock_addr.user_ip6, sock_common.skc_v6_daddr, and the skb_v6_* helpers).
+ */
+static __always_inline int coldstep_ipv6_is_unspecified(const __u32 a[4])
+{
+	return a[0] == 0 && a[1] == 0 && a[2] == 0 && a[3] == 0;
+}
+
 /* First four bytes of an HTTP request line (after userspace read). */
 static __always_inline int coldstep_http_prefix_is_request(const char p[4])
 {

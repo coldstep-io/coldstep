@@ -161,6 +161,25 @@ int main(void)
 		EXPECT_ZERO(coldstep_ipv4_is_unspecified(addr), "not unspecified 0.0.0.1");
 	}
 
+	/* coldstep_ipv6_is_unspecified — :: only (four network-order __u32 words) */
+	{
+		__u32 unspecified[4] = { 0, 0, 0, 0 };
+		__u32 loopback[4] = { 0, 0, 0, 0 };          /* ::1 filled below */
+		__u32 low_nonzero[4] = { 0, 0, 0, 0 };
+		__u32 high_nonzero[4] = { 0, 0, 0, 0 };
+		__u8 one_be[4] = { 0, 0, 0, 1 };
+		__u8 fe80_be[4] = { 0xfe, 0x80, 0, 0 };
+
+		memcpy(&loopback[3], one_be, 4);             /* ::1 */
+		memcpy(&low_nonzero[3], one_be, 4);
+		memcpy(&high_nonzero[0], fe80_be, 4);        /* fe80:: */
+
+		EXPECT_NE_ZERO(coldstep_ipv6_is_unspecified(unspecified), "unspecified ::");
+		EXPECT_ZERO(coldstep_ipv6_is_unspecified(loopback), "not unspecified ::1");
+		EXPECT_ZERO(coldstep_ipv6_is_unspecified(low_nonzero), "not unspecified ::1 (low word)");
+		EXPECT_ZERO(coldstep_ipv6_is_unspecified(high_nonzero), "not unspecified fe80::");
+	}
+
 	/* coldstep_http_prefix_is_request */
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("GET "), "GET ");
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("POST"), "POST");
