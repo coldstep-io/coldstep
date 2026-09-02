@@ -89,8 +89,16 @@ static __always_inline int dst_in_ignored(__be32 daddr)
 	 * reporting, which left defend-mode jobs stuck "in_progress" after
 	 * finishing. Living here makes the bypass automatic for every caller —
 	 * all IPv4 deny paths check dst_in_ignored before denying.
+	 *
+	 * 0.0.0.0 is bypassed alongside 127.0.0.0/8 for the same reason: the
+	 * kernel transparently rewrites a connect(2)/sendmsg(2) destination of
+	 * INADDR_ANY to INADDR_LOOPBACK, but only after this hook has already
+	 * observed (and would otherwise deny) the raw 0.0.0.0 the caller passed.
+	 * See coldstep_ipv4_is_unspecified's doc comment in coldstep_pure.h for
+	 * the empirical confirmation against both the kernel and this agent's
+	 * own enforcement.
 	 */
-	if (coldstep_ipv4_is_loopback(daddr))
+	if (coldstep_ipv4_is_loopback(daddr) || coldstep_ipv4_is_unspecified(daddr))
 		return 1;
 
 	k.prefixlen = 32;

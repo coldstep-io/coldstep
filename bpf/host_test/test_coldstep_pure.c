@@ -146,6 +146,21 @@ int main(void)
 		EXPECT_ZERO(coldstep_ipv4_is_loopback(addr), "not loopback 1.0.0.127");
 	}
 
+	/* coldstep_ipv4_is_unspecified — 0.0.0.0 (INADDR_ANY) only */
+	{
+		__be32 addr;
+		__u8 bytes_zero[4] = { 0, 0, 0, 0 };
+		__u8 bytes_loopback[4] = { 127, 0, 0, 1 };
+		__u8 bytes_low_nonzero[4] = { 0, 0, 0, 1 };
+
+		memcpy(&addr, bytes_zero, 4);
+		EXPECT_NE_ZERO(coldstep_ipv4_is_unspecified(addr), "unspecified 0.0.0.0");
+		memcpy(&addr, bytes_loopback, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_unspecified(addr), "not unspecified 127.0.0.1");
+		memcpy(&addr, bytes_low_nonzero, 4);
+		EXPECT_ZERO(coldstep_ipv4_is_unspecified(addr), "not unspecified 0.0.0.1");
+	}
+
 	/* coldstep_http_prefix_is_request */
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("GET "), "GET ");
 	EXPECT_NE_ZERO(coldstep_http_prefix_is_request("POST"), "POST");
