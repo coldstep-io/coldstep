@@ -108,6 +108,16 @@ func TestSanitizeRequestURI(t *testing.T) {
 			"https://user:supersecret@host.example/path?ok=1",
 			"https://host.example/path?ok=1",
 		},
+		{
+			"percent_encoded_question_mark_smuggled_query_redacted",
+			"/cb%3Faccess_token%3Dsekret",
+			"/cb?access_token=REDACTED",
+		},
+		{
+			"percent_encoded_question_mark_preserves_non_secret_value",
+			"/cb%3Fnext%3D1",
+			"/cb?next=1",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
