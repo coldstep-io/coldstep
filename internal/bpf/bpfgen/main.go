@@ -55,7 +55,7 @@ func main() {
 	cflags := fmt.Sprintf("%s -O2 -g -Wall -Werror -I%s -I/usr/include/bpf", archFlag, bpfInclude)
 
 	args := []string{
-		"run", "github.com/cilium/ebpf/cmd/bpf2go@v0.21.0",
+		"run", "github.com/cilium/ebpf/cmd/bpf2go@v0.22.0",
 		"-cc", "clang",
 		"-no-strip",
 		// bpfel only: every supported platform (linux amd64 + arm64, the CI
