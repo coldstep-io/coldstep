@@ -28,7 +28,13 @@ func normalizeHostHeader(val string) string {
 // ParseHTTPRequestPrefix extracts method, host, and path from the first bytes of a cleartext HTTP/1.x request.
 // Tolerates partial buffers; returns ok=false if no recognizable request line.
 func ParseHTTPRequestPrefix(raw []byte) (method, host, path string, ok bool) {
-	raw = bytes.TrimSpace(raw)
+	// Only leading whitespace is trimmed. raw is already sliced to the exact
+	// BPF-captured length (no padding) — trailing bytes are meaningful, and a
+	// missing line terminator at the end is the only signal takeLine has to
+	// tell a truncated header apart from a complete one. Trimming trailing
+	// whitespace here would eat a real request's final "\r\n\r\n" and make
+	// every complete capture look truncated too.
+	raw = bytes.TrimLeft(raw, " \t\r\n")
 	if len(raw) < 8 {
 		return "", "", "", false
 	}
@@ -56,7 +62,16 @@ func ParseHTTPRequestPrefix(raw []byte) (method, host, path string, ok bool) {
 	rest = skipEOL(rest)
 	for len(rest) > 0 {
 		var line []byte
-		line, rest = takeLine(rest)
+		var lineOK bool
+		line, rest, lineOK = takeLine(rest)
+		if !lineOK {
+			// Unterminated trailing fragment: the capture window likely cut a
+			// header mid-value (e.g. "Host: api.github" with the ".com\r\n"
+			// past the window). Parsing it as a complete header would report
+			// a different, truncated value with no signal that it happened —
+			// stop instead of trusting a line we can't confirm is whole.
+			break
+		}
 		if len(line) == 0 {
 			continue
 		}
@@ -83,16 +98,19 @@ func skipEOL(b []byte) []byte {
 	return b
 }
 
-// takeLine removes one line from the front of b (LF or CRLF) and returns the line without terminators.
-func takeLine(b []byte) (line, rest []byte) {
+// takeLine removes one line from the front of b (LF or CRLF) and returns the
+// line without terminators. ok is false when b has no line terminator at
+// all — the caller cannot tell whether that trailing fragment is a complete
+// line or a truncated one, so it should not be treated as either.
+func takeLine(b []byte) (line, rest []byte, ok bool) {
 	if len(b) == 0 {
-		return nil, b
+		return nil, b, false
 	}
 	if i := bytes.Index(b, []byte("\r\n")); i >= 0 {
-		return b[:i], b[i+2:]
+		return b[:i], b[i+2:], true
 	}
 	if i := bytes.IndexByte(b, '\n'); i >= 0 {
-		return b[:i], b[i+1:]
+		return b[:i], b[i+1:], true
 	}
-	return b, nil
+	return nil, nil, false
 }
