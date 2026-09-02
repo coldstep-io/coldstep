@@ -446,7 +446,13 @@ func ResolveOwners(ctx context.Context, domains []string, resolver LookupIPFunc,
 					}
 					break
 				}
-				if errors.Is(err, context.Canceled) && gctx.Err() != nil {
+				// Parent cancel means "stop retrying"; a per-attempt deadline is
+				// exactly what retries exist for. Gate on gctx.Err() alone —
+				// checking errors.Is(err, context.Canceled) missed a parent whose
+				// own deadline expired (that surfaces as DeadlineExceeded), which
+				// burned every remaining attempt spinning on a dead context.
+				// Mirrors the CompileDomainAllowlist worker above.
+				if gctx.Err() != nil {
 					break
 				}
 				// per-attempt timeout or transient failure: retry

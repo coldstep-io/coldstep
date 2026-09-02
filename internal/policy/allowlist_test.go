@@ -423,3 +423,26 @@ func TestCompileDomainAllowlist_HighCardinalityIPv4Warns(t *testing.T) {
 		t.Fatalf("expected high-cardinality warn log, got %q", string(b))
 	}
 }
+
+// A parent context whose own deadline expired surfaces as DeadlineExceeded, not
+// Canceled. Gating the retry break on errors.Is(err, context.Canceled) missed
+// that and burned every remaining attempt spinning on a dead context.
+func TestResolveOwners_StopsRetryingOnParentDeadline(t *testing.T) {
+	var calls int32
+	resolver := func(ctx context.Context, network, host string) ([]net.IP, error) {
+		atomic.AddInt32(&calls, 1)
+		return nil, ctx.Err()
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+	defer cancel()
+
+	owners := ResolveOwners(ctx, []string{"example.com"}, resolver, 8)
+	if len(owners) != 0 {
+		t.Errorf("ResolveOwners returned %d owners on a dead context, want 0", len(owners))
+	}
+	// The worker checks gctx.Err() before the first lookup, so an already-expired
+	// parent means zero attempts; the point is that it must never reach 8.
+	if n := atomic.LoadInt32(&calls); n > 1 {
+		t.Errorf("resolver called %d times on an expired parent context, want <=1", n)
+	}
+}
