@@ -120,26 +120,29 @@ func checkMapIntegrity(cfg config.Config, defendCfg, allowedIpv4, ignoredIpv4 *e
 		}
 	}
 
-	// 2. Check allowed_ipv4 count
+	// 2. Check allowed_ipv4 keyset. A same-count key substitution (delete one
+	// allowed /32, insert a different one — e.g. 0.0.0.0/0) is invisible to a
+	// pure count comparison, so this compares the actual keyset against the
+	// keyset expectedAllowedKeys derives from the same compiled snapshot +
+	// policy that loadAllowedLPMMap originally programmed from, matching
+	// rearmAllowedFromSnapshot's own reconciliation exactly.
 	const assetAllowed = "map:allowed_ipv4"
-	count := 0
+	actual := make(map[[8]byte]struct{})
 	iter := allowedIpv4.Iterate()
 	var k [8]byte // LPM key (4 prefixlen + 4 ip)
 	var v uint8
 	for iter.Next(&k, &v) {
-		count++
+		actual[k] = struct{}{}
 	}
 	if err := iter.Err(); err != nil {
 		logMapIntegrityFailure(cfg, assetAllowed, "iterate error", "", "", stats, seq, jsonlMu, defendState, backoff, signer)
 	} else {
-		defendState.mu.Lock()
-		expected := defendState.expectedEntries
-		defendState.mu.Unlock()
-		if count != expected {
-			logMapIntegrityFailure(cfg, assetAllowed, "count mismatch", fmt.Sprintf("%d", expected), fmt.Sprintf("%d", count), stats, seq, jsonlMu, defendState, backoff, signer)
+		expected := expectedAllowedKeys(defendCompiled, pol)
+		if !lpmKeysetsEqual(actual, expected) {
+			logMapIntegrityFailure(cfg, assetAllowed, "keyset mismatch", fmt.Sprintf("%d entries", len(expected)), fmt.Sprintf("%d entries", len(actual)), stats, seq, jsonlMu, defendState, backoff, signer)
 			// H-04: re-program the LPM trie from the compiled snapshot so a
-			// tampered widening (extra allowed entries) or count corruption
-			// does not persist until process restart.
+			// tampered widening (extra allowed entries) or substitution does
+			// not persist until process restart.
 			added, removed, rearmErr := rearmAllowedFromSnapshot(allowedIpv4, defendCompiled, pol)
 			if rearmErr != nil {
 				slog.Error("BPF allowlist re-arm failed", "asset", assetAllowed, "err", rearmErr)
@@ -150,21 +153,19 @@ func checkMapIntegrity(cfg config.Config, defendCfg, allowedIpv4, ignoredIpv4 *e
 		}
 	}
 
-	// 3. Check ignored_ipv4 count
+	// 3. Check ignored_ipv4 keyset (same substitution gap as allowed_ipv4).
 	const assetIgnored = "map:ignored_ipv4_lpm"
-	countIgnored := 0
+	actualIgnored := make(map[[8]byte]struct{})
 	iterIgnored := ignoredIpv4.Iterate()
 	for iterIgnored.Next(&k, &v) {
-		countIgnored++
+		actualIgnored[k] = struct{}{}
 	}
 	if err := iterIgnored.Err(); err != nil {
 		logMapIntegrityFailure(cfg, assetIgnored, "iterate error", "", "", stats, seq, jsonlMu, defendState, backoff, signer)
 	} else {
-		defendState.mu.Lock()
-		expectedIgnored := defendState.expectedIgnoredEntries
-		defendState.mu.Unlock()
-		if countIgnored != expectedIgnored {
-			logMapIntegrityFailure(cfg, assetIgnored, "count mismatch", fmt.Sprintf("%d", expectedIgnored), fmt.Sprintf("%d", countIgnored), stats, seq, jsonlMu, defendState, backoff, signer)
+		expectedIgnored := expectedIgnoredKeys(pol)
+		if !lpmKeysetsEqual(actualIgnored, expectedIgnored) {
+			logMapIntegrityFailure(cfg, assetIgnored, "keyset mismatch", fmt.Sprintf("%d entries", len(expectedIgnored)), fmt.Sprintf("%d entries", len(actualIgnored)), stats, seq, jsonlMu, defendState, backoff, signer)
 			// H-04: same self-heal posture as allowed_ipv4 — restore from
 			// policy.IgnoredIPv4Nets so an attacker cannot widen the
 			// implicit-allow surface by injecting extra ignored CIDRs.
@@ -177,6 +178,20 @@ func checkMapIntegrity(cfg config.Config, defendCfg, allowedIpv4, ignoredIpv4 *e
 			}
 		}
 	}
+}
+
+// lpmKeysetsEqual reports whether two LPM-trie keysets (8-byte prefixlen+IP
+// keys) contain exactly the same keys.
+func lpmKeysetsEqual(a, b map[[8]byte]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for k := range a {
+		if _, ok := b[k]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func logMapIntegrityFailure(cfg config.Config, asset, errStr, expected, actual string, stats *runStats, seq *telemetry.SeqGen, jsonlMu *sync.Mutex, defendState *defendState, backoff *integrityBackoff, signer *telemetry.Signer) {

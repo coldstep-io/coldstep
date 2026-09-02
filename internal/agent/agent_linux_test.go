@@ -721,19 +721,32 @@ func TestCheckMapIntegrity(t *testing.T) {
 	var seq telemetry.SeqGen
 	var jsonlMu sync.Mutex
 
-	// Empty snapshot keeps the H-04 re-arm path a no-op for the matched-count
-	// phases below; the dedicated TestRearmAllowedFromSnapshot exercises the
-	// non-empty re-arm path.
+	// pol carries the same 2 allowed IPv4 literals + 1 ignored CIDR the test
+	// asserts on below, so expectedAllowedKeys/expectedIgnoredKeys (keyset
+	// comparison, not just count) derive the same keys the map is manually
+	// seeded with in step 2. mergeDefaultRFC1918Ignored=false keeps the
+	// ignored set to exactly the one CIDR under test (no implicit RFC1918
+	// entries). Empty snapshot keeps the H-04 re-arm path exercising only
+	// pol's literals for the matched-keyset phases below; the dedicated
+	// TestRearmAllowedFromSnapshot exercises the compiled-snapshot re-arm path.
+	pol, err := policy.BuildPolicyEx("", "1.1.1.1,1.1.1.2", "10.0.0.0/24", false)
+	if err != nil {
+		t.Fatalf("build policy: %v", err)
+	}
 	var snapshot policy.CompileResult
 	backoff := newIntegrityBackoff()
 
-	// 1. Initial check (mismatch expected)
-	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
+	// 1. Initial check (keyset mismatch expected: maps start empty). The H-04
+	// auto-rearm this triggers immediately programs the correct keys, so the
+	// map ends this call already matching pol's keyset.
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, pol, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected 2 failures (allowed=0, ignored=0), got %d", state.mapIntegrityFailureCount())
 	}
 
-	// 2. Fix counts
+	// 2. Reassert the same keys pol expects (idempotent — step 1's auto-rearm
+	// already programmed them; this just documents what the keyset check now
+	// compares against instead of a bare count).
 	kAllowed1 := [8]byte{32, 0, 0, 0, 1, 1, 1, 1}
 	kAllowed2 := [8]byte{32, 0, 0, 0, 1, 1, 1, 2}
 	v := uint8(1)
@@ -743,17 +756,36 @@ func TestCheckMapIntegrity(t *testing.T) {
 	kIgnored := [8]byte{24, 0, 0, 0, 10, 0, 0, 0}
 	_ = ignoredIpv4.Update(&kIgnored, &v, ebpf.UpdateAny)
 
-	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, pol, stats, state, backoff, &seq, &jsonlMu, nil)
 	if state.mapIntegrityFailureCount() != 2 {
 		t.Fatalf("expected failures to remain at 2 after clean check, got %d", state.mapIntegrityFailureCount())
+	}
+
+	// 2b. H-1 regression: a same-count key substitution (swap kAllowed2 for an
+	// unrelated /32) must still be detected — this is exactly the gap a pure
+	// count comparison misses.
+	kSubstituted := [8]byte{32, 0, 0, 0, 9, 9, 9, 9}
+	if err := allowedIpv4.Delete(&kAllowed2); err != nil {
+		t.Fatalf("delete kAllowed2: %v", err)
+	}
+	_ = allowedIpv4.Update(&kSubstituted, &v, ebpf.UpdateAny)
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, pol, stats, state, backoff, &seq, &jsonlMu, nil)
+	if state.mapIntegrityFailureCount() != 3 {
+		t.Fatalf("expected same-count key substitution to be detected (3 failures), got %d", state.mapIntegrityFailureCount())
+	}
+	if err := allowedIpv4.Lookup(&kSubstituted, &v); err == nil {
+		t.Fatal("expected substituted key to be removed by auto-rearm")
+	}
+	if err := allowedIpv4.Lookup(&kAllowed2, &v); err != nil {
+		t.Fatalf("expected kAllowed2 restored by auto-rearm: %v", err)
 	}
 
 	// 3. Tamper with defend_cfg
 	val0 := uint32(0)
 	_ = defendCfg.Update(&key0, &val0, ebpf.UpdateAny)
-	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, nil, stats, state, backoff, &seq, &jsonlMu, nil)
-	if state.mapIntegrityFailureCount() != 3 {
-		t.Fatalf("expected 3 failures after defend_cfg tampering, got %d", state.mapIntegrityFailureCount())
+	checkMapIntegrity(cfg, defendCfg, allowedIpv4, ignoredIpv4, snapshot, pol, stats, state, backoff, &seq, &jsonlMu, nil)
+	if state.mapIntegrityFailureCount() != 4 {
+		t.Fatalf("expected 4 failures after defend_cfg tampering, got %d", state.mapIntegrityFailureCount())
 	}
 
 	// Verify revert
