@@ -1,11 +1,12 @@
 # Job `detect-mode`: observe-only (`mode: detect`). Host allowlist affects policy labels only — it does NOT block traffic.
 #
-# Job `defend-mode` (defend mode — CI egress-block smoke): same BPF stack as product `mode: defend` (cgroup block non-allowlisted egress). apt runs before the
-# agent (stub DNS / mirrors break once defend is up). theclouddj.com is allowlisted; hosts pins avoid resolver UDP
-# after defend. example.com is pinned to TEST-NET-1 (192.0.2.1) so curl is deterministically denied.
+# Defend mode is intentionally NOT exercised here. The defend-mode egress-block smoke lives in
+# `coldstep-ci-runner.yml`, which is the gate merges actually depend on; running it a second time in
+# the demo cost ~45 min of Actions minutes per dispatch (BPF verifier load dominates) for no extra
+# signal, and defend blocks the artifact uploader's own egress so the job could not publish a report.
 #
 # Agent binary: download the combined `coldstep-linux-amd64` from the repo GitHub Release for
-# `COLDSTEP_AGENT_VERSION` (`supply-chain-attest.yml`). Both jobs pass `release-path`. The single
+# `COLDSTEP_AGENT_VERSION` (`supply-chain-attest.yml`); the job passes `release-path`. The single
 # `coldstep` binary provides the agent plus the `diff` / `stop` subcommands; the detect job runs the
 # baseline `diff` and uploads the pure-markdown `.coldstep-report.md` artifact rendered from JSONL.
 # NOTE: the `diff` subcommand requires a release that ships the combined binary; bump
@@ -22,10 +23,6 @@ on:
     inputs:
       run_detect:
         description: Run detect-mode job
-        type: boolean
-        default: true
-      run_defend:
-        description: Run defend-mode job
         type: boolean
         default: true
       coldstep_diff_strict:
@@ -223,147 +220,3 @@ jobs:
         run: |
           set -euo pipefail
           ls -la "${GITHUB_WORKSPACE}"/.coldstep-report.md "${GITHUB_WORKSPACE}"/.coldstep-events.jsonl 2>/dev/null || true
-
-  defend-mode:
-    if: inputs.run_defend
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    env:
-      # Align with coldstep-ci-runner defend-mode: release-binary smoke can miss deny JSONL on some runners.
-      COLDSTEP_DEFEND_DENY_JSONL_STRICT: "0"
-    steps:
-      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v6
-
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e  # v7
-        with:
-          go-version-file: go.mod
-
-      - name: Download coldstep agent (GitHub Release)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          mkdir -p bin
-          for attempt in 1 2 3; do
-            if gh release download "${COLDSTEP_AGENT_VERSION}" \
-              --repo "${GITHUB_REPOSITORY}" \
-              --pattern 'coldstep-linux-amd64' \
-              --dir bin; then
-              break
-            fi
-            if [[ "${attempt}" -eq 3 ]]; then
-              echo "failed to download coldstep release artifact after ${attempt} attempts"
-              exit 1
-            fi
-            sleep $((attempt * 5))
-          done
-          mv bin/coldstep-linux-amd64 bin/coldstep
-          chmod +x bin/coldstep
-
-      # apt and stub-resolver DNS must run before defend: cgroup deny breaks 127.0.0.53:53 and unrelated UDP.
-      - name: Install runtime probes (before defend so mirrors/DNS still work)
-        run: |
-          set -euo pipefail
-          sudo DEBIAN_FRONTEND=noninteractive apt-get update -qq
-          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq nmap dnsutils netcat-openbsd curl
-
-      - name: Assert required tools are present
-        run: |
-          set -euo pipefail
-          command -v dig
-          command -v nc
-          command -v nmap
-          command -v curl
-
-      - name: Pin theclouddj.com for nmap (avoid stub DNS once defend is running)
-        run: |
-          set -euo pipefail
-          ip=$(dig +short theclouddj.com A | awk 'NF{print; exit}')
-          test -n "${ip}"
-          echo "${ip} theclouddj.com" | sudo tee -a /etc/hosts >/dev/null
-
-      - name: Coldstep (defend mode)
-        uses: ./
-        with:
-          mode: defend
-          # phase: start forces main.js to call startAgent() — required because
-          # node24 pre hooks do not fire for local `uses: ./` refs in this project's CI.
-          phase: start
-          # Unified allow input: domains, wildcard domains, and IPs in one place.
-          allow: theclouddj.com, *.ubuntu.com, archive.ubuntu.com, azure.archive.ubuntu.com, 1.1.1.1
-          release-path: bin/coldstep
-          report: none
-
-      - name: Allowed target — nmap port 80 (theclouddj.com)
-        run: |
-          set -euo pipefail
-          nmap -4 -Pn -p 80 --max-retries 1 --host-timeout 60s theclouddj.com
-
-      - name: Allowed IP target — direct TCP connect (1.1.1.1:443)
-        run: |
-          set -euo pipefail
-          if ! timeout 10 nc -4 -z -w 4 1.1.1.1 443 2>/dev/null; then
-            echo "expected allowlisted IP connect to succeed under defend allowlist"
-            exit 1
-          fi
-
-      # example.com can share IPv4 space with CDNs in the allowlist map; pin to RFC 5737 TEST-NET-1 so the
-      # connect is deterministically not allowlisted and cgroup defend blocks AF_INET :443.
-      - name: Pin example.com to non-allowlisted docnet IP (/etc/hosts)
-        run: |
-          set -euo pipefail
-          echo '192.0.2.1 example.com' | sudo tee -a /etc/hosts >/dev/null
-
-      - name: Disallowed target — curl example.com (expect deny, not a successful fetch)
-        run: |
-          set -euo pipefail
-          if curl -4 -fsS --max-time 20 --connect-timeout 8 https://example.com/ >/dev/null 2>&1; then
-            echo "expected curl to example.com to fail under defend allowlist"
-            exit 1
-          fi
-
-      - name: Disallowed IP target — direct TCP connect (93.184.216.34:443, expect deny)
-        run: |
-          set -euo pipefail
-          if timeout 10 nc -4 -z -w 4 93.184.216.34 443 2>/dev/null; then
-            echo "expected direct IP connect to be blocked under defend allowlist"
-            exit 1
-          fi
-
-      - name: Settle then verify deny telemetry
-        run: |
-          set -euo pipefail
-          sleep 4
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          test -f "$j"
-          if grep -q '"type":"deny"' "$j"; then
-            grep -Eq '"type":"deny".*"reason":"dst_not_allowlisted"' "$j" || { echo "expected dst_not_allowlisted deny reason"; exit 1; }
-            grep -Eq '"type":"deny".*"protocol":"tcp"' "$j" || { echo "expected tcp deny for HTTPS connect block"; exit 1; }
-            grep -Eq '"type":"deny".*"dst":"192.0.2.1"' "$j" || { echo "expected deny for blocked URL target example.com -> 192.0.2.1"; exit 1; }
-            grep -Eq '"type":"deny".*"dst":"93.184.216.34"' "$j" || { echo "expected deny for blocked direct IP 93.184.216.34"; exit 1; }
-            if grep -Eq '"type":"deny".*"dst":"1.1.1.1"' "$j"; then
-              echo "::warning::allowlisted IP 1.1.1.1 was denied in this run; keeping as non-blocking runner-path signal"
-            fi
-          else
-            if [[ "${COLDSTEP_DEFEND_DENY_JSONL_STRICT:-0}" == "1" ]]; then
-              echo "::error::no deny JSONL rows observed in defend smoke (set COLDSTEP_DEFEND_DENY_JSONL_STRICT=0 for variance tolerance)"
-              exit 1
-            fi
-            echo "::warning::no deny JSONL rows observed in this run; prior curl/nc steps still asserted blocks — see Show deny lines (debug)"
-          fi
-
-      - name: Quick control matrix (GitHub-native R/Y/G)
-        if: always()
-        run: |
-          {
-            echo "## Defend smoke"
-            echo ""
-            echo "- **Result:** prior steps asserted allowlist / URL block / IP deny telemetry. See **Show deny lines (debug)** in the log for raw \`deny\` JSONL rows."
-          } >> "${GITHUB_STEP_SUMMARY}"
-
-      - name: Show deny lines (debug)
-        if: always()
-        run: |
-          set -x
-          j="${GITHUB_WORKSPACE}/.coldstep-events.jsonl"
-          if [ -f "$j" ]; then grep '"type":"deny"' "$j" || true; fi
