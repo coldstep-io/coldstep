@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/coldstep-io/coldstep/internal/policy"
 )
 
 // maxAllowlistFiles bounds the number of comma-separated allow-file paths a
@@ -67,6 +69,28 @@ func rejectDefendWildcards(c classifiedAllow) error {
 		return nil
 	}
 	return fmt.Errorf("defend mode does not support wildcard allow-list entries (BPF allowed_domains map uses exact-string lookup); replace with exact hostnames or IPv4 literals/CIDRs: %s", strings.Join(bad, ", "))
+}
+
+// validateAllowPolicy runs the classified allow buckets through the same parser
+// the agent uses, so a malformed entry fails `start` instead of the agent.
+//
+// classifyAllowTokens routes anything matching ipv4LiteralOrCIDR into `ips`, and
+// that regex range-checks neither octets nor prefix length — "10.0.0.256" and
+// "1.2.3.4/99" are classified as IPs, not hostnames. policy.Parse rejects them,
+// but it only runs inside the `sudo coldstep run` child, long after start has
+// returned 0. Unless fail-on-error is set the job then runs to completion with
+// no agent attached and nothing in the log saying so (and in defend mode, no
+// enforcement). Same reasoning for a `!CIDR` ignore entry that is not a CIDR.
+func validateAllowPolicy(c classifiedAllow, noDefaultIgnoredNets bool) error {
+	if _, err := policy.BuildPolicyEx(
+		strings.Join(c.hosts, ","),
+		strings.Join(c.ips, ","),
+		strings.Join(c.ignoredNets, ","),
+		!noDefaultIgnoredNets,
+	); err != nil {
+		return fmt.Errorf("allow: %w", err)
+	}
+	return nil
 }
 
 // classifyAllowTokens splits unified allow-list tokens into per-type buckets.
@@ -219,7 +243,10 @@ func resolvePathUnderWorkspace(workspaceAbs, userPath string) (string, error) {
 		return "", err
 	}
 	rel, err := filepath.Rel(ws, rp)
-	if err != nil || strings.HasPrefix(rel, "..") {
+	// Only a ".." *path element* escapes the workspace. A bare HasPrefix(rel, "..")
+	// also rejected in-workspace files whose name merely starts with two dots
+	// (e.g. "..allow.txt"). Matches safepath.hasPrefix.
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("path outside GITHUB_WORKSPACE")
 	}
 	return rp, nil

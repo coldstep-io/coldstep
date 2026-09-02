@@ -301,6 +301,10 @@ func runStart(cfg startConfig) error {
 	// are warned about (not silently dropped) when a consumer still sets them.
 	warnRemovedAllowlistInputs()
 
+	if err := validateAllowPolicy(allow, cfg.NoDefaultIgnoredNets); err != nil {
+		return err
+	}
+
 	if mode == "defend" {
 		if err := rejectDefendWildcards(allow); err != nil {
 			return err
@@ -715,8 +719,17 @@ func truncate(s string, max int) string {
 	if len(s) <= max {
 		return s
 	}
+	// Back the cut off the partial rune it may have landed inside. Only the
+	// trailing rune matters, so decode backwards at most UTFMax-1 times —
+	// the previous `!utf8.ValidString(s[:end])` re-validated the entire prefix
+	// on every step, so a single invalid byte anywhere earlier in the body
+	// walked `end` all the way back to it and discarded everything after
+	// (and cost O(max^2) byte scans doing it).
 	end := max
-	for end > 0 && !utf8.ValidString(s[:end]) {
+	for i := 0; i < utf8.UTFMax-1 && end > 0; i++ {
+		if r, size := utf8.DecodeLastRuneInString(s[:end]); r != utf8.RuneError || size > 1 {
+			break
+		}
 		end--
 	}
 	out := s[:end]
