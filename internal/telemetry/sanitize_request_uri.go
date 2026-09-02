@@ -97,6 +97,34 @@ func SanitizeRequestURI(raw string) string {
 			q[k][i] = redactCredentialPatterns(q[k][i])
 		}
 	}
+
+	// A literal '?' in the decoded path can only come from a percent-encoded
+	// '?' in the raw request (a real '?' is parsed as the query delimiter and
+	// never lands in u.Path). Treat everything after it as a smuggled query
+	// string and redact it the same way as a real query, instead of writing
+	// it out in cleartext where it would otherwise slip past the redaction
+	// above.
+	path := u.Path
+	if idx := strings.IndexByte(path, '?'); idx >= 0 {
+		embedded := path[idx+1:]
+		path = path[:idx]
+		if eq, eqErr := url.ParseQuery(embedded); eqErr == nil {
+			for k, vs := range eq {
+				for i, v := range vs {
+					if isSensitiveQueryKey(k) {
+						vs[i] = redactedCredential
+					} else {
+						vs[i] = redactCredentialPatterns(v)
+					}
+				}
+				for _, v := range vs {
+					q.Add(k, v)
+				}
+			}
+		} else {
+			path += "?" + redactCredentialPatterns(embedded)
+		}
+	}
 	u.RawQuery = q.Encode()
 
 	var out strings.Builder
@@ -105,7 +133,7 @@ func SanitizeRequestURI(raw string) string {
 		out.WriteString("://")
 		out.WriteString(u.Host)
 	}
-	out.WriteString(u.Path)
+	out.WriteString(path)
 	if u.RawQuery != "" {
 		out.WriteByte('?')
 		out.WriteString(u.RawQuery)
