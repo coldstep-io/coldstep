@@ -131,6 +131,23 @@ static __always_inline int coldstep_ipv4_is_loopback(__be32 daddr)
 	return first_octet == 127;
 }
 
+/*
+ * 0.0.0.0 (INADDR_ANY) as a connect(2)/sendmsg(2) destination. The kernel's
+ * IPv4 connect path (inet_stream_connect / ip4_datagram_connect) transparently
+ * rewrites a destination of INADDR_ANY to INADDR_LOOPBACK — but that rewrite
+ * happens AFTER cgroup/connect4 and the LSM connect/sendmsg hooks observe the
+ * destination, so without this check they see the raw 0.0.0.0 the caller
+ * passed and deny it as a normal (non-loopback) destination even though the
+ * kernel is about to route the connection to loopback. Empirically confirmed
+ * against the real kernel and this agent's own defend-mode enforcement:
+ * connect(("0.0.0.0", port)) succeeds and getpeername() reports 127.0.0.1,
+ * while cgroup/connect4 logs a deny with dst=0.0.0.0 for the exact same call.
+ */
+static __always_inline int coldstep_ipv4_is_unspecified(__be32 daddr)
+{
+	return daddr == 0;
+}
+
 /* First four bytes of an HTTP request line (after userspace read). */
 static __always_inline int coldstep_http_prefix_is_request(const char p[4])
 {
