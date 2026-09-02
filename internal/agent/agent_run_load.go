@@ -266,7 +266,9 @@ func (s *runState) loadDefendCgroup(compileCtx context.Context, backend string) 
 	s.cleanup.push(func() { _ = defendSendmsgLnk.Close() })
 
 	s.attachEgressBackstop()
-	s.attachDefendIPv6(cgPath)
+	if err := s.attachDefendIPv6(cgPath); err != nil {
+		return fmt.Errorf("defend mode requires confirmed IPv6 cgroup enforcement: %w", err)
+	}
 
 	// AttachCgroup returns once the program is bound, but on hosted runners the
 	// kernel has been observed to not yet enforce for newly-created sockets for
@@ -342,11 +344,25 @@ func (s *runState) attachEgressBackstop() {
 	}
 }
 
-// attachDefendIPv6 attaches the observe-only cgroup connect6/sendmsg6 hooks
-// (best-effort; tolerates missing programs and attach failures).
-func (s *runState) attachDefendIPv6(cgPath string) {
-	// P0-1 Phase 1: IPv6 observe-only hooks. Tolerate missing programs and
-	// attach failures (very old kernels without cgroup/connect6 support).
+// attachDefendIPv6 attaches the cgroup connect6/sendmsg6 ENFORCEMENT hooks
+// (gate native IPv6 against allowed_ipv6, v4-mapped IPv6 against the IPv4
+// allowlist — see CLAUDE.md's "cgroup section enforces IPv4, IPv4-mapped
+// IPv6, and native IPv6"). These programs are unconditionally compiled into
+// the cgroup section of trace_defend_all.bpf.c and already fail-closed at
+// load time (bpf/defend/loader.go's detachProgram, not
+// detachProgramIfPresent) — so a nil program here would mean
+// LoadDefendObjectsForKernel already failed the whole load earlier, making
+// the nil branches below defensive dead code in practice, not a tolerated
+// degradation path.
+//
+// Attach failures are fatal, matching the IPv4 connect4/sendmsg4 attach
+// calls in loadDefendCgroup: "defend" is documented (action.yml, CLAUDE.md)
+// as blocking IPv4 *and* IPv6 egress unconditionally, not only when the
+// allowlist has an IPv6 entry — silently continuing without IPv6
+// enforcement while still reporting BPF/telemetry as healthy would let any
+// non-allowlisted IPv6 destination through with no deny event and no signal
+// in the digest.
+func (s *runState) attachDefendIPv6(cgPath string) error {
 	if s.defendObjs.DefendCgroupConnect6 != nil {
 		ipv6ConnectLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
 			Path:    cgPath,
@@ -354,12 +370,11 @@ func (s *runState) attachDefendIPv6(cgPath string) {
 			Program: s.defendObjs.DefendCgroupConnect6,
 		})
 		if attachErr != nil {
-			slog.Info("ipv6 connect6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
-		} else {
-			s.cleanup.push(func() { _ = ipv6ConnectLnk.Close() })
+			return fmt.Errorf("attach defend_cgroup_connect6: %w", attachErr)
 		}
+		s.cleanup.push(func() { _ = ipv6ConnectLnk.Close() })
 	} else {
-		slog.Info("ipv6 connect6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		slog.Info("ipv6 connect6 enforcement program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 enforcement")
 	}
 	if s.defendObjs.DefendCgroupSendmsg6 != nil {
 		ipv6SendmsgLnk, attachErr := link.AttachCgroup(link.CgroupOptions{
@@ -368,13 +383,13 @@ func (s *runState) attachDefendIPv6(cgPath string) {
 			Program: s.defendObjs.DefendCgroupSendmsg6,
 		})
 		if attachErr != nil {
-			slog.Info("ipv6 sendmsg6 observe-only hook unavailable; continuing without IPv6 visibility", "err", attachErr)
-		} else {
-			s.cleanup.push(func() { _ = ipv6SendmsgLnk.Close() })
+			return fmt.Errorf("attach defend_cgroup_sendmsg6: %w", attachErr)
 		}
+		s.cleanup.push(func() { _ = ipv6SendmsgLnk.Close() })
 	} else {
-		slog.Info("ipv6 sendmsg6 observe-only program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 visibility")
+		slog.Info("ipv6 sendmsg6 enforcement program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 enforcement")
 	}
+	return nil
 }
 
 // loadExec loads the sched_process_exec tracepoint (mandatory) and its ring
