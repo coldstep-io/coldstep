@@ -2,6 +2,7 @@ import * as core from '@actions/core';
 import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as https from 'https';
+import * as net from 'net';
 import * as os from 'os';
 import * as path from 'path';
 
@@ -350,6 +351,30 @@ function readFileTokensSafe(filePaths: string, baseDir: string): string[] {
 // IPv4 literal or CIDR: x.x.x.x or x.x.x.x/nn
 const IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
 
+// IPv6 literal or CIDR (SP-2): x:x::x or x:x::x/nn. Mirrors
+// internal/actioncli/allowlist_files.go's isIPLiteralOrCIDR — without this,
+// an IPv6 allow entry (action.yml documents "1.2.3.4, 2001:db8::1" as valid)
+// falls through to the domain/host branch below and gets sent to the agent
+// as a hostname, which internal/policy's hostname parser rejects outright.
+function isIPv6LiteralOrCIDR(token: string): boolean {
+  const slash = token.indexOf('/');
+  const addr = slash >= 0 ? token.slice(0, slash) : token;
+  if (net.isIP(addr) !== 6) {
+    return false;
+  }
+  if (slash >= 0) {
+    const prefix = token.slice(slash + 1);
+    if (!/^\d{1,3}$/.test(prefix)) {
+      return false;
+    }
+    const n = Number(prefix);
+    if (n > 128) {
+      return false;
+    }
+  }
+  return true;
+}
+
 interface ParsedTokens {
   allowedIPs: string[];
   ignoredNets: string[];
@@ -370,7 +395,7 @@ function classifyTokens(tokens: string[]): ParsedTokens {
       } else {
         core.warning(`allow: unrecognized negation token "${token}" (expected !IPv4 or !CIDR); skipped`);
       }
-    } else if (IPV4_RE.test(token)) {
+    } else if (IPV4_RE.test(token) || isIPv6LiteralOrCIDR(token)) {
       allowedIPs.push(token);
     } else {
       // Plain or wildcard domain — goes to both lists for full coverage

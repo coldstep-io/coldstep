@@ -33,7 +33,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var require_tunnel = __commonJS({
   "node_modules/tunnel/lib/tunnel.js"(exports2) {
     "use strict";
-    var net = require("net");
+    var net2 = require("net");
     var tls = require("tls");
     var http = require("http");
     var https2 = require("https");
@@ -960,7 +960,7 @@ var require_util = __commonJS({
     var { kDestroyed, kBodyUsed, kListeners, kBody } = require_symbols();
     var { IncomingMessage } = require("node:http");
     var stream = require("node:stream");
-    var net = require("node:net");
+    var net2 = require("node:net");
     var { Blob: Blob2 } = require("node:buffer");
     var nodeUtil = require("node:util");
     var { stringify } = require("node:querystring");
@@ -1105,7 +1105,7 @@ var require_util = __commonJS({
       }
       assert(typeof host === "string");
       const servername = getHostname(host);
-      if (net.isIP(servername)) {
+      if (net2.isIP(servername)) {
         return "";
       }
       return servername;
@@ -2442,7 +2442,7 @@ var require_timers = __commonJS({
 var require_connect = __commonJS({
   "node_modules/undici/lib/core/connect.js"(exports2, module2) {
     "use strict";
-    var net = require("node:net");
+    var net2 = require("node:net");
     var assert = require("node:assert");
     var util = require_util();
     var { InvalidArgumentError, ConnectTimeoutError } = require_errors();
@@ -2538,7 +2538,7 @@ var require_connect = __commonJS({
         } else {
           assert(!httpSocket, "httpSocket can only be sent on TLS update");
           port = port || 80;
-          socket = net.connect({
+          socket = net2.connect({
             highWaterMark: 64 * 1024,
             // Same as nodejs fs streams.
             ...options,
@@ -7513,7 +7513,7 @@ var require_client = __commonJS({
   "node_modules/undici/lib/dispatcher/client.js"(exports2, module2) {
     "use strict";
     var assert = require("node:assert");
-    var net = require("node:net");
+    var net2 = require("node:net");
     var http = require("node:http");
     var util = require_util();
     var { channels } = require_diagnostics();
@@ -7662,7 +7662,7 @@ var require_client = __commonJS({
         if (maxRequestsPerClient != null && (!Number.isInteger(maxRequestsPerClient) || maxRequestsPerClient < 0)) {
           throw new InvalidArgumentError("maxRequestsPerClient must be a positive number");
         }
-        if (localAddress != null && (typeof localAddress !== "string" || net.isIP(localAddress) === 0)) {
+        if (localAddress != null && (typeof localAddress !== "string" || net2.isIP(localAddress) === 0)) {
           throw new InvalidArgumentError("localAddress must be valid string IP address");
         }
         if (maxResponseSize != null && (!Number.isInteger(maxResponseSize) || maxResponseSize < -1)) {
@@ -7826,7 +7826,7 @@ var require_client = __commonJS({
         const idx = hostname.indexOf("]");
         assert(idx !== -1);
         const ip = hostname.substring(1, idx);
-        assert(net.isIP(ip));
+        assert(net2.isIP(ip));
         hostname = ip;
       }
       client[kConnecting] = true;
@@ -11505,7 +11505,7 @@ var require_dump = __commonJS({
 var require_dns = __commonJS({
   "node_modules/undici/lib/interceptor/dns.js"(exports2, module2) {
     "use strict";
-    var { isIP } = require("node:net");
+    var { isIP: isIP2 } = require("node:net");
     var { lookup } = require("node:dns");
     var DecoratorHandler = require_decorator_handler();
     var { InvalidArgumentError, InformationalError } = require_errors();
@@ -11760,7 +11760,7 @@ var require_dns = __commonJS({
       return (dispatch) => {
         return function dnsInterceptor(origDispatchOpts, handler) {
           const origin = origDispatchOpts.origin.constructor === URL ? origDispatchOpts.origin : new URL(origDispatchOpts.origin);
-          if (isIP(origin.hostname) !== 0) {
+          if (isIP2(origin.hostname) !== 0) {
             return dispatch(origDispatchOpts, handler);
           }
           instance.runLookup(origin, origDispatchOpts, (err, newOrigin) => {
@@ -19329,6 +19329,7 @@ var path3 = __toESM(require("path"));
 var import_crypto = require("crypto");
 var fs3 = __toESM(require("fs"));
 var https = __toESM(require("https"));
+var net = __toESM(require("net"));
 var os5 = __toESM(require("os"));
 var path = __toESM(require("path"));
 var MAX_READY_STATUS_JSON_BYTES = 512 * 1024;
@@ -19594,6 +19595,24 @@ function readFileTokensSafe(filePaths, baseDir) {
   return tokens;
 }
 var IPV4_RE = /^(\d{1,3}\.){3}\d{1,3}(\/\d{1,2})?$/;
+function isIPv6LiteralOrCIDR(token) {
+  const slash = token.indexOf("/");
+  const addr = slash >= 0 ? token.slice(0, slash) : token;
+  if (net.isIP(addr) !== 6) {
+    return false;
+  }
+  if (slash >= 0) {
+    const prefix = token.slice(slash + 1);
+    if (!/^\d{1,3}$/.test(prefix)) {
+      return false;
+    }
+    const n = Number(prefix);
+    if (n > 128) {
+      return false;
+    }
+  }
+  return true;
+}
 function classifyTokens(tokens) {
   const allowedIPs = [];
   const ignoredNets = [];
@@ -19607,7 +19626,7 @@ function classifyTokens(tokens) {
       } else {
         warning(`allow: unrecognized negation token "${token}" (expected !IPv4 or !CIDR); skipped`);
       }
-    } else if (IPV4_RE.test(token)) {
+    } else if (IPV4_RE.test(token) || isIPv6LiteralOrCIDR(token)) {
       allowedIPs.push(token);
     } else {
       allowedHosts.push(token);
