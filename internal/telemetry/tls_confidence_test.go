@@ -55,3 +55,27 @@ func TestTLSConfidenceConstants(t *testing.T) {
 		}
 	}
 }
+
+// The SNI field budget passed to SanitizeField at the call sites (253, the RFC
+// 1035 max FQDN) is BELOW the boundary ScoreTLSConfidence uses to report
+// "partial" (TLSSNIMaxLen = 255). Confidence must therefore be scored on the
+// parsed SNI, before sanitizing — scoring the sanitized value makes the partial
+// tier unreachable and labels a boundary-length (possibly truncated) SNI "full".
+// This pins the relationship so a re-order in the TLS ring reader fails here.
+func TestScoreTLSConfidence_MustBeScoredBeforeSanitize(t *testing.T) {
+	const sniFieldBudget = 253 // readTLSRing's SanitizeField(sni, 253)
+	if sniFieldBudget >= TLSSNIMaxLen {
+		t.Fatalf("field budget %d >= TLSSNIMaxLen %d — this test's premise no longer holds",
+			sniFieldBudget, TLSSNIMaxLen)
+	}
+
+	boundary := strings.Repeat("a", TLSSNIMaxLen)
+	if got := ScoreTLSConfidence(boundary); got != TLSConfidencePartial {
+		t.Errorf("ScoreTLSConfidence(len=%d) = %q, want %q", len(boundary), got, TLSConfidencePartial)
+	}
+	// Sanitizing first destroys the signal — the reason for the ordering.
+	if got := ScoreTLSConfidence(SanitizeField(boundary, sniFieldBudget)); got != TLSConfidenceFull {
+		t.Errorf("sanitize-then-score = %q, want %q (documents the bug being guarded against)",
+			got, TLSConfidenceFull)
+	}
+}
