@@ -100,7 +100,45 @@ func (s *runState) loadDefend(compileCtx context.Context) error {
 		slog.Warn("lsm defend attach failed; falling back to cgroup", "err", lsmAttachErr)
 	}
 
-	return s.loadDefendCgroup(compileCtx, backend.backend)
+	if err := s.loadDefendCgroup(compileCtx, backend.backend); err != nil {
+		return err
+	}
+	// Arm sub-project B's self-defense hook last, after every defend link
+	// (LSM + cgroup + TCX backstop) has been attached — see
+	// finalizeBpfSelfDefense and trackDefendLink for why link protection
+	// specifically must wait until here.
+	s.finalizeBpfSelfDefense()
+	return nil
+}
+
+// trackDefendLink registers lnk for cleanup (same as every other attach site)
+// and records its kernel link id into s.defendLinkIDs so
+// finalizeBpfSelfDefense can protect it from BPF_LINK_GET_FD_BY_ID.
+// Best-effort: a link whose Info() fails (very old kernel without bpf_link id
+// support) is still cleaned up normally, just not covered by self-defense.
+func (s *runState) trackDefendLink(lnk link.Link) {
+	s.cleanup.push(func() { _ = lnk.Close() })
+	if info, err := lnk.Info(); err == nil {
+		s.defendLinkIDs = append(s.defendLinkIDs, uint32(info.ID))
+	}
+}
+
+// finalizeBpfSelfDefense arms sub-project B's lsm/bpf self-defense hook
+// (populates self_prog_ids / self_map_ids / self_link_ids, then flips
+// self_defense_cfg.enabled=1) once every defend link has been attached.
+// Called once at the very end of loadDefend so no defend link — cgroup,
+// LSM, or TCX backstop — is ever left unprotected during the load window.
+// No-op if the self-defense LSM link itself never attached.
+func (s *runState) finalizeBpfSelfDefense() {
+	if !s.selfDefenseLinkAttached {
+		return
+	}
+	progN, mapN, linkN := armBpfSelfDefense(&s.defendObjs, uint32(os.Getpid()), s.defendLinkIDs) // #nosec G115 -- pid is always a small positive int; uint32 round-trip is intentional //nolint:gosec
+	s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{
+		Name:   "lsm/bpf (self-defense)",
+		OK:     true,
+		Detail: fmt.Sprintf("protecting %d prog(s) + %d map(s) + %d link(s)", progN, mapN, linkN),
+	})
 }
 
 // loadDefendLSM attaches the BPF LSM defend hooks (socket_connect/sendmsg,
@@ -139,8 +177,8 @@ func (s *runState) loadDefendLSM(haveLSM, haveIOUringLSM bool) (lsmAttachErr err
 				// never fire — `lsm_deny_events` then stays empty even though
 				// cgroup is defending.
 				s.lsmDenyRd.R = rd
-				s.cleanup.push(func() { _ = lnk1.Close() })
-				s.cleanup.push(func() { _ = lnk2.Close() })
+				s.trackDefendLink(lnk1)
+				s.trackDefendLink(lnk2)
 
 				// Sendfile/splice gap (kernel 5.15): attach lsm/socket_sendpage
 				// so the sock_sendpage() path is gated against the same IPv4
@@ -151,34 +189,32 @@ func (s *runState) loadDefendLSM(haveLSM, haveIOUringLSM bool) (lsmAttachErr err
 					if attachErr != nil {
 						slog.Info("lsm/socket_sendpage attach failed; sendfile/splice gap remains on this kernel", "err", attachErr)
 					} else {
-						s.cleanup.push(func() { _ = sendpageLnk.Close() })
+						s.trackDefendLink(sendpageLnk)
 					}
 				} else {
 					slog.Info("lsm/socket_sendpage program not present in defend stubs; rebuild defend objects on Linux to close the sendfile/splice gap")
 				}
 
-				// Sub-project B: lsm/bpf self-defense. Attach the hook, arm
-				// it (record coldstep's own object ids + enabled=1), and
-				// open its ringbuf. Best-effort defense-in-depth — never
-				// fatal. Inert until armed; armBpfSelfDefense flips enabled
-				// only after the protected-id sets are populated.
+				// Sub-project B: lsm/bpf self-defense. Attach the hook and
+				// open its ringbuf here; arming (recording coldstep's own
+				// object ids — including every defend link's id — and
+				// flipping enabled=1) is deferred to finalizeBpfSelfDefense
+				// at the end of loadDefend, once every defend link (this one
+				// included, plus the cgroup/TCX links attached after this
+				// point) has been attached. Best-effort defense-in-depth —
+				// never fatal.
 				if s.defendObjs.ColdstepBpfSelfDefense != nil {
 					if sdLnk, sdErr := link.AttachLSM(link.LSMOptions{Program: s.defendObjs.ColdstepBpfSelfDefense}); sdErr != nil {
 						slog.Info("lsm/bpf self-defense attach failed; monitor tamper protection inactive", "err", sdErr)
 						s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{Name: "lsm/bpf (self-defense)", OK: false, Detail: bpfDetail(sdErr)})
 					} else {
-						s.cleanup.push(func() { _ = sdLnk.Close() })
-						progN, mapN := armBpfSelfDefense(&s.defendObjs, uint32(os.Getpid())) // #nosec G115 -- pid is always a small positive int; uint32 round-trip is intentional //nolint:gosec
+						s.trackDefendLink(sdLnk)
+						s.selfDefenseLinkAttached = true
 						if sdRd, rerr := ringbuf.NewReader(s.defendObjs.BpfSelfDefenseEvents); rerr != nil {
 							slog.Info("bpf self-defense ringbuf unavailable; continuing", "err", rerr)
 						} else {
 							s.selfDefenseRd.R = sdRd
 						}
-						s.bpfSt = append(s.bpfSt, telemetry.BPFStatus{
-							Name:   "lsm/bpf (self-defense)",
-							OK:     true,
-							Detail: fmt.Sprintf("protecting %d prog(s) + %d map(s)", progN, mapN),
-						})
 					}
 				}
 
@@ -192,7 +228,7 @@ func (s *runState) loadDefendLSM(haveLSM, haveIOUringLSM bool) (lsmAttachErr err
 						slog.Info("lsm/io_uring_cmd attach failed; cgroup+socket LSM still active", "err", ioErr)
 						ioUringAttachErr = ioErr
 					} else {
-						s.cleanup.push(func() { _ = lnk3.Close() })
+						s.trackDefendLink(lnk3)
 					}
 				}
 			}
@@ -253,7 +289,7 @@ func (s *runState) loadDefendCgroup(compileCtx context.Context, backend string) 
 	if err != nil {
 		return fmt.Errorf("attach defend_connect4: %w", err)
 	}
-	s.cleanup.push(func() { _ = defendConnectLnk.Close() })
+	s.trackDefendLink(defendConnectLnk)
 
 	defendSendmsgLnk, err := link.AttachCgroup(link.CgroupOptions{
 		Path:    cgPath,
@@ -263,7 +299,7 @@ func (s *runState) loadDefendCgroup(compileCtx context.Context, backend string) 
 	if err != nil {
 		return fmt.Errorf("attach defend_sendmsg4: %w", err)
 	}
-	s.cleanup.push(func() { _ = defendSendmsgLnk.Close() })
+	s.trackDefendLink(defendSendmsgLnk)
 
 	s.attachEgressBackstop()
 	if err := s.attachDefendIPv6(cgPath); err != nil {
@@ -331,7 +367,7 @@ func (s *runState) attachEgressBackstop() {
 			slog.Info("egress backstop tcx attach failed; continuing", "iface", iface.Name, "err", attachErr)
 			continue
 		}
-		s.cleanup.push(func() { _ = tcxLnk.Close() })
+		s.trackDefendLink(tcxLnk)
 		attached++
 	}
 	if attached > 0 {
@@ -372,7 +408,7 @@ func (s *runState) attachDefendIPv6(cgPath string) error {
 		if attachErr != nil {
 			return fmt.Errorf("attach defend_cgroup_connect6: %w", attachErr)
 		}
-		s.cleanup.push(func() { _ = ipv6ConnectLnk.Close() })
+		s.trackDefendLink(ipv6ConnectLnk)
 	} else {
 		slog.Info("ipv6 connect6 enforcement program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 enforcement")
 	}
@@ -385,7 +421,7 @@ func (s *runState) attachDefendIPv6(cgPath string) error {
 		if attachErr != nil {
 			return fmt.Errorf("attach defend_cgroup_sendmsg6: %w", attachErr)
 		}
-		s.cleanup.push(func() { _ = ipv6SendmsgLnk.Close() })
+		s.trackDefendLink(ipv6SendmsgLnk)
 	} else {
 		slog.Info("ipv6 sendmsg6 enforcement program not present in defend stubs; rebuild defend objects on Linux to enable IPv6 enforcement")
 	}

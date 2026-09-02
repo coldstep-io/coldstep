@@ -59,13 +59,15 @@ func TestBpfSelfDefenseSourceWiring(t *testing.T) {
 	if !strings.Contains(st, "cfg->agent_tgid") {
 		t.Error("self-defense must exempt the agent's own tgid")
 	}
-	// The three self-object cmds dispatched against the id sets / pin prefix.
+	// The four self-object cmds dispatched against the id sets / pin prefix.
 	for _, want := range []string{
 		"BPF_PROG_GET_FD_BY_ID",
 		"BPF_MAP_GET_FD_BY_ID",
+		"BPF_LINK_GET_FD_BY_ID",
 		"BPF_OBJ_GET",
 		"self_prog_ids",
 		"self_map_ids",
+		"self_link_ids",
 		"self_pin_prefix",
 	} {
 		if !strings.Contains(st, want) {

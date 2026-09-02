@@ -6,10 +6,11 @@
  *
  * Emitted once (deduped) when a non-agent task attempts to obtain a handle to
  * one of coldstep's own BPF objects via BPF_PROG_GET_FD_BY_ID /
- * BPF_MAP_GET_FD_BY_ID (by id) or BPF_OBJ_GET (by pin path), and the hook
- * denies it with -EPERM. target_kind distinguishes prog / map / pin so the
- * digest can attribute the attempt. The JSONL seq is NOT carried on the wire —
- * userspace allocates it under jsonlMu on emit (BG-1 pattern).
+ * BPF_MAP_GET_FD_BY_ID / BPF_LINK_GET_FD_BY_ID (by id) or BPF_OBJ_GET (by pin
+ * path), and the hook denies it with -EPERM. target_kind distinguishes
+ * prog / map / link / pin so the digest can attribute the attempt. The JSONL
+ * seq is NOT carried on the wire — userspace allocates it under jsonlMu on
+ * emit (BG-1 pattern).
  *
  * Fixed 40-byte layout — keep in sync with bpfSelfDefenseEventWireSize in
  * internal/agent/agent_linux.go and the Go decoder:
@@ -20,6 +21,7 @@
 #define COLDSTEP_SELFDEF_KIND_PROG 1
 #define COLDSTEP_SELFDEF_KIND_MAP 2
 #define COLDSTEP_SELFDEF_KIND_PIN 3
+#define COLDSTEP_SELFDEF_KIND_LINK 4
 
 struct bpf_self_defense_event {
 	__u64 ts;          /* bpf_ktime_get_ns() at deny */

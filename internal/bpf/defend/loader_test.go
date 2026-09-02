@@ -100,7 +100,7 @@ func TestDefendSpecStripsIOUringLSMWithoutLSM(t *testing.T) {
 
 // TestDefendSpecExposesSelfDefenseProgram asserts the compiled BPF object
 // contains sub-project B's lsm/bpf self-defense program with the expected
-// SectionName, plus its six self_* maps. Pure spec parse — no kernel attach.
+// SectionName, plus its seven self_* maps. Pure spec parse — no kernel attach.
 func TestDefendSpecExposesSelfDefenseProgram(t *testing.T) {
 	spec, err := LoadDefend()
 	if err != nil {
@@ -116,6 +116,7 @@ func TestDefendSpecExposesSelfDefenseProgram(t *testing.T) {
 	for _, name := range []string{
 		"self_prog_ids",
 		"self_map_ids",
+		"self_link_ids",
 		"self_pin_prefix",
 		"self_defense_cfg",
 		"bpf_self_defense_events",
@@ -159,6 +160,7 @@ func TestStripAllLSM(t *testing.T) {
 		"sendpage_observed",
 		"self_prog_ids",
 		"self_map_ids",
+		"self_link_ids",
 		"self_pin_prefix",
 		"self_defense_cfg",
 		"bpf_self_defense_events",

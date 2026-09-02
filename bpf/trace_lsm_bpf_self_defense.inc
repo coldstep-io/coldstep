@@ -6,17 +6,22 @@
  * unloading the monitor (the Doyensec/Datadog "unload the monitor" gap).
  *
  * Scope is "self objects only" — zero blast radius to any other BPF user on the
- * runner. The hook denies exactly three control-plane operations, and ONLY when
+ * runner. The hook denies exactly four control-plane operations, and ONLY when
  * they target a coldstep object:
  *
- *   BPF_PROG_GET_FD_BY_ID  attr->prog_id ∈ self_prog_ids  → -EPERM
- *   BPF_MAP_GET_FD_BY_ID   attr->map_id  ∈ self_map_ids   → -EPERM
+ *   BPF_PROG_GET_FD_BY_ID  attr->prog_id  ∈ self_prog_ids  → -EPERM
+ *   BPF_MAP_GET_FD_BY_ID   attr->map_id   ∈ self_map_ids   → -EPERM
+ *   BPF_LINK_GET_FD_BY_ID  attr->link_id  ∈ self_link_ids  → -EPERM
  *   BPF_OBJ_GET            attr->pathname prefix==pin dir  → -EPERM
  *
  * Realistic CAP_BPF attackers have no pre-existing fd to coldstep objects, so
  * these "get a handle" paths are the chokepoint: deny the handle and the
- * follow-on DETACH/DELETE cannot happen. prog_id and map_id overlay the same
- * union offset in bpf_attr, so one CO-RE read serves both id cmds.
+ * follow-on DETACH/DELETE/UPDATE cannot happen — this applies to links the
+ * same as it does to progs and maps (a link's own id is enumerable via
+ * BPF_LINK_GET_NEXT_ID / `bpftool link show` the same way prog/map ids are,
+ * so BPF_LINK_GET_FD_BY_ID is the identical chokepoint for links). prog_id,
+ * map_id and link_id all overlay the same union offset in bpf_attr, so one
+ * CO-RE read serves all three id cmds.
  *
  * The agent's own runtime bpf() calls (allowlist BPF_MAP_UPDATE_ELEM, ringbuf
  * consume) act on fds it already holds from load time — they never call
@@ -60,6 +65,14 @@ struct {
 	__type(key, __u32);
 	__type(value, __u8);
 } self_map_ids SEC(".maps");
+
+/* Set membership: coldstep's own bpf_link ids (cgroup/LSM/TCX attach links). */
+struct {
+	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(max_entries, 64);
+	__type(key, __u32);
+	__type(value, __u8);
+} self_link_ids SEC(".maps");
 
 /* The agent's bpffs pin directory prefix (NUL-terminated). Empty string (first
  * byte 0) disables the BPF_OBJ_GET branch entirely. */
@@ -196,6 +209,16 @@ int BPF_PROG(coldstep_bpf_self_defense, int cmd, union bpf_attr *attr,
 		__u8 *hit = bpf_map_lookup_elem(&self_map_ids, &id); /* AUDIT(5a) */
 		if (hit) {
 			selfdef_emit(cmd, id, COLDSTEP_SELFDEF_KIND_MAP);
+			return -EPERM;
+		}
+		return 0;
+	}
+
+	if (cmd == BPF_LINK_GET_FD_BY_ID) {
+		__u32 id = BPF_CORE_READ(attr, link_id);
+		__u8 *hit = bpf_map_lookup_elem(&self_link_ids, &id); /* AUDIT(5a) */
+		if (hit) {
+			selfdef_emit(cmd, id, COLDSTEP_SELFDEF_KIND_LINK);
 			return -EPERM;
 		}
 		return 0;

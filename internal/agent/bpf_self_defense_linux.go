@@ -17,9 +17,14 @@ type selfDefenseCfgValue struct {
 }
 
 // armBpfSelfDefense (sub-project B) records the kernel ids of coldstep's own
-// loaded defend programs/maps into self_prog_ids / self_map_ids, then flips
-// self_defense_cfg.enabled to 1 LAST — so the lsm/bpf hook stays inert until
-// the protected-id sets are complete (no arm-before-known-ids window).
+// loaded defend programs/maps into self_prog_ids / self_map_ids, records the
+// caller-supplied link ids (linkIDs — every cgroup/LSM/TCX link attached from
+// the defend collection; see runState.trackDefendLink) into self_link_ids,
+// then flips self_defense_cfg.enabled to 1 LAST — so the lsm/bpf hook stays
+// inert until the protected-id sets are complete (no arm-before-known-ids
+// window). Callers must attach every defend link before calling this so no
+// link is left unprotected; that is why this is called once at the end of
+// loadDefend, after loadDefendCgroup, rather than as each program attaches.
 //
 // Best-effort: a missing map (stub predating the section, or LSM stripped)
 // makes this a no-op rather than an error — the program ships inert in that
@@ -27,11 +32,11 @@ type selfDefenseCfgValue struct {
 // objects today; that disables the BPF_OBJ_GET branch, leaving the by-id
 // protection (the realistic CAP_BPF tamper vector) as the active path.
 //
-// Returns the number of program ids and map ids successfully recorded so the
+// Returns the number of program/map/link ids successfully recorded so the
 // caller can surface it in a BPFStatus row.
-func armBpfSelfDefense(objs *defend.DefendObjects, agentTGID uint32) (progN, mapN int) {
+func armBpfSelfDefense(objs *defend.DefendObjects, agentTGID uint32, linkIDs []uint32) (progN, mapN, linkN int) {
 	if objs.SelfDefenseCfg == nil {
-		return 0, 0 // section absent — nothing to arm
+		return 0, 0, 0 // section absent — nothing to arm
 	}
 
 	one := uint8(1)
@@ -71,11 +76,18 @@ func armBpfSelfDefense(objs *defend.DefendObjects, agentTGID uint32) (progN, map
 			}
 		}
 	}
+	if objs.SelfLinkIds != nil {
+		for _, id := range linkIDs {
+			if err := objs.SelfLinkIds.Put(id, one); err == nil {
+				linkN++
+			}
+		}
+	}
 
 	// Arm last: enabled=1 only after the id sets are populated.
 	cfg := selfDefenseCfgValue{AgentTGID: agentTGID, Enabled: 1}
 	_ = objs.SelfDefenseCfg.Put(uint32(0), cfg)
-	return progN, mapN
+	return progN, mapN, linkN
 }
 
 // selfDefenseProgramSet lists every defend program whose handle should be
@@ -124,6 +136,7 @@ func selfDefenseMapSet(o *defend.DefendObjects) []*ebpf.Map {
 		o.SendpageObserved,
 		o.SelfProgIds,
 		o.SelfMapIds,
+		o.SelfLinkIds,
 		o.SelfPinPrefix,
 		o.SelfDefenseCfg,
 		o.BpfSelfDefenseEvents,

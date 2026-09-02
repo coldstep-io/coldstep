@@ -73,6 +73,16 @@ type runState struct {
 	bpfSt   []telemetry.BPFStatus
 	cleanup runCleanup
 
+	// defendLinkIDs collects the kernel link ids of every cgroup/LSM/TCX link
+	// attached from the defend collection (see trackDefendLink). Sub-project
+	// B's self-defense hook arms from this slice once loadDefend finishes
+	// attaching everything, so every defend link — not just its programs and
+	// maps — is protected from BPF_LINK_GET_FD_BY_ID.
+	defendLinkIDs []uint32
+	// selfDefenseLinkAttached is true once lsm/bpf (coldstep_bpf_self_defense)
+	// itself attached, gating finalizeBpfSelfDefense.
+	selfDefenseLinkAttached bool
+
 	kernel         string
 	runnerEnv      string
 	compatWarnings []telemetry.CompatWarning

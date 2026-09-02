@@ -887,6 +887,8 @@ func bpfSelfDefenseKindName(k uint8) string {
 		return "map"
 	case 3:
 		return "pin"
+	case 4:
+		return "link"
 	default:
 		return "other"
 	}
