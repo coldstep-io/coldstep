@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -806,5 +807,62 @@ func TestRedTeam_DefendAllowlistedDomainResolvesAndPasses(t *testing.T) {
 		if bytes.Contains(line, []byte(`"dst":"127.0.0.1"`)) {
 			t.Fatalf("unexpected deny event after domain-resolved allowlist:\n%s", line)
 		}
+	}
+}
+
+// The kernel rewrites a connect(2) destination of :: to ::1 (tcp_v6_connect),
+// but only AFTER cgroup/connect6 and lsm/socket_connect have judged the
+// destination — so before the coldstep_ipv6_is_unspecified bypass those hooks
+// saw the raw ::, missed the allowed_ipv6 trie, and denied a connection the
+// kernel was about to route to loopback. IPv6 twin of the 0.0.0.0 bypass on the
+// IPv4 path; asserts the connect succeeds and emits no deny row.
+func TestRedTeam_DefendAllowsUnspecifiedIPv6(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("requires root for BPF load")
+	}
+	skipIfUnsupportedSyscallBPFKernel(t)
+
+	ln, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("host has no usable IPv6 loopback: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			c, aerr := ln.Accept()
+			if aerr != nil {
+				return
+			}
+			_ = c.Close()
+		}
+	}()
+	port := ln.Addr().(*net.TCPAddr).Port
+
+	h := newRedteamHarness(t)
+	// Allowlist deliberately excludes :: and ::1 — the bypass must come from
+	// the hook, not from the allowlist.
+	h.applyDefendEnv(t, "localhost", "127.0.0.1/32")
+
+	cancel, errCh := startAgent(t, 15*time.Second)
+	defer stopAgent(t, cancel, errCh)
+
+	if !waitForReady(h.ready, 10*time.Second) {
+		t.Fatal("agent did not become ready within 10s")
+	}
+
+	target := net.JoinHostPort("::", strconv.Itoa(port))
+	conn, dialErr := net.DialTimeout("tcp6", target, 3*time.Second)
+	if dialErr != nil {
+		dump, _ := os.ReadFile(h.events)
+		t.Fatalf("connect to %s was blocked under defend mode (%v); the kernel rewrites :: to ::1 so this must be bypassed. events:\n%s",
+			target, dialErr, string(dump))
+	}
+	peer := conn.RemoteAddr().String()
+	_ = conn.Close()
+	t.Logf("connect to %s succeeded; peer=%s (kernel rewrote :: to loopback)", target, peer)
+
+	// Belt and braces: no deny row naming :: may appear.
+	if line := pollJSONLForType(h.events, "deny", []string{`"dst":"::"`}, 2*time.Second); line != nil {
+		t.Errorf("deny JSONL row emitted for the unspecified IPv6 destination: %s", string(line))
 	}
 }

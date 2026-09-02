@@ -422,10 +422,15 @@ func readTLSRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, pol
 			sni = res.sni
 			reassembled = res.reassembly
 		}
+		// Score confidence on the PARSED value, before sanitizing. SanitizeField
+		// truncates to 253 bytes but ScoreTLSConfidence only reports "partial" at
+		// >= TLSSNIMaxLen (255), so scoring the sanitized string made the partial
+		// tier unreachable: an SNI sitting exactly on the capture/RFC boundary —
+		// the one case we cannot prove was not truncated — was labelled "full".
+		conf := telemetry.ScoreTLSConfidence(sni)
 		// SNI is parsed from an attacker-controlled TLS ClientHello buffer.
 		sni = telemetry.SanitizeField(sni, 253)
 		cl := pol.Classify(sni, ip)
-		conf := telemetry.ScoreTLSConfidence(sni)
 		// P4: if trace_ktls observed setsockopt(SOL_TLS) for this pid within the
 		// tracker TTL AND that Mark landed BEFORE this TLS event arrived in
 		// userspace, the SNI we just parsed (if any) is a pre-offload artifact —
@@ -501,7 +506,14 @@ func readUDPRing(ctx context.Context, cfg config.Config, rd *ringbuf.Reader, dns
 		ts := time.Now().UTC().Format(time.RFC3339Nano)
 
 		ipStr := ip.String()
-		possibleQUIC := port == 443
+		// Use the shared predicate, not a bare `port == 443`: IsQUICCandidate
+		// also excludes loopback, and it already gates the separate
+		// quic_candidate event below. Scoring the flag and the counter
+		// differently made UDPEvent.PossibleQUIC / Summary.QuicObserved /
+		// Coverage.QuicObserved count runner-local UDP/443 that never produced a
+		// quic_candidate row — the two QUIC numbers in the digest disagreed,
+		// which is exactly what centralizing the predicate is meant to prevent.
+		possibleQUIC := IsQUICCandidate(ipStr, port)
 		if possibleQUIC {
 			stats.addQUICObserved()
 		}

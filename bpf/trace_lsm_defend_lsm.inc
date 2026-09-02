@@ -150,6 +150,14 @@ static __always_inline int lsm_v6_enforce(__u8 proto, const __u8 daddr16[16],
 
 	if (skb_v6_is_loopback(a))
 		return 0;
+	/*
+	 * :: — the kernel rewrites an all-zero connect destination to loopback
+	 * after this hook, and the sendmsg fallback below reads skc_v6_daddr,
+	 * which is all-zero on an unconnected socket (the IPv4 fallback already
+	 * bails on daddr == 0). See coldstep_ipv6_is_unspecified.
+	 */
+	if (coldstep_ipv6_is_unspecified(a))
+		return 0;
 	if (skb_v6_is_link_local(a))
 		return 0;
 

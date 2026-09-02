@@ -339,3 +339,59 @@ func TestRenders_NeutralizeLinkBrackets(t *testing.T) {
 		}
 	}
 }
+
+// An over-long record must be counted as a parse error and skipped, not end
+// the scan. Before the bufio.Reader rewrite a single record above
+// maxEventLineBytes stopped bufio.Scanner permanently: every event after it was
+// dropped and Parse returned an error the caller used to discard the whole
+// report.
+func TestParse_OversizedLineIsSkippedNotFatal(t *testing.T) {
+	huge := `{"type":"tcp","pad":"` + strings.Repeat("A", maxEventLineBytes) + `"}`
+	stream := `{"type":"meta","ts":"t0"}` + "\n" +
+		huge + "\n" +
+		`{"type":"exec"}` + "\n" +
+		`{"type":"tcp","dst":"1.2.3.4","dport":443,"fqdn":"after.example.com"}` + "\n"
+
+	a, err := Parse(strings.NewReader(stream))
+	if err != nil {
+		t.Fatalf("Parse returned error for an over-long record: %v", err)
+	}
+	if a.ParseErrors != 1 {
+		t.Errorf("ParseErrors=%d want 1 (the oversized record)", a.ParseErrors)
+	}
+	// Records after the oversized one must still be aggregated.
+	if a.Execs != 1 {
+		t.Errorf("Execs=%d want 1 — events after the oversized record were dropped", a.Execs)
+	}
+	if a.TCPConns != 1 {
+		t.Errorf("TCPConns=%d want 1", a.TCPConns)
+	}
+	if _, ok := a.Dests["after.example.com"]; !ok {
+		t.Errorf("destination after the oversized record missing: %v", a.Dests)
+	}
+	if missing := a.MissingRequiredTypes("standard"); len(missing) != 0 {
+		t.Errorf("MissingRequiredTypes=%v want none", missing)
+	}
+}
+
+// A final record with no trailing newline must still be aggregated.
+func TestParse_UnterminatedFinalLine(t *testing.T) {
+	a, err := Parse(strings.NewReader(`{"type":"meta"}` + "\n" + `{"type":"exec"}`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Execs != 1 {
+		t.Errorf("Execs=%d want 1", a.Execs)
+	}
+}
+
+// CRLF-terminated streams (a Windows-authored fixture) must parse.
+func TestParse_CRLFTerminated(t *testing.T) {
+	a, err := Parse(strings.NewReader("{\"type\":\"meta\"}\r\n{\"type\":\"exec\"}\r\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if a.Execs != 1 || !a.MetaSeen {
+		t.Errorf("Execs=%d MetaSeen=%v want 1/true", a.Execs, a.MetaSeen)
+	}
+}

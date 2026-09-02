@@ -299,3 +299,20 @@ func TestGithubAPIBaseURL(t *testing.T) {
 		t.Fatal("expected error for plaintext http GITHUB_API_URL")
 	}
 }
+
+// truncate backs the cut off a partial trailing rune. It must not walk back to
+// an invalid byte earlier in the body: the old whole-prefix utf8.ValidString
+// check discarded everything after the first bad byte (and cost O(max^2)).
+func TestTruncate_invalidByteEarlyKeepsLaterContent(t *testing.T) {
+	body := "HEADER\n" + string([]byte{0xff}) + "\nTAIL-CONTENT-" + strings.Repeat("A", 200)
+	out := truncate(body, 100)
+	if !strings.Contains(out, "TAIL-CONTENT-") {
+		t.Errorf("truncate dropped content after an early invalid byte: %q", out)
+	}
+	if !strings.HasSuffix(out, "_(truncated)_\n") {
+		t.Errorf("truncate lost its marker: %q", out)
+	}
+	if len(out) < 90 {
+		t.Errorf("truncate returned %d bytes, want ~100 of body plus marker", len(out))
+	}
+}

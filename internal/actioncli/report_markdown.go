@@ -38,9 +38,16 @@ func writeDetailedMarkdownReport(baseDir, digestOutput string) *markdown.Aggrega
 	}
 	defer f.Close()
 
+	// markdown.Parse always returns a usable Aggregate; an error means the read
+	// stopped early (truncated file, I/O fault), not that the events seen so far
+	// are unusable. Render what was captured rather than dropping the whole
+	// report — discarding it here also made runStop announce "the agent likely
+	// never started", which is the wrong diagnosis for a partial stream.
 	agg, err := markdown.Parse(f)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "coldstep: parse events for markdown report: %v\n", err)
+		fmt.Fprintf(os.Stderr, "coldstep: parse events for markdown report (rendering partial stream): %v\n", err)
+	}
+	if agg == nil {
 		return nil
 	}
 

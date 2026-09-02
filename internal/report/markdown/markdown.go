@@ -13,7 +13,9 @@ package markdown
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -149,79 +151,129 @@ type denyLine struct {
 	Mode       string `json:"mode"`
 }
 
+const (
+	// maxEventLineBytes bounds one JSONL record. A longer record is counted in
+	// ParseErrors and skipped; the stream keeps being read past it.
+	maxEventLineBytes = 4 * 1024 * 1024
+	// eventReadBufferBytes is the bufio.Reader window; records larger than it
+	// are stitched across ReadSlice calls.
+	eventReadBufferBytes = 64 * 1024
+)
+
 // Parse reads a JSONL event stream and rolls it up into an Aggregate. Malformed
 // lines are counted in ParseErrors and skipped — a single bad line never aborts
 // the report (defence-in-depth against a build step appending garbage).
+//
+// "Malformed" includes over-long: this used to run on a bufio.Scanner capped at
+// maxEventLineBytes, and a single record above the cap made Scan() stop for
+// good — every event after it was dropped and the caller
+// (actioncli.writeDetailedMarkdownReport) discarded the whole Aggregate on the
+// returned error, so no report, digest, job summary or PR comment was produced
+// and --strict reported "no .coldstep-events.jsonl to evaluate". Appending one
+// oversized line was therefore enough to suppress the entire report. The reader
+// below resynchronizes on the next newline instead.
 func Parse(r io.Reader) (*Aggregate, error) {
 	a := &Aggregate{Dests: make(map[string]int), seen: make(map[string]struct{}), domains: make(map[string]struct{})}
-	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var t typedLine
-		if err := json.Unmarshal(line, &t); err != nil {
+	br := bufio.NewReaderSize(r, eventReadBufferBytes)
+	for {
+		raw, oversize, rerr := readEventLine(br, maxEventLineBytes)
+		if oversize {
 			a.ParseErrors++
+		} else if line := bytes.TrimRight(raw, "\r\n"); len(line) > 0 {
+			a.consumeLine(line)
+		}
+		if rerr != nil {
+			if errors.Is(rerr, io.EOF) {
+				return a, nil
+			}
+			return a, fmt.Errorf("read events: %w", rerr)
+		}
+	}
+}
+
+// readEventLine returns the next newline-terminated record from br, including
+// its terminator. oversize reports that the record exceeded max — its bytes are
+// discarded but still consumed, so the next call resumes at the following
+// record rather than mid-record. The returned error is the underlying read
+// error (io.EOF at end of stream), reported alongside any final unterminated
+// record.
+func readEventLine(br *bufio.Reader, max int) (line []byte, oversize bool, err error) {
+	for {
+		chunk, e := br.ReadSlice('\n')
+		if !oversize {
+			if len(line)+len(chunk) > max {
+				oversize = true
+				line = nil
+			} else {
+				line = append(line, chunk...)
+			}
+		}
+		if errors.Is(e, bufio.ErrBufferFull) {
 			continue
 		}
-		a.TotalEvents++
-		if t.Type != "meta" {
-			a.NonMetaEvents++
-		}
-		a.seen[t.Type] = struct{}{}
-		switch t.Type {
-		case "meta":
-			a.countMeta(line)
-		case "tcp", "tcp6":
-			a.TCPConns++
-			if t.Type == "tcp6" {
-				a.IPv6Events++
-			}
-			a.countDest(line)
-		case "udp", "udp6":
-			a.UDPSends++
-			if t.Type == "udp6" {
-				a.IPv6Events++
-			}
-			a.countDest(line)
-		case "http":
-			a.HTTPReqs++
-		case "exec":
-			a.Execs++
-		case "proc_fork":
-			a.ProcForks++
-		case "fs_event":
-			a.FSEvents++
-		case "quic_candidate":
-			a.QUICCandidates++
-		case "tls":
-			a.countTLS(line)
-		case "ktls_offload":
-			a.KTLSOffload++
-		case "tcp_state":
-			a.TCPStateEvents++
-		case "io_uring_send":
-			a.IoUringSend++
-		case "io_uring_tls":
-			a.IoUringTLS++
-		case "bpf_audit":
-			a.BPFAudit++
-		case "bpf_tamper":
-			a.BPFTamper++
-		case "bpf_self_defense":
-			a.BpfSelfDefenseDenied++
-		case "egress_backstop":
-			a.EgressBackstop++
-		case "deny":
-			a.countDeny(line)
-		}
+		return line, oversize, e
 	}
-	if err := sc.Err(); err != nil {
-		return a, fmt.Errorf("scan events: %w", err)
+}
+
+// consumeLine folds one well-formed JSONL record into the aggregate. Callers
+// pass a line with its terminator already stripped.
+func (a *Aggregate) consumeLine(line []byte) {
+	var t typedLine
+	if err := json.Unmarshal(line, &t); err != nil {
+		a.ParseErrors++
+		return
 	}
-	return a, nil
+	a.TotalEvents++
+	if t.Type != "meta" {
+		a.NonMetaEvents++
+	}
+	a.seen[t.Type] = struct{}{}
+	switch t.Type {
+	case "meta":
+		a.countMeta(line)
+	case "tcp", "tcp6":
+		a.TCPConns++
+		if t.Type == "tcp6" {
+			a.IPv6Events++
+		}
+		a.countDest(line)
+	case "udp", "udp6":
+		a.UDPSends++
+		if t.Type == "udp6" {
+			a.IPv6Events++
+		}
+		a.countDest(line)
+	case "http":
+		a.HTTPReqs++
+	case "exec":
+		a.Execs++
+	case "proc_fork":
+		a.ProcForks++
+	case "fs_event":
+		a.FSEvents++
+	case "quic_candidate":
+		a.QUICCandidates++
+	case "tls":
+		a.countTLS(line)
+	case "ktls_offload":
+		a.KTLSOffload++
+	case "tcp_state":
+		a.TCPStateEvents++
+	case "io_uring_send":
+		a.IoUringSend++
+	case "io_uring_tls":
+		a.IoUringTLS++
+	case "bpf_audit":
+		a.BPFAudit++
+	case "bpf_tamper":
+		a.BPFTamper++
+	case "bpf_self_defense":
+		a.BpfSelfDefenseDenied++
+	case "egress_backstop":
+		a.EgressBackstop++
+	case "deny":
+		a.countDeny(line)
+	}
 }
 
 func (a *Aggregate) countDest(line []byte) {

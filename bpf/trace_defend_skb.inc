@@ -215,6 +215,9 @@ int defend_skb_egress(struct __sk_buff *skb)
 
 		if (skb_v6_is_loopback(a4))
 			return TC_ACT_OK;
+		/* :: — never a real wire destination; matches the enforcing v6 paths. */
+		if (coldstep_ipv6_is_unspecified(a4))
+			return TC_ACT_OK;
 		if (skb_v6_is_link_local(a4))
 			return TC_ACT_OK;
 

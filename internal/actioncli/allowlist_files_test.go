@@ -181,3 +181,50 @@ func TestMergeInlineAndAllowlistFiles_TooManyFilesRejected(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
+
+// A file whose name merely starts with two dots is inside the workspace. The
+// escape check used a bare HasPrefix(rel, "..") and rejected it.
+func TestResolvePathUnderWorkspace_AllowsDotDotPrefixedName(t *testing.T) {
+	ws := t.TempDir()
+	want := filepath.Join(ws, "..allow.txt")
+	if err := os.WriteFile(want, []byte("example.com\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := resolvePathUnderWorkspace(ws, "..allow.txt")
+	if err != nil {
+		t.Fatalf("resolvePathUnderWorkspace(..allow.txt) = %v, want it accepted", err)
+	}
+	realWant, err := filepath.EvalSymlinks(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != realWant {
+		t.Errorf("got %q want %q", got, realWant)
+	}
+}
+
+// ".." as a whole element must still be rejected.
+func TestResolvePathUnderWorkspace_RejectsDotDotElement(t *testing.T) {
+	ws := t.TempDir()
+	if _, err := resolvePathUnderWorkspace(ws, filepath.Join("..", "escape.txt")); err == nil {
+		t.Error("resolvePathUnderWorkspace accepted a '..' traversal")
+	}
+}
+
+// A malformed literal must fail `start`, not the sudo child. ipv4LiteralOrCIDR
+// range-checks neither octets nor prefix length, so these are classified as IPs.
+func TestValidateAllowPolicy_RejectsMalformedEntries(t *testing.T) {
+	for _, tok := range []string{"10.0.0.256", "1.2.3.4/99", "999.999.999.999", "!10.0.0.1"} {
+		c := classifyAllowTokens([]string{tok})
+		if err := validateAllowPolicy(c, false); err == nil {
+			t.Errorf("validateAllowPolicy(%q) = nil, want an error (ips=%v ignoredNets=%v)", tok, c.ips, c.ignoredNets)
+		}
+	}
+}
+
+func TestValidateAllowPolicy_AcceptsWellFormed(t *testing.T) {
+	c := classifyAllowTokens([]string{"github.com", "*.githubusercontent.com", "10.1.2.3", "192.0.2.0/24", "2001:db8::1", "!172.16.0.0/12"})
+	if err := validateAllowPolicy(c, false); err != nil {
+		t.Fatalf("validateAllowPolicy on a well-formed allow list: %v", err)
+	}
+}
