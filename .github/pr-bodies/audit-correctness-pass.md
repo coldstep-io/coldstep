@@ -94,5 +94,3 @@ All green. Each fix was also confirmed to fail before the change.
 Co-Authored-By: Claude Opus 5 (1M context) &lt;noreply@anthropic.com&gt;
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-https://claude.ai/code/session_01VeeNWh3M23z6UHkPTnX3dj

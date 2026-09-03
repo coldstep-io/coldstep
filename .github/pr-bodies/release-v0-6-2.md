@@ -60,5 +60,3 @@ Green on Linux before opening:
 2. Separate follow-up PR bumps `website/index.html` to `v0.6.2` once the tag exists on Releases.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
-
-https://claude.ai/code/session_01VeeNWh3M23z6UHkPTnX3dj
