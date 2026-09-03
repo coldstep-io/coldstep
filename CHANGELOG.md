@@ -7,6 +7,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-02
+
+### Fixed
+
+- **Defend mode denied `::` (the unspecified IPv6 address).** `tcp_v6_connect()` / `ip6_datagram_connect()` rewrite an all-zero `sin6_addr` to `in6addr_loopback`, but only *after* `cgroup/connect6`, `cgroup/sendmsg6` and `lsm/socket_connect` have judged the destination — so those hooks saw the raw `::`, missed the `allowed_ipv6` trie, and denied a connection the kernel was about to route to loopback. `lsm/socket_sendmsg` reached the same deny by a second route: with no `msg_name` it falls back to `skc_v6_daddr`, which is all-zero on an unconnected socket, where the IPv4 half of the same fallback already treats `daddr == 0` as "no destination". Adds `coldstep_ipv6_is_unspecified` and wires it into the cgroup hooks, `lsm_v6_enforce`, and the observe-only skb backstop. IPv6 twin of the `0.0.0.0` bypass shipped in v0.6.1 (#364), which had explicitly deferred this case. (#366)
+- **A single over-long JSONL record suppressed the entire report.** `markdown.Parse` ran on a `bufio.Scanner` capped at 4 MiB; one record above the cap stopped the scan permanently, every event after it was dropped, and the caller discarded the whole aggregate — producing no `.coldstep-report.md`, no digest, no job summary, no PR comment, a misleading "the agent likely never started" annotation, and the wrong `--strict` error. Appending one oversized line to `.coldstep-events.jsonl` was therefore enough to suppress the report, against the documented "a single bad line never aborts the report" posture; it was also reachable without malice via a large `MetaEvent.UnresolvedDomains`. Parsing now resynchronizes on the next newline and counts the record in `ParseErrors`. (#366)
+- **`signing-key` runs silently rounded integers above 2^53.** Signature canonicalization round-tripped events through `map[string]any`, so `json.Unmarshal` decoded every number as `float64` — `tcp_state`'s `timestamp_ns` was written altered (`...456789` -> `...456800`) and the signature then certified the corrupted value. Canonicalization now decodes with `UseNumber()`. Unsigned runs were unaffected. (#366)
+- **A malformed `allow:` entry killed the agent instead of failing `start`.** The IPv4 classifier range-checks neither octets nor prefix length, so `10.0.0.256` and `1.2.3.4/99` were routed to `COLDSTEP_ALLOWED_IPS` and rejected only inside the `sudo coldstep run` child — after `start` had already returned 0. Without `fail-on-error` the job then ran to completion with no agent attached, nothing in the log saying so, and no enforcement in defend mode. `start` now validates through the same parser the agent uses and fails fast. (#366)
+- **TLS SNI `partial` confidence was unreachable.** Confidence was scored on the sanitized SNI, and `SanitizeField`'s 253-byte budget sits below the 255-byte `TLSSNIMaxLen` boundary — so the tier never fired, and an SNI sitting exactly on the capture boundary (the one case that cannot be proven un-truncated) was reported as `full`. Confidence is now scored on the parsed value. (#366)
+- **QUIC was counted two different ways.** The UDP reader used a bare `port == 443` instead of `IsQUICCandidate`, so runner-local UDP/443 set `possible_quic` and bumped `quic_observed` while emitting no `quic_candidate` row, leaving the two QUIC numbers in the digest disagreeing. (#366)
+- **PR comment bodies were gutted by one invalid UTF-8 byte.** `truncate()` re-validated the whole prefix on each step, so a single bad byte anywhere discarded everything after it (a 209-byte body with a bad byte at index 7 truncated to 7 bytes) at `O(n^2)` cost. It now backs off at most `UTFMax-1` bytes from the cut. (#366)
+- **`allow-file` rejected in-workspace files whose name starts with `..`.** The containment check used `HasPrefix(rel, "..")`, which also matches a legitimate `..allow.txt`; only a `..` path *element* escapes the workspace. (#366)
+- **`ResolveOwners` burned every retry on an expired parent context.** The loop broke only on `context.Canceled`, missing a parent whose own deadline expired (`DeadlineExceeded`). (#366)
+
+### Changed
+
+- **Docs:** the defend-mode coverage claims in `action.yml`, `README.md` and `SECURITY.md` now record the unspecified-address bypass (`0.0.0.0` and `::`) alongside loopback and link-local. The `0.0.0.0` bypass shipped in v0.6.1 without a matching docs update.
+- **CI:** removed the `defend-mode` job from `coldstep-demo`. It duplicated the egress-block smoke that `coldstep-ci-runner` already runs as a merge gate, cost ~45 minutes of Actions minutes per `workflow_dispatch` (and defaulted to on), and could not publish its own evidence because defend blocks the artifact uploader's egress. The `coldstep-ci-runner` defend-mode gate is unchanged. (#366)
+
 ## [0.5.3] — 2026-06-10
 
 ### Fixed

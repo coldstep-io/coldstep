@@ -2,7 +2,7 @@
 
 **coldstep** is a GitHub Action plus a small Linux **eBPF** agent for **GitHub-hosted Ubuntu** runners. It records egress and process activity to **JSONL** and optional **Markdown** digests (job **Summary** when enabled). **Blocking** uses **`mode: defend`**.
 
-**Pin workflows to** **`coldstep-io/coldstep@v0.6.1`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
+**Pin workflows to** **`coldstep-io/coldstep@v0.6.2`** (or a newer tag on [Releases](https://github.com/coldstep-io/coldstep/releases)). Listing: [**Coldstep eBPF CI Egress** on GitHub Marketplace](https://github.com/marketplace/actions/coldstep-ebpf-ci-egress).
 
 [![coldstep-ci](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-ci.yml) [![coldstep-demo](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml/badge.svg)](https://github.com/coldstep-io/coldstep/actions/workflows/coldstep-demo.yml)
 
@@ -19,7 +19,7 @@ Using Coldstep in **your** workflow does **not** require **Python** or **`pip in
 | Mode | What it does | Allowlist |
 | :--- | :------------- | :-------- |
 | **`detect`** (default) | Observe and log IPv4-focused TCP/UDP egress activity (IPv6 and QUIC not observed); no blocking. | Optional (policy labels only). |
-| **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). Loopback (`127.0.0.0/8`, `::1`) always bypasses, and the host's configured DNS resolvers are auto-allowed so workload DNS keeps working (opt out: env `COLDSTEP_NO_RESOLVER_AUTOALLOW=1`). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
+| **`defend`** | Block IPv4 and IPv6 egress not on the allowlist (cgroup `connect4`/`sendmsg4` + `connect6`/`sendmsg6`; QUIC payloads remain uninspected). Loopback (`127.0.0.0/8`, `::1`) and the unspecified address (`0.0.0.0`, `::`) always bypass, and the host's configured DNS resolvers are auto-allowed so workload DNS keeps working (opt out: env `COLDSTEP_NO_RESOLVER_AUTOALLOW=1`). | **Required** — non-empty effective allowlist (A and/or AAAA resolutions). |
 
 Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode-optional)**.
 
@@ -27,7 +27,7 @@ Defend setup example: **[QUICK_START → Defend mode](QUICK_START.md#defend-mode
 
 ## Add it to a workflow
 
-**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.6.1`** (or a newer tag you publish), not **`@main`**.
+**Recommended:** use **`runs-on: ubuntu-latest`** (see **Requirements**). Pin the published composite action at **`coldstep-io/coldstep@v0.6.2`** (or a newer tag you publish), not **`@main`**.
 
 ```yaml
 jobs:
@@ -35,14 +35,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: coldstep-io/coldstep@v0.6.1
+      - uses: coldstep-io/coldstep@v0.6.2
         with:
           fail-on-error: true
           log-level: info
       - run: echo "your build steps"
 ```
 
-The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.6.1`** (or a newer tag).
+The single `uses:` block is enough — node24 pre/post hooks start the agent before your build steps and flush the digest at job end. **`coldstep-demo`** (`workflow_dispatch`) demonstrates the same pattern. Downstream repos should pin **`coldstep-io/coldstep@v0.6.2`** (or a newer tag).
 
 ---
 
@@ -50,7 +50,7 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 
 | Topic | Detail |
 | :---- | :----- |
-| **IP versions** | Coldstep observes IPv4 TCP/UDP egress (detect + defend). In **defend mode** coldstep also enforces IPv6 TCP/UDP egress via cgroup `connect6` + `sendmsg6` hooks against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` (loopback) and `fe80::/10` (link-local) bypass enforcement by design. Detect-mode IPv6 egress is still silently bypassed (no observation). QUIC/HTTP3 traffic is observed as UDP/443 events but the inner framing is not inspected. See **[Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix (Unix sockets, io_uring, service containers, Docker-in-Docker). |
+| **IP versions** | Coldstep observes IPv4 TCP/UDP egress (detect + defend). In **defend mode** coldstep also enforces IPv6 TCP/UDP egress via cgroup `connect6` + `sendmsg6` hooks against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` (loopback), `::` (unspecified) and `fe80::/10` (link-local) bypass enforcement by design. Detect-mode IPv6 egress is still silently bypassed (no observation). QUIC/HTTP3 traffic is observed as UDP/443 events but the inner framing is not inspected. See **[Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix (Unix sockets, io_uring, service containers, Docker-in-Docker). |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
 | **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
