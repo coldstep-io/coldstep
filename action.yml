@@ -16,8 +16,10 @@ inputs:
       connect4/sendmsg4 + connect6/sendmsg6 hooks always; BPF LSM twins
       (socket_connect/socket_sendmsg, IPv4 and IPv6) additionally enforce on
       kernels with CONFIG_BPF_LSM=y and bpf in the boot lsm= chain (not
-      GitHub-hosted runners). Loopback (127.0.0.0/8, ::1) and IPv6 link-local
-      always bypass, and the host's configured DNS resolvers (resolv.conf /
+      GitHub-hosted runners). Loopback (127.0.0.0/8, ::1), the unspecified
+      address (0.0.0.0, ::) — which the kernel rewrites to loopback after the
+      hooks observe it — and IPv6 link-local (fe80::/10) always bypass, and
+      the host's configured DNS resolvers (resolv.conf /
       systemd-resolved upstreams) are auto-allowed so workload DNS keeps
       working — opt out with env COLDSTEP_NO_RESOLVER_AUTOALLOW=1 and
       allowlist resolver IPs explicitly. QUIC/HTTP3 payloads, Unix sockets,
