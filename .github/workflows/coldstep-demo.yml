@@ -193,7 +193,7 @@ jobs:
 
       - name: Persist detect JSONL baseline artifact
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: coldstep-events-baseline-${{ env.NS_RUNNER_LABEL }}
           path: ${{ github.workspace }}/.coldstep-events.jsonl
@@ -207,7 +207,7 @@ jobs:
       # / coldstep-report-linux-amd64 release-binary consumer demo, issue #219.)
       - name: Upload detect markdown report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a  # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
         with:
           name: coldstep-detect-report-md
           path: ${{ github.workspace }}/.coldstep-report.md
