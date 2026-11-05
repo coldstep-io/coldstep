@@ -9,7 +9,7 @@ so consumers pinning the action to the v0.5.2 tag silently ran the v0.5.1
 agent. The COLDSTEP_BINARY_VERSION bump used to live in a post-tag "Train-2"
 commit, which made every tag ship the previous binary by construction.
 
-Invariant enforced (see RELEASE_PROCESS.md "Release invariant"):
+Invariant enforced (the v0.5.2 tag shipped the previous agent):
 
   COLDSTEP_BINARY_VERSION (src/shared.ts)
     == version embedded in dist/{pre,main,post}/index.js
@@ -96,7 +96,7 @@ def main() -> int:
     if marketplace_tag != binary_version:
         fail(
             f"MARKETPLACE_COLDSTEP_TAG={marketplace_tag} != COLDSTEP_BINARY_VERSION="
-            f"{binary_version} — bump BOTH in the same release PR (RELEASE_PROCESS.md)"
+            f"{binary_version} — bump BOTH in the same release PR"
         )
         exit_code = 1
 

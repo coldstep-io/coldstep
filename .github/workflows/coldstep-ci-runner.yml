@@ -6,10 +6,6 @@ name: coldstep-ci runner
 on:
   workflow_call:
     inputs:
-      coldstep_diff_strict:
-        description: When true, detect-mode fails if previous-run JSONL diff cannot be computed
-        type: boolean
-        default: true
       defend_deny_jsonl_strict:
         description: When true, defend-mode fails if no deny JSONL rows appear after defend smoke (stricter than default variance-tolerant path)
         type: boolean
@@ -20,9 +16,8 @@ on:
         default: false
 
 # Default to least-privilege for every job in this reusable workflow.
-# Jobs that legitimately need more (e.g. `actions: read` to download a
-# previous-run baseline artifact for JSONL diff) override this block at the
-# job level — see `coldstep-demo-detect.yml` for the same pattern.
+# Jobs that need more override this block (detect-mode below, and the
+# detect-mode job in coldstep-demo.yml).
 permissions:
   contents: read
 
@@ -311,7 +306,7 @@ jobs:
       # Release-version invariant (v0.5.2 incident): COLDSTEP_BINARY_VERSION
       # (src/shared.ts) == compiled dist/ bundles == MARKETPLACE_COLDSTEP_TAG,
       # and all consumer-facing docs/workflow pins match that tag. PR-time
-      # twin of the supply-chain-attest tag gate; see RELEASE_PROCESS.md
+      # twin of the supply-chain-attest tag gate; see scripts/check_release_version_alignment.py
       # "Release invariant".
       - name: Release version + consumer pin alignment
         run: |
@@ -327,8 +322,6 @@ jobs:
       actions: read
       contents: read
     env:
-      COLDSTEP_DIFF_PREV_RUN: '1'
-      COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
@@ -338,7 +331,7 @@ jobs:
           go-version-file: go.mod
 
       # Built from source via release-path (same as defend-mode): under the
-      # single-train release flow (RELEASE_PROCESS.md "Release invariant") a
+      # single-train release flow (scripts/check_release_version_alignment.py) a
       # release PR pins the NEXT, not-yet-published COLDSTEP_BINARY_VERSION,
       # so the consumer download path 404s by design until the tag ships —
       # this job must not depend on it. The published-release download path
@@ -408,11 +401,9 @@ jobs:
           report: none
           fail-on-error: 'false'
 
-      # Anti-blindness assertion inline (no binary subcommand): the prebuilt build
-      # consumed here predates the agent+action merge, so assert-integrity / diff
-      # are not yet available from the download. The JSONL stream is the source of
-      # truth; require the core event types directly. The subcommand-based gate +
-      # previous-run diff return once a release ships the combined binary (Train-2).
+      # Assert the JSONL stream inline. The combined binary's
+      # report/diff/assert-integrity subcommands are covered by the from-source
+      # unit, integration, and redteam jobs.
       - name: Anti-blindness JSONL assertion (inline)
         run: |
           set -euo pipefail

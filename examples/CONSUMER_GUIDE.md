@@ -12,25 +12,25 @@ whose `pre` hook starts the agent before your build steps and whose `post` hook
 flushes the digest at job end.
 
 ```yaml
-- uses: coldstep-io/coldstep@v0.5.3
+- uses: coldstep-io/coldstep@v0.6.2
   with:
     mode: detect
     fail-on-error: true
     log-level: info
 ```
 
-Always pin a published tag (`@v0.5.3` or newer), never `@main`.
+Always pin a published tag (`@v0.6.2` or newer), never `@main`.
 
 ## 2. Inputs you will actually use
 
 | Input | Default | Purpose |
 | :---- | :------ | :------ |
 | `mode` | `detect` | `detect` = observe only. `defend` = block non-allowlisted egress (requires a non-empty allowlist). |
-| `allow` | — | Allowlist entries (comma- or newline-separated): domains, wildcards, IPv4/CIDRs, and `!CIDR` ignore entries. |
+| `allow` | — | Allowlist entries (comma- or newline-separated): domains, wildcards (**detect only**), IPv4/IPv6 literals/CIDRs, and `!CIDR` ignore entries. |
 | `allow-file` | — | Path to a file with the same allowlist syntax, one entry per line. |
-| `detect-profile` | base | `enhanced` turns on richer event streams (process tree, TLS SNI, fs events). |
-| `report` | on | Controls the rendered job-summary / `.coldstep-report.md` output. |
-| `fail-on-error` | `false` | When `true`, the job fails if the agent cannot become operationally ready (not when policy denies traffic). |
+| `detect-profile` | `standard` | `enhanced` turns on richer event streams (process tree, TLS SNI, fs events). Detect mode only. |
+| `report` | `job-summary` | `job-summary`, `pr-comment`, `both`, or `none`. |
+| `fail-on-error` | unset | Unset means **true** in defend and **false** in detect. When true, the job fails if the agent cannot become operationally ready (not when policy denies traffic). |
 | `log-level` | `info` | Agent log verbosity. |
 | `no-default-ignored-nets` | `false` | When `true`, disables the implicit RFC1918 (private-range) ignores. |
 
@@ -40,16 +40,20 @@ The allowlist is one unified model used by both `allow` and `allow-file`:
 
 ```text
 registry.npmjs.org      # domain — resolved (A/AAAA) at startup
-*.githubusercontent.com # wildcard domain
+*.githubusercontent.com # wildcard domain — detect only; rejected in defend
 140.82.112.0/20         # IPv4 CIDR
 93.184.216.34           # single IPv4
-!10.0.0.0/8             # ignore entry — never blocked, never logged as denied
+2001:db8::1             # single IPv6
+!10.0.0.0/8             # ignore entry — IPv4 only
 ```
 
 - **Domains** are resolved at startup into the effective IP allowlist. If a
   domain resolves to many IPs, all are allowed.
-- **Loopback** (`127.0.0.0/8`, `::1`) and the runner's configured DNS resolvers
-  always bypass, so DNS itself is never broken by defend mode.
+- **Wildcards** (`*.example.com`) are accepted in detect and rejected at parse
+  time in defend. The BPF allowlist is exact-match.
+- **Loopback** (`127.0.0.0/8`, `::1`), the unspecified address (`0.0.0.0`, `::`),
+  and the runner's configured DNS resolvers always bypass, so DNS itself is
+  never broken by defend mode.
 - `defend` mode **requires** a non-empty effective allowlist; it refuses to
   start otherwise.
 

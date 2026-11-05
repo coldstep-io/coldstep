@@ -22,17 +22,17 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # One `uses:` block is all you need. The node24 pre-hook starts the
       # agent before the steps below; the post-hook flushes the digest.
-      - uses: coldstep-io/coldstep@v0.6.1
+      - uses: coldstep-io/coldstep@v0.6.2
         with:
           mode: detect          # default; shown here for clarity
           fail-on-error: true   # fail the job if the agent cannot start
           log-level: info
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 24
 
@@ -40,9 +40,9 @@ jobs:
       # In detect mode this is observed and logged, never blocked.
       - run: npm install express
 
-      # The stop step writes the digest to .coldstep-detect.md by default
-      # (mode-named; v0.6.1+). Upload it without a custom extractor.
-      - uses: actions/upload-artifact@v6
+      # The stop step writes the digest to .coldstep-detect.md by default.
+      # Upload it without a custom extractor.
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: coldstep-detect-digest

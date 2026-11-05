@@ -116,9 +116,24 @@ def _strip_duplicate_typedef_blocks(text: str) -> str:
     return "".join(out)
 
 
+# Indented `struct tag;` / `union tag;` inside another record. bpftool on current
+# GitHub-hosted kernels emits these; they declare no member, and clang
+# -Wmissing-declarations -Werror rejects them. Column-0 forward declarations
+# stay — those are real type introductions.
+_NESTED_FORWARD_DECL = re.compile(
+    r"^[ \t]+(?:struct|union)[ \t]+[A-Za-z_][A-Za-z0-9_]*;[ \t]*\n",
+    re.MULTILINE,
+)
+
+
+def _strip_nested_forward_decls(text: str) -> str:
+    return _NESTED_FORWARD_DECL.sub("", text)
+
+
 def fix_vmlinux(path: Path) -> None:
     raw = path.read_text(encoding="utf-8")
     text = raw.replace("\r\n", "\n")
+    text = _strip_nested_forward_decls(text)
     if _needs_insert(text):
         text = _insert_after_preamble(text)
         # Inserted block ends with a blank line; bpftool output often had another blank

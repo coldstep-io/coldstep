@@ -1,5 +1,6 @@
-# Builds and attests release-grade artifacts: Go agent/action binaries, composite action bundle,
-# and CycloneDX SBOMs. Triggers on version tags and manual dispatch.
+# Builds and attests release-grade artifacts: the combined coldstep binary,
+# a composite action bundle tarball, and CycloneDX SBOMs. Triggers on version
+# tags and manual dispatch.
 name: supply-chain-attest
 
 on:
@@ -97,7 +98,7 @@ jobs:
 
       # Published binary per tag; demo / consumer workflows download this instead of compiling on every run.
       # Immutable releases may reject uploads: fail if coldstep-linux-amd64 is still missing (otherwise demos see "no assets to download").
-      # (The coldstep-report-linux-amd64 asset, issue #219, was retired when the report binary was folded into coldstep-action.)
+      # One asset: coldstep-linux-amd64 is bin/coldstep (agent + start/stop/diff/assert-integrity).
       - name: Upload Linux agent to GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         env:

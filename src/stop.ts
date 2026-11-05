@@ -282,8 +282,8 @@ export async function stopAgent(): Promise<void> {
   }
 
   const baseDir = process.env.GITHUB_WORKSPACE || actionRootPath();
-  // Bug #9: PID file must match start.ts and cmd/coldstep-action's
-  // runStart — workspace location is the public, documented contract.
+  // Bug #9: PID file must match start.ts and internal/actioncli runStart —
+  // workspace location is the public, documented contract.
   // Mixed-entrypoint use (e.g. Go start + TS stop) otherwise reads a
   // different file, no-ops SIGTERM, and the agent is SIGKILLed instead.
   const pidFile = path.join(baseDir, '.coldstep.pid');

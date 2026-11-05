@@ -93,7 +93,7 @@ func warnRemovedAllowlistInputs() {
 	for _, r := range []struct{ env, replacement string }{
 		{"INPUT_IGNORED-NETS", "put `!CIDR` entries in `allow`"},
 		{"INPUT_IGNORED-NETS-FILE", "put `!CIDR` lines in an `allow-file`"},
-		{"INPUT_BOOTSTRAP-ALLOWLIST", "copy the reference packs into your own `allow-file`"},
+		{"INPUT_BOOTSTRAP-ALLOWLIST", "list the destinations you need in `allow` or an `allow-file`"},
 	} {
 		if strings.TrimSpace(os.Getenv(r.env)) != "" {
 			name := strings.ToLower(strings.TrimPrefix(r.env, "INPUT_"))
@@ -112,7 +112,7 @@ func parseAggregateFile(path string) (*markdown.Aggregate, error) {
 	return markdown.Parse(f)
 }
 
-// runDiff implements `coldstep-action diff` — the baseline destination-domain
+// runDiff implements `coldstep diff` — the baseline destination-domain
 // diff that replaces `coldstep-report diff`. It reads two JSONL streams
 // directly (no report model), writes a compact marker block to the job
 // summary, and, with --fail-on-new-domain, exits non-zero when current
