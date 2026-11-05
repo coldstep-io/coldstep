@@ -2,7 +2,7 @@
 // so drift is caught locally and in every CI unit job, not only by the
 // Python guard scripts (scripts/check_release_version_alignment.py).
 //
-// Invariant (RELEASE_PROCESS.md "Release invariant", v0.5.2 incident):
+// Invariant (v0.5.2 incident: the tag shipped the previous agent):
 // COLDSTEP_BINARY_VERSION in src/shared.ts must equal the version embedded
 // in the compiled dist/{pre,main,post}/index.js bundles and the
 // MARKETPLACE_COLDSTEP_TAG consumer pin in scripts/check_workflow_action_pins.py.
@@ -77,6 +77,6 @@ func TestMarketplacePinMatchesBinaryVersion(t *testing.T) {
 		t.Fatal("scripts/check_workflow_action_pins.py: MARKETPLACE_COLDSTEP_TAG declaration not found")
 	}
 	if m[1] != version {
-		t.Errorf("MARKETPLACE_COLDSTEP_TAG=%s != COLDSTEP_BINARY_VERSION=%s — bump both in the same release PR (RELEASE_PROCESS.md)", m[1], version)
+		t.Errorf("MARKETPLACE_COLDSTEP_TAG=%s != COLDSTEP_BINARY_VERSION=%s — bump both in the same release PR", m[1], version)
 	}
 }

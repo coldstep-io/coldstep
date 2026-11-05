@@ -52,9 +52,10 @@ The single `uses:` block is enough — node24 pre/post hooks start the agent bef
 | :---- | :----- |
 | **IP versions** | Coldstep observes IPv4 TCP/UDP egress (detect + defend). In **defend mode** coldstep also enforces IPv6 TCP/UDP egress via cgroup `connect6` + `sendmsg6` hooks against an AAAA-resolved `allowed_ipv6` LPM trie (H14, v0.4.0); `::1` (loopback), `::` (unspecified) and `fe80::/10` (link-local) bypass enforcement by design. Detect-mode IPv6 egress is still silently bypassed (no observation). QUIC/HTTP3 traffic is observed as UDP/443 events but the inner framing is not inspected. See **[Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix (Unix sockets, io_uring, service containers, Docker-in-Docker). |
 | **Runner OS** | **Linux only** for the agent. **v1 supports `ubuntu-latest` only** (GitHub-hosted Ubuntu x64). Not supported on macOS, Windows, self-hosted, or other `runs-on` labels until explicitly documented in a later release. |
-| **Build on runner** | The action runs [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
+| **Consumer binary** | The published action downloads the release asset **`coldstep-linux-amd64`** (linux/amd64 only), checks its SHA-256 against the GitHub Release, and caches it under **`RUNNER_TEMP`**. Consumer jobs do not compile BPF. |
+| **Build in this repo** | CI and local Linux builds use [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh) (clang, libbpf, **bpftool** against `/sys/kernel/btf/vmlinux` → `bpf/vmlinux.h`, `go generate` / bpf2go, then **`go build`** → **`bin/coldstep`**). |
 | **Privileges** | The agent runs under **`sudo`** to load BPF. |
-| **Action runtime** | Composite action is shell + one Go binary (`bin/coldstep`, downloaded prebuilt); the node24 `pre`/`post` hooks start/stop the agent. |
+| **Action runtime** | Composite action is node24 `pre` / `main` / `post` (`dist/`) plus that one Go binary. `pre` starts the agent; `post` flushes the digest. |
 
 For **GitHub Actions security posture** — threat model for a workflow job, consumer mitigations (pins, permissions), residual risk, and honest telemetry scope — see **[SECURITY.md](SECURITY.md)** (*GitHub Actions: threat model and mitigations*). For **guaranteed vs best-effort behavior** (telemetry gaps, hook coverage), see **[Guarantees vs best-effort](SECURITY.md#guarantees-vs-best-effort-defend-and-detect)**. Maintainers may keep deeper **egress truthfulness** specs under local **`design/`** (gitignored); consumers should rely on **SECURITY.md** and **README**.
 
@@ -66,9 +67,10 @@ Consumer copy-paste above uses **`actions/checkout@v6`**. Other first-party pins
 
 | Workflow / area | Notable `uses:` |
 | :-------------- | :-------------- |
-| **CI / demo / attest** | `actions/checkout@v6`, `actions/setup-go@v6` (`go-version-file: go.mod`, matches **`go`** directive), `actions/setup-node@v6` (`node-version: 24`, npm cache where applicable), `actions/upload-artifact@v6` |
-| **Supply chain** | `actions/attest@v4` |
-| **Pages** | `actions/checkout@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v4`, `actions/deploy-pages@v5` |
+| **CI entry** ([`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)) | `actions/checkout@v7.0.1`, `actions/setup-go@v7` (`go-version-file: go.mod`), `actions/setup-node@v7` (`node-version: 24`, npm cache), `golangci/golangci-lint-action@v9` |
+| **Runner, demo, nightly, kernel, redteam, compat** | `actions/checkout@v6` (commit SHA; a few runner jobs use `actions/checkout@v7.0.1`), `actions/setup-go@v7`, `actions/cache@v5`, `actions/upload-artifact@v7` |
+| **Supply chain** | `actions/attest@v4`, `actions/upload-artifact@v7` |
+| **Pages** | `actions/checkout@v6`, `actions/configure-pages@v6`, `actions/upload-pages-artifact@v5`, `actions/deploy-pages@v5` |
 
 ---
 
@@ -79,7 +81,7 @@ Same **`detect`** / **`defend`** meanings as **[At a glance](#at-a-glance)**. Th
 | Mode | Behavior |
 | :--- | :------- |
 | **`detect`** (default) | Observe and record; no egress blocking. |
-| **`defend`** | Block TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires configuration (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** with IPv4 allowlist entries (from domain **A** records and **`allow`** IPv4 literals/CIDRs). |
+| **`defend`** | Block IPv4 and IPv6 TCP/UDP egress that is not on the allowlist; job fails fast on the first deny. Requires a non-empty effective allowlist (see **`action.yml`** / Quick Start). Uses cgroup **connect4** / **sendmsg4** and **connect6** / **sendmsg6**. Domains are resolved for **A** and **AAAA**; IPv4 and IPv6 literals/CIDRs are programmed into the allowlist tries. |
 
 **Artifacts (under `$GITHUB_WORKSPACE` by default)**
 
@@ -101,7 +103,7 @@ Paths can be overridden with env vars such as `COLDSTEP_EVENTS_LOG`, `COLDSTEP_T
 After a **`detect`**-mode run, the post step reads **`.coldstep-events.jsonl`** and emits a ready-to-paste allowlist as both a **Job Summary** section ("**Suggested allowlist**") and an action output named **`suggested-allow`**. Hostnames observed via **DNS / SNI / HTTP Host** take priority over the raw IPs they resolved to, so the output stays stable across DNS rotation. The output is empty in defend mode or when no destinations were observed.
 
 ```yaml
-- uses: coldstep-io/coldstep@main
+- uses: coldstep-io/coldstep@v0.6.2
   id: coldstep
   with:
     mode: detect
@@ -150,7 +152,7 @@ The optional **`tls_sni`** feature parses the **ClientHello SNI** from cleartext
 
 ## Supply chain (optional)
 
-On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-chain-attest.yml`](.github/workflows/supply-chain-attest.yml)** builds **`bin/coldstep`**, the **esbuild** JS bundle, a tarball, and CycloneDX SBOMs, then creates **artifact attestations** (requires a repository/org configuration that supports attestations). See that file and [`LICENSE.md`](LICENSE.md) for third-party licenses.
+On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-chain-attest.yml`](.github/workflows/supply-chain-attest.yml)** builds **`bin/coldstep`**, a tarball of **`action.yml`** + **`bin/coldstep`** + **`scripts/build-agent-linux.sh`**, and CycloneDX SBOMs, then creates **artifact attestations** and uploads **`coldstep-linux-amd64`** to the GitHub Release (requires a repository/org configuration that supports attestations). The node24 bundles in **`dist/`** ship in the git tag, not in that tarball. See that workflow and [`LICENSE.md`](LICENSE.md) for third-party licenses.
 
 ---
 
@@ -158,17 +160,17 @@ On **version tags** matching `v*` (and via **workflow_dispatch**), **[`supply-ch
 
 Validation and BPF builds are **authoritative on GitHub Actions** (GitHub-hosted **`ubuntu-latest`**). Local workstations can approximate parts of the Linux pipeline with Docker (below); kernels and cgroup layout still differ from hosted runners.
 
-**Releases (maintainers):** **`RELEASE_PROCESS.md`** defines the **consumer pin standard** (repo docs vs **`website/`** timing, pin checker, demos, changelog).
+**Releases (maintainers):** [`scripts/check_release_version_alignment.py`](scripts/check_release_version_alignment.py) requires the git tag, `COLDSTEP_BINARY_VERSION`, and `MARKETPLACE_COLDSTEP_TAG` to match before any release asset is built. [`scripts/check_workflow_action_pins.py`](scripts/check_workflow_action_pins.py) checks the consumer pin in the repo docs. **`website/`** is updated in a follow-up after the tag exists.
 
-- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)** → **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Use a PR or **`workflow_dispatch`** on **`coldstep-ci.yml`**, or run **`coldstep-demo.yml`** (full integration), **`coldstep-demo-detect.yml`** / **`coldstep-demo-defend.yml`** (minimal detect / defend demos), to verify changes. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
+- **Merge gates:** PRs and pushes to **`main`** run **[`coldstep-ci.yml`](.github/workflows/coldstep-ci.yml)**, which calls **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)** and also runs **golangci-lint** plus a **`dist/`** freshness check. **`workflow_dispatch`** on **`coldstep-ci.yml`** accepts **`default`**, **`fast`**, and **`strict`** presets. **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** is the full integration demo. Extra workflows: **[`coldstep-runner-compat.yml`](.github/workflows/coldstep-runner-compat.yml)**, **[`coldstep-kernel-matrix.yml`](.github/workflows/coldstep-kernel-matrix.yml)**, **[`coldstep-redteam-ebpf.yml`](.github/workflows/coldstep-redteam-ebpf.yml)**. **[`coldstep-ci-nightly.yml`](.github/workflows/coldstep-ci-nightly.yml)** runs govulncheck, shuffle tests, and optional sudo deep-debug. **`coldstep-pages.yml`** deploys **`website/`**; **`supply-chain-attest.yml`** runs on **`v*`** tags and manual dispatch.
 - **Generated BPF:** `bpf/vmlinux.h` and `internal/bpf/**/*_bpf*.go` stubs are **gitignored**; each CI run executes **`scripts/build-agent-linux.sh`** (host **`bpftool`** + **`go generate`**) before **`go build`**. On a non-Linux workstation, **[`scripts/docker-linux-test.sh`](scripts/docker-linux-test.sh)** runs that pipeline plus **`go test`** inside an **`ubuntu:24.04`** container (bind-mounts the repo). For a **closer match** to **`coldstep-ci-runner`** ( **`go vet`**, **staticcheck**, race on **`internal/agent`**, optional **`integration`** tests in a **`--privileged`** container), use **[`scripts/docker-deep-debug.sh`](scripts/docker-deep-debug.sh)** — by default it also runs **`go test -shuffle`**, **`govulncheck`**, and a **coverage** summary (set **`COLDSTEP_DOCKER_DEEP=0`** to skip). See the script header for **`COLDSTEP_DOCKER_IMAGE`**, **`COLDSTEP_DOCKER_RACE_FULL`**, **`COLDSTEP_DOCKER_INTERACTIVE`**, **`COLDSTEP_DOCKER_NO_INTEGRATION`**, and related env vars (run from the repo root on **Docker Desktop + Git Bash** so bind mounts resolve cleanly).
 - **Assistants / iterative fixes:** **[`scripts/agent-linux-verify.sh`](scripts/agent-linux-verify.sh)** wraps the Docker flows, writes **`.coldstep-verify-last.log`**, echoes **`COLDSTEP_AGENT_VERIFY_BUNDLE_*`** markers with a reproducible **`NEXT`** checklist. **`COLDSTEP_VERIFY_MODE=quick`** (**`docker-linux-test`**) for fast fails; **`deep`** (**`docker-deep-debug`**, default); **`fast`** for a shorter **`deep`** pass (**shuffle/govulncheck/coverage** skipped, **integration** skipped). Example: **`COLDSTEP_VERIFY_MODE=fast bash scripts/agent-linux-verify.sh`**. **Windows quickest path:** **`winget install --id Git.Git -e`** once (adds **`bash`**), Docker running; then **`powershell -NoProfile -File scripts/agent-linux-verify.ps1 -VerifyMode fast`** — a thin shim that locates Git Bash and runs **`scripts/agent-linux-verify.sh`**.
 
 ### Deep-debug escalation guide
 
-When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — run **[`coldstep-deep-debug.yml`](.github/workflows/coldstep-deep-debug.yml)** via **`workflow_dispatch`** on your branch.
+When a normal **`coldstep-ci`** pass is insufficient — flaky failures, BPF verifier/load issues, workflow + agent + report regressions — dispatch **[`coldstep-ci-nightly.yml`](.github/workflows/coldstep-ci-nightly.yml)** and enable **`run_integration_sudo`**.
 
-The workflow executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs. For **local** BPF/agent-focused debugging (without the workflow’s npm/deep-debug stages), run **`scripts/docker-deep-debug.sh`** on a Linux host or Docker Desktop.
+That job executes **`scripts/deep-debug.sh`** on **`ubuntu-latest`** and uploads **`.coldstep-deep-debug/`** as an artifact (staged **`report.md`** + logs). Attach links or snippets from that run to issues or PRs. For **local** BPF/agent-focused debugging (without the workflow’s npm/deep-debug stages), run **`scripts/docker-deep-debug.sh`** on a Linux host or Docker Desktop.
 
 Implementation is **clean-room** (no vendored third-party guard code). **Acknowledgments:** prior art that informed product direction is credited in the repo's acknowledgment section where present.
 
@@ -178,7 +180,7 @@ Implementation is **clean-room** (no vendored third-party guard code). **Acknowl
 
 1. Pin **`coldstep-io/coldstep@<tag>`** on **`runs-on: ubuntu-latest`**, with a single **`uses:`** block before your build steps (node24 `pre` starts the agent; `post` flushes the digest at job end) — see **[QUICK_START](QUICK_START.md)**.
 2. Start in **`mode: detect`** (default); switch to **`mode: defend`** only when you have a tested allowlist.
-3. Prefer **`allow-file`** for long lists (one entry per line; `!CIDR` to ignore a net). Reference starter packs live in **`scripts/coldstep_bootstrap/`** — copy the lines you want into your own `allow-file`.
+3. Prefer **`allow-file`** for long lists (one entry per line; `!CIDR` to ignore a net). Copy-paste starters live in **[`examples/`](examples/README.md)**.
 
 ---
 

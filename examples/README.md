@@ -2,7 +2,7 @@
 
 Copy-paste-ready consumer workflows for the
 [`coldstep-io/coldstep`](https://github.com/coldstep-io/coldstep) GitHub Action.
-All examples pin the published tag **`coldstep-io/coldstep@v0.5.3`** — pin a
+All examples pin the published tag **`coldstep-io/coldstep@v0.6.2`** — pin a
 release tag, never `@main`.
 
 | File | Mode | What it shows |
@@ -14,7 +14,7 @@ release tag, never `@main`.
 ## How to use
 
 1. Copy a `.yml` file into `.github/workflows/` in your repository.
-2. Keep the pinned tag (`@v0.5.3`) or bump to a newer published release.
+2. Keep the pinned tag (`@v0.6.2`) or bump to a newer published release.
 3. Use **GitHub-hosted `ubuntu-latest`** — that is the only supported runner
    for v1 (the agent is Linux/eBPF and needs the hosted kernel's BTF).
 

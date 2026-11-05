@@ -1,6 +1,6 @@
 {
   "name": "coldstep-action",
-  "description": "Node20 GitHub Action bundles for coldstep pre/main/post lifecycle.",
+  "description": "Node 24 GitHub Action bundles for the coldstep pre/main/post lifecycle.",
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",

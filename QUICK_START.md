@@ -1,6 +1,6 @@
 # Coldstep Quick Start
 
-**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.6.2`** (or a newer tag from [Releases](https://github.com/coldstep-io/coldstep/releases)). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`**, **`coldstep-demo`**, **`coldstep-demo-detect`**, or **`coldstep-demo-defend`**). There is no maintained local build path for the Linux agent.
+**v1:** the composite agent is validated and supported on **`runs-on: ubuntu-latest`** only. Pin the published action at **`coldstep-io/coldstep@v0.6.2`** (or a newer tag from [Releases](https://github.com/coldstep-io/coldstep/releases)). **Repository changes** are validated via **GitHub Actions** (open a PR or use **`workflow_dispatch`** on **`coldstep-ci`** or **`coldstep-demo`**). Hosted CI is authoritative. A local Linux build uses [`scripts/build-agent-linux.sh`](scripts/build-agent-linux.sh); non-Linux workstations can approximate that with the Docker wrappers in the [README](README.md#contributing-github-actions-only).
 
 ## Two modes (read this first)
 
@@ -11,7 +11,7 @@ Coldstep exposes **two** mode names in `with:` and env **`CI_GUARD_MODE`**: **`d
 | Observe-only telemetry (default) | `mode: detect` or omit `mode` |
 | Block egress not on the allowlist | `mode: defend` + non-empty **`allow`** / **`allow-file`** |
 
-> **Coverage scope:** **detect** mode observes **IPv4 TCP/UDP** only (IPv6 not observed). **defend** mode enforces **IPv4 _and_ IPv6 TCP/UDP** — cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`, with native IPv6 gated against an AAAA-resolved `allowed_ipv6` LPM trie; `::1` and `fe80::/10` bypass by design. **QUIC/HTTP3 and Unix socket traffic remain uncovered** (QUIC inner framing uninspected; AF_UNIX silently bypassed). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
+> **Coverage scope:** **detect** mode observes **IPv4 TCP/UDP** only (IPv6 not observed). **defend** mode enforces **IPv4 _and_ IPv6 TCP/UDP** — cgroup `connect4`/`sendmsg4` plus `connect6`/`sendmsg6`, with native IPv6 gated against an AAAA-resolved `allowed_ipv6` LPM trie. Loopback (`127.0.0.0/8`, `::1`), the unspecified address (`0.0.0.0`, `::`), and IPv6 link-local (`fe80::/10`) bypass by design. **QUIC/HTTP3 and Unix socket traffic remain uncovered** (QUIC inner framing uninspected; AF_UNIX silently bypassed). See **[SECURITY.md → Coverage Boundaries](SECURITY.md#coverage-boundaries)** for the full matrix.
 
 ---
 
@@ -114,7 +114,7 @@ Every `with:` key the action accepts (defaults are what you get if you omit the 
 
 ## Validation (what automation proves)
 
-Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. Read **[VALIDATION.md](VALIDATION.md)** for the detect vs defend matrix, job names (`detect-mode`, `defend-mode`, …), and honest limits (self-hosted, adversarial bypass, …).
+Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, not every sentence in the docs. The detect and defend jobs live in **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)** (`detect-mode`, `defend-mode`). Honest limits (self-hosted, adversarial bypass, hook coverage) are in **[SECURITY.md](SECURITY.md)**.
 
 ---
 
@@ -123,7 +123,7 @@ Coldstep’s CI and tests prove **specific scenarios on GitHub-hosted Linux**, n
 - Prefer **`coldstep-io/coldstep@v0.6.2`** (or a **newer tag** you publish). **`@main`** tracks the default branch and can change without notice.
 - The early **`v0.1.0`** tag is not usable (it lacks repo-root **`action.yml`**); use **`v0.2.1`** or a newer published tag that includes **`action.yml`**.
 
-**Example workflows in this repo** (all use `uses: ./` and are triggered with **`workflow_dispatch`** except **`coldstep-detect-demo-dev`** which also runs on **`push` to `dev`**): **[`coldstep-demo-detect.yml`](.github/workflows/coldstep-demo-detect.yml)** (minimal detect), **[`coldstep-demo-defend.yml`](.github/workflows/coldstep-demo-defend.yml)** (minimal **defend**), **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** (full integration / drift), and **[`coldstep-detect-demo-dev.yml`](.github/workflows/coldstep-detect-demo-dev.yml)** — same agent detect setup on **`dev`** with full BLUF + HTML artifact plus an extra **IP classification** Job Summary section.
+**Example workflows:** **[`coldstep-demo.yml`](.github/workflows/coldstep-demo.yml)** is the in-repo detect demo (`workflow_dispatch`, `uses: ./`). Defend smoke lives in **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**. Copy-paste consumer workflows are in **[`examples/`](examples/README.md)**.
 
 ---
 
@@ -173,7 +173,6 @@ Detect mode is default. For defend behavior (block non-allowlisted egress), reus
       google.com
       github.com
       api.example.com
-      *.svc.example.com
       1.1.1.1
       8.8.8.8
 - run: echo "your build/test/deploy steps"
@@ -187,7 +186,7 @@ For large allowlists, keep **UTF-8 text files** in the repository and pass **com
 
 **File format:** optional `#` full-line or end-of-line comments; tokens separated by newlines, commas, and/or spaces (same as editing a long inline `allow:` list, but reviewable in PRs as a file). Entries are auto-classified into domains, wildcard hosts, IPv4/IPv6 literals, and `!`-prefixed ignore CIDRs.
 
-**Starter packs:** reference domain/IP packs live in **`scripts/coldstep_bootstrap/`** in the repo. Copy the lines you want into your own **`allow-file`** — there is no separate input to merge them (the `bootstrap-allowlist` input was removed).
+There is no bundled allowlist and no `bootstrap-allowlist` input. Copy the destinations you need into your own **`allow-file`**. Starter workflows are in **[`examples/`](examples/README.md)**. Wildcard domains (`*.example.com`) are **detect-only** and rejected when `mode: defend`.
 
 **Example**
 
@@ -211,7 +210,7 @@ Start with default **detect**, then set **`detect-profile: enhanced`** when you 
 
 ### Report pipeline (maintainers)
 
-Reporting is one pure-markdown path in the combined `coldstep` binary (no separate `coldstep-report` binary, no HTML): `coldstep stop` renders the simple report to the Job Summary and the detailed report to `.coldstep-report.md`; `coldstep diff` and `coldstep assert-integrity` are the baseline / anti-blindness gates. Demo/CI workflows upload `.coldstep-report.md` as the downloadable artifact.
+Reporting is one pure-markdown path in the combined `coldstep` binary (no separate `coldstep-report` binary, no HTML): `coldstep stop` renders the simple report to the Job Summary and the detailed report to `.coldstep-report.md`. `coldstep diff` and `coldstep assert-integrity` are optional subcommands. Demo and CI workflows upload `.coldstep-report.md` and check the JSONL in the workflow itself.
 
 Consumers copying **`QUICK_START`** alone only need the default digest + JSONL unless they opt into maintainer workflows.
 
@@ -219,14 +218,13 @@ Consumers copying **`QUICK_START`** alone only need the default digest + JSONL u
 
 ## Advanced (optional): previous-run drift diff
 
-The **[`coldstep-demo`](.github/workflows/coldstep-demo.yml)**-style detect job can emit a **previous-run drift** report when a workflow sets:
+`coldstep diff` compares destination domains in two JSONL files. Nothing in the published action or the demo workflow turns this on. Download a prior `.coldstep-events.jsonl` yourself, then run:
 
-```yaml
-env:
-  COLDSTEP_DIFF_PREV_RUN: '1'
+```bash
+coldstep diff --current .coldstep-events.jsonl --baseline baseline.jsonl --fail-on-new-domain
 ```
 
-Typical needs: `permissions: actions: read, contents: read` for baseline lookup (see **`coldstep-ci.yml`** / detect jobs in **`coldstep-ci-runner.yml`**). When enabled, the job may compare the current **`.coldstep-events.jsonl`** to a prior artifact (traffic-shape style deltas; **not** PID-for-PID equality). If no baseline exists yet, the report should say so and must not fail the job by itself.
+`--fail-on-new-domain` exits non-zero when the current file has a destination domain the baseline does not. There is no `COLDSTEP_DIFF_PREV_RUN` switch.
 
 ---
 
@@ -245,7 +243,7 @@ The action is a node24 JavaScript action with `pre` / `main` / `post` hooks. Git
 No for **v1** — it fails when the **agent** cannot become operationally ready (BPF/trace/cgroup), not when policy denies traffic.
 
 **Can I pin `coldstep-io/coldstep@main`?**  
-You can, but **`main` moves**; prefer a **release tag** per **[README](README.md)** and **[RELEASE_PROCESS.md](RELEASE_PROCESS.md)**.
+You can, but **`main` moves**; prefer a **release tag** per **[README](README.md)**. The tag must match `COLDSTEP_BINARY_VERSION` in [`src/shared.ts`](src/shared.ts); [`scripts/check_release_version_alignment.py`](scripts/check_release_version_alignment.py) enforces that before a release asset is built.
 
 **Does Coldstep support Windows or macOS runners?**  
 **No** for this **v1** quick path — use **`ubuntu-latest`** only.
@@ -254,4 +252,4 @@ You can, but **`main` moves**; prefer a **release tag** per **[README](README.md
 Set **`report: pr-comment`** (or **`both`** for Summary + PR comment) and ensure the workflow is a **`pull_request`** event. **`github-token`** defaults to **`github.token`**.
 
 **Where is the full honesty matrix for CI?**  
-**[VALIDATION.md](VALIDATION.md)** — what is proven in-repo vs not.
+**[SECURITY.md](SECURITY.md)** — coverage boundaries and what defend actually denies. The in-repo jobs are `detect-mode` and `defend-mode` in **[`coldstep-ci-runner.yml`](.github/workflows/coldstep-ci-runner.yml)**.

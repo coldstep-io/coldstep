@@ -2,7 +2,8 @@
 """
 Guardrail: consumer-facing coldstep-io/coldstep pin matches the tag we publish.
 
-Bump MARKETPLACE_COLDSTEP_TAG with each release (see RELEASE_PROCESS.md).
+Bump MARKETPLACE_COLDSTEP_TAG with each release, in the same PR as
+COLDSTEP_BINARY_VERSION (scripts/check_release_version_alignment.py).
 
 --skip-website: exclude website/index.html. CI (coldstep-ci-runner action_bundle)
 uses this because the site pin intentionally lags until the post-tag follow-up
@@ -29,6 +30,10 @@ PINNED_FILES = (
     ROOT / "README.md",
     ROOT / "QUICK_START.md",
     ROOT / "CONTRIBUTING.md",
+    ROOT / "examples" / "README.md",
+    ROOT / "examples" / "CONSUMER_GUIDE.md",
+    ROOT / "examples" / "detect-basic.yml",
+    ROOT / "examples" / "defend-allowlist.yml",
     ROOT / "website" / "index.html",
 )
 

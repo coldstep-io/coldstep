@@ -19655,7 +19655,7 @@ function warnRemovedAllowlistInputs() {
   const removed = [
     ["ignored-nets", "put `!CIDR` entries in `allow`"],
     ["ignored-nets-file", "put `!CIDR` lines in an `allow-file`"],
-    ["bootstrap-allowlist", "copy the reference packs into your own `allow-file`"]
+    ["bootstrap-allowlist", "list the destinations you need in `allow` or an `allow-file`"]
   ];
   for (const [name, repl] of removed) {
     if (getInput(name).trim() !== "") {

@@ -11,7 +11,7 @@ on:
   workflow_dispatch:
     inputs:
       ci_preset:
-        description: CI preset (default = normal, fast = skip integration, strict = extra defend/diff gates)
+        description: CI preset (default = normal, fast = skip integration, strict = fail defend-mode when the smoke produces no deny rows)
         type: choice
         options:
           - default
@@ -33,7 +33,6 @@ jobs:
   hosted-linux:
     uses: ./.github/workflows/coldstep-ci-runner.yml
     with:
-      coldstep_diff_strict: ${{ github.event_name != 'workflow_dispatch' || inputs.ci_preset == 'strict' }}
       defend_deny_jsonl_strict: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'strict' || false }}
       skip_integration: ${{ github.event_name == 'workflow_dispatch' && inputs.ci_preset == 'fast' || false }}
     secrets: inherit

@@ -8,8 +8,16 @@ coverage*.out
 coverage
 *.coverprofile
 
-# Local Windows tooling binaries (not published)
+# Windows build outputs — any directory, including repo root.
+# Patterns without a slash apply in every directory. The `**` forms and the
+# uppercase twins cover case-sensitive clones (Linux CI) as well as Windows.
 *.exe
+*.EXE
+**/*.exe
+**/*.EXE
+/coldstep.exe
+/coldstep-action.exe
+/coldstep-report.exe
 
 # Stray root-built Go binaries (a `go build` without -o bin/ drops these in the
 # repo root; the real outputs live under /bin/, already ignored above).
@@ -83,6 +91,4 @@ AGENTS.md
 # Ignore stray copies under .github only.
 /.github/design/
 
-# Internal dev tooling not part of the shipped action.
-/docker/code-review-assistant/
 .coldstep-suggested-allow.txt

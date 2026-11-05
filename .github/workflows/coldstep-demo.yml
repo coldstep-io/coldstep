@@ -7,10 +7,9 @@
 #
 # Agent binary: download the combined `coldstep-linux-amd64` from the repo GitHub Release for
 # `COLDSTEP_AGENT_VERSION` (`supply-chain-attest.yml`); the job passes `release-path`. The single
-# `coldstep` binary provides the agent plus the `diff` / `stop` subcommands; the detect job runs the
-# baseline `diff` and uploads the pure-markdown `.coldstep-report.md` artifact rendered from JSONL.
-# NOTE: the `diff` subcommand requires a release that ships the combined binary; bump
-# `COLDSTEP_AGENT_VERSION` to that tag (Train-2) before this demo's diff step will pass.
+# `coldstep` binary provides the agent plus `stop`. The detect job checks the
+# JSONL and uploads `.coldstep-report.md`. `coldstep-linux-amd64` is that binary
+# for `COLDSTEP_AGENT_VERSION`.
 
 name: coldstep-demo
 
@@ -25,17 +24,11 @@ on:
         description: Run detect-mode job
         type: boolean
         default: true
-      coldstep_diff_strict:
-        description: Fail detect-mode if previous-run JSONL diff cannot be computed
-        type: boolean
-        default: true
 
 env:
   COLDSTEP_AGENT_VERSION: v0.6.2
 
-# Default to least-privilege; the detect-mode job overrides with
-# `permissions: { actions: read, contents: read }` when previous-run baseline
-# diff is enabled (mirrors `coldstep-demo-detect.yml`).
+# Default to least-privilege. The detect-mode job also sets actions: read.
 permissions:
   contents: read
 
@@ -48,8 +41,6 @@ jobs:
       actions: read
       contents: read
     env:
-      COLDSTEP_DIFF_PREV_RUN: '1'
-      COLDSTEP_DIFF_STRICT: ${{ inputs.coldstep_diff_strict == true && '1' || '0' }}
       NS_RUNNER_LABEL: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v6
@@ -202,9 +193,8 @@ jobs:
           overwrite: true
 
       # Detailed report: the pure-markdown .coldstep-report.md is written by the
-      # action's stop step (coldstep-action). Upload it as the downloadable
-      # detect-report artifact. (Replaces the retired coldstep-report HTML render
-      # / coldstep-report-linux-amd64 release-binary consumer demo, issue #219.)
+      # action's stop step (`coldstep stop`). Upload it as the downloadable
+      # detect-report artifact.
       - name: Upload detect markdown report
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9  # v7.0.2
